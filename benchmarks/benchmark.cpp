@@ -2,7 +2,8 @@
 #include "gradient.hpp"
 #include "values.hpp"
 #include "vector_equation.hpp"
-
+#define _USE_MATH_DEFINES
+#include <math.h>
 #include <benchmark/benchmark.h>
 
 #include <array>

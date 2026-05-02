@@ -18,6 +18,16 @@ enum class DiffMode { Symbolic, Forward, Reverse };
 // ===========================================================================
 namespace detail {
 
+// GCC requires always_inline on each per-pass lambda so it can constant-fold
+// through the expression tree. Clang folds each pass independently at a
+// manageable size without the hint — forcing always_inline merges all N passes
+// into one function body that exceeds Clang's optimisation threshold.
+#if defined(__GNUC__) && !defined(__clang__)
+#define DIFF_PASS_INLINE __attribute__((always_inline))
+#else
+#define DIFF_PASS_INLINE
+#endif
+
 template <ExpressionConcept Expr, typename T = typename Expr::value_type>
   requires(!is_dual_v<T>)
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) {
@@ -62,15 +72,19 @@ template <ExpressionConcept Expr,
   std::array<value_type, n> seeds{};
   std::array<scalar_type, n> gradients{};
 
-  static_for<n>([&]<std::size_t I>() {
-    seeds[I] = value_type{values[I], scalar_type{}};
-  });
-  static_for<n>([&]<std::size_t J>() {
-    seeds[J] = value_type{values[J], scalar_type{1}};
-    expr.update(symbols{}, seeds);
-    gradients[J] = expr.eval().template get<1>();
-    seeds[J] = value_type{values[J], scalar_type{}};
-  });
+  // One outer lambda exposes compile-time Js to both the init fold and the
+  // per-pass lambdas. Each inner lambda is independently sized for Clang's
+  // inliner; DIFF_PASS_INLINE forces GCC to inline them so it can see through
+  // to seeds/expr and constant-fold compile-time-known inputs.
+  [&]<std::size_t... Js>(std::index_sequence<Js...>) {
+    ((seeds[Js] = value_type{values[Js], scalar_type{}}), ...);
+    ([&]() DIFF_PASS_INLINE {
+      seeds[Js] = value_type{values[Js], scalar_type{1}};
+      expr.update(symbols{}, seeds);
+      gradients[Js] = expr.eval().template get<1>();
+      seeds[Js] = value_type{values[Js], scalar_type{}};
+    }(), ...);
+  }(std::make_index_sequence<n>{});
 
   expr.update(symbols{}, seeds);
   return gradients;

@@ -168,6 +168,56 @@ both compilers.  All 166 unit tests pass.
 
 ---
 
+### Why `static_for` cannot encapsulate the fix
+
+After confirming the solution above, we investigated whether the `DIFF_PASS_INLINE` detail
+could be hidden inside a modified `static_for` so call-sites stay clean.
+
+Two variants of `static_for` were tried:
+
+**Variant A — GCC wrapper inside `static_for`:**
+```cpp
+template <std::size_t N, class F> constexpr void static_for(F &&f) {
+  [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+#if defined(__GNUC__) && !defined(__clang__)
+    ([&]() __attribute__((always_inline)) {
+      std::forward<F>(f).template operator()<Is>();
+    }(), ...);
+#else
+    (std::forward<F>(f).template operator()<Is>(), ...);
+#endif
+  }(std::make_index_sequence<N>{});
+}
+```
+The `always_inline` wrapper forces GCC to evaluate the wrapper lambda, but the wrapper
+only captures `f` by reference — it does not capture `seeds`, `expr`, or `values`.
+After inlining the wrapper, GCC still has to call `f.template operator()<Is>()`, which is
+*not* marked `always_inline`, so GCC stops and the constant-folding barrier remains.
+
+**Variant B — Minimal `index_sequence` fold (no wrapper):**
+```cpp
+template <std::size_t N, class F> constexpr void static_for(F &&f) {
+  [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+    (std::forward<F>(f).template operator()<Is>(), ...);
+  }(std::make_index_sequence<N>{});
+}
+```
+This removes the Boost `mp_for_each` indirection (fixing Clang's N = 2 anomaly) but does
+not help GCC inline large lambda bodies.  GCC's inliner still declines to inline the
+template call operator of the passed lambda because no hint is present.
+
+**Root cause:** `DIFF_PASS_INLINE` must be on the lambda that **directly captures**
+`seeds`, `expr`, `gradients`, and `values`.  Any wrapper inside `static_for` adds a
+capture of `f`, creating an extra indirection layer that blocks GCC from seeing the
+underlying variables.  The macro therefore belongs on the per-pass lambda at the
+call site in `forward_mode_gradient`, not inside the loop abstraction.
+
+`static_for` itself has been updated to use the minimal `index_sequence` fold (Variant B)
+rather than Boost `mp_for_each`; this is still an improvement for the other call-sites
+in the codebase.
+
+---
+
 ## Namespace organisation
 
 The entire library lives inside `namespace diff`.  Internal helpers are in
