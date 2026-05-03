@@ -52,15 +52,11 @@ private:
   using jacobian_t = decltype(make_jac_rows(std::declval<Exprs>(), symbols{}));
   Exprs expressions;
   jacobian_t jacobian_data;
-  std::size_t runtime_input_dim_{input_dim};
-
   friend std::ostream &operator<<(std::ostream &out, const Equation &ve) {
     static_for<output_dim>([&]<std::size_t I>() {
       out << "f" << I << ": " << std::get<I>(ve.expressions);
-      if constexpr (input_dim > 0) {
-        out << " grad: ";
-        print_tup(out, std::get<I>(ve.jacobian_data));
-      }
+      out << " grad: ";
+      print_tup(out, std::get<I>(ve.jacobian_data));
       out << '\n';
     });
     return out;
@@ -95,23 +91,7 @@ private:
     return J;
   }
 
-  // --- Reverse-mode Jacobian (runtime path) ---
-  [[nodiscard]] auto jacobian_reverse_mode() const
-    requires(input_dim == 0)
-  {
-    Eigen::Matrix<value_type, output_dim, Eigen::Dynamic> J(output_dim,
-                                                            runtime_input_dim_);
-    J.setZero();
-    static_for<output_dim>([&]<std::size_t I>() {
-      Eigen::VectorX<value_type> row =
-          Eigen::VectorX<value_type>::Zero(runtime_input_dim_);
-      std::get<I>(expressions).backward(mp::mp_list<>{}, value_type{1}, row);
-      J.row(I) = std::move(row);
-    });
-    return J;
-  }
-
-  // --- Forward-mode Jacobian ---
+// --- Forward-mode Jacobian ---
   [[nodiscard]] auto jacobian_forward_mode()
     requires is_dual_v<value_type> && (input_dim > 0)
   {
@@ -227,18 +207,9 @@ private:
   }
 
 public:
-  // Compile-time constructor: symbols extracted from expression types.
   constexpr Equation(TFirst first, TRest... rest)
       : expressions{first, rest...},
-        jacobian_data{make_jac_rows(expressions, symbols{})},
-        runtime_input_dim_{input_dim} {}
-
-  // Runtime constructor: no compile-time symbols; n_inputs given at
-  // construction.
-  Equation(std::size_t n_inputs, TFirst first, TRest... rest)
-    requires(input_dim == 0)
-      : expressions{first, rest...}, jacobian_data{},
-        runtime_input_dim_{n_inputs} {}
+        jacobian_data{make_jac_rows(expressions, symbols{})} {}
 
   // Evaluate all component expressions.
   [[nodiscard]] constexpr auto evaluate() const {
@@ -262,25 +233,10 @@ public:
   }
 
   template <DiffMode Mode>
-  [[nodiscard]] auto jacobian() const
-    requires(Mode == DiffMode::Reverse && input_dim == 0)
-  {
-    return jacobian_reverse_mode();
-  }
-
-  template <DiffMode Mode>
   [[nodiscard]] auto jacobian(Eigen::Vector<value_type, input_dim> values)
     requires(Mode == DiffMode::Reverse && input_dim > 0)
   {
     update(symbols{}, values);
-    return jacobian<Mode>();
-  }
-
-  template <DiffMode Mode>
-  [[nodiscard]] auto jacobian(Eigen::VectorX<value_type> values)
-    requires(Mode == DiffMode::Reverse && input_dim == 0)
-  {
-    update(values);
     return jacobian<Mode>();
   }
 
@@ -366,20 +322,10 @@ public:
     std::apply(apply_to_tuple_func, jacobian_data);
   }
 
-  // Update runtime variables — convenience overload (no symbol list needed).
-  void update(const auto &values)
-    requires(input_dim == 0)
-  {
-    auto update_func = detail::update_func_t{mp::mp_list<>{}, values};
-    std::apply(update_func, expressions);
-  }
 };
 
 template <ExpressionConcept T, ExpressionConcept... Ts>
 Equation(T, Ts...) -> Equation<T, Ts...>;
-
-template <ExpressionConcept T, ExpressionConcept... Ts>
-Equation(std::size_t, T, Ts...) -> Equation<T, Ts...>;
 
 } // namespace diff
 

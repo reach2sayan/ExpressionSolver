@@ -30,8 +30,6 @@ template <AnOp Op, typename LHS, typename RHS> class Expression;
 template <AnOp Op, typename Exp> class MonoExpression;
 template <Numeric T> class Constant;
 template <Numeric T, char> class Variable;
-template <Numeric T> class RuntimeVariable;
-
 // ===========================================================================
 // Tag trait: true for any first-class expression node.
 // ===========================================================================
@@ -40,9 +38,6 @@ template <Numeric T> struct is_expression_type<Constant<T>> : std::true_type {};
 
 template <Numeric T, char C>
 struct is_expression_type<Variable<T, C>> : std::true_type {};
-
-template <Numeric T>
-struct is_expression_type<RuntimeVariable<T>> : std::true_type {};
 
 template <AnOp Op, typename LHS, typename RHS>
 struct is_expression_type<Expression<Op, LHS, RHS>> : std::true_type {};

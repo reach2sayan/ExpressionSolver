@@ -291,58 +291,6 @@ constexpr void Variable<T, symbol>::backward(const auto &syms, T adj,
   grads[idx] += adj;
 }
 
-// ===========================================================================
-// RuntimeVariable<T>
-// ===========================================================================
-template <Numeric T> class RuntimeVariable : public IOperators {
-  T value_{};
-  std::size_t index_;
-
-  friend std::ostream &operator<<(std::ostream &out,
-                                  const RuntimeVariable<T> &v) {
-    out << "rv[" << v.index_ << "]";
-    return out;
-  }
-
-public:
-  using value_type = T;
-  RuntimeVariable(T value, std::size_t index = {})
-      : value_(std::move(value)), index_(index) {}
-  [[nodiscard]] T eval() const { return value_; }
-  [[nodiscard]] Constant<T> derivative() const { return Constant<T>{T{1}}; }
-  operator T() const { return value_; }
-  [[nodiscard]] T get() const { return value_; }
-  [[nodiscard]] std::size_t index() const { return index_; }
-
-  void update(const auto & /*syms*/, const auto &updates) {
-    value_ = T(updates[index_]);
-  }
-  void collect(const auto & /*syms*/, auto &) const {}
-
-  void backward(const auto & /*syms*/, T adj, auto &grads) const {
-    grads[index_] += adj;
-  }
-
-  template <typename Syms, std::size_t N>
-  [[nodiscard]] T eval_seeded(const std::array<T, N> &) const {
-    return value_;
-  }
-
-  template <std::size_t I> [[nodiscard]] auto get() const {
-    static_assert(I < 2);
-    if constexpr (requires { std::tuple_size<T>::value; })
-      return eval().template get<I>();
-    else if constexpr (I == 0)
-      return eval();
-    else
-      return static_cast<T>(derivative());
-  }
-};
-/*
-template <typename T> auto RV(T value, std::size_t index) {
-  return RuntimeVariable<T>(value, index);
-}
-*/
 #define DEFINE_CONST_UDL(type, suffix)                                         \
   consteval diff::Constant<type> operator"" _##suffix(                         \
       unsigned long long val) {                                                \
@@ -385,7 +333,6 @@ struct tuple_element<I, diff::Variable<T, C>> {
 };
 } // namespace std
 
-#define RV(x, index) diff::RuntimeVariable(x, index)
 #define PDV(x, label)                                                          \
   diff::Variable<diff::Dual<decltype(x)>, label>(diff::Dual<decltype(x)>{x, 0})
 #define PV(x, label) diff::Variable<decltype(x), label>(x)
