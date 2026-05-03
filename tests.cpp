@@ -1621,3 +1621,103 @@ TEST(ScalarHessianTest, ForwardAgreesWithReverse) {
     for (std::size_t j = 0; j < 2; ++j)
       EXPECT_NEAR(H_fwd[i][j], H_rev[i][j], 1e-12);
 }
+
+// ===========================================================================
+// NthDerivativeTest — nth_derivative<Order> free function and Equation member
+// ===========================================================================
+
+TEST(NthDerivativeTest, FirstOrderUnivariate) {
+  // f(x) = x^3, f'(x) = 3x^2, f'(2) = 12
+  using D = Dual<double>;
+  Variable<D, 'x'> x{D{2.0}};
+  auto expr = x * x * x;
+  auto d = nth_derivative<1>(expr, std::array{2.0});
+  EXPECT_NEAR(d[0], 12.0, 1e-12);
+}
+
+TEST(NthDerivativeTest, SecondOrderUnivariate) {
+  // f(x) = x^3, f''(x) = 6x, f''(2) = 12
+  using DD = Dual<Dual<double>>;
+  Variable<DD, 'x'> x{DD{Dual<double>{2.0}}};
+  auto expr = x * x * x;
+  auto d = nth_derivative<2>(expr, std::array{2.0});
+  EXPECT_NEAR(d[0], 12.0, 1e-12);
+}
+
+TEST(NthDerivativeTest, ThirdOrderUnivariate) {
+  // f(x) = x^4, f'''(x) = 24x, f'''(1) = 24
+  using DDD = Dual<Dual<Dual<double>>>;
+  Variable<DDD, 'x'> x{DDD{Dual<Dual<double>>{Dual<double>{1.0}}}};
+  auto expr = x * x * x * x;
+  auto d = nth_derivative<3>(expr, std::array{1.0});
+  EXPECT_NEAR(d[0], 24.0, 1e-12);
+}
+
+TEST(NthDerivativeTest, SecondOrderMultivariate) {
+  // f(x,y) = x^2 * y
+  // d²f/dx² = 2y = 4 at (1, 2)
+  // d²f/dy² = 0 at (1, 2)
+  using DD = Dual<Dual<double>>;
+  Variable<DD, 'x'> x{DD{Dual<double>{1.0}}};
+  Variable<DD, 'y'> y{DD{Dual<double>{2.0}}};
+  auto expr = x * x * y;
+  auto d = nth_derivative<2>(expr, std::array{1.0, 2.0});
+  EXPECT_NEAR(d[0], 4.0, 1e-12);  // d²f/dx²
+  EXPECT_NEAR(d[1], 0.0, 1e-12);  // d²f/dy²
+}
+
+TEST(NthDerivativeTest, NoArgVersionReadsCurrentValues) {
+  // f(x) = sin(x), f''(x) = -sin(x), f''(pi/4) = -sin(pi/4)
+  using DD = Dual<Dual<double>>;
+  const double x0 = std::numbers::pi / 4.0;
+  Variable<DD, 'x'> x{DD{Dual<double>{x0}}};
+  auto expr = sin(x);
+  auto d = nth_derivative<2>(expr);
+  EXPECT_NEAR(d[0], -std::sin(x0), 1e-12);
+}
+
+TEST(NthDerivativeTest, EquationMemberWithValues) {
+  // f(x) = exp(x), all derivatives = exp(x), exp(1) ≈ 2.71828...
+  using DD = Dual<Dual<double>>;
+  Variable<DD, 'x'> x{DD{Dual<double>{1.0}}};
+  auto eq = Equation(exp(x));
+  auto d = eq.nth_derivative<2>(std::array{1.0});
+  EXPECT_NEAR(d[0], std::exp(1.0), 1e-12);
+}
+
+TEST(NthDerivativeTest, EquationMemberNoArg) {
+  // f(x) = x^3, f''(x) = 6x, f''(3) = 18
+  using DD = Dual<Dual<double>>;
+  Variable<DD, 'x'> x{DD{Dual<double>{3.0}}};
+  auto eq = Equation(x * x * x);
+  auto d = eq.nth_derivative();
+  EXPECT_NEAR(d[0], 18.0, 1e-12);
+}
+
+/*
+ * can we then not make hessian a special case of nth_derivative, and make the tests only with Dual<T>
+
+● Let me look at values.hpp to understand PDV / PV before restructuring:
+
+● Reading 1 file… (ctrl+o to expand)
+  Read 1 file (ctrl+o to expand)
+
+● Letgmegcheckmoperations.hppttoesee·howoOp::eval issstructured:
+
+  Reading 1 file… (ctrl+o to expand)
+  ⎿  include/operations.hppis promoted to Dual<Dual...<T>> as nneded
+
+❯ like I thoguth Dual<T> is promoted to Dual<Dual...<T>> as nneded                                                                                                             ──
+
+❯ and I meant only the forward mode hessian
+
+● Now I understand — you want Dual<T> to be promoted to Dual<Dual<...<T>>> as needed at evaluation time, so the user always writes depth-1 variables. And only
+  forward_mode_hessian changes. Let me read the rest of operations.hpp first:
+
+  Read 1 file (ctrl+o to expand)
+
+● This requires making the expression eval_seeded infrastructure generic so a Dual<T> expression can be evaluated with Dual<Dual<T>> seeds. The changes touch four files: make
+  operations generic, add eval_seeded_cast<U> to expressions, then update gradient/equation. Let me do it systematically.
+
+  Step 1: operations.hpp — make funcs generic and expose func_type:
+  */
