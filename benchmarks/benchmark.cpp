@@ -1,7 +1,7 @@
 #include "dual.hpp"
+#include "equation.hpp"
 #include "gradient.hpp"
 #include "values.hpp"
-#include "vector_equation.hpp"
 #define _USE_MATH_DEFINES
 #include <math.h>
 #include <benchmark/benchmark.h>
@@ -20,7 +20,7 @@ static void run_symbolic(benchmark::State &state, Eq &eq) {
   }
 }
 
-template <ExpressionConcept Expr>
+template <CExpression Expr>
 static void run_reverse(benchmark::State &state, const Expr &expr) {
   for (auto _ : state) {
     auto gradients = gradient<DiffMode::Reverse>(expr);
@@ -29,7 +29,7 @@ static void run_reverse(benchmark::State &state, const Expr &expr) {
   }
 }
 
-template <ExpressionConcept Expr, std::size_t N>
+template <CExpression Expr, std::size_t N>
 static void run_forward(
     benchmark::State &state, Expr &expr,
     const std::array<dual_scalar_t<typename Expr::value_type>, N> &values) {

@@ -26,14 +26,14 @@ template <char C, typename SymList> consteval std::size_t find_index_of_char() {
 
 struct IOperators {
 
-  template <ExpressionConcept LHS, ExpressionConcept RHS>
+  template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator+(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
     return Expression<SumOp<value_type>, LHS, RHS>{std::move(a), std::move(b)};
   }
 
-  template <ExpressionConcept LHS, ExpressionConcept RHS>
+  template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator*(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
@@ -41,7 +41,7 @@ struct IOperators {
                                                         std::move(b));
   }
 
-  template <ExpressionConcept LHS, ExpressionConcept RHS>
+  template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator-(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
@@ -50,7 +50,7 @@ struct IOperators {
                                                              std::move(neg)};
   }
 
-  template <ExpressionConcept LHS, ExpressionConcept RHS>
+  template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator/(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
@@ -58,105 +58,105 @@ struct IOperators {
                                                       std::move(b)};
   }
 
-  template <ExpressionConcept Expr> friend constexpr auto sin(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto sin(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<SineOp<value_type>, Expr>{std::move(a)};
   }
 
-  template <ExpressionConcept Expr> friend constexpr auto cos(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto cos(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<CosineOp<value_type>, Expr>{std::move(a)};
   }
 
-  template <ExpressionConcept Expr> friend constexpr auto exp(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto exp(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<ExpOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto tan(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto tan(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<TanOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto log(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto log(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<LogOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto sqrt(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto sqrt(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<SqrtOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto abs(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto abs(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<AbsOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto asin(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto asin(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<AsinOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto acos(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto acos(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<AcosOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto atan(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto atan(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<AtanOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto sinh(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto sinh(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<SinhOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto cosh(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto cosh(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<CoshOp<value_type>, Expr>{std::move(a)};
   }
-  template <ExpressionConcept Expr> friend constexpr auto tanh(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto tanh(const Expr &a) {
     using value_type = typename Expr::value_type;
     return MonoExpression<TanhOp<value_type>, Expr>{std::move(a)};
   }
 
-  template <typename S, ExpressionConcept RHS>
+  template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator+(S s, const RHS &b) {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} + b;
   }
-  template <typename S, ExpressionConcept RHS>
+  template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator*(S s, const RHS &b) {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} * b;
   }
-  template <typename S, ExpressionConcept RHS>
+  template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator-(S s, const RHS &b) {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} - b;
   }
-  template <typename S, ExpressionConcept RHS>
+  template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator/(S s, const RHS &b) {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} / b;
   }
 
-  template <ExpressionConcept LHS, typename S>
+  template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator+(const LHS &a, S s) {
     using VT = typename LHS::value_type;
     return a + Constant<VT>{static_cast<VT>(s)};
   }
-  template <ExpressionConcept LHS, typename S>
+  template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator*(const LHS &a, S s) {
     using VT = typename LHS::value_type;
     return a * Constant<VT>{static_cast<VT>(s)};
   }
-  template <ExpressionConcept LHS, typename S>
+  template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator-(const LHS &a, S s) {
     using VT = typename LHS::value_type;
     return a - Constant<VT>{static_cast<VT>(s)};
   }
-  template <ExpressionConcept LHS, typename S>
+  template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
   friend constexpr auto operator/(const LHS &a, S s) {
     using VT = typename LHS::value_type;

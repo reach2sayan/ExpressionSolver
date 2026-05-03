@@ -46,7 +46,7 @@ template <AnOp Op, typename Exp>
 struct is_expression_type<MonoExpression<Op, Exp>> : std::true_type {};
 
 template <typename T>
-concept ExpressionConcept = is_expression_type<std::remove_cvref_t<T>>::value;
+concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
 
 // ===========================================================================
 // EvalResult<T>

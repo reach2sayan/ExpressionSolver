@@ -1,5 +1,5 @@
+#include "equation.hpp"
 #include "values.hpp"
-#include "vector_equation.hpp"
 #include <iostream>
 
 int main() {

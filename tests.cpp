@@ -1,9 +1,9 @@
 #include "dual.hpp"
+#include "equation.hpp"
 #include "gradient.hpp"
 #include "operations.hpp"
 #include "traits.hpp"
 #include "values.hpp"
-#include "vector_equation.hpp"
 #include <gtest/gtest.h>
 #include <numbers>
 
@@ -348,13 +348,13 @@ TEST(ConceptTest, NumericSatisfied) {
 }
 
 TEST(ConceptTest, ExpressionConceptSatisfied) {
-  static_assert(ExpressionConcept<Constant<double>>);
-  static_assert(ExpressionConcept<Variable<double, 'x'>>);
+  static_assert(CExpression<Constant<double>>);
+  static_assert(CExpression<Variable<double, 'x'>>);
   using SumExpr = decltype(std::declval<Variable<double, 'x'>>() +
                            std::declval<Constant<double>>());
-  static_assert(ExpressionConcept<SumExpr>);
-  static_assert(!ExpressionConcept<int>);
-  static_assert(!ExpressionConcept<double>);
+  static_assert(CExpression<SumExpr>);
+  static_assert(!CExpression<int>);
+  static_assert(!CExpression<double>);
 }
 
 TEST(ConceptTest, AnOpSatisfied) {

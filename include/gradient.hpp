@@ -28,7 +28,7 @@ namespace detail {
 #define DIFF_PASS_INLINE
 #endif
 
-template <ExpressionConcept Expr, typename T = typename Expr::value_type>
+template <CExpression Expr, typename T = typename Expr::value_type>
   requires(!is_dual_v<T>)
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) {
   using Syms =
@@ -39,7 +39,7 @@ template <ExpressionConcept Expr, typename T = typename Expr::value_type>
   return grads;
 }
 
-template <ExpressionConcept Expr, typename T = typename Expr::value_type>
+template <CExpression Expr, typename T = typename Expr::value_type>
   requires is_dual_v<T>
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) {
   using scalar_t = dual_scalar_t<T>;
@@ -55,7 +55,7 @@ template <ExpressionConcept Expr, typename T = typename Expr::value_type>
   return result;
 }
 
-template <ExpressionConcept Expr,
+template <CExpression Expr,
           typename TArr =
               dual_scalar_t<typename std::remove_cvref_t<Expr>::value_type>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -90,7 +90,7 @@ template <ExpressionConcept Expr,
   return gradients;
 }
 
-template <ExpressionConcept Expr,
+template <CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -123,7 +123,7 @@ template <ExpressionConcept Expr,
   return H;
 }
 
-template <ExpressionConcept Expr,
+template <CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -141,7 +141,7 @@ template <ExpressionConcept Expr,
   return reverse_mode_hessian(expr, values);
 }
 
-template <ExpressionConcept Expr,
+template <CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -169,7 +169,7 @@ template <ExpressionConcept Expr,
   return H;
 }
 
-template <ExpressionConcept Expr,
+template <CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -193,13 +193,13 @@ template <ExpressionConcept Expr,
 // Public API — select mode with DiffMode::Forward or DiffMode::Reverse.
 // ===========================================================================
 
-template <DiffMode Mode, ExpressionConcept Expr>
+template <DiffMode Mode, CExpression Expr>
   requires(Mode == DiffMode::Reverse)
 [[nodiscard]] constexpr auto gradient(const Expr &expr) {
   return detail::reverse_mode_gradient(expr);
 }
 
-template <DiffMode Mode, ExpressionConcept Expr,
+template <DiffMode Mode, CExpression Expr,
           typename TArr =
               dual_scalar_t<typename std::remove_cvref_t<Expr>::value_type>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -210,7 +210,7 @@ template <DiffMode Mode, ExpressionConcept Expr,
   return detail::forward_mode_gradient(expr, values);
 }
 
-template <DiffMode Mode, ExpressionConcept Expr,
+template <DiffMode Mode, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -220,7 +220,7 @@ template <DiffMode Mode, ExpressionConcept Expr,
   return detail::reverse_mode_hessian(expr, values);
 }
 
-template <DiffMode Mode, ExpressionConcept Expr,
+template <DiffMode Mode, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -230,7 +230,7 @@ template <DiffMode Mode, ExpressionConcept Expr,
   return detail::reverse_mode_hessian(expr);
 }
 
-template <DiffMode Mode, ExpressionConcept Expr,
+template <DiffMode Mode, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
@@ -241,7 +241,7 @@ template <DiffMode Mode, ExpressionConcept Expr,
   return detail::forward_mode_hessian(expr, values);
 }
 
-template <DiffMode Mode, ExpressionConcept Expr,
+template <DiffMode Mode, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<

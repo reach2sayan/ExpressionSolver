@@ -33,7 +33,7 @@ using namespace diff;
 // Helpers
 // ---------------------------------------------------------------------------
 
-template <ExpressionConcept Expr, std::size_t N>
+template <CExpression Expr, std::size_t N>
 static void run_our_forward(benchmark::State &state, Expr &expr,
                              const std::array<dual_scalar_t<typename Expr::value_type>, N> &vals) {
     for (auto _ : state) {
@@ -43,7 +43,7 @@ static void run_our_forward(benchmark::State &state, Expr &expr,
     }
 }
 
-template <ExpressionConcept Expr>
+template <CExpression Expr>
 static void run_our_reverse(benchmark::State &state, const Expr &expr) {
     for (auto _ : state) {
         auto g = reverse_mode_grad(expr);

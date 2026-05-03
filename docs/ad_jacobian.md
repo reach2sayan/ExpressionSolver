@@ -30,7 +30,8 @@ _Method-by-method walkthrough with worked examples for `Expression_Differentiato
    - 5.4 [Worked example](#54-worked-example)
 6. [Comparison](#6-comparison-of-forward-and-reverse-mode)
 7. [Symbol Resolution](#7-symbol-resolution-compile-time-indexing)
-8. [Quick Reference](#8-quick-reference)
+8. [`Equation` — Scalar and Vector Functions](#8-equation--scalar-and-vector-functions)
+9. [Quick Reference](#9-quick-reference)
 
 ---
 
@@ -64,15 +65,14 @@ Every code section below refers to real source lines in `include/`.
 |---|---|---|
 | `Constant<T>` | `Numeric T` | Fixed numeric literal |
 | `Variable<T, symbol>` | `Numeric T`, `char symbol` | Named mutable scalar |
-| `RuntimeVariable<T>` | `Numeric T` | Index-addressed variable |
 | `Expression<Op, LHS, RHS>` | binary op, two children | Binary operation node |
 | `MonoExpression<Op, Expr>` | unary op, one child | Unary operation node |
 | `EvalResult<T>` | `Numeric T` | Thin value wrapper (see §2.7) |
 
 Sources: `expressions.hpp`, `values.hpp`.
 
-The concept `ExpressionConcept` is satisfied by all of the above through the
-`is_expression_type<T>` tag trait (`expressions.hpp:38–67`).
+The concept `CExpression` is satisfied by all of the above through the
+`is_expression_type<T>` tag trait (`expressions.hpp:36–46`).
 
 ### 2.2 Tree for the running example
 
@@ -123,11 +123,10 @@ primal value.
 
 | Node | What it does | Source |
 |---|---|---|
-| `Constant` | Returns stored literal | `values.hpp:176` |
-| `Variable<T,C>` | Returns `value` (internal field) | `values.hpp:218` |
-| `RuntimeVariable` | Returns `value_` | `values.hpp:311` |
-| `Expression<Op,L,R>` | Calls `Op::eval(lhs, rhs)` via `std::apply` | `expressions.hpp:162` |
-| `MonoExpression<Op,E>` | Calls `Op::eval(expression)` | `expressions.hpp:107` |
+| `Constant` | Returns stored literal | `values.hpp` |
+| `Variable<T,C>` | Returns `value` (internal field) | `values.hpp` |
+| `Expression<Op,L,R>` | Calls `Op::eval(lhs, rhs)` via `std::apply` | `expressions.hpp` |
+| `MonoExpression<Op,E>` | Calls `Op::eval(expression)` | `expressions.hpp` |
 
 `Op::eval` for binary ops simply invokes the wrapped functor
 (e.g. `std::plus<T>{}(lhs, rhs)`).  For unary ops it invokes the
@@ -157,11 +156,10 @@ with that list.
 
 | Node | What it does | Source |
 |---|---|---|
-| `Constant` | No-op | `values.hpp:184` |
-| `Variable<T,symbol>` | Resolves `constexpr idx = find_index_of_char<symbol,Syms>()`, then `*this = updates[idx]` | `values.hpp:265–270` |
-| `RuntimeVariable` | `value_ = T(updates[index_])` using runtime index | `values.hpp:317–319` |
-| `Expression` | Recurses into `lhs` then `rhs` | `expressions.hpp:182–185` |
-| `MonoExpression` | Recurses into `expression` | `expressions.hpp:116–118` |
+| `Constant` | No-op | `values.hpp` |
+| `Variable<T,symbol>` | Resolves `constexpr idx = find_index_of_char<symbol,Syms>()`, then `*this = updates[idx]` | `values.hpp` |
+| `Expression` | Recurses into `lhs` then `rhs` | `expressions.hpp` |
+| `MonoExpression` | Recurses into `expression` | `expressions.hpp` |
 
 > **Key invariant:** After `expr.update(symbols{}, seeds)`, every `Variable`
 > in the tree has been refreshed.  A subsequent `expr.eval()` reflects the new
@@ -180,9 +178,8 @@ before reseeding.
 
 | Node | What it does | Source |
 |---|---|---|
-| `Constant` | No-op | `values.hpp:185` |
-| `Variable<T,symbol>` | `out[idx] = value` | `values.hpp:272–278` |
-| `RuntimeVariable` | No-op (index-based, not symbol-based) | `values.hpp:320` |
+| `Constant` | No-op | `values.hpp` |
+| `Variable<T,symbol>` | `out[idx] = value` | `values.hpp` |
 | `Expression` / `MonoExpression` | Recurses into children | `expressions.hpp` |
 
 ---
@@ -200,11 +197,10 @@ The template parameter `Syms` is the compile-time symbol list; it tells each
 
 | Node | What it returns | Source |
 |---|---|---|
-| `Constant` | The stored literal (ignores `vals`) | `values.hpp:189` |
-| `Variable<T,symbol>` | `vals[find_index_of_char<symbol,Syms>()]` | `values.hpp:232–235` |
-| `RuntimeVariable` | `value_` (ignores `vals`) | `values.hpp:327` |
-| `Expression<Op,L,R>` | `Op::eval(EvalResult{lhs.eval_seeded(vals)}, EvalResult{rhs.eval_seeded(vals)})` | `expressions.hpp:172–180` |
-| `MonoExpression<Op,E>` | `Op::eval(EvalResult{expression.eval_seeded(vals)})` | `expressions.hpp:109–114` |
+| `Constant` | The stored literal (ignores `vals`) | `values.hpp` |
+| `Variable<T,symbol>` | `vals[find_index_of_char<symbol,Syms>()]` | `values.hpp` |
+| `Expression<Op,L,R>` | `Op::eval(EvalResult{lhs.eval_seeded(vals)}, EvalResult{rhs.eval_seeded(vals)})` | `expressions.hpp` |
+| `MonoExpression<Op,E>` | `Op::eval(EvalResult{expression.eval_seeded(vals)})` | `expressions.hpp` |
 
 #### Why `EvalResult`?
 
@@ -257,24 +253,15 @@ constexpr void backward(const auto&, T, auto&) const {}
 #### `Variable<T,symbol>`
 This _is_ a leaf variable.  `∂(self)/∂x_self = 1`, so:
 ```cpp
-// values.hpp:286–292
 constexpr void backward(const auto& syms, T adj, auto& grads) const {
     constexpr auto idx = find_index_of_char<symbol, Syms>();
     grads[idx] += adj;
 }
 ```
 
-#### `RuntimeVariable`
-Same as above with a runtime index:
-```cpp
-// values.hpp:322–324
-grads[index_] += adj;
-```
-
 #### `Expression<Op, L, R>`
 Delegates to `Op::backward(lhs, rhs, adj, syms, grads)`:
 ```cpp
-// expressions.hpp:190–193
 std::apply([&](const auto&... e) { Op::backward(e..., adj, syms, grads); },
            inner_expressions);
 ```
@@ -283,7 +270,6 @@ Each `Op` encodes the chain rule for its specific operation (see §2.9).
 #### `MonoExpression<Op, E>`
 Delegates to `Op::backward(expression, adj, syms, grads)`:
 ```cpp
-// expressions.hpp:122–124
 Op::backward(expression, adj, syms, grads);
 ```
 
@@ -384,7 +370,7 @@ Complete table of all unary `backward` multipliers:
 | `AcosOp` | `acos(u)` | `-1/√(1-u²)` | `-adj / sqrt(1-u²)` |
 | `AtanOp` | `atan(u)` | `1/(1+u²)` | `adj / (1+u²)` |
 
-Sources: `operations.hpp:86–343`.
+Source: `operations.hpp`.
 
 ---
 
@@ -431,7 +417,7 @@ friend constexpr Dual exp(const Dual& d) {
 }
 ```
 
-`Dual<T>` satisfies the `Numeric` concept (`dual.hpp:127`), so
+`Dual<T>` satisfies the `Numeric` concept (`dual.hpp`), so
 `Variable<Dual<double>,'x'>` is a perfectly ordinary expression node whose
 scalar value happens to carry a tangent component.
 
@@ -467,10 +453,10 @@ The full Jacobian requires **n separate passes**, one per input dimension.
 
 ### 4.2 Code walkthrough: `detail::forward_mode_gradient`
 
-**Location:** `gradient.hpp:58–91`
+**Location:** `gradient.hpp`
 
 ```cpp
-template <ExpressionConcept Expr, ...>
+template <CExpression Expr, ...>
 auto forward_mode_gradient(Expr& expr, array<TArr, N> values)
     requires is_dual_v<typename Expr::value_type>
 {
@@ -651,10 +637,10 @@ appear more than once in the expression (e.g. `x` appears in both `x·y` and
 
 ### 5.2 Code walkthrough: `detail::reverse_mode_gradient`
 
-**Location:** `gradient.hpp:31–40`
+**Location:** `gradient.hpp`
 
 ```cpp
-template <ExpressionConcept Expr, typename T = typename Expr::value_type>
+template <CExpression Expr, typename T = typename Expr::value_type>
     requires (!is_dual_v<T>)
 constexpr auto reverse_mode_gradient(const Expr& expr) {
     using Syms = extract_symbols_from_expr<Expr>::type;
@@ -795,15 +781,13 @@ re-use correctly — not just trees.
 ### Public API
 
 ```cpp
-// gradient.hpp:196–211
-
 // Reverse mode — expr must hold plain T values
 auto g1 = gradient<diff::DiffMode::Reverse>(expr);
 
 // Forward mode — expr must have Dual<T> value_type
 auto g2 = gradient<diff::DiffMode::Forward>(expr, {x_val, y_val});
 
-// Convenience macros (gradient.hpp:256–257)
+// Convenience macros (gradient.hpp)
 auto g3 = reverse_mode_grad(expr);
 auto g4 = forward_mode_grad(expr, {x_val, y_val});
 ```
@@ -835,39 +819,145 @@ branch.
 
 ---
 
-## 8. Quick Reference
+## 8. `Equation` — Scalar and Vector Functions
 
-### Forward mode — setup checklist
+`Equation<TFirst, TRest...>` (`equation.hpp`) is the top-level wrapper for
+differentiating a function `f : ℝⁿ → ℝᵐ`.  The same class handles both
+`m = 1` (scalar output) and `m > 1` (vector output); the API surface is
+selected at compile time via `requires(output_dim == 1)`.
+
+### Static members (all cases)
+
+| Member | Type | Meaning |
+|---|---|---|
+| `output_dim` | `std::size_t` | Number of component functions `m` |
+| `input_dim` | `std::size_t` | Number of distinct compile-time variables `n` |
+| `number_of_derivatives` | `std::size_t` | Equal to `input_dim` |
+| `symbols` | MP11 type-list | Sorted, deduplicated symbol list |
+
+### Construction
 
 ```cpp
-// 1. Declare variables with Dual value type
-auto x = Variable<Dual<double>, 'x'>{Dual{x_val, 0.0}};
-auto y = Variable<Dual<double>, 'y'>{Dual{y_val, 0.0}};
-// (or use the PDV macro: PDV(x_val, 'x'))
-
-// 2. Build expression tree
-auto f = x * y + sin(x);
-
-// 3. Compute gradient
-auto grad = forward_mode_grad(f, {x_val, y_val});
-// grad[0] = ∂f/∂x,  grad[1] = ∂f/∂y
+// Any number of expressions — deduction guide infers Equation<E1, E2, ...>
+auto eq = Equation(f1, f2, f3);   // f: ℝⁿ → ℝ³
+auto eq = Equation(f1);            // f: ℝⁿ → ℝ  (scalar)
 ```
 
-### Reverse mode — setup checklist
+### Scalar output API (`output_dim == 1`)
 
 ```cpp
-// 1. Declare variables with plain type
-auto x = Variable<double, 'x'>{x_val};
-auto y = Variable<double, 'y'>{y_val};
-// (or use the PV macro: PV(x_val, 'x'))
+// Evaluate the function
+auto val = eq.evaluate();          // returns value_type (scalar)
+auto val2 = static_cast<T>(eq);    // implicit conversion
 
-// 2. Build expression tree
+// Access symbolic derivative expressions (live, callable)
+auto df_dx0 = eq[IDX(1)];         // derivative expression w.r.t. first variable
+auto df_dx1 = eq[IDX(2)];         // w.r.t. second variable, etc.
+df_dx0.eval();                     // evaluate at current variable values
+
+// Evaluate all partial derivatives at once
+auto [dx, dy] = eq.eval_derivatives();  // structured binding, returns std::array<T, n>
+```
+
+`eq[IDX(0)]` returns the expression itself; `eq[IDX(k)]` for `k ≥ 1` returns
+the symbolic derivative expression for the `k`-th variable (in symbol order).
+These are **live expression objects** — calling `.eval()` on them reflects
+the current variable values, and they can be further composed or differentiated.
+
+### Vector output API (all `output_dim`)
+
+```cpp
+// Evaluate all outputs
+auto out = eq.evaluate();               // returns std::array<T, output_dim>
+
+// Jacobian — plain T variables (reverse or symbolic mode)
+auto J = eq.jacobian<DiffMode::Reverse>();     // Eigen::Matrix, output_dim × input_dim
+auto J = eq.jacobian<DiffMode::Symbolic>();
+
+// Jacobian — Dual<T> variables (forward mode)
+auto J = eq.jacobian<DiffMode::Forward>();
+
+// Pass new evaluation point directly
+auto J = eq.jacobian<DiffMode::Reverse>(values);  // updates then differentiates
+
+// Hessian per output — Dual<T> variables
+auto H = eq.hessian<DiffMode::Reverse>();   // array<Matrix, output_dim>
+auto H = eq.hessian<DiffMode::Forward>();   // Dual<Dual<T>> variables
+
+// Update variable values manually
+using Syms = decltype(eq)::symbols;
+eq.update(Syms{}, new_values);
+
+// Convenience macros
+eq.reverse_mode_jac()
+eq.forward_mode_jac()
+eq.symbolic_mode_jac()
+eq.reverse_mode_hess()
+eq.forward_mode_hess()
+```
+
+### `jacobian_data` — stored symbolic derivatives
+
+Internally `Equation` stores `jacobian_data`, a compile-time tuple-of-tuples
+containing one symbolic derivative expression per `(output, input)` pair.
+This is built once at construction via `make_jac_rows` / `make_derivatives`
+and kept in sync by `update()`.  The `jacobian<Symbolic>` mode simply
+evaluates these stored expressions rather than running AD at query time.
+
+---
+
+## 9. Quick Reference
+
+### Gradient of a scalar expression
+
+```cpp
+// Reverse mode — plain T variables
+auto x = PV(x_val, 'x');
+auto y = PV(y_val, 'y');
 auto f = x * y + sin(x);
+auto grad = reverse_mode_grad(f);   // std::array<double, 2>
 
-// 3. Variables already hold x_val, y_val from construction
-//    (or call f.update() manually if you change the point)
+// Forward mode — Dual<T> variables
+auto x = PDV(x_val, 'x');
+auto y = PDV(y_val, 'y');
+auto f = x * y + sin(x);
+auto grad = forward_mode_grad(f, {x_val, y_val});
+```
 
-// 4. Compute gradient
-auto grad = reverse_mode_grad(f);
-// grad[0] = ∂f/∂x,  grad[1] = ∂f/∂y
+### Symbolic partial derivatives via `Equation`
+
+```cpp
+auto x = PV(x_val, 'x');
+auto y = PV(y_val, 'y');
+auto eq = Equation(x * y + sin(x));
+
+auto val       = eq.evaluate();          // primal value
+auto df_dx     = eq[IDX(1)];             // symbolic ∂f/∂x expression
+auto df_dy     = eq[IDX(2)];             // symbolic ∂f/∂y expression
+auto [dx, dy]  = eq.eval_derivatives();  // both evaluated at once
+```
+
+### Jacobian of a vector function
+
+```cpp
+// Reverse mode — plain T variables
+auto eq = Equation(x * y, x + y);
+auto J = eq.reverse_mode_jac();          // Eigen::Matrix<double, 2, 2>
+
+// Forward mode — Dual<T> variables (eq built with PDV variables)
+auto J = eq.forward_mode_jac();
+
+// Symbolic
+auto J = eq.symbolic_mode_jac();
+```
+
+### Hessian
+
+```cpp
+// Forward-over-reverse — Dual<T> variables
+auto eq = Equation(x * y + sin(x));
+auto H = eq.reverse_mode_hess();         // std::array<Eigen::Matrix, 1>
+
+// Forward-over-forward — Dual<Dual<T>> variables
+auto H = eq.forward_mode_hess();
 ```
