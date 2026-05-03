@@ -59,10 +59,12 @@ public:
 
   template <std::size_t Index> [[nodiscard]] constexpr auto get() const {
     static_assert(Index < 2, "Dual index out of bounds");
-    if constexpr (Index == 0)
+    if constexpr (Index == 0) {
       return val;
-    else
+    }
+    else {
       return deriv;
+    }
   }
 
   [[nodiscard]] friend constexpr Dual sin(const Dual &d) {

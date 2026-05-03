@@ -49,7 +49,7 @@ template <ExpressionConcept Expr, typename T = typename Expr::value_type>
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
   std::array<scalar_t, N> result{};
-  for (auto i : std::views::iota(decltype(N){0}, N)) {
+  for (std::size_t i = 0; i < N; i++) {
     result[i] = grads[i].template get<0>();
   }
   return result;
@@ -103,19 +103,19 @@ template <ExpressionConcept Expr,
   std::array<std::array<S, N>, N> H{};
   std::array<T, N> seeds{};
 
-  for (auto j : std::views::iota(0u, N)) {
-    for (auto i : std::views::iota(0u, N)) {
+  for (std::size_t j = 0; j < N; j++) {
+    for (std::size_t i = 0; i < N; i++) {
       seeds[i] = T{values[i], i == j ? S{1} : S{}};
     }
     expr.update(symbols{}, seeds);
     std::array<T, N> grads{};
     expr.backward(symbols{}, T{1}, grads);
-    for (auto i : std::views::iota(0u, N)) {
+    for (std::size_t i = 0; i < N; i++) {
       H[i][j] = grads[i].template get<1>();
     }
   }
 
-  for (auto i : std::views::iota(0u, N)) {
+  for (std::size_t i = 0; i < N; i++) {
     seeds[i] = T{values[i], S{}};
   }
   expr.update(symbols{}, seeds);
@@ -135,7 +135,7 @@ template <ExpressionConcept Expr,
   std::array<T, N> current{};
   expr.collect(symbols{}, current);
   std::array<S, N> values{};
-  for (auto i : std::views::iota(0u, N)) {
+  for (std::size_t i = 0; i < N; i++) {
     values[i] = current[i].template get<0>();
   }
   return reverse_mode_hessian(expr, values);
@@ -181,7 +181,7 @@ template <ExpressionConcept Expr,
   std::array<T, N> current{};
   expr.collect(symbols{}, current);
   std::array<S, N> values{};
-  for (auto i : std::views::iota(0u, N)) {
+  for (std::size_t i = 0; i < N; i++) {
     values[i] = current[i].template get<0>().template get<0>();
   }
   return forward_mode_hessian(expr, values);

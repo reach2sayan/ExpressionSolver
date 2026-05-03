@@ -499,3 +499,5 @@ build/
 /cmake-build-clang-release/
 /cmake-build-gcc-debug/
 /cmake-build-gcc-release/
+*.aux
+*.toc
