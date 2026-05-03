@@ -112,13 +112,12 @@ private:
     requires(input_dim > 0)
   {
     Eigen::Matrix<value_type, output_dim, input_dim> J;
-    [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-      ([&]() DIFF_PASS_INLINE {
-        auto row = std::apply(detail::eval_func, std::get<Is>(jacobian_data));
-        for (std::size_t j = 0; j < input_dim; ++j)
-          J(Is, j) = row[j];
-      }(), ...);
-    }(std::make_index_sequence<output_dim>{});
+    static_for<output_dim>([&]<std::size_t I>() {
+      auto row = std::apply(detail::eval_func, std::get<I>(jacobian_data));
+      for (std::size_t j = 0; j < input_dim; ++j) {
+        J(I, j) = row[j];
+      }
+    });
     return J;
   }
 
@@ -276,11 +275,9 @@ public:
   {
     const auto &row = std::get<0>(jacobian_data);
     std::array<value_type, input_dim> result{};
-    [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-      ([&]() DIFF_PASS_INLINE {
-        result[Is] = std::get<Is>(row).eval();
-      }(), ...);
-    }(std::make_index_sequence<input_dim>{});
+    static_for<input_dim>([&]<std::size_t I>() {
+      result[I] = std::get<I>(row).eval();
+    });
     return result;
   }
 
