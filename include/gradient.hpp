@@ -78,14 +78,12 @@ template <CExpression Expr,
   // to seeds/expr and constant-fold compile-time-known inputs.
   [&]<std::size_t... Js>(std::index_sequence<Js...>) {
     ((seeds[Js] = value_type{values[Js], scalar_type{}}), ...);
-    (
-        [&]() DIFF_PASS_INLINE {
-          seeds[Js] = value_type{values[Js], scalar_type{1}};
-          expr.update(symbols{}, seeds);
-          gradients[Js] = expr.eval().template get<1>();
-          seeds[Js] = value_type{values[Js], scalar_type{}};
-        }(),
-        ...);
+    ([&]() DIFF_PASS_INLINE {
+      seeds[Js] = value_type{values[Js], scalar_type{1}};
+      expr.update(symbols{}, seeds);
+      gradients[Js] = expr.eval().template get<1>();
+      seeds[Js] = value_type{values[Js], scalar_type{}};
+    }(), ...);
   }(std::make_index_sequence<n>{});
 
   expr.update(symbols{}, seeds);
@@ -189,55 +187,6 @@ template <CExpression Expr,
   return forward_mode_hessian(expr, values);
 }
 
-// ---------------------------------------------------------------------------
-// Nth-derivative helpers
-// ---------------------------------------------------------------------------
-
-// Lift scalar val into nth_dual_t<T,N> with all dual parts zero (constant).
-template <typename T, std::size_t N>
-constexpr nth_dual_t<T, N> embed_constant(T val) {
-  if constexpr (N == 0) {
-    return val;
-  } else {
-    return nth_dual_t<T, N>{embed_constant<T, N - 1>(val),
-                            nth_dual_t<T, N - 1>{}};
-  }
-}
-
-// Seed for the Nth derivative of a single variable:
-//   seed<1>(v) = {v, 1}
-//   seed<N>(v) = {seed<N-1>(v), embed_constant<N-1>(1)}
-// Chain .get<1>() N times on f(seed) to recover f^(N)(v).
-template <typename T, std::size_t N>
-constexpr nth_dual_t<T, N> make_nth_seed(T val) {
-  if constexpr (N == 0) {
-    return val;
-  } else if constexpr (N == 1) {
-    return nth_dual_t<T, 1>{val, T{1}};
-  } else {
-    return nth_dual_t<T, N>{make_nth_seed<T, N - 1>(val),
-                            embed_constant<T, N - 1>(T{1})};
-  }
-}
-
-// Chain .get<1>() N times: extracts the order-N tangent component.
-template <std::size_t N, typename T> constexpr auto extract_nth(const T &x) {
-  if constexpr (N == 0) {
-    return x;
-  } else {
-    return extract_nth<N - 1>(x.template get<1>());
-  }
-}
-
-// Chain .get<0>() N times: recovers the base scalar from a nested dual.
-template <std::size_t N, typename T> constexpr auto get_real_part(const T &x) {
-  if constexpr (N == 0) {
-    return x;
-  } else {
-    return get_real_part<N - 1>(x.template get<0>());
-  }
-}
-
 } // namespace detail
 
 // ===========================================================================
@@ -300,61 +249,6 @@ template <DiffMode Mode, CExpression Expr,
   requires(Mode == DiffMode::Forward && is_dual_v<T> && is_dual_v<D>)
 [[nodiscard]] constexpr auto hessian(const Expr &expr) {
   return detail::forward_mode_hessian(expr);
-}
-
-// ===========================================================================
-// nth_derivative<Order> — pure Order-th partial derivative per variable.
-//
-// Returns std::array<S, N_vars> where entry i = ∂^Order f / ∂x_i^Order.
-// Mixed partials are NOT computed; use hessian() for ∂²f/∂xᵢ∂xⱼ.
-//
-// Requires: Expr::value_type == nth_dual_t<S, Order>
-//   i.e. the expression must be built with Order-deep Dual variables.
-// ===========================================================================
-
-template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
-              std::remove_cvref_t<Expr>>::type>::value>
-  requires(dual_depth_v<T> == Order && Order > 0 && N > 0)
-[[nodiscard]] constexpr auto nth_derivative(const Expr &expr,
-                                            std::array<S, N> values) {
-  using symbols =
-      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
-  std::array<S, N> result{};
-  static_for<N>([&]<std::size_t I>() {
-    std::array<T, N> seeds{};
-    static_for<N>([&]<std::size_t J>() {
-      if constexpr (I == J) {
-        seeds[J] = detail::make_nth_seed<S, Order>(values[J]);
-      }
-      else {
-        seeds[J] = detail::embed_constant<S, Order>(values[J]);
-      }
-    });
-    result[I] =
-        detail::extract_nth<Order>(expr.template eval_seeded<symbols>(seeds));
-  });
-  return result;
-}
-
-template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
-              std::remove_cvref_t<Expr>>::type>::value>
-  requires(dual_depth_v<T> == Order && Order > 0 && N > 0)
-[[nodiscard]] constexpr auto nth_derivative(const Expr &expr) {
-  using symbols =
-      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
-  std::array<T, N> current{};
-  expr.collect(symbols{}, current);
-  std::array<S, N> values{};
-  for (std::size_t i = 0; i < N; ++i) {
-    values[i] = detail::get_real_part<Order>(current[i]);
-  }
-  return nth_derivative<Order>(expr, values);
 }
 
 } // namespace diff

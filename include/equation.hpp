@@ -398,25 +398,6 @@ public:
     return hessian<Mode>();
   }
 
-  // --- nth_derivative<Order>() ---
-  // Returns std::array<S, input_dim> of ∂^Order f / ∂x_i^Order per variable.
-  // Requires value_type == nth_dual_t<S, Order> (build variables with that type).
-
-  template <std::size_t Order>
-  [[nodiscard]] constexpr auto
-  nth_derivative(std::array<scalar_base_t<value_type>, input_dim> values) const
-    requires(output_dim == 1 && dual_depth_v<value_type> == Order && Order > 0)
-  {
-    return diff::nth_derivative<Order>(std::get<0>(expressions), values);
-  }
-
-  template <std::size_t Order = dual_depth_v<value_type>>
-  [[nodiscard]] constexpr auto nth_derivative() const
-    requires(output_dim == 1 && is_dual_v<value_type>)
-  {
-    return diff::nth_derivative<Order>(std::get<0>(expressions));
-  }
-
   // Update compile-time variables in all expressions and Jacobian rows.
   constexpr void update(const symbols &syms, const auto &updates) {
     auto update_func = detail::update_func_t{syms, updates};
