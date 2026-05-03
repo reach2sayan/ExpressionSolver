@@ -4,7 +4,6 @@
 #include "gradient.hpp"
 #include <Eigen/Dense>
 #include <boost/mp11/algorithm.hpp>
-#include <ranges>
 
 namespace diff {
 
@@ -74,7 +73,7 @@ private:
     Eigen::Matrix<value_type, output_dim, input_dim> J;
     static_for<output_dim>([&]<std::size_t I>() {
       auto row = std::apply(detail::eval_func, std::get<I>(jacobian_data));
-      for (auto j : std::views::iota(std::size_t{0}, input_dim)) {
+      for (std::size_t j = 0; j < input_dim; ++j) {
         J(I, j) = row[j];
       }
     });
@@ -89,7 +88,7 @@ private:
     static_for<output_dim>([&]<std::size_t I>() {
       std::array<value_type, input_dim> row{};
       std::get<I>(expressions).backward(symbols{}, value_type{1}, row);
-      for (auto j : std::views::iota(std::size_t{0}, input_dim)) {
+      for (std::size_t j = 0; j < input_dim; ++j) {
         J(I, j) = row[j];
       }
     });
@@ -125,24 +124,23 @@ private:
         [&](const auto &...exprs) { (exprs.collect(symbols{}, current), ...); },
         expressions);
 
-    for (auto j : std::views::iota(std::size_t{0}, input_dim)) {
-      for (auto i : std::views::iota(std::size_t{0}, input_dim)) {
+    for (std::size_t j = 0; j < input_dim; ++j){
+      for (std::size_t i = 0; i < input_dim; ++i) {
         seeds[i] =
             value_type{current[i].template get<0>(), i == j ? S{1} : S{}};
       }
       update(symbols{}, seeds);
       auto vals = evaluate();
-      for (auto i : std::views::iota(std::size_t{0}, output_dim))
+      for (std::size_t i = 0; i < output_dim; ++i)
         J(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) =
             vals[i].template get<1>();
     }
 
     // Restore to real-part values with zero dual tangent.
-    for (auto i : std::views::iota(std::size_t{0}, input_dim)) {
+    for (std::size_t i = 0; i < input_dim; ++i) {
       seeds[i] = value_type{current[i].template get<0>(), S{}};
     }
     update(symbols{}, seeds);
-
     return J;
   }
 
@@ -152,8 +150,9 @@ private:
   {
     using S = dual_scalar_t<value_type>;
     std::array<Eigen::Matrix<S, input_dim, input_dim>, output_dim> H;
-    for (auto &h : H)
+    for (auto &h : H) {
       h.setZero();
+    }
 
     std::array<value_type, input_dim> current{};
     std::apply(
@@ -161,8 +160,8 @@ private:
         expressions);
 
     Eigen::Vector<value_type, input_dim> seeds;
-    for (auto j : std::views::iota(std::size_t{0}, input_dim)) {
-      for (auto i : std::views::iota(std::size_t{0}, input_dim)) {
+    for (std::size_t j = 0; j < input_dim; ++j){
+      for (std::size_t i= 0; i < input_dim; ++i) {
         seeds[i] =
             value_type{current[i].template get<0>(), i == j ? S{1} : S{}};
       }
@@ -195,16 +194,15 @@ private:
     using S = dual_scalar_t<D>;
 
     std::array<Eigen::Matrix<S, input_dim, input_dim>, output_dim> H;
-
     std::array<value_type, input_dim> current{};
     std::apply(
         [&](const auto &...exprs) { (exprs.collect(symbols{}, current), ...); },
         expressions);
 
     Eigen::Vector<value_type, input_dim> seeds;
-    for (auto i : std::views::iota(std::size_t{0}, input_dim)) {
-      for (auto j : std::views::iota(std::size_t{0}, input_dim)) {
-        for (auto k : std::views::iota(std::size_t{0}, input_dim)) {
+    for (std::size_t i = 0; i < input_dim; ++i) {
+      for (std::size_t j = 0; j < input_dim; ++j) {
+        for (std::size_t k = 0; k < input_dim; ++k) {
           S real_k = current[k].template get<0>().template get<0>();
           seeds[k] = value_type{D{real_k, k == j ? S{1} : S{}},
                                 D{k == i ? S{1} : S{}, S{}}};
@@ -219,7 +217,7 @@ private:
     }
 
     // Restore to real-part values.
-    for (auto k : std::views::iota(std::size_t{0}, input_dim)) {
+    for (std::size_t k = 0; k < input_dim; ++k) {
       S real_k = current[k].template get<0>().template get<0>();
       seeds[k] = value_type{D{real_k, S{}}, D{}};
     }
@@ -302,8 +300,9 @@ public:
   {
     using S = dual_scalar_t<value_type>;
     Eigen::Vector<value_type, input_dim> seeds;
-    for (std::size_t i = 0; i < input_dim; ++i)
+    for (std::size_t i = 0; i < input_dim; ++i) {
       seeds[i] = value_type{values[i], S{}};
+    }
     update(symbols{}, seeds);
     return jacobian<Mode>();
   }
@@ -326,8 +325,9 @@ public:
   {
     using S = dual_scalar_t<value_type>;
     Eigen::Vector<value_type, input_dim> seeds;
-    for (std::size_t i = 0; i < input_dim; ++i)
+    for (std::size_t i = 0; i < input_dim; ++i) {
       seeds[i] = value_type{values[i], S{}};
+    }
     update(symbols{}, seeds);
     return hessian<Mode>();
   }
@@ -349,8 +349,9 @@ public:
     using D = dual_scalar_t<value_type>;
     using S = dual_scalar_t<D>;
     Eigen::Vector<value_type, input_dim> seeds;
-    for (auto i : std::views::iota(0u, input_dim))
+    for (std::size_t i = 0; i < input_dim; ++i) {
       seeds[i] = value_type{D{values[i], S{}}, D{}};
+    }
     update(symbols{}, seeds);
     return hessian<Mode>();
   }
@@ -381,6 +382,10 @@ template <ExpressionConcept T, ExpressionConcept... Ts>
 Equation(std::size_t, T, Ts...) -> Equation<T, Ts...>;
 
 } // namespace diff
+
+auto make_equation(auto &&...args) {
+  return diff::Equation(std::forward<decltype(args)>(args)...);
+}
 
 #define forward_mode_hess hessian<diff::DiffMode::Forward>
 #define reverse_mode_hess hessian<diff::DiffMode::Reverse>

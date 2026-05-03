@@ -1206,7 +1206,7 @@ TEST(EquationForward, StateRestoredAfterCall) {
   auto y = PDV(4.0, 'y');
   auto k = PDV(4.0, 'y');
   k = 7.0;
-  auto ve = Equation(x * y, x + y);
+  auto ve = make_equation(x * y, x + y);
   auto [v0, v1] = ve.evaluate();
   auto [v01, v02] = v0;
   EXPECT_DOUBLE_EQ(v01, 12.0);                 // x*y = 12

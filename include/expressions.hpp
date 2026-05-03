@@ -92,12 +92,13 @@ public:
 
   template <std::size_t I> [[nodiscard]] constexpr auto get() const {
     static_assert(I < 2);
-    if constexpr (requires { std::tuple_size<value_type>::value; })
+    if constexpr (requires { std::tuple_size<value_type>::value; }) {
       return eval().template get<I>();
-    else if constexpr (I == 0)
+    } else if constexpr (I == 0) {
       return eval();
-    else
+    } else {
       return static_cast<value_type>(derivative());
+    }
   }
 
   [[nodiscard]] constexpr auto derivative() const {
@@ -151,12 +152,13 @@ public:
 
   template <std::size_t I> [[nodiscard]] constexpr auto get() const {
     static_assert(I < 2);
-    if constexpr (requires { std::tuple_size<value_type>::value; })
+    if constexpr (requires { std::tuple_size<value_type>::value; }) {
       return eval().template get<I>();
-    else if constexpr (I == 0)
+    } else if constexpr (I == 0) {
       return eval();
-    else
+    } else {
       return static_cast<value_type>(derivative());
+    }
   }
 
   [[nodiscard]] constexpr auto eval() const {

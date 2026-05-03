@@ -5,10 +5,8 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 #include <benchmark/benchmark.h>
-
 #include <array>
 #include <cstddef>
-#include <numbers>
 #include <vector>
 
 using namespace diff;
