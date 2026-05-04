@@ -109,6 +109,14 @@ public:
         EvalResult<value_type>{expression.template eval_seeded<Syms>(vals)});
   }
 
+  // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
+  template <typename U, typename Syms, std::size_t N>
+  [[nodiscard]] constexpr U
+  eval_seeded_as(const std::array<U, N> &vals) const {
+    return Op::eval(
+        EvalResult<U>{expression.template eval_seeded_as<U, Syms>(vals)});
+  }
+
   constexpr void update(const auto &symbols, const auto &updates) {
     expression.update(symbols, updates);
   }
@@ -174,6 +182,15 @@ public:
             inner_expressions.first.template eval_seeded<Syms>(vals)},
         EvalResult<value_type>{
             inner_expressions.second.template eval_seeded<Syms>(vals)});
+  }
+
+  // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
+  template <typename U, typename Syms, std::size_t N>
+  [[nodiscard]] constexpr U
+  eval_seeded_as(const std::array<U, N> &vals) const {
+    return Op::eval(
+        EvalResult<U>{inner_expressions.first.template eval_seeded_as<U, Syms>(vals)},
+        EvalResult<U>{inner_expressions.second.template eval_seeded_as<U, Syms>(vals)});
   }
 
   constexpr void update(const auto &symbols, const auto &updates) {

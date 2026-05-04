@@ -145,6 +145,48 @@ inline constexpr bool is_dual_v = is_dual_impl(std::type_identity<T>{});
 template <typename T>
 using dual_scalar_t = decltype(dual_scalar_impl(std::declval<T>()));
 
+// nth_dual_t<T, N> = Dual<Dual<...<T>...>> nested N times
+template <typename T, std::size_t N>
+struct nth_dual { using type = Dual<typename nth_dual<T, N - 1>::type>; };
+template <typename T>
+struct nth_dual<T, 0> { using type = T; };
+template <typename T, std::size_t N>
+using nth_dual_t = typename nth_dual<T, N>::type;
+
+// How many Dual<> layers wrap T
+template <typename T>
+inline constexpr std::size_t dual_depth_v = 0;
+template <typename T>
+inline constexpr std::size_t dual_depth_v<Dual<T>> = 1 + dual_depth_v<T>;
+
+// Innermost scalar type, peeling all Dual<> wrappers
+template <typename T>
+struct scalar_base { using type = T; };
+template <typename T>
+struct scalar_base<Dual<T>> { using type = typename scalar_base<T>::type; };
+template <typename T>
+using scalar_base_t = typename scalar_base<T>::type;
+
+// embed_constant: lift a base scalar into nth_dual_t<T,N> with zero dual parts.
+template <typename T, std::size_t N>
+constexpr nth_dual_t<T, N> embed_constant(T val) {
+  if constexpr (N == 0) {
+    return val;
+  } else {
+    return nth_dual_t<T, N>{embed_constant<T, N - 1>(val), nth_dual_t<T, N - 1>{}};
+  }
+}
+
+// get_real_part: peel N Dual<> layers to recover the base scalar.
+template <std::size_t N, typename T>
+constexpr auto get_real_part(const T &x) {
+  if constexpr (N == 0) {
+    return x;
+  } else {
+    return get_real_part<N - 1>(x.template get<0>());
+  }
+}
+
 } // namespace diff
 
 namespace std {

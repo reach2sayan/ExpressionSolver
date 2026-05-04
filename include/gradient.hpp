@@ -3,9 +3,9 @@
 #include "dual.hpp"
 #include "expressions.hpp"
 #include "traits.hpp"
+#include <unsupported/Eigen/CXX11/Tensor>
 #include <array>
 #include <boost/mp11/algorithm.hpp>
-#include <ranges>
 
 namespace diff {
 
@@ -14,25 +14,18 @@ namespace mp = boost::mp11;
 enum class DiffMode { Symbolic, Forward, Reverse };
 
 // ===========================================================================
-// detail — implementation functions; use the public wrappers below.
+// detail — internal implementations; use the public wrappers below.
 // ===========================================================================
 namespace detail {
 
-// GCC requires always_inline on each per-pass lambda so it can constant-fold
-// through the expression tree. Clang folds each pass independently at a
-// manageable size without the hint — forcing always_inline merges all N passes
-// into one function body that exceeds Clang's optimisation threshold.
-#if defined(__GNUC__) && !defined(__clang__)
-#define DIFF_PASS_INLINE __attribute__((always_inline))
-#else
-#define DIFF_PASS_INLINE
-#endif
+// ---------------------------------------------------------------------------
+// Reverse-mode gradient helpers
+// ---------------------------------------------------------------------------
 
 template <CExpression Expr, typename T = typename Expr::value_type>
   requires(!is_dual_v<T>)
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) {
-  using Syms =
-      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
+  using Syms = typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
   constexpr auto N = mp::mp_size<Syms>::value;
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
@@ -43,51 +36,14 @@ template <CExpression Expr, typename T = typename Expr::value_type>
   requires is_dual_v<T>
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) {
   using scalar_t = dual_scalar_t<T>;
-  using Syms =
-      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
+  using Syms = typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
   constexpr auto N = mp::mp_size<Syms>::value;
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
   std::array<scalar_t, N> result{};
-  for (std::size_t i = 0; i < N; i++) {
+  for (std::size_t i = 0; i < N; i++)
     result[i] = grads[i].template get<0>();
-  }
   return result;
-}
-
-template <CExpression Expr,
-          typename TArr =
-              dual_scalar_t<typename std::remove_cvref_t<Expr>::value_type>,
-          std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
-              std::remove_cvref_t<Expr>>::type>::value>
-[[nodiscard]] auto forward_mode_gradient(Expr &expr, std::array<TArr, N> values)
-  requires is_dual_v<typename std::remove_cvref_t<Expr>::value_type>
-{
-  using expr_type = std::remove_cvref_t<Expr>;
-  using value_type = typename expr_type::value_type;
-  using scalar_type = dual_scalar_t<value_type>;
-  using symbols = typename extract_symbols_from_expr<expr_type>::type;
-  constexpr std::size_t n = mp::mp_size<symbols>::value;
-
-  std::array<value_type, n> seeds{};
-  std::array<scalar_type, n> gradients{};
-
-  // One outer lambda exposes compile-time Js to both the init fold and the
-  // per-pass lambdas. Each inner lambda is independently sized for Clang's
-  // inliner; DIFF_PASS_INLINE forces GCC to inline them so it can see through
-  // to seeds/expr and constant-fold compile-time-known inputs.
-  [&]<std::size_t... Js>(std::index_sequence<Js...>) {
-    ((seeds[Js] = value_type{values[Js], scalar_type{}}), ...);
-    ([&]() DIFF_PASS_INLINE {
-      seeds[Js] = value_type{values[Js], scalar_type{1}};
-      expr.update(symbols{}, seeds);
-      gradients[Js] = expr.eval().template get<1>();
-      seeds[Js] = value_type{values[Js], scalar_type{}};
-    }(), ...);
-  }(std::make_index_sequence<n>{});
-
-  expr.update(symbols{}, seeds);
-  return gradients;
 }
 
 template <CExpression Expr,
@@ -97,29 +53,21 @@ template <CExpression Expr,
               std::remove_cvref_t<Expr>>::type>::value>
   requires is_dual_v<T>
 [[nodiscard]] auto reverse_mode_hessian(Expr &expr, std::array<S, N> values) {
-  using symbols =
-      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
-
+  using symbols = typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
   std::array<std::array<S, N>, N> H{};
   std::array<T, N> seeds{};
-
   for (std::size_t j = 0; j < N; j++) {
-    for (std::size_t i = 0; i < N; i++) {
+    for (std::size_t i = 0; i < N; i++)
       seeds[i] = T{values[i], i == j ? S{1} : S{}};
-    }
     expr.update(symbols{}, seeds);
     std::array<T, N> grads{};
     expr.backward(symbols{}, T{1}, grads);
-    for (std::size_t i = 0; i < N; i++) {
+    for (std::size_t i = 0; i < N; i++)
       H[i][j] = grads[i].template get<1>();
-    }
   }
-
-  for (std::size_t i = 0; i < N; i++) {
+  for (std::size_t i = 0; i < N; i++)
     seeds[i] = T{values[i], S{}};
-  }
   expr.update(symbols{}, seeds);
-
   return H;
 }
 
@@ -130,84 +78,113 @@ template <CExpression Expr,
               std::remove_cvref_t<Expr>>::type>::value>
   requires is_dual_v<T>
 [[nodiscard]] auto reverse_mode_hessian(Expr &expr) {
-  using symbols =
-      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
+  using symbols = typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
   std::array<T, N> current{};
   expr.collect(symbols{}, current);
   std::array<S, N> values{};
-  for (std::size_t i = 0; i < N; i++) {
+  for (std::size_t i = 0; i < N; i++)
     values[i] = current[i].template get<0>();
-  }
   return reverse_mode_hessian(expr, values);
 }
 
-template <CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
-          std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
-              std::remove_cvref_t<Expr>>::type>::value>
-  requires is_dual_v<T> && is_dual_v<D>
-[[nodiscard]] constexpr auto forward_mode_hessian(const Expr &expr,
-                                                  std::array<S, N> values) {
-  using symbols =
-      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
-
-  std::array<std::array<S, N>, N> H{};
-  static_for<N>([&]<std::size_t I>() {
-    static_for<N>([&]<std::size_t J>() {
-      std::array<T, N> seeds{};
-      static_for<N>([&]<std::size_t K>() {
-        seeds[K] =
-            T{D{values[K], K == J ? S{1} : S{}}, D{K == I ? S{1} : S{}, S{}}};
-      });
-      H[I][J] = expr.template eval_seeded<symbols>(seeds)
-                    .template get<1>()
-                    .template get<1>();
-    });
-  });
-
-  return H;
+// ---------------------------------------------------------------------------
+// Forward-mode: mixed-partial seed construction.
+//
+// make_mixed_seed<S, Depth>(value, idx, k):
+//   Builds the Dual^Depth<S> seed for variable k given a multi-index
+//   idx[0..Depth-1], where idx[0] is the outermost direction and
+//   idx[Depth-1] is the innermost.  All cross-terms start at zero so
+//   only the intended mixed partial is non-zero in the result.
+//
+//   Extraction: result.get<1>().get<1>()... (Depth times)
+//               = ∂^Depth f / ∂x_{idx[0]} ∂x_{idx[1]} ... ∂x_{idx[Depth-1]}
+// ---------------------------------------------------------------------------
+template <typename S, std::size_t Depth>
+constexpr nth_dual_t<S, Depth> make_mixed_seed(S value,
+                                                const std::size_t *idx,
+                                                std::size_t k) {
+  if constexpr (Depth == 0) {
+    return value;
+  } else if constexpr (Depth == 1) {
+    return nth_dual_t<S, 1>{value, k == idx[0] ? S{1} : S{}};
+  } else {
+    auto inner = make_mixed_seed<S, Depth - 1>(value, idx + 1, k);
+    auto outer_tangent =
+        embed_constant<S, Depth - 1>(k == idx[0] ? S{1} : S{});
+    return nth_dual_t<S, Depth>{inner, outer_tangent};
+  }
 }
 
-template <CExpression Expr,
+// Chain .get<1>() N times: extracts the order-N tangent component.
+template <std::size_t N, typename T> constexpr auto extract_nth(const T &x) {
+  if constexpr (N == 0)
+    return x;
+  else
+    return extract_nth<N - 1>(x.template get<1>());
+}
+
+// ---------------------------------------------------------------------------
+// Core forward derivative_tensor implementation.
+// Returns Eigen::Tensor<S, Order> of shape [N, N, ..., N] (rank = Order).
+// T[i₁][i₂]...[iOrder] = ∂^Order f / ∂x_{i₁} ∂x_{i₂} ... ∂x_{iOrder}
+// ---------------------------------------------------------------------------
+template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
+          typename S = scalar_base_t<T>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
               std::remove_cvref_t<Expr>>::type>::value>
-  requires is_dual_v<T> && is_dual_v<D>
-[[nodiscard]] constexpr auto forward_mode_hessian(const Expr &expr) {
+  requires(Order > 0 && N > 0)
+[[nodiscard]] auto derivative_tensor_impl(const Expr &expr,
+                                          std::array<S, N> values) {
   using symbols =
       typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
-  std::array<T, N> current{};
-  expr.collect(symbols{}, current);
-  std::array<S, N> values{};
-  for (std::size_t i = 0; i < N; i++) {
-    values[i] = current[i].template get<0>().template get<0>();
+  using U = nth_dual_t<S, Order>;
+
+  Eigen::Tensor<S, (int)Order> result;
+  Eigen::array<Eigen::Index, Order> dims;
+  for (std::size_t d = 0; d < Order; ++d)
+    dims[d] = static_cast<Eigen::Index>(N);
+  result.resize(dims);
+
+  // Iterate over all N^Order multi-indices (row-major: idx[0] most significant).
+  std::size_t total = 1;
+  for (std::size_t d = 0; d < Order; ++d)
+    total *= N;
+
+  for (std::size_t flat = 0; flat < total; ++flat) {
+    std::array<std::size_t, Order> idx{};
+    std::size_t tmp = flat;
+    for (int d = (int)Order - 1; d >= 0; --d) {
+      idx[d] = tmp % N;
+      tmp /= N;
+    }
+
+    std::array<U, N> seeds{};
+    for (std::size_t k = 0; k < N; ++k)
+      seeds[k] = make_mixed_seed<S, Order>(values[k], idx.data(), k);
+
+    U val = expr.template eval_seeded_as<U, symbols>(seeds);
+    S deriv = extract_nth<Order>(val);
+
+    // Use array-form operator() to avoid MSVC narrowing in variadic brace-init.
+    Eigen::array<Eigen::Index, Order> tidx;
+    for (std::size_t d = 0; d < Order; ++d)
+      tidx[d] = static_cast<Eigen::Index>(idx[d]);
+    result(tidx) = deriv;
   }
-  return forward_mode_hessian(expr, values);
+  return result;
 }
 
 } // namespace detail
 
 // ===========================================================================
-// Public API — select mode with DiffMode::Forward or DiffMode::Reverse.
+// Public API — reverse mode
 // ===========================================================================
 
 template <DiffMode Mode, CExpression Expr>
   requires(Mode == DiffMode::Reverse)
 [[nodiscard]] constexpr auto gradient(const Expr &expr) {
   return detail::reverse_mode_gradient(expr);
-}
-
-template <DiffMode Mode, CExpression Expr,
-          typename TArr =
-              dual_scalar_t<typename std::remove_cvref_t<Expr>::value_type>,
-          std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
-              std::remove_cvref_t<Expr>>::type>::value>
-  requires(Mode == DiffMode::Forward &&
-           is_dual_v<typename std::remove_cvref_t<Expr>::value_type>)
-[[nodiscard]] auto gradient(Expr &expr, std::array<TArr, N> values) {
-  return detail::forward_mode_gradient(expr, values);
 }
 
 template <DiffMode Mode, CExpression Expr,
@@ -230,30 +207,50 @@ template <DiffMode Mode, CExpression Expr,
   return detail::reverse_mode_hessian(expr);
 }
 
-template <DiffMode Mode, CExpression Expr,
+// ===========================================================================
+// Public API — forward mode (derivative_tensor)
+//
+// derivative_tensor<Order>(expr [, values])
+//   → Eigen::Tensor<S, Order>  with shape [N, N, ..., N]
+//   → T(i₁, i₂, ..., iOrder) = ∂^Order f / ∂x_{i₁} ∂x_{i₂} ... ∂x_{iOrder}
+//
+// Works for any expression depth (Variable<T>, Variable<Dual<T>>, etc.).
+// Input is always the base scalar S = scalar_base_t<value_type>; the library
+// promotes internally to nth_dual_t<S, Order> via eval_seeded_as.
+//
+// Order = 1 → gradient (rank-1 tensor)
+// Order = 2 → full Hessian including mixed partials (rank-2 tensor)
+// Order = k → full k-th order derivative tensor
+// ===========================================================================
+
+template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
+          typename S = scalar_base_t<T>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
               std::remove_cvref_t<Expr>>::type>::value>
-  requires(Mode == DiffMode::Forward && is_dual_v<T> && is_dual_v<D>)
-[[nodiscard]] constexpr auto hessian(const Expr &expr,
-                                     std::array<S, N> values) {
-  return detail::forward_mode_hessian(expr, values);
+  requires(Order > 0 && N > 0)
+[[nodiscard]] auto derivative_tensor(const Expr &expr, std::array<S, N> values) {
+  return detail::derivative_tensor_impl<Order>(expr, values);
 }
 
-template <DiffMode Mode, CExpression Expr,
+template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename D = dual_scalar_t<T>, typename S = dual_scalar_t<D>,
+          typename S = scalar_base_t<T>,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
               std::remove_cvref_t<Expr>>::type>::value>
-  requires(Mode == DiffMode::Forward && is_dual_v<T> && is_dual_v<D>)
-[[nodiscard]] constexpr auto hessian(const Expr &expr) {
-  return detail::forward_mode_hessian(expr);
+  requires(Order > 0 && N > 0)
+[[nodiscard]] auto derivative_tensor(const Expr &expr) {
+  using symbols =
+      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
+  std::array<T, N> current{};
+  expr.collect(symbols{}, current);
+  std::array<S, N> values{};
+  for (std::size_t i = 0; i < N; ++i)
+    values[i] = get_real_part<dual_depth_v<T>>(current[i]);
+  return detail::derivative_tensor_impl<Order>(expr, values);
 }
 
 } // namespace diff
 
 #define reverse_mode_grad gradient<diff::DiffMode::Reverse>
-#define forward_mode_grad gradient<diff::DiffMode::Forward>
 #define reverse_mode_hess hessian<diff::DiffMode::Reverse>
-#define forward_mode_hess hessian<diff::DiffMode::Forward>
