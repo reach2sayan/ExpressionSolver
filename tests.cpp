@@ -1697,7 +1697,6 @@ TEST(DerivativeTensorTest, Equation_Order2_IsHessianStack) {
   Variable<double, 'y'> yf{yv};
   auto ve_fwd = Equation(xf * yf, xf * xf);
   auto H_fwd = ve_fwd.derivative_tensor<2>(std::array{xv, yv});
-
   using D = Dual<double>;
   Variable<D, 'x'> xr{D{xv}};
   Variable<D, 'y'> yr{D{yv}};

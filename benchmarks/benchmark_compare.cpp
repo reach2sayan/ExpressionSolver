@@ -37,7 +37,7 @@ template <CExpression Expr, std::size_t N>
 static void run_our_forward(benchmark::State &state, Expr &expr,
                              const std::array<dual_scalar_t<typename Expr::value_type>, N> &vals) {
     for (auto _ : state) {
-        auto g = forward_mode_grad(expr, vals);
+        auto g = derivative_tensor<1>(expr, vals);
         benchmark::DoNotOptimize(g);
         benchmark::ClobberMemory();
     }
