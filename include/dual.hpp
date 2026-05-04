@@ -167,6 +167,26 @@ struct scalar_base<Dual<T>> { using type = typename scalar_base<T>::type; };
 template <typename T>
 using scalar_base_t = typename scalar_base<T>::type;
 
+// embed_constant: lift a base scalar into nth_dual_t<T,N> with zero dual parts.
+template <typename T, std::size_t N>
+constexpr nth_dual_t<T, N> embed_constant(T val) {
+  if constexpr (N == 0) {
+    return val;
+  } else {
+    return nth_dual_t<T, N>{embed_constant<T, N - 1>(val), nth_dual_t<T, N - 1>{}};
+  }
+}
+
+// get_real_part: peel N Dual<> layers to recover the base scalar.
+template <std::size_t N, typename T>
+constexpr auto get_real_part(const T &x) {
+  if constexpr (N == 0) {
+    return x;
+  } else {
+    return get_real_part<N - 1>(x.template get<0>());
+  }
+}
+
 } // namespace diff
 
 namespace std {

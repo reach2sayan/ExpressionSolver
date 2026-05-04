@@ -31,11 +31,13 @@ template <typename T, typename func, char symbol>
   requires cunary_op<func, T>
 struct UnaryOp : Op<T, OpType::Unary> {
   using value_type = Op<T, OpType::Unary>::value_type;
+  using func_type = func;
   static void print(std::ostream &out, const CExpression auto &lhs) {
     out << symbol << lhs;
   }
   [[nodiscard]] constexpr static auto eval(const CExpression auto &lhs) {
-    return std::invoke(func{}, lhs);
+    using VT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
+    return std::invoke(func{}, static_cast<VT>(lhs));
   }
 };
 
@@ -43,17 +45,20 @@ template <typename T, typename func, char symbol>
   requires cbinary_op<func, T>
 struct BinaryOp : Op<T, OpType::Binary> {
   using value_type = Op<T, OpType::Binary>::value_type;
+  using func_type = func;
   static void print(std::ostream &out, const CExpression auto &lhs,
                     const CExpression auto &rhs) {
     out << lhs << symbol << rhs;
   }
   [[nodiscard]] constexpr static auto eval(const CExpression auto &lhs,
                                            const CExpression auto &rhs) {
-    return std::invoke(func{}, lhs, rhs);
+    using LT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
+    using RT = typename std::remove_cvref_t<decltype(rhs)>::value_type;
+    return std::invoke(func{}, static_cast<LT>(lhs), static_cast<RT>(rhs));
   }
 };
 
-template <typename T> struct SumOp : BinaryOp<T, std::plus<T>, '+'> {
+template <typename T> struct SumOp : BinaryOp<T, std::plus<void>, '+'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) {
@@ -67,7 +72,7 @@ template <typename T> struct SumOp : BinaryOp<T, std::plus<T>, '+'> {
   }
 };
 
-template <Numeric T> struct MultiplyOp : BinaryOp<T, std::multiplies<T>, '*'> {
+template <Numeric T> struct MultiplyOp : BinaryOp<T, std::multiplies<void>, '*'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) {
@@ -83,7 +88,7 @@ template <Numeric T> struct MultiplyOp : BinaryOp<T, std::multiplies<T>, '*'> {
   }
 };
 
-template <Numeric T> struct NegateOp : UnaryOp<T, std::negate<T>, '-'> {
+template <Numeric T> struct NegateOp : UnaryOp<T, std::negate<void>, '-'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs) {
     auto d = lhs.derivative();
@@ -95,7 +100,7 @@ template <Numeric T> struct NegateOp : UnaryOp<T, std::negate<T>, '-'> {
   }
 };
 
-template <Numeric T> struct DivideOp : BinaryOp<T, std::divides<T>, '/'> {
+template <Numeric T> struct DivideOp : BinaryOp<T, std::divides<void>, '/'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) {
@@ -115,87 +120,61 @@ template <Numeric T> struct DivideOp : BinaryOp<T, std::divides<T>, '/'> {
 };
 
 namespace detail {
-template <Numeric T> struct sine_impl {
-  T operator()(const T &a) const {
-    using std::sin;
-    return sin(a);
-  }
+struct sine_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::sin; return sin(a); }
 };
-template <Numeric T> struct cosine_impl {
-  T operator()(const T &a) const {
-    using std::cos;
-    return cos(a);
-  }
+struct cosine_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::cos; return cos(a); }
 };
-template <Numeric T> struct tan_impl {
-  T operator()(const T &a) const {
-    using std::tan;
-    return tan(a);
-  }
+struct tan_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::tan; return tan(a); }
 };
-template <Numeric T> struct log_impl {
-  T operator()(const T &a) const {
-    using std::log;
-    return log(a);
-  }
+struct log_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::log; return log(a); }
 };
-template <Numeric T> struct sqrt_impl {
-  T operator()(const T &a) const {
-    using std::sqrt;
-    return sqrt(a);
-  }
+struct sqrt_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::sqrt; return sqrt(a); }
 };
-template <Numeric T> struct abs_impl {
-  T operator()(const T &a) const {
-    using std::abs;
-    return abs(a);
-  }
+struct abs_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::abs; return abs(a); }
 };
-template <Numeric T> struct asin_impl {
-  T operator()(const T &a) const {
-    using std::asin;
-    return asin(a);
-  }
+struct asin_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::asin; return asin(a); }
 };
-template <Numeric T> struct acos_impl {
-  T operator()(const T &a) const {
-    using std::acos;
-    return acos(a);
-  }
+struct acos_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::acos; return acos(a); }
 };
-template <Numeric T> struct atan_impl {
-  T operator()(const T &a) const {
-    using std::atan;
-    return atan(a);
-  }
+struct atan_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::atan; return atan(a); }
 };
-template <Numeric T> struct sinh_impl {
-  T operator()(const T &a) const {
-    using std::sinh;
-    return sinh(a);
-  }
+struct sinh_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::sinh; return sinh(a); }
 };
-template <Numeric T> struct cosh_impl {
-  T operator()(const T &a) const {
-    using std::cosh;
-    return cosh(a);
-  }
+struct cosh_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::cosh; return cosh(a); }
 };
-template <Numeric T> struct tanh_impl {
-  T operator()(const T &a) const {
-    using std::tanh;
-    return tanh(a);
-  }
+struct tanh_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::tanh; return tanh(a); }
 };
-template <Numeric T> struct exp_impl {
-  T operator()(const T &a) const {
-    using std::exp;
-    return exp(a);
-  }
+struct exp_impl {
+  template <Numeric T>
+  constexpr T operator()(const T &a) const { using std::exp; return exp(a); }
 };
 } // namespace detail
 
-template <Numeric T> struct SineOp : UnaryOp<T, detail::sine_impl<T>, '$'> {
+template <Numeric T> struct SineOp : UnaryOp<T, detail::sine_impl, '$'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -205,7 +184,7 @@ template <Numeric T> struct SineOp : UnaryOp<T, detail::sine_impl<T>, '$'> {
   }
 };
 
-template <Numeric T> struct CosineOp : UnaryOp<T, detail::cosine_impl<T>, '['> {
+template <Numeric T> struct CosineOp : UnaryOp<T, detail::cosine_impl, '['> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -225,7 +204,7 @@ constexpr auto SineOp<T>::derivative(const CExpression auto &expr) {
   return cos(expr) * expr.derivative();
 }
 
-template <Numeric T> struct ExpOp : UnaryOp<T, detail::exp_impl<T>, 'e'> {
+template <Numeric T> struct ExpOp : UnaryOp<T, detail::exp_impl, 'e'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs) {
     return MonoExpression<ExpOp<T>, std::decay_t<decltype(lhs)>>{lhs} *
@@ -238,7 +217,7 @@ template <Numeric T> struct ExpOp : UnaryOp<T, detail::exp_impl<T>, 'e'> {
   }
 };
 
-template <Numeric T> struct TanOp : UnaryOp<T, detail::tan_impl<T>, 't'> {
+template <Numeric T> struct TanOp : UnaryOp<T, detail::tan_impl, 't'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -249,7 +228,7 @@ template <Numeric T> struct TanOp : UnaryOp<T, detail::tan_impl<T>, 't'> {
   }
 };
 
-template <Numeric T> struct LogOp : UnaryOp<T, detail::log_impl<T>, 'l'> {
+template <Numeric T> struct LogOp : UnaryOp<T, detail::log_impl, 'l'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -258,7 +237,7 @@ template <Numeric T> struct LogOp : UnaryOp<T, detail::log_impl<T>, 'l'> {
   }
 };
 
-template <Numeric T> struct SqrtOp : UnaryOp<T, detail::sqrt_impl<T>, 'q'> {
+template <Numeric T> struct SqrtOp : UnaryOp<T, detail::sqrt_impl, 'q'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -268,7 +247,7 @@ template <Numeric T> struct SqrtOp : UnaryOp<T, detail::sqrt_impl<T>, 'q'> {
   }
 };
 
-template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl<T>, '|'> {
+template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl, '|'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -279,7 +258,7 @@ template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl<T>, '|'> {
   }
 };
 
-template <Numeric T> struct AsinOp : UnaryOp<T, detail::asin_impl<T>, 'S'> {
+template <Numeric T> struct AsinOp : UnaryOp<T, detail::asin_impl, 'S'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -290,7 +269,7 @@ template <Numeric T> struct AsinOp : UnaryOp<T, detail::asin_impl<T>, 'S'> {
   }
 };
 
-template <Numeric T> struct AcosOp : UnaryOp<T, detail::acos_impl<T>, 'K'> {
+template <Numeric T> struct AcosOp : UnaryOp<T, detail::acos_impl, 'K'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -301,7 +280,7 @@ template <Numeric T> struct AcosOp : UnaryOp<T, detail::acos_impl<T>, 'K'> {
   }
 };
 
-template <Numeric T> struct AtanOp : UnaryOp<T, detail::atan_impl<T>, 'N'> {
+template <Numeric T> struct AtanOp : UnaryOp<T, detail::atan_impl, 'N'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -311,7 +290,7 @@ template <Numeric T> struct AtanOp : UnaryOp<T, detail::atan_impl<T>, 'N'> {
   }
 };
 
-template <Numeric T> struct SinhOp : UnaryOp<T, detail::sinh_impl<T>, 'H'> {
+template <Numeric T> struct SinhOp : UnaryOp<T, detail::sinh_impl, 'H'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -321,7 +300,7 @@ template <Numeric T> struct SinhOp : UnaryOp<T, detail::sinh_impl<T>, 'H'> {
   }
 };
 
-template <Numeric T> struct CoshOp : UnaryOp<T, detail::cosh_impl<T>, 'G'> {
+template <Numeric T> struct CoshOp : UnaryOp<T, detail::cosh_impl, 'G'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,
@@ -331,7 +310,7 @@ template <Numeric T> struct CoshOp : UnaryOp<T, detail::cosh_impl<T>, 'G'> {
   }
 };
 
-template <Numeric T> struct TanhOp : UnaryOp<T, detail::tanh_impl<T>, 'Y'> {
+template <Numeric T> struct TanhOp : UnaryOp<T, detail::tanh_impl, 'Y'> {
   [[nodiscard]] constexpr static auto
   derivative(const CExpression auto &lhs);
   constexpr static void backward(const CExpression auto &expr, T adj,

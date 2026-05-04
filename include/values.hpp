@@ -190,6 +190,14 @@ public:
     return value;
   }
 
+  // eval_seeded_as<U>: embed constant into the deeper type U with zero dual parts.
+  template <typename U, typename Syms, std::size_t N>
+  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &) const {
+    using S = scalar_base_t<U>;
+    return embed_constant<S, dual_depth_v<U>>(
+        static_cast<S>(get_real_part<dual_depth_v<T>>(value)));
+  }
+
   template <std::size_t I> [[nodiscard]] constexpr auto get() const {
     static_assert(I < 2);
     if constexpr (requires { std::tuple_size<T>::value; }) {
@@ -230,6 +238,13 @@ public:
 
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr T eval_seeded(const std::array<T, N> &vals) const {
+    constexpr auto idx = find_index_of_char<symbol, Syms>();
+    return vals[idx];
+  }
+
+  // eval_seeded_as<U>: return the U-typed seed for this variable.
+  template <typename U, typename Syms, std::size_t N>
+  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const {
     constexpr auto idx = find_index_of_char<symbol, Syms>();
     return vals[idx];
   }

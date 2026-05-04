@@ -1129,17 +1129,15 @@ TEST(ReverseModeAD, ThreeVariables) {
 }
 
 // ===========================================================================
-// Equation — forward-mode Jacobian via dual numbers
+// Equation — forward-mode Jacobian via derivative_tensor<1>
 // ===========================================================================
 
 TEST(EquationForward, TwoVariables) {
-  // f(x,y) = (x*y, x+y)  at (3,4)
-  // J = [[y, x], [1, 1]] = [[4, 3], [1, 1]]
-  using D = Dual<double>;
-  Variable<D, 'x'> x{D{3.0}};
-  Variable<D, 'y'> y{D{4.0}};
+  // f(x,y) = (x*y, x+y) at (3,4) — J = [[4,3],[1,1]]
+  Variable<double, 'x'> x{3.0};
+  Variable<double, 'y'> y{4.0};
   auto ve = Equation(x * y, x + y);
-  auto J = ve.forward_mode_jac();
+  auto J = ve.derivative_tensor<1>();
   EXPECT_DOUBLE_EQ(J(0, 0), 4.0); // ∂(x*y)/∂x = y = 4
   EXPECT_DOUBLE_EQ(J(0, 1), 3.0); // ∂(x*y)/∂y = x = 3
   EXPECT_DOUBLE_EQ(J(1, 0), 1.0); // ∂(x+y)/∂x
@@ -1147,21 +1145,18 @@ TEST(EquationForward, TwoVariables) {
 }
 
 TEST(EquationForward, AgreesWithSymbolic) {
-  // Build the same Equation two ways and compare Jacobians.
+  // derivative_tensor<1> must agree with symbolic Jacobian.
   double xv = 2.0, yv = 3.0;
 
-  // Symbolic path
   auto xs = PV(xv, 'x');
   auto ys = PV(yv, 'y');
   auto ve_sym = Equation(xs * xs, xs * ys, ys * ys);
   auto J_sym = ve_sym.symbolic_mode_jac();
 
-  // Forward-mode path
-  using D = Dual<double>;
-  Variable<D, 'x'> xd{D{xv}};
-  Variable<D, 'y'> yd{D{yv}};
+  Variable<double, 'x'> xd{xv};
+  Variable<double, 'y'> yd{yv};
   auto ve_fwd = Equation(xd * xd, xd * yd, yd * yd);
-  auto J_fwd = ve_fwd.forward_mode_jac();
+  auto J_fwd = ve_fwd.derivative_tensor<1>();
 
   for (std::size_t i = 0; i < 3; ++i)
     for (std::size_t j = 0; j < 2; ++j)
@@ -1169,25 +1164,22 @@ TEST(EquationForward, AgreesWithSymbolic) {
 }
 
 TEST(EquationForward, TrigJacobian) {
-  // f(x,y) = (x*y, sin(x) + y*y)  at (2, 3) — same as EquationTest
-  // J = [[y, x], [cos(x), 2y]] = [[3, 2], [cos(2), 6]]
-  using D = Dual<double>;
-  Variable<D, 'x'> x{D{2.0}};
-  Variable<D, 'y'> y{D{3.0}};
+  // f(x,y) = (x*y, sin(x) + y*y) at (2,3) — J = [[3,2],[cos(2),6]]
+  Variable<double, 'x'> x{2.0};
+  Variable<double, 'y'> y{3.0};
   auto ve = Equation(x * y, sin(x) + y * y);
-  auto J = ve.forward_mode_jac();
+  auto J = ve.derivative_tensor<1>();
   EXPECT_DOUBLE_EQ(J(0, 0), 3.0);
   EXPECT_DOUBLE_EQ(J(0, 1), 2.0);
-  EXPECT_DOUBLE_EQ(J(1, 0), std::cos(2.0));
+  EXPECT_NEAR(J(1, 0), std::cos(2.0), 1e-12);
   EXPECT_DOUBLE_EQ(J(1, 1), 6.0);
 }
 
-TEST(EquationForward, ReverseAgreesWithForward) {
-  using D = Dual<double>;
-  Variable<D, 'x'> x{D{2.0}};
-  Variable<D, 'y'> y{D{3.0}};
+TEST(EquationForward, AgreesWithReverse) {
+  Variable<double, 'x'> x{2.0};
+  Variable<double, 'y'> y{3.0};
   auto ve_fwd = Equation(x * y, sin(x) + y * y);
-  auto J_fwd = ve_fwd.forward_mode_jac();
+  auto J_fwd = ve_fwd.derivative_tensor<1>();
 
   auto xs = PV(2.0, 'x');
   auto ys = PV(3.0, 'y');
@@ -1196,7 +1188,7 @@ TEST(EquationForward, ReverseAgreesWithForward) {
 
   for (std::size_t i = 0; i < 2; ++i)
     for (std::size_t j = 0; j < 2; ++j)
-      EXPECT_DOUBLE_EQ(J_rev(i, j), J_fwd(i, j));
+      EXPECT_NEAR(J_rev(i, j), J_fwd(i, j), 1e-12);
 }
 
 TEST(EquationForward, StateRestoredAfterCall) {
@@ -1426,52 +1418,45 @@ TEST(HessianTest, ForwardOverReverse_Symmetric) {
 }
 
 // ===========================================================================
-// Hessian via forward-over-forward, nested Dual<Dual<T>> (eval_hessian_forward)
+// Equation derivative_tensor<2> — forward-mode Hessian, plain scalar variables
 // ===========================================================================
 
-TEST(HessianForwardTest, NestedDual_FunctionValues) {
-  // f(x,y) = (x*y, x*x)  at (2, 3)  =>  f0=6, f1=4
-  using DD = Dual<Dual<double>>;
-  using D = Dual<double>;
-  Variable<DD, 'x'> x{DD{D{2.0}, D{}}};
-  Variable<DD, 'y'> y{DD{D{3.0}, D{}}};
+TEST(HessianForwardTest, FunctionValues) {
+  // f(x,y) = (x*y, x*x) at (2, 3) => f0=6, f1=4
+  Variable<double, 'x'> x{2.0};
+  Variable<double, 'y'> y{3.0};
   auto ve = Equation(x * y, x * x);
-  (void)ve.forward_mode_hess();
   auto f = ve.evaluate();
-  EXPECT_DOUBLE_EQ(f[0].template get<0>().template get<0>(), 6.0);
-  EXPECT_DOUBLE_EQ(f[1].template get<0>().template get<0>(), 4.0);
+  EXPECT_DOUBLE_EQ(f[0], 6.0);
+  EXPECT_DOUBLE_EQ(f[1], 4.0);
 }
 
-TEST(HessianForwardTest, NestedDual_XY) {
-  // H[f0] where f0(x,y) = x*y — same expected values as forward-over-reverse
-  using DD = Dual<Dual<double>>;
-  using D = Dual<double>;
-  Variable<DD, 'x'> x{DD{D{2.0}, D{}}};
-  Variable<DD, 'y'> y{DD{D{3.0}, D{}}};
+TEST(HessianForwardTest, XY) {
+  // H[f0] where f0(x,y) = x*y — H = [[0,1],[1,0]]
+  Variable<double, 'x'> x{2.0};
+  Variable<double, 'y'> y{3.0};
   auto ve = Equation(x * y, x * x);
-  auto H = ve.forward_mode_hess();
-  EXPECT_DOUBLE_EQ(H[0](0, 0), 0.0);
-  EXPECT_DOUBLE_EQ(H[0](0, 1), 1.0);
-  EXPECT_DOUBLE_EQ(H[0](1, 0), 1.0);
-  EXPECT_DOUBLE_EQ(H[0](1, 1), 0.0);
+  auto H = ve.derivative_tensor<2>();
+  EXPECT_DOUBLE_EQ(H(0, 0, 0), 0.0);
+  EXPECT_DOUBLE_EQ(H(0, 0, 1), 1.0);
+  EXPECT_DOUBLE_EQ(H(0, 1, 0), 1.0);
+  EXPECT_DOUBLE_EQ(H(0, 1, 1), 0.0);
 }
 
-TEST(HessianForwardTest, NestedDual_Quadratic) {
-  // H[f1] where f1(x,y) = x²
-  using DD = Dual<Dual<double>>;
-  using D = Dual<double>;
-  Variable<DD, 'x'> x{DD{D{2.0}, D{}}};
-  Variable<DD, 'y'> y{DD{D{3.0}, D{}}};
+TEST(HessianForwardTest, Quadratic) {
+  // H[f1] where f1(x,y) = x² — H = [[2,0],[0,0]]
+  Variable<double, 'x'> x{2.0};
+  Variable<double, 'y'> y{3.0};
   auto ve = Equation(x * y, x * x);
-  auto H = ve.forward_mode_hess();
-  EXPECT_DOUBLE_EQ(H[1](0, 0), 2.0);
-  EXPECT_DOUBLE_EQ(H[1](0, 1), 0.0);
-  EXPECT_DOUBLE_EQ(H[1](1, 0), 0.0);
-  EXPECT_DOUBLE_EQ(H[1](1, 1), 0.0);
+  auto H = ve.derivative_tensor<2>();
+  EXPECT_DOUBLE_EQ(H(1, 0, 0), 2.0);
+  EXPECT_DOUBLE_EQ(H(1, 0, 1), 0.0);
+  EXPECT_DOUBLE_EQ(H(1, 1, 0), 0.0);
+  EXPECT_DOUBLE_EQ(H(1, 1, 1), 0.0);
 }
 
 TEST(HessianForwardTest, AgreesWithForwardOverReverse) {
-  // Both methods must produce the same Hessian for f(x,y) = (x*y, x*x).
+  // derivative_tensor<2> must match reverse-mode Hessian for f(x,y) = (x*y, x*x).
   double xv = 1.5, yv = 2.5;
 
   using D = Dual<double>;
@@ -1480,31 +1465,25 @@ TEST(HessianForwardTest, AgreesWithForwardOverReverse) {
   auto ve_rev = Equation(xr * yr, xr * xr);
   auto H_rev = ve_rev.reverse_mode_hess();
 
-  using DD = Dual<Dual<double>>;
-  Variable<DD, 'x'> xf{DD{D{xv}, D{}}};
-  Variable<DD, 'y'> yf{DD{D{yv}, D{}}};
+  Variable<double, 'x'> xf{xv};
+  Variable<double, 'y'> yf{yv};
   auto ve_fwd = Equation(xf * yf, xf * xf);
-  auto H_fwd = ve_fwd.forward_mode_hess();
+  auto H_fwd = ve_fwd.derivative_tensor<2>();
 
-  for (std::size_t k = 0; k < 2; ++k)
-    for (std::size_t i = 0; i < 2; ++i)
-      for (std::size_t j = 0; j < 2; ++j)
-        EXPECT_NEAR(H_fwd[k](i, j), H_rev[k](i, j), 1e-12);
+  for (int k = 0; k < 2; ++k)
+    for (int i = 0; i < 2; ++i)
+      for (int j = 0; j < 2; ++j)
+        EXPECT_NEAR(H_fwd(k, i, j), H_rev[k](i, j), 1e-12);
 }
 
-TEST(HessianForwardTest, NestedDual_WithValues) {
-  // Values-accepting overload: start at (0,0), set to (2,3).
-  using DD = Dual<Dual<double>>;
-  using D = Dual<double>;
-  Variable<DD, 'x'> x{DD{D{0.0}, D{}}};
-  Variable<DD, 'y'> y{DD{D{0.0}, D{}}};
+TEST(HessianForwardTest, WithValues) {
+  // Values-accepting overload: variables at (0,0), evaluated at (2,3).
+  Variable<double, 'x'> x{0.0};
+  Variable<double, 'y'> y{0.0};
   auto ve = Equation(x * y, x * x);
-  Eigen::Vector2d pt{2.0, 3.0};
-  auto H = ve.forward_mode_hess(pt);
-  auto f = ve.evaluate();
-  EXPECT_DOUBLE_EQ(f[0].template get<0>().template get<0>(), 6.0);
-  EXPECT_DOUBLE_EQ(H[0](0, 1), 1.0);
-  EXPECT_DOUBLE_EQ(H[1](0, 0), 2.0);
+  auto H = ve.derivative_tensor<2>(std::array{2.0, 3.0});
+  EXPECT_DOUBLE_EQ(H(0, 0, 1), 1.0);
+  EXPECT_DOUBLE_EQ(H(1, 0, 0), 2.0);
 }
 
 // ===========================================================================
@@ -1548,31 +1527,27 @@ TEST(ScalarHessianTest, ReverseMode_Symmetric) {
 }
 
 TEST(ScalarHessianTest, ForwardMode_XY) {
-  // f(x,y) = x*y  =>  H = [[0, 1], [1, 0]]
-  using DD = Dual<Dual<double>>;
-  using D = Dual<double>;
-  Variable<DD, 'x'> x{DD{D{2.0}, D{}}};
-  Variable<DD, 'y'> y{DD{D{3.0}, D{}}};
+  // f(x,y) = x*y  =>  H = [[0, 1], [1, 0]] — plain double variables
+  Variable<double, 'x'> x{2.0};
+  Variable<double, 'y'> y{3.0};
   auto expr = x * y;
-  auto H = forward_mode_hess(expr, std::array{2.0, 3.0});
-  EXPECT_DOUBLE_EQ(H[0][0], 0.0);
-  EXPECT_DOUBLE_EQ(H[0][1], 1.0);
-  EXPECT_DOUBLE_EQ(H[1][0], 1.0);
-  EXPECT_DOUBLE_EQ(H[1][1], 0.0);
+  auto H = derivative_tensor<2>(expr, std::array{2.0, 3.0});
+  EXPECT_DOUBLE_EQ(H(0, 0), 0.0);
+  EXPECT_DOUBLE_EQ(H(0, 1), 1.0);
+  EXPECT_DOUBLE_EQ(H(1, 0), 1.0);
+  EXPECT_DOUBLE_EQ(H(1, 1), 0.0);
 }
 
 TEST(ScalarHessianTest, ForwardMode_QuadraticForm) {
   // f(x,y) = x*x + 2*y*y  =>  H = [[2, 0], [0, 4]]
-  using DD = Dual<Dual<double>>;
-  using D = Dual<double>;
-  Variable<DD, 'x'> x{DD{D{1.0}, D{}}};
-  Variable<DD, 'y'> y{DD{D{1.0}, D{}}};
-  auto expr = x * x + PC(DD{D{2.0}}) * y * y;
-  auto H = forward_mode_hess(expr, std::array{1.0, 1.0});
-  EXPECT_DOUBLE_EQ(H[0][0], 2.0);
-  EXPECT_DOUBLE_EQ(H[0][1], 0.0);
-  EXPECT_DOUBLE_EQ(H[1][0], 0.0);
-  EXPECT_DOUBLE_EQ(H[1][1], 4.0);
+  Variable<double, 'x'> x{1.0};
+  Variable<double, 'y'> y{1.0};
+  auto expr = x * x + PC(2.0) * y * y;
+  auto H = derivative_tensor<2>(expr, std::array{1.0, 1.0});
+  EXPECT_DOUBLE_EQ(H(0, 0), 2.0);
+  EXPECT_DOUBLE_EQ(H(0, 1), 0.0);
+  EXPECT_DOUBLE_EQ(H(1, 0), 0.0);
+  EXPECT_DOUBLE_EQ(H(1, 1), 4.0);
 }
 
 TEST(ScalarHessianTest, ReverseMode_NoValues) {
@@ -1589,20 +1564,18 @@ TEST(ScalarHessianTest, ReverseMode_NoValues) {
 }
 
 TEST(ScalarHessianTest, ForwardMode_NoValues) {
-  using DD = Dual<Dual<double>>;
-  using D = Dual<double>;
-  Variable<DD, 'x'> x{DD{D{2.0}, D{}}};
-  Variable<DD, 'y'> y{DD{D{3.0}, D{}}};
+  Variable<double, 'x'> x{2.0};
+  Variable<double, 'y'> y{3.0};
   auto expr = x * y;
-  auto H = forward_mode_hess(expr);
-  EXPECT_DOUBLE_EQ(H[0][1], 1.0);
-  EXPECT_DOUBLE_EQ(H[1][0], 1.0);
-  EXPECT_DOUBLE_EQ(H[0][0], 0.0);
-  EXPECT_DOUBLE_EQ(H[1][1], 0.0);
+  auto H = derivative_tensor<2>(expr);
+  EXPECT_DOUBLE_EQ(H(0, 1), 1.0);
+  EXPECT_DOUBLE_EQ(H(1, 0), 1.0);
+  EXPECT_DOUBLE_EQ(H(0, 0), 0.0);
+  EXPECT_DOUBLE_EQ(H(1, 1), 0.0);
 }
 
 TEST(ScalarHessianTest, ForwardAgreesWithReverse) {
-  // Both methods must agree on f(x,y) = exp(x*y) at (0.5, 1.5).
+  // derivative_tensor<2> must agree with reverse-mode Hessian on exp(x*y).
   double xv = 0.5, yv = 1.5;
 
   using D = Dual<double>;
@@ -1611,113 +1584,138 @@ TEST(ScalarHessianTest, ForwardAgreesWithReverse) {
   auto expr_r = exp(xr * yr);
   auto H_rev = reverse_mode_hess(expr_r, std::array{xv, yv});
 
-  using DD = Dual<Dual<double>>;
-  Variable<DD, 'x'> xf{DD{D{xv}, D{}}};
-  Variable<DD, 'y'> yf{DD{D{yv}, D{}}};
+  Variable<double, 'x'> xf{xv};
+  Variable<double, 'y'> yf{yv};
   auto expr_f = exp(xf * yf);
-  auto H_fwd = forward_mode_hess(expr_f, std::array{xv, yv});
+  auto H_fwd = derivative_tensor<2>(expr_f, std::array{xv, yv});
+
+  for (int i = 0; i < 2; ++i)
+    for (int j = 0; j < 2; ++j)
+      EXPECT_NEAR(H_fwd(i, j), H_rev[i][j], 1e-12);
+}
+
+// ===========================================================================
+// DerivativeTensorTest — derivative_tensor<Order> free function and Equation
+// ===========================================================================
+
+TEST(DerivativeTensorTest, Order1_ScalarVariable) {
+  // Plain scalar Variable<double>, f(x) = x^3, f'(3) = 27
+  Variable<double, 'x'> x{3.0};
+  auto expr = x * x * x;
+  auto T1 = derivative_tensor<1>(expr, std::array{3.0});
+  EXPECT_NEAR(T1(0), 27.0, 1e-12);
+}
+
+TEST(DerivativeTensorTest, Order1_MatchesGradient) {
+  // derivative_tensor<1> should match reverse-mode gradient.
+  double xv = 1.5, yv = 2.5;
+  Variable<double, 'x'> x{xv};
+  Variable<double, 'y'> y{yv};
+  auto expr = x * x + x * y;  // df/dx = 2x+y, df/dy = x
+
+  auto T1 = derivative_tensor<1>(expr, std::array{xv, yv});
+  EXPECT_NEAR(T1(0), 2*xv + yv, 1e-12);
+  EXPECT_NEAR(T1(1), xv, 1e-12);
+}
+
+TEST(DerivativeTensorTest, Order2_ScalarVariable) {
+  // Plain double: f(x) = x^3, f''(2) = 12
+  Variable<double, 'x'> x{2.0};
+  auto expr = x * x * x;
+  auto T2 = derivative_tensor<2>(expr, std::array{2.0});
+  EXPECT_NEAR(T2(0, 0), 12.0, 1e-12);
+}
+
+TEST(DerivativeTensorTest, Order2_MatchesHessian) {
+  // derivative_tensor<2> must agree with reverse-mode Hessian.
+  double xv = 0.7, yv = 1.3;
+  using D = Dual<double>;
+  Variable<D, 'x'> xr{D{xv}};
+  Variable<D, 'y'> yr{D{yv}};
+  auto expr_r = exp(xr * yr);
+  auto H_rev = reverse_mode_hess(expr_r, std::array{xv, yv});
+
+  Variable<double, 'x'> xf{xv};
+  Variable<double, 'y'> yf{yv};
+  auto expr_f = exp(xf * yf);
+  auto H_fwd = derivative_tensor<2>(expr_f, std::array{xv, yv});
 
   for (std::size_t i = 0; i < 2; ++i)
     for (std::size_t j = 0; j < 2; ++j)
-      EXPECT_NEAR(H_fwd[i][j], H_rev[i][j], 1e-12);
+      EXPECT_NEAR(H_fwd(i, j), H_rev[i][j], 1e-12);
 }
 
-// ===========================================================================
-// NthDerivativeTest — nth_derivative<Order> free function and Equation member
-// ===========================================================================
-
-TEST(NthDerivativeTest, FirstOrderUnivariate) {
-  // f(x) = x^3, f'(x) = 3x^2, f'(2) = 12
-  using D = Dual<double>;
-  Variable<D, 'x'> x{D{2.0}};
-  auto expr = x * x * x;
-  auto d = nth_derivative<1>(expr, std::array{2.0});
-  EXPECT_NEAR(d[0], 12.0, 1e-12);
-}
-
-TEST(NthDerivativeTest, SecondOrderUnivariate) {
-  // f(x) = x^3, f''(x) = 6x, f''(2) = 12
-  using DD = Dual<Dual<double>>;
-  Variable<DD, 'x'> x{DD{Dual<double>{2.0}}};
-  auto expr = x * x * x;
-  auto d = nth_derivative<2>(expr, std::array{2.0});
-  EXPECT_NEAR(d[0], 12.0, 1e-12);
-}
-
-TEST(NthDerivativeTest, ThirdOrderUnivariate) {
-  // f(x) = x^4, f'''(x) = 24x, f'''(1) = 24
-  using DDD = Dual<Dual<Dual<double>>>;
-  Variable<DDD, 'x'> x{DDD{Dual<Dual<double>>{Dual<double>{1.0}}}};
+TEST(DerivativeTensorTest, Order3_Polynomial) {
+  // f(x) = x^4, f'''(x) = 24x, f'''(2) = 48
+  Variable<double, 'x'> x{2.0};
   auto expr = x * x * x * x;
-  auto d = nth_derivative<3>(expr, std::array{1.0});
-  EXPECT_NEAR(d[0], 24.0, 1e-12);
+  auto T3 = derivative_tensor<3>(expr, std::array{2.0});
+  EXPECT_NEAR(T3(0, 0, 0), 48.0, 1e-9);
 }
 
-TEST(NthDerivativeTest, SecondOrderMultivariate) {
-  // f(x,y) = x^2 * y
-  // d²f/dx² = 2y = 4 at (1, 2)
-  // d²f/dy² = 0 at (1, 2)
-  using DD = Dual<Dual<double>>;
-  Variable<DD, 'x'> x{DD{Dual<double>{1.0}}};
-  Variable<DD, 'y'> y{DD{Dual<double>{2.0}}};
-  auto expr = x * x * y;
-  auto d = nth_derivative<2>(expr, std::array{1.0, 2.0});
-  EXPECT_NEAR(d[0], 4.0, 1e-12);  // d²f/dx²
-  EXPECT_NEAR(d[1], 0.0, 1e-12);  // d²f/dy²
-}
-
-TEST(NthDerivativeTest, NoArgVersionReadsCurrentValues) {
-  // f(x) = sin(x), f''(x) = -sin(x), f''(pi/4) = -sin(pi/4)
-  using DD = Dual<Dual<double>>;
+TEST(DerivativeTensorTest, NoArgReadsCurrentValues) {
+  // No-arg overload reads current values from variables.
   const double x0 = std::numbers::pi / 4.0;
-  Variable<DD, 'x'> x{DD{Dual<double>{x0}}};
+  Variable<double, 'x'> x{x0};
   auto expr = sin(x);
-  auto d = nth_derivative<2>(expr);
-  EXPECT_NEAR(d[0], -std::sin(x0), 1e-12);
+  auto T2 = derivative_tensor<2>(expr);
+  EXPECT_NEAR(T2(0, 0), -std::sin(x0), 1e-12);
 }
 
-TEST(NthDerivativeTest, EquationMemberWithValues) {
-  // f(x) = exp(x), all derivatives = exp(x), exp(1) ≈ 2.71828...
-  using DD = Dual<Dual<double>>;
-  Variable<DD, 'x'> x{DD{Dual<double>{1.0}}};
-  auto eq = Equation(exp(x));
-  auto d = eq.nth_derivative<2>(std::array{1.0});
-  EXPECT_NEAR(d[0], std::exp(1.0), 1e-12);
+TEST(DerivativeTensorTest, MixedPartials_Symmetric) {
+  // Hessian must be symmetric for smooth f.
+  double xv = 0.5, yv = 1.5;
+  Variable<double, 'x'> x{xv};
+  Variable<double, 'y'> y{yv};
+  auto expr = exp(x * y);
+  auto H = derivative_tensor<2>(expr, std::array{xv, yv});
+  EXPECT_NEAR(H(0, 1), H(1, 0), 1e-12);
 }
 
-TEST(NthDerivativeTest, EquationMemberNoArg) {
-  // f(x) = x^3, f''(x) = 6x, f''(3) = 18
-  using DD = Dual<Dual<double>>;
-  Variable<DD, 'x'> x{DD{Dual<double>{3.0}}};
-  auto eq = Equation(x * x * x);
-  auto d = eq.nth_derivative();
-  EXPECT_NEAR(d[0], 18.0, 1e-12);
+TEST(DerivativeTensorTest, Equation_Order1_IsJacobian) {
+  // derivative_tensor<1> for Equation must match reverse-mode Jacobian.
+  double xv = 1.0, yv = 2.0;
+  Variable<double, 'x'> xf{xv};
+  Variable<double, 'y'> yf{yv};
+  auto ve_fwd = Equation(xf * yf, xf * xf);
+  auto J_fwd = ve_fwd.derivative_tensor<1>();
+
+  auto xr = PV(xv, 'x');
+  auto yr = PV(yv, 'y');
+  auto ve_rev = Equation(xr * yr, xr * xr);
+  auto J_rev = ve_rev.reverse_mode_jac();
+
+  for (std::size_t i = 0; i < 2; ++i)
+    for (std::size_t j = 0; j < 2; ++j)
+      EXPECT_NEAR(J_fwd(i, j), J_rev(i, j), 1e-12);
 }
 
-/*
- * can we then not make hessian a special case of nth_derivative, and make the tests only with Dual<T>
+TEST(DerivativeTensorTest, Equation_Order2_IsHessianStack) {
+  // derivative_tensor<2> shape [2,2,2] must match per-output reverse Hessians.
+  double xv = 1.5, yv = 2.5;
+  Variable<double, 'x'> xf{xv};
+  Variable<double, 'y'> yf{yv};
+  auto ve_fwd = Equation(xf * yf, xf * xf);
+  auto H_fwd = ve_fwd.derivative_tensor<2>(std::array{xv, yv});
 
-● Let me look at values.hpp to understand PDV / PV before restructuring:
+  using D = Dual<double>;
+  Variable<D, 'x'> xr{D{xv}};
+  Variable<D, 'y'> yr{D{yv}};
+  auto ve_rev = Equation(xr * yr, xr * xr);
+  auto H_rev = ve_rev.reverse_mode_hess();
 
-● Reading 1 file… (ctrl+o to expand)
-  Read 1 file (ctrl+o to expand)
+  for (std::size_t k = 0; k < 2; ++k)
+    for (std::size_t i = 0; i < 2; ++i)
+      for (std::size_t j = 0; j < 2; ++j)
+        EXPECT_NEAR(H_fwd(k, i, j), H_rev[k](i, j), 1e-12);
+}
 
-● Letgmegcheckmoperations.hppttoesee·howoOp::eval issstructured:
-
-  Reading 1 file… (ctrl+o to expand)
-  ⎿  include/operations.hppis promoted to Dual<Dual...<T>> as nneded
-
-❯ like I thoguth Dual<T> is promoted to Dual<Dual...<T>> as nneded                                                                                                             ──
-
-❯ and I meant only the forward mode hessian
-
-● Now I understand — you want Dual<T> to be promoted to Dual<Dual<...<T>>> as needed at evaluation time, so the user always writes depth-1 variables. And only
-  forward_mode_hessian changes. Let me read the rest of operations.hpp first:
-
-  Read 1 file (ctrl+o to expand)
-
-● This requires making the expression eval_seeded infrastructure generic so a Dual<T> expression can be evaluated with Dual<Dual<T>> seeds. The changes touch four files: make
-  operations generic, add eval_seeded_cast<U> to expressions, then update gradient/equation. Let me do it systematically.
-
-  Step 1: operations.hpp — make funcs generic and expose func_type:
-  */
+TEST(DerivativeTensorTest, Equation_Order3_TrigPolynomial) {
+  // f(x) = sin(x)*x^2, f'''(x) = -sin(x)*x^2 - ... validated at x=1
+  // Use finite differences as ground truth for 3rd order.
+  // Actually use a pure polynomial: f(x) = x^4, f'''(x) = 24x, f'''(1) = 24
+  Variable<double, 'x'> x{1.0};
+  auto ve = Equation(x * x * x * x);
+  auto T3 = ve.derivative_tensor<3>(std::array{1.0});
+  EXPECT_NEAR(T3(0, 0, 0, 0), 24.0, 1e-9);
+}
