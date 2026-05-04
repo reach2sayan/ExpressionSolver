@@ -443,7 +443,7 @@ static void BM_Forward_Batched_F4(benchmark::State &state) {
     double sink = 0.0;
     for (std::size_t i = 0; i < count; ++i) {
       auto grads = derivative_tensor<1>(expressions[i], points[i]);
-      sink += grads(0);
+      sink += grads[0];
     }
     benchmark::DoNotOptimize(sink);
     benchmark::ClobberMemory();

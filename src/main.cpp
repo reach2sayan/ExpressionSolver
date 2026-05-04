@@ -35,8 +35,8 @@ int main() {
 
   auto J = ve.symbolic_mode_jac();
   std::cout << "Jacobian:\n";
-  std::cout << "  [df0/dx, df0/dy] = [" << J.row(0) << "]\n";
-  std::cout << "  [df1/dx, df1/dy] = [" << J.row(1) << "]\n";
+  std::cout << "  [df0/dx, df0/dy] = [" << J[0][0] << ", " << J[0][1] << "]\n";
+  std::cout << "  [df1/dx, df1/dy] = [" << J[1][0] << ", " << J[1][1] << "]\n";
 
   // --- Equation: f: R^2 -> R^3 ---
   // f(x, y) = (x*x,  sin(x)*y,  x + y*y)
@@ -52,5 +52,10 @@ int main() {
 
   auto J3 = ve3.symbolic_mode_jac();
   std::cout << "Jacobian:\n";
-  std::cout << J3;
+  for (const auto &row : J3) {
+    std::cout << "  [";
+    for (std::size_t j = 0; j < row.size(); ++j)
+      std::cout << (j ? ", " : "") << row[j];
+    std::cout << "]\n";
+  }
 }

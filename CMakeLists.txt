@@ -22,21 +22,8 @@ else ()
     endif ()
 endif ()
 find_package(Boost 1.74 CONFIG QUIET)
-find_package(Eigen3 3.4 CONFIG QUIET)
 
 include(FetchContent)
-if (NOT TARGET Eigen3::Eigen)
-    FetchContent_Declare(
-            eigen
-            GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-            GIT_TAG 3.4.0
-            GIT_SHALLOW TRUE
-    )
-    set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-    set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(eigen)
-endif ()
-
 if (NOT TARGET Boost::headers)
     FetchContent_Declare(
             boost_mp11
@@ -96,10 +83,9 @@ add_library(diff INTERFACE
         expression_differentiator.hpp
 )
 target_include_directories(diff INTERFACE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(diff INTERFACE Boost::headers Eigen3::Eigen)
+target_link_libraries(diff INTERFACE Boost::headers)
 target_include_directories(diff SYSTEM INTERFACE
-        $<TARGET_PROPERTY:Boost::headers,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:Eigen3::Eigen,INTERFACE_INCLUDE_DIRECTORIES>)
+        $<TARGET_PROPERTY:Boost::headers,INTERFACE_INCLUDE_DIRECTORIES>)
 
 add_executable(main src/main.cpp)
 target_link_libraries(main PUBLIC diff)

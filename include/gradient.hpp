@@ -3,13 +3,27 @@
 #include "dual.hpp"
 #include "expressions.hpp"
 #include "traits.hpp"
-#include <unsupported/Eigen/CXX11/Tensor>
 #include <array>
 #include <boost/mp11/algorithm.hpp>
 
 namespace diff {
 
 namespace mp = boost::mp11;
+
+// Compile-time N-dimensional array: nd_array_t<S, N, Order> is std::array nested Order times.
+template <typename S, std::size_t N, std::size_t Order>
+struct nd_array { using type = std::array<typename nd_array<S, N, Order - 1>::type, N>; };
+template <typename S, std::size_t N>
+struct nd_array<S, N, 0> { using type = S; };
+template <typename S, std::size_t N, std::size_t Order>
+using nd_array_t = typename nd_array<S, N, Order>::type;
+
+// arr[idx[0]][idx[1]]...[idx[Order-1]]
+template <std::size_t Order>
+constexpr auto& nd_index(auto& arr, const std::size_t* idx) {
+    if constexpr (Order == 0) return arr;
+    else return nd_index<Order - 1>(arr[idx[0]], idx + 1);
+}
 
 enum class DiffMode { Symbolic, Forward, Reverse };
 
@@ -125,8 +139,8 @@ template <std::size_t N, typename T> constexpr auto extract_nth(const T &x) {
 
 // ---------------------------------------------------------------------------
 // Core forward derivative_tensor implementation.
-// Returns Eigen::Tensor<S, Order> of shape [N, N, ..., N] (rank = Order).
-// T[i₁][i₂]...[iOrder] = ∂^Order f / ∂x_{i₁} ∂x_{i₂} ... ∂x_{iOrder}
+// Returns nd_array_t<S, N, Order> — nested std::array of rank Order.
+// result[i₁][i₂]...[iOrder] = ∂^Order f / ∂x_{i₁} ∂x_{i₂} ... ∂x_{iOrder}
 // ---------------------------------------------------------------------------
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
@@ -140,13 +154,8 @@ template <std::size_t Order, CExpression Expr,
       typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
   using U = nth_dual_t<S, Order>;
 
-  Eigen::Tensor<S, (int)Order> result;
-  Eigen::array<Eigen::Index, Order> dims;
-  for (std::size_t d = 0; d < Order; ++d)
-    dims[d] = static_cast<Eigen::Index>(N);
-  result.resize(dims);
+  nd_array_t<S, N, Order> result{};
 
-  // Iterate over all N^Order multi-indices (row-major: idx[0] most significant).
   std::size_t total = 1;
   for (std::size_t d = 0; d < Order; ++d)
     total *= N;
@@ -164,13 +173,7 @@ template <std::size_t Order, CExpression Expr,
       seeds[k] = make_mixed_seed<S, Order>(values[k], idx.data(), k);
 
     U val = expr.template eval_seeded_as<U, symbols>(seeds);
-    S deriv = extract_nth<Order>(val);
-
-    // Use array-form operator() to avoid MSVC narrowing in variadic brace-init.
-    Eigen::array<Eigen::Index, Order> tidx;
-    for (std::size_t d = 0; d < Order; ++d)
-      tidx[d] = static_cast<Eigen::Index>(idx[d]);
-    result(tidx) = deriv;
+    nd_index<Order>(result, idx.data()) = extract_nth<Order>(val);
   }
   return result;
 }
@@ -211,8 +214,8 @@ template <DiffMode Mode, CExpression Expr,
 // Public API — forward mode (derivative_tensor)
 //
 // derivative_tensor<Order>(expr [, values])
-//   → Eigen::Tensor<S, Order>  with shape [N, N, ..., N]
-//   → T(i₁, i₂, ..., iOrder) = ∂^Order f / ∂x_{i₁} ∂x_{i₂} ... ∂x_{iOrder}
+//   → nd_array_t<S, N, Order>  (nested std::array, rank = Order, extent N each)
+//   → result[i₁][i₂]...[iOrder] = ∂^Order f / ∂x_{i₁} ∂x_{i₂} ... ∂x_{iOrder}
 //
 // Works for any expression depth (Variable<T>, Variable<Dual<T>>, etc.).
 // Input is always the base scalar S = scalar_base_t<value_type>; the library

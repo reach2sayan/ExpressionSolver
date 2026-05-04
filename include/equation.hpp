@@ -1,7 +1,7 @@
 #pragma once
 #include "dual.hpp"
 #include "gradient.hpp"
-#include <Eigen/Dense>
+#include <array>
 #include <boost/mp11/algorithm.hpp>
 #include <ranges>
 
@@ -111,11 +111,9 @@ private:
   [[nodiscard]] auto jacobian_symbolic() const
     requires(input_dim > 0)
   {
-    Eigen::Matrix<value_type, output_dim, input_dim> J;
+    std::array<std::array<value_type, input_dim>, output_dim> J{};
     static_for<output_dim>([&]<std::size_t I>() {
-      auto row = std::apply(detail::eval_func, std::get<I>(jacobian_data));
-      for (std::size_t j = 0; j < input_dim; ++j)
-        J(I, j) = row[j];
+      J[I] = std::apply(detail::eval_func, std::get<I>(jacobian_data));
     });
     return J;
   }
@@ -124,12 +122,9 @@ private:
   [[nodiscard]] auto jacobian_reverse_mode() const
     requires(input_dim > 0)
   {
-    Eigen::Matrix<value_type, output_dim, input_dim> J;
+    std::array<std::array<value_type, input_dim>, output_dim> J{};
     static_for<output_dim>([&]<std::size_t I>() {
-      std::array<value_type, input_dim> row{};
-      std::get<I>(expressions).backward(symbols{}, value_type{1}, row);
-      for (std::size_t j = 0; j < input_dim; ++j)
-        J(I, j) = row[j];
+      std::get<I>(expressions).backward(symbols{}, value_type{1}, J[I]);
     });
     return J;
   }
@@ -139,16 +134,14 @@ private:
     requires(is_dual_v<value_type> && input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
-    std::array<Eigen::Matrix<S, input_dim, input_dim>, output_dim> H;
-    for (auto &h : H)
-      h.setZero();
+    std::array<std::array<std::array<S, input_dim>, input_dim>, output_dim> H{};
 
     std::array<value_type, input_dim> current{};
     std::apply(
         [&](const auto &...exprs) { (exprs.collect(symbols{}, current), ...); },
         expressions);
 
-    Eigen::Vector<value_type, input_dim> seeds;
+    std::array<value_type, input_dim> seeds{};
     for (std::size_t j = 0; j < input_dim; ++j) {
       for (std::size_t i = 0; i < input_dim; ++i)
         seeds[i] = value_type{current[i].template get<0>(), i == j ? S{1} : S{}};
@@ -156,19 +149,19 @@ private:
       static_for<output_dim>([&]<std::size_t K>() {
         std::array<value_type, input_dim> grads{};
         std::get<K>(expressions).backward(symbols{}, value_type{1}, grads);
-        for (auto i : std::views::iota(std::size_t{0}, input_dim))
-          H[K](static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) =
-              grads[i].template get<1>();
+        for (std::size_t i = 0; i < input_dim; ++i)
+          H[K][i][j] = grads[i].template get<1>();
       });
     }
-    for (auto i : std::views::iota(std::size_t{0}, input_dim))
+    for (std::size_t i = 0; i < input_dim; ++i)
       seeds[i] = value_type{current[i].template get<0>(), S{}};
     update(symbols{}, seeds);
     return H;
   }
 
   // --- Forward-mode derivative tensor (any order) ---
-  // Returns Eigen::Tensor<S, Order+1> with shape [output_dim, N, ..., N].
+  // Returns std::array<nd_array_t<S, input_dim, Order>, output_dim>.
+  // result[out][i₁]...[iOrder] = ∂^Order f_out / ∂x_{i₁}...∂x_{iOrder}
   template <std::size_t Order>
   [[nodiscard]] auto equation_derivative_tensor_impl(
       std::array<scalar_base_t<value_type>, input_dim> values) const
@@ -177,12 +170,7 @@ private:
     using S = scalar_base_t<value_type>;
     using U = nth_dual_t<S, Order>;
 
-    Eigen::Tensor<S, (int)(Order + 1)> result;
-    Eigen::array<Eigen::Index, Order + 1> dims;
-    dims[0] = static_cast<Eigen::Index>(output_dim);
-    for (std::size_t d = 1; d <= Order; ++d)
-      dims[d] = static_cast<Eigen::Index>(input_dim);
-    result.resize(dims);
+    std::array<nd_array_t<S, input_dim, Order>, output_dim> result{};
 
     std::size_t total = 1;
     for (std::size_t d = 0; d < Order; ++d)
@@ -200,16 +188,10 @@ private:
       for (std::size_t k = 0; k < input_dim; ++k)
         seeds[k] = detail::make_mixed_seed<S, Order>(values[k], idx.data(), k);
 
-      // Use array-form operator() to avoid MSVC narrowing in variadic brace-init.
       static_for<output_dim>([&]<std::size_t OUT>() {
         U val = std::get<OUT>(expressions)
                     .template eval_seeded_as<U, symbols>(seeds);
-        S deriv = detail::extract_nth<Order>(val);
-        Eigen::array<Eigen::Index, Order + 1> tidx;
-        tidx[0] = static_cast<Eigen::Index>(OUT);
-        for (std::size_t d = 0; d < Order; ++d)
-          tidx[d + 1] = static_cast<Eigen::Index>(idx[d]);
-        result(tidx) = deriv;
+        nd_index<Order>(result[OUT], idx.data()) = detail::extract_nth<Order>(val);
       });
     }
     return result;
@@ -282,7 +264,7 @@ public:
   }
 
   template <DiffMode Mode>
-  [[nodiscard]] auto jacobian(Eigen::Vector<value_type, input_dim> values)
+  [[nodiscard]] auto jacobian(std::array<value_type, input_dim> values)
     requires(Mode == DiffMode::Reverse && input_dim > 0)
   {
     update(symbols{}, values);
@@ -300,11 +282,11 @@ public:
 
   template <DiffMode Mode>
   [[nodiscard]] auto
-  hessian(Eigen::Vector<dual_scalar_t<value_type>, input_dim> values)
+  hessian(std::array<dual_scalar_t<value_type>, input_dim> values)
     requires(Mode == DiffMode::Reverse && is_dual_v<value_type> && input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
-    Eigen::Vector<value_type, input_dim> seeds;
+    std::array<value_type, input_dim> seeds{};
     for (std::size_t i = 0; i < input_dim; ++i)
       seeds[i] = value_type{values[i], S{}};
     update(symbols{}, seeds);
@@ -313,7 +295,7 @@ public:
 
   // --- derivative_tensor<Order>() — forward-mode, any order ---
   // Input is always plain scalar S = scalar_base_t<value_type>.
-  // Returns Eigen::Tensor<S, Order+1> with shape [output_dim, N, ..., N].
+  // Returns std::array<nd_array_t<S, input_dim, Order>, output_dim>.
 
   template <std::size_t Order>
   [[nodiscard]] auto derivative_tensor(
