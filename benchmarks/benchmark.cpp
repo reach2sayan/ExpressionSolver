@@ -14,6 +14,7 @@ using namespace diff;
 template <typename Eq>
 static void run_symbolic(benchmark::State &state, Eq &eq) {
   for (auto _ : state) {
+    benchmark::ClobberMemory();
     auto gradients = eq.eval_derivatives();
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
@@ -21,8 +22,9 @@ static void run_symbolic(benchmark::State &state, Eq &eq) {
 }
 
 template <CExpression Expr>
-static void run_reverse(benchmark::State &state, const Expr &expr) {
+static void run_reverse(benchmark::State &state, Expr &expr) {
   for (auto _ : state) {
+    benchmark::ClobberMemory();
     auto gradients = gradient<DiffMode::Reverse>(expr);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
@@ -32,8 +34,10 @@ static void run_reverse(benchmark::State &state, const Expr &expr) {
 template <CExpression Expr, std::size_t N>
 static void run_forward(
     benchmark::State &state, Expr &expr,
-    const std::array<scalar_base_t<typename Expr::value_type>, N> &values) {
+    std::array<scalar_base_t<typename Expr::value_type>, N> values) {
   for (auto _ : state) {
+    benchmark::ClobberMemory();
+    benchmark::DoNotOptimize(values);
     auto gradients = derivative_tensor<1>(expr, values);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
@@ -43,6 +47,7 @@ static void run_forward(
 template <typename VE>
 static void run_symbolic_jacobian(benchmark::State &state, VE &ve) {
   for (auto _ : state) {
+    benchmark::ClobberMemory();
     auto J = ve.template symbolic_mode_jac();
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
@@ -50,8 +55,9 @@ static void run_symbolic_jacobian(benchmark::State &state, VE &ve) {
 }
 
 template <typename VE>
-static void run_reverse_jacobian(benchmark::State &state, const VE &ve) {
+static void run_reverse_jacobian(benchmark::State &state, VE &ve) {
   for (auto _ : state) {
+    benchmark::ClobberMemory();
     auto J = ve.template reverse_mode_jac();
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
@@ -61,6 +67,7 @@ static void run_reverse_jacobian(benchmark::State &state, const VE &ve) {
 template <typename VE>
 static void run_forward_jacobian(benchmark::State &state, VE &ve) {
   for (auto _ : state) {
+    benchmark::ClobberMemory();
     auto J = ve.template derivative_tensor<1>();
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
@@ -202,115 +209,6 @@ static void BM_Reverse_Vector_F4(benchmark::State &state) {
   run_reverse_jacobian(state, ve);
 }
 BENCHMARK(BM_Reverse_Vector_F4);
-
-// ===========================================================================
-// Parallel reverse-mode Jacobian — breakeven sweep (output_dim 2 / 4 / 6)
-// Each row is  f_i(x,y,z,w) = exp(x*z) + sin(y*w) + x*y*z*w.
-// Compare BM_Symbolic_Vector_F4 (2 rows) vs these to see thread-spawn overhead
-// vs parallelism payoff as output_dim grows.
-// ===========================================================================
-
-static void BM_Reverse_Parallel_2Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f());
-  run_reverse_jacobian(state, ve);
-}
-BENCHMARK(BM_Reverse_Parallel_2Rows);
-
-static void BM_Symbolic_Parallel_2Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f());
-  run_symbolic_jacobian(state, ve);
-}
-BENCHMARK(BM_Symbolic_Parallel_2Rows);
-
-static void BM_Reverse_Parallel_4Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f(), f(), f());
-  run_reverse_jacobian(state, ve);
-}
-BENCHMARK(BM_Reverse_Parallel_4Rows);
-
-static void BM_Symbolic_Parallel_4Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f(), f(), f());
-  run_symbolic_jacobian(state, ve);
-}
-BENCHMARK(BM_Symbolic_Parallel_4Rows);
-
-static void BM_Reverse_Parallel_6Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f(), f(), f(), f(), f());
-  run_reverse_jacobian(state, ve);
-}
-BENCHMARK(BM_Reverse_Parallel_6Rows);
-
-static void BM_Symbolic_Parallel_6Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f(), f(), f(), f(), f());
-  run_symbolic_jacobian(state, ve);
-}
-BENCHMARK(BM_Symbolic_Parallel_6Rows);
-
-// ===========================================================================
-// Parallel reverse — large heterogeneous system  f: ℝ⁴ → ℝ⁵
-// Mix of trig, exp, and polynomial rows to stress the parallel path with
-// diverse per-row work.
-// ===========================================================================
-
-static void BM_Reverse_Parallel_Large(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto ve =
-      Equation(x * y + exp(z), sin(x) * cos(y) + z * w, exp(x + y) + z * z,
-               x * z * w + sin(y), cos(x * y) + exp(z + w));
-  run_reverse_jacobian(state, ve);
-}
-BENCHMARK(BM_Reverse_Parallel_Large);
-
-static void BM_Symbolic_Parallel_Large(benchmark::State &state) {
-  auto x = PV(1.0, 'x');
-  auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z');
-  auto w = PV(M_PI / 6.0, 'w');
-  auto ve =
-      Equation(x * y + exp(z), sin(x) * cos(y) + z * w, exp(x + y) + z * z,
-               x * z * w + sin(y), cos(x * y) + exp(z + w));
-  run_symbolic_jacobian(state, ve);
-}
-BENCHMARK(BM_Symbolic_Parallel_Large);
-
-// ===========================================================================
-// Parallel-future reverse-mode Jacobian — std::async per output row.
-// Rows are independent so no data races; overhead vs. benefit depends on
-// per-row work: expect loss for small expressions, gain for large ones.
-// ===========================================================================
 
 static void BM_Footprint_F4(benchmark::State &state) {
   auto xs = PV(1.0, 'x');
