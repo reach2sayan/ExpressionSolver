@@ -55,7 +55,6 @@ template <typename T>
 concept CEquation = CExpression<T> and std::constructible_from<T>;
 template <CExpression... Ts> class Equation;
 
-
 // Build a std::tuple of Jacobian rows — one row (std::tuple of derivatives)
 // per expression in the std::tuple es.
 template <typename... Syms, typename... Exprs>
@@ -63,7 +62,8 @@ constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
                              mp::mp_list<Syms...> = {}) {
   return std::apply(
       [](const auto &...exprs) {
-        return std::make_tuple(make_derivatives(mp::mp_list<Syms...>{}, exprs)...);
+        return std::make_tuple(
+            make_derivatives(mp::mp_list<Syms...>{}, exprs)...);
       },
       es);
 }
@@ -80,9 +80,9 @@ constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
 //   update(syms, values)                     — update variable values
 // ===========================================================================
 template <CExpression TFirst, CExpression... TRest>
-  requires((std::same_as<typename TFirst::value_type,
-                         typename TRest::value_type> &&
-            ...))
+  requires(
+      (std::same_as<typename TFirst::value_type, typename TRest::value_type> &&
+       ...))
 class Equation<TFirst, TRest...> {
 public:
   using value_type = typename TFirst::value_type;
@@ -121,18 +121,21 @@ private:
 
   void spawn_parallel_workers() {
     if constexpr (output_dim > 1) {
-      par_state_ = std::make_unique<ParState>(
-          static_cast<std::ptrdiff_t>(output_dim));
+      par_state_ =
+          std::make_unique<ParState>(static_cast<std::ptrdiff_t>(output_dim));
       [this]<std::size_t... Is>(std::index_sequence<Is...>) {
         ((par_state_->workers[Is] = std::jthread([this](std::stop_token st) {
-           while (true) {
-             par_state_->start.arrive_and_wait();
-             if (st.stop_requested()) return;
-             std::get<Is + 1>(expressions).backward(
-                 symbols{}, value_type{1}, par_state_->results[Is + 1]);
-             par_state_->end.arrive_and_wait();
-           }
-         })), ...);
+            while (true) {
+              par_state_->start.arrive_and_wait();
+              if (st.stop_requested())
+                return;
+              std::get<Is + 1>(expressions)
+                  .backward(symbols{}, value_type{1},
+                            par_state_->results[Is + 1]);
+              par_state_->end.arrive_and_wait();
+            }
+          })),
+         ...);
       }(std::make_index_sequence<par_nworkers>{});
     }
   }
@@ -180,8 +183,8 @@ private:
       return jacobian_reverse_mode();
     } else {
       par_state_->start.arrive_and_wait();
-      std::get<0>(expressions).backward(
-          symbols{}, value_type{1}, par_state_->results[0]);
+      std::get<0>(expressions)
+          .backward(symbols{}, value_type{1}, par_state_->results[0]);
       par_state_->end.arrive_and_wait();
       return par_state_->results;
     }
@@ -201,18 +204,22 @@ private:
 
     std::array<value_type, input_dim> seeds{};
     for (std::size_t j = 0; j < input_dim; ++j) {
-      for (std::size_t i = 0; i < input_dim; ++i)
-        seeds[i] = value_type{current[i].template get<0>(), i == j ? S{1} : S{}};
+      for (std::size_t i = 0; i < input_dim; ++i) {
+        seeds[i] =
+            value_type{current[i].template get<0>(), i == j ? S{1} : S{}};
+      }
       update(symbols{}, seeds);
       static_for<output_dim>([&]<std::size_t K>() {
         std::array<value_type, input_dim> grads{};
         std::get<K>(expressions).backward(symbols{}, value_type{1}, grads);
-        for (std::size_t i = 0; i < input_dim; ++i)
+        for (std::size_t i = 0; i < input_dim; ++i) {
           H[K][i][j] = grads[i].template get<1>();
+        }
       });
     }
-    for (std::size_t i = 0; i < input_dim; ++i)
+    for (std::size_t i = 0; i < input_dim; ++i) {
       seeds[i] = value_type{current[i].template get<0>(), S{}};
+    }
     update(symbols{}, seeds);
     return H;
   }
@@ -249,7 +256,8 @@ private:
       static_for<output_dim>([&]<std::size_t OUT>() {
         U val = std::get<OUT>(expressions)
                     .template eval_seeded_as<U, symbols>(seeds);
-        nd_index<Order>(result[OUT], idx.data()) = detail::extract_nth<Order>(val);
+        nd_index<Order>(result[OUT], idx.data()) =
+            detail::extract_nth<Order>(val);
       });
     }
     return result;
@@ -258,15 +266,14 @@ private:
 public:
   Equation(TFirst first, TRest... rest)
       : expressions{first, rest...},
-        jacobian_data{make_jac_rows(expressions, symbols{})}
-  {
+        jacobian_data{make_jac_rows(expressions, symbols{})} {
     spawn_parallel_workers();
   }
 
   // Move is only safe when there are no pinned workers (output_dim == 1).
   // For output_dim > 1, worker lambdas capture `this`; moving would dangle.
   Equation(Equation &&o) noexcept
-      requires(par_nworkers == 0)
+    requires(par_nworkers == 0)
       : expressions{std::move(o.expressions)},
         jacobian_data{std::move(o.jacobian_data)},
         par_state_{std::move(o.par_state_)} {}
@@ -277,8 +284,10 @@ public:
 
   ~Equation() {
     if constexpr (output_dim > 1) {
-      for (auto &w : par_state_->workers) w.request_stop();
-      par_state_->start.arrive_and_wait();  // wake workers so they see stop and exit
+      for (auto &w : par_state_->workers)
+        w.request_stop();
+      par_state_->start
+          .arrive_and_wait(); // wake workers so they see stop and exit
     }
   }
 
@@ -300,9 +309,8 @@ public:
   {
     const auto &row = std::get<0>(jacobian_data);
     std::array<value_type, input_dim> result{};
-    static_for<input_dim>([&]<std::size_t I>() {
-      result[I] = std::get<I>(row).eval();
-    });
+    static_for<input_dim>(
+        [&]<std::size_t I>() { result[I] = std::get<I>(row).eval(); });
     return result;
   }
 
@@ -370,7 +378,8 @@ public:
 
   template <DiffMode Mode>
   [[nodiscard]] auto hessian()
-    requires(Mode == DiffMode::Reverse && is_dual_v<value_type> && input_dim > 0)
+    requires(Mode == DiffMode::Reverse && is_dual_v<value_type> &&
+             input_dim > 0)
   {
     return hessian_forward_over_reverse();
   }
@@ -378,7 +387,8 @@ public:
   template <DiffMode Mode>
   [[nodiscard]] auto
   hessian(std::array<dual_scalar_t<value_type>, input_dim> values)
-    requires(Mode == DiffMode::Reverse && is_dual_v<value_type> && input_dim > 0)
+    requires(Mode == DiffMode::Reverse && is_dual_v<value_type> &&
+             input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
     std::array<value_type, input_dim> seeds{};
@@ -424,7 +434,6 @@ public:
     std::apply(update_func, expressions);
     std::apply(apply_to_tuple_func, jacobian_data);
   }
-
 };
 
 template <CExpression T, CExpression... Ts>
