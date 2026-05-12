@@ -18,6 +18,20 @@ template <std::size_t N, class F> constexpr void static_for(F &&f) {
 template <typename T> constexpr static bool is_const = false;
 template <typename T> constexpr static bool is_const<Constant<T>> = true;
 
+template <typename T> inline constexpr bool is_variable_v = false;
+template <typename T, char C> inline constexpr bool is_variable_v<Variable<T, C>> = true;
+
+template <typename T> inline constexpr char variable_symbol_v = '\0';
+template <typename T, char C> inline constexpr char variable_symbol_v<Variable<T, C>> = C;
+
+template <typename T> inline constexpr bool is_mono_expression_v = false;
+template <typename Op, typename E>
+inline constexpr bool is_mono_expression_v<MonoExpression<Op, E>> = true;
+
+template <typename T> inline constexpr bool is_binary_expression_v = false;
+template <typename Op, typename L, typename R>
+inline constexpr bool is_binary_expression_v<Expression<Op, L, R>> = true;
+
 template <typename T, char symbol = 'X'> struct make_all_constant {
   using type = T;
 };
@@ -106,64 +120,33 @@ constexpr void make_labels_array(const Expression<Op, LHS, RHS> &expr,
 }
 
 template <char symbol, typename Expr>
-constexpr auto constify_unmatched_var_impl() {
-  if constexpr (is_variable_v<Expr>) {
-    if constexpr (Expr::symbol == symbol) {
+consteval auto constify_unmatched_var_impl() {
+  if constexpr (is_constant_v<Expr>) {
+    return std::type_identity<Expr>{};
+  } else if constexpr (is_variable_v<Expr>) {
+    if constexpr (variable_symbol_v<Expr> == symbol) {
       return std::type_identity<Expr>{};
     } else {
       return std::type_identity<Constant<typename Expr::value_type>>{};
     }
-  } else if constexpr (is_constant_v<Expr>) {
-    return std::type_identity<Expr>{};
-  } else if constexpr (is_expression_v<Expr>) {
-    using L = typename Expr::lhs_type;
-    using R = typename Expr::rhs_type;
-    using Op = typename Expr::op_type;
-
-    return std::type_identity<
-        Expression<Op,
-                   constify_unmatched_var_t<symbol, L>,
-                   constify_unmatched_var_t<symbol, R>>>{};
+  } else if constexpr (is_binary_expression_v<Expr>) {
+    using L   = typename Expr::lhs_type;
+    using R   = typename Expr::rhs_type;
+    using Op  = typename Expr::op_type;
+    using NewL = typename decltype(constify_unmatched_var_impl<symbol, L>())::type;
+    using NewR = typename decltype(constify_unmatched_var_impl<symbol, R>())::type;
+    return std::type_identity<Expression<Op, NewL, NewR>>{};
   } else if constexpr (is_mono_expression_v<Expr>) {
-    using E = typename Expr::expr_type;
-    using Op = typename Expr::op_type;
-
-    return std::type_identity<
-        MonoExpression<Op, constify_unmatched_var_t<symbol, E>>>{};
+    using E   = typename Expr::lhs_type;
+    using Op  = typename Expr::op_type;
+    using NewE = typename decltype(constify_unmatched_var_impl<symbol, E>())::type;
+    return std::type_identity<MonoExpression<Op, NewE>>{};
   }
 }
 
 template <char symbol, typename Expr>
 using constify_unmatched_var_t =
-    typename decltype(constify_unmatched_var_impl<symbol, Expr>())::type;template <char symbol, typename Expr> struct constify_unmatched_var;
-
-template <char symbol, typename T>
-struct constify_unmatched_var<symbol, Variable<T, symbol>> {
-  using type = Variable<T, symbol>;
-};
-template <char symbol, typename T, char othersymbol>
-struct constify_unmatched_var<symbol, Variable<T, othersymbol>> {
-  using type = Constant<T>;
-};
-template <char symbol, typename T>
-struct constify_unmatched_var<symbol, Constant<T>> {
-  using type = Constant<T>;
-};
-template <char symbol, typename Op, typename LHS, typename RHS>
-struct constify_unmatched_var<symbol, Expression<Op, LHS, RHS>> {
-  using type =
-      Expression<Op, typename constify_unmatched_var<symbol, LHS>::type,
-                 typename constify_unmatched_var<symbol, RHS>::type>;
-};
-template <char symbol, typename Op, typename Expr>
-struct constify_unmatched_var<symbol, MonoExpression<Op, Expr>> {
-  using type =
-      MonoExpression<Op, typename constify_unmatched_var<symbol, Expr>::type>;
-};
-
-template <char symbol, typename Expr>
-using constify_unmatched_var_t =
-    typename constify_unmatched_var<symbol, Expr>::type;
+    typename decltype(constify_unmatched_var_impl<symbol, Expr>())::type;
 
 template <char symbol, typename T>
 constexpr auto make_all_constant_except(const Variable<T, symbol> &v) {
@@ -203,7 +186,6 @@ constexpr auto make_all_constant_except(const MonoExpression<Op, Expr> &expr)
 
 template <typename A, typename B>
 using ic_less = mp::mp_bool<(A::value < B::value)>;
-
 template <typename List> using sort_tuple_t = mp::mp_sort<List, ic_less>;
 
 template <typename List>
