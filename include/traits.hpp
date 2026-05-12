@@ -52,24 +52,32 @@ using as_const_expression = make_all_constant<
     Expression<typename TExpression::op_type, typename TExpression::lhs_type,
                typename TExpression::rhs_type>>::type;
 
-template <char symbol, typename Expr> struct replace_matching_variable_as_const;
-template <char symbol, typename T> struct replace_matching_variable_as_const {
-  using type = T;
-};
-template <char symbol, typename T>
-struct replace_matching_variable_as_const<symbol, Variable<T, symbol>> {
-  using type = Constant<T>;
-};
-template <char symbol, typename Op, typename... TExpressions>
-struct replace_matching_variable_as_const<symbol,
-                                          Expression<Op, TExpressions...>> {
-  using type = Expression<Op, typename replace_matching_variable_as_const<
-                                  symbol, TExpressions>::type...>;
-};
+template <char symbol, typename T> consteval auto replace_matching_var_impl() {
+  if constexpr (is_variable_v<T> && variable_symbol_v<T> == symbol) {
+    return std::type_identity<Constant<typename T::value_type>>{};
+  } else if constexpr (is_binary_expression_v<T>) {
+    using L = typename T::lhs_type;
+    using R = typename T::rhs_type;
+    using Op = typename T::op_type;
+    using NewL =
+        typename decltype(replace_matching_var_impl<symbol, L>())::type;
+    using NewR =
+        typename decltype(replace_matching_var_impl<symbol, R>())::type;
+    return std::type_identity<Expression<Op, NewL, NewR>>{};
+  } else if constexpr (is_mono_expression_v<T>) {
+    using E = typename T::lhs_type;
+    using Op = typename T::op_type;
+    using NewE =
+        typename decltype(replace_matching_var_impl<symbol, E>())::type;
+    return std::type_identity<MonoExpression<Op, NewE>>{};
+  } else {
+    return std::type_identity<T>{};
+  }
+}
 
-template <char symbol, typename TExpression>
+template <char symbol, typename T>
 using replace_matching_variable_as_const_t =
-    typename replace_matching_variable_as_const<symbol, TExpression>::type;
+    typename decltype(replace_matching_var_impl<symbol, T>())::type;
 
 template <char symbol, typename T>
 constexpr auto make_const_variable(const Variable<T, symbol> &var) {
@@ -104,7 +112,7 @@ constexpr auto make_const_variable(const MonoExpression<Op, LHS> &expr)
 }
 
 template <typename T, char C, std::size_t N>
-constexpr void make_labels_array(const Variable<T, C> &,
+consteval void make_labels_array(const Variable<T, C> &,
                                  std::array<char, N> &out, std::size_t &index) {
   out[index++] = C;
 }
@@ -216,7 +224,8 @@ template <typename T> consteval auto extract_symbols_impl() {
 }
 
 template <typename T>
-using extract_symbols_from_expr_t = typename decltype(extract_symbols_impl<T>())::type;
+using extract_symbols_from_expr_t =
+    typename decltype(extract_symbols_impl<T>())::type;
 
 template <std::size_t N> consteval auto idx() noexcept {
   return std::integral_constant<std::size_t, N>{};
