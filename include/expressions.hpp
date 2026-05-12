@@ -91,6 +91,7 @@ class MonoExpression : public BaseExpression<Op> {
 public:
   [[nodiscard]] constexpr const auto &expressions() const { return expression; }
   using lhs_type = Exp;
+  using op_type = Op;
   using value_type = typename BaseExpression<Op>::value_type;
   constexpr MonoExpression(Exp expr) : expression{std::move(expr)} {}
 

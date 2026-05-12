@@ -653,7 +653,7 @@ TEST(EquationTest, DifferenceOfSquares) {
   constexpr auto x = PV(4, 'x');
   constexpr auto y = PV(2, 'y');
   constexpr auto expr = (x + y) * (x - y);
-  auto eq = Equation(expr);
+  constexpr auto eq = Equation(expr);
   auto [d1, d2] = eq.eval_derivatives();
   ASSERT_EQ(expr, 12); // (4+2)*(4-2) = 12
   ASSERT_EQ(d1, 8);    // 2x = 8
