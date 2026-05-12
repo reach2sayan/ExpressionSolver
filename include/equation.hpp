@@ -87,8 +87,8 @@ class Equation<TFirst, TRest...> {
 public:
   using value_type = typename TFirst::value_type;
   using symbols = sort_tuple_t<
-      tuple_union_t<typename extract_symbols_from_expr<TFirst>::type,
-                    typename extract_symbols_from_expr<TRest>::type...>>;
+      tuple_union_t<extract_symbols_from_expr_t<TFirst>,
+                    extract_symbols_from_expr_t<TRest>...>>;
 
   static constexpr std::size_t output_dim = 1 + sizeof...(TRest);
   static constexpr std::size_t input_dim = mp::mp_size<symbols>::value;

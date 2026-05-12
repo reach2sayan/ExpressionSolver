@@ -30,20 +30,24 @@ struct IOperators {
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator+(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
-    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>)
+    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() + b.get()};
-    else
+    }
+    else {
       return Expression<SumOp<value_type>, LHS, RHS>{a, b};
+    }
   }
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator*(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
-    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>)
+    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() * b.get()};
-    else
+    }
+    else {
       return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
+    }
   }
 
   template <CExpression LHS, CExpression RHS>
@@ -63,10 +67,12 @@ struct IOperators {
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator/(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
-    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>)
+    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() / b.get()};
-    else
+    }
+    else {
       return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
+    }
   }
 
   template <CExpression Expr> friend constexpr auto sin(const Expr &a) {

@@ -373,7 +373,7 @@ TEST(ConceptTest, AnOpSatisfied) {
 
 TEST(SymbolTest, SingleVariable) {
   using E = Variable<double, 'x'>;
-  using Syms = extract_symbols_from_expr<E>::type;
+  using Syms = extract_symbols_from_expr_t<E>;
   static_assert(boost::mp11::mp_size<Syms>::value == 1);
   static_assert(std::is_same_v<boost::mp11::mp_at_c<Syms, 0>,
                                std::integral_constant<char, 'x'>>);
@@ -382,7 +382,7 @@ TEST(SymbolTest, SingleVariable) {
 TEST(SymbolTest, TwoVariables) {
   using E = decltype(std::declval<Variable<double, 'x'>>() *
                      std::declval<Variable<double, 'y'>>());
-  using Syms = extract_symbols_from_expr<E>::type;
+  using Syms = extract_symbols_from_expr_t<E>;
   static_assert(boost::mp11::mp_size<Syms>::value == 2);
   // Symbols are sorted by char value: 'x' < 'y'
   static_assert(std::is_same_v<boost::mp11::mp_at_c<Syms, 0>,
@@ -395,7 +395,7 @@ TEST(SymbolTest, DuplicateSymbolsDeduplicated) {
   // x * x has only one distinct symbol
   using E = decltype(std::declval<Variable<double, 'x'>>() *
                      std::declval<Variable<double, 'x'>>());
-  using Syms = extract_symbols_from_expr<E>::type;
+  using Syms = extract_symbols_from_expr_t<E>;
   static_assert(boost::mp11::mp_size<Syms>::value == 1);
 }
 
@@ -404,7 +404,7 @@ TEST(SymbolTest, ThreeVariables) {
   auto y = PV(2.0, 'y');
   auto z = PV(3.0, 'z');
   auto expr = x + y + z;
-  using Syms = extract_symbols_from_expr<decltype(expr)>::type;
+  using Syms = extract_symbols_from_expr_t<decltype(expr)>;
   static_assert(boost::mp11::mp_size<Syms>::value == 3);
 }
 
