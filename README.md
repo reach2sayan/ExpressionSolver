@@ -3,7 +3,7 @@
 
 # Expression Differentiator
 
-A header-only C++20 library for symbolic expression trees, symbolic differentiation, and automatic differentiation — forward mode (dual numbers), reverse mode (adjoint backpropagation), second-order (Hessian) computation, and parallel reverse-mode Jacobians.
+A header-only C++20 library for symbolic expression trees, symbolic differentiation, and automatic differentiation — forward mode (dual numbers), reverse mode (adjoint backpropagation), and second-order (Hessian) computation.
 
 ## What it does
 
@@ -13,11 +13,10 @@ A header-only C++20 library for symbolic expression trees, symbolic differentiat
 - Wrap multiple outputs in `Equation<F0, F1, ...>` to evaluate Jacobians (f: ℝⁿ → ℝᵐ).
 - Use `Dual<T>` for forward-mode AD; nest as `Dual<Dual<T>>` for second-order.
 - Use `TaylorDual<S, N>` for efficient N-th order univariate derivatives in O(N²) time.
-- Select differentiation mode with `DiffMode::Forward` / `DiffMode::Reverse` / `DiffMode::Symbolic` / `DiffMode::ParallelReverse`.
+- Select differentiation mode with `DiffMode::Forward` / `DiffMode::Reverse` / `DiffMode::Symbolic`.
 - Use `gradient<DiffMode>` for scalar gradients; `hessian<DiffMode>` for scalar Hessians.
 - Use `eq.jacobian<DiffMode>()` for vector Jacobians; `eq.hessian<DiffMode>()` for per-output Hessians.
 - Evaluate constant-only expressions at compile time.
-- Compute multi-output Jacobians in parallel using pre-spawned workers and `std::barrier` (zero allocation in the hot path).
 
 ## Requirements
 
@@ -52,7 +51,7 @@ cmake --build build_compare --target benchmarks_compare
 ./build_compare/benchmarks_compare
 ```
 
-See [BENCHMARKS.md](benchmarks/BENCHMARKS.md) for the full suite description, snapshots, comparison results, and notes on the parallel Jacobian experiment.
+See [BENCHMARKS.md](benchmarks/BENCHMARKS.md) for the full suite description, snapshots, and comparison results.
 
 ## Main types
 
@@ -62,7 +61,6 @@ See [BENCHMARKS.md](benchmarks/BENCHMARKS.md) for the full suite description, sn
 |---|---|
 | `Constant<T>` | Fixed numeric value; derivative is zero |
 | `Variable<T, 'x'>` | Named symbolic variable |
-| `RuntimeVariable<T>` | Index-addressed variable; symbol list resolved at runtime |
 
 ### Expression nodes
 
@@ -100,7 +98,6 @@ Math functions: `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `asin`, `acos`
 | `PC(v)` | `Constant<decltype(v)>{v}` |
 | `PV(v, 'x')` | `Variable<decltype(v), 'x'>{v}` |
 | `PDV(v, 'x')` | `Variable<Dual<decltype(v)>, 'x'>{Dual<decltype(v)>{v, 0}}` |
-| `RV(v, i)` | `RuntimeVariable<decltype(v)>{v, i}` |
 | `3_ci` | `Constant<int>{3}` |
 | `1.5_cd` | `Constant<double>{1.5}` |
 | `4_vi` | `Variable<int, 'c'>{4}` |
@@ -279,44 +276,12 @@ auto expr = x * y + sin(x);
 auto H = derivative_tensor<2>(expr, std::array{1.0, 2.0});
 ```
 
-### Parallel reverse-mode Jacobian
-
-`Equation` pre-spawns `output_dim - 1` worker threads at construction time. Each
-`jacobian<DiffMode::ParallelReverse>()` call uses two `std::barrier` phase transitions —
-no dynamic allocation in the hot path.
-
-```cpp
-auto x = PV(1.0, 'x'); auto y = PV(0.5, 'y');
-auto z = PV(1.7, 'z'); auto w = PV(0.3, 'w');
-auto ve = Equation(exp(x*z) + sin(y*w),
-                   x*y - z*w,
-                   sin(x) + cos(y) + z);
-
-auto J = ve.jacobian<DiffMode::ParallelReverse>();
-// J[i][j] = ∂fᵢ/∂xⱼ
-```
-
-Workers are joined automatically when the `Equation` is destroyed (`std::jthread`).
-Do not move an `Equation` after construction when `output_dim > 1`: worker lambdas
-capture `this`.
-
-### Runtime variables (dynamic input dimension)
-
-```cpp
-auto x = RV(2.0, 0);
-auto y = RV(3.0, 1);
-auto eq = Equation(2, x * y, x + y);   // 2 inputs, 2 outputs
-
-auto J = eq.jacobian<DiffMode::Reverse>();
-eq.update(Eigen::Vector2d{4.0, 5.0});
-```
-
 ## API summary
 
 ### `DiffMode` enum
 
 ```cpp
-enum class DiffMode { Symbolic, Forward, Reverse, ParallelReverse };
+enum class DiffMode { Symbolic, Forward, Reverse };
 ```
 
 ### `gradient.hpp` — scalar free functions
@@ -338,10 +303,9 @@ enum class DiffMode { Symbolic, Forward, Reverse, ParallelReverse };
 | Method | Returns |
 |---|---|
 | `evaluate()` | `std::array<T, m>` |
-| `jacobian<DiffMode::Symbolic>()` | `Eigen::Matrix<T, m, n>` (symbolic, compile-time only) |
-| `jacobian<DiffMode::Reverse>([values])` | `Eigen::Matrix<T, m, n>` — reverse-mode, serial |
-| `jacobian<DiffMode::ParallelReverse>()` | `std::array<std::array<T, n>, m>` — parallel reverse, barrier-based |
-| `jacobian<DiffMode::Forward>([values])` | `Eigen::Matrix<S, m, n>` — forward-mode, requires `Dual<T>` |
+| `jacobian<DiffMode::Symbolic>()` | `std::array<std::array<T, n>, m>` (symbolic, compile-time only) |
+| `jacobian<DiffMode::Reverse>([values])` | `std::array<std::array<T, n>, m>` — reverse-mode |
+| `jacobian<DiffMode::Forward>([values])` | `std::array<std::array<S, n>, m>` — forward-mode, requires `Dual<T>` |
 | `hessian<DiffMode::Reverse>([values])` | `std::array<Eigen::Matrix<S, n, n>, m>` — forward-over-reverse, requires `Dual<T>` |
 | `hessian<DiffMode::Forward>([values])` | `std::array<Eigen::Matrix<S, n, n>, m>` — forward-over-forward, requires `Dual<Dual<T>>` |
 
@@ -354,7 +318,6 @@ enum class DiffMode { Symbolic, Forward, Reverse, ParallelReverse };
 - Hessian methods require `Dual`-valued variables; the base scalar `S` is extracted automatically.
 - `hessian<DiffMode::Forward>` and `gradient<DiffMode::Forward>` are fully stateless (`const` expr).
 - `hessian<DiffMode::Reverse>` (scalar) mutates the expression to seed dual tangents but restores on exit.
-- `RuntimeVariable` nodes have `input_dim == 0`; the number of inputs is passed to the `Equation` constructor.
 
 ## Contributing
 
