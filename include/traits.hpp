@@ -105,7 +105,37 @@ constexpr void make_labels_array(const Expression<Op, LHS, RHS> &expr,
   make_labels_array(expr.expressions().second, out, index);
 }
 
-template <char symbol, typename Expr> struct constify_unmatched_var;
+template <char symbol, typename Expr>
+constexpr auto constify_unmatched_var_impl() {
+  if constexpr (is_variable_v<Expr>) {
+    if constexpr (Expr::symbol == symbol) {
+      return std::type_identity<Expr>{};
+    } else {
+      return std::type_identity<Constant<typename Expr::value_type>>{};
+    }
+  } else if constexpr (is_constant_v<Expr>) {
+    return std::type_identity<Expr>{};
+  } else if constexpr (is_expression_v<Expr>) {
+    using L = typename Expr::lhs_type;
+    using R = typename Expr::rhs_type;
+    using Op = typename Expr::op_type;
+
+    return std::type_identity<
+        Expression<Op,
+                   constify_unmatched_var_t<symbol, L>,
+                   constify_unmatched_var_t<symbol, R>>>{};
+  } else if constexpr (is_mono_expression_v<Expr>) {
+    using E = typename Expr::expr_type;
+    using Op = typename Expr::op_type;
+
+    return std::type_identity<
+        MonoExpression<Op, constify_unmatched_var_t<symbol, E>>>{};
+  }
+}
+
+template <char symbol, typename Expr>
+using constify_unmatched_var_t =
+    typename decltype(constify_unmatched_var_impl<symbol, Expr>())::type;template <char symbol, typename Expr> struct constify_unmatched_var;
 
 template <char symbol, typename T>
 struct constify_unmatched_var<symbol, Variable<T, symbol>> {

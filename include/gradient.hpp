@@ -33,15 +33,7 @@ constexpr auto &nd_index(auto &arr, const std::size_t *idx) {
 }
 
 enum class DiffMode { Symbolic, Forward, Reverse, ParallelReverse };
-
-// ===========================================================================
-// detail — internal implementations; use the public wrappers below.
-// ===========================================================================
 namespace detail {
-
-// ---------------------------------------------------------------------------
-// Reverse-mode gradient helpers
-// ---------------------------------------------------------------------------
 
 template <CExpression Expr, typename T = typename Expr::value_type>
   requires(!is_dual_v<T>)
