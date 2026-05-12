@@ -2,6 +2,7 @@
 
 #include "dual.hpp"
 #include "expressions.hpp"
+#include "taylor_dual.hpp"
 #include "traits.hpp"
 #include <array>
 #include <boost/mp11/algorithm.hpp>
@@ -10,11 +11,14 @@ namespace diff {
 
 namespace mp = boost::mp11;
 
-// Compile-time N-dimensional array: nd_array_t<S, N, Order> is std::array nested Order times.
-template <typename S, std::size_t N, std::size_t Order>
-struct nd_array { using type = std::array<typename nd_array<S, N, Order - 1>::type, N>; };
-template <typename S, std::size_t N>
-struct nd_array<S, N, 0> { using type = S; };
+// Compile-time N-dimensional array: nd_array_t<S, N, Order> is std::array
+// nested Order times.
+template <typename S, std::size_t N, std::size_t Order> struct nd_array {
+  using type = std::array<typename nd_array<S, N, Order - 1>::type, N>;
+};
+template <typename S, std::size_t N> struct nd_array<S, N, 0> {
+  using type = S;
+};
 template <typename S, std::size_t N, std::size_t Order>
 using nd_array_t = typename nd_array<S, N, Order>::type;
 
@@ -28,11 +32,7 @@ constexpr auto &nd_index(auto &arr, const std::size_t *idx) {
   }
 }
 
-enum class DiffMode { Symbolic, Forward, Reverse };
-
-// ===========================================================================
-// detail — internal implementations; use the public wrappers below.
-// ===========================================================================
+enum class DiffMode { Symbolic, Forward, Reverse, ParallelReverse };
 namespace detail {
 
 template <CExpression Expr, typename T = typename Expr::value_type>
@@ -56,8 +56,9 @@ template <CExpression Expr, typename T = typename Expr::value_type>
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
   std::array<scalar_t, N> result{};
-  for (std::size_t i = 0; i < N; i++)
+  for (std::size_t i = 0; i < N; i++) {
     result[i] = grads[i].template get<0>();
+  }
   return result;
 }
 
@@ -121,17 +122,15 @@ template <CExpression Expr,
 //               = ∂^Depth f / ∂x_{idx[0]} ∂x_{idx[1]} ... ∂x_{idx[Depth-1]}
 // ---------------------------------------------------------------------------
 template <typename S, std::size_t Depth>
-constexpr nth_dual_t<S, Depth> make_mixed_seed(S value,
-                                                const std::size_t *idx,
-                                                std::size_t k) {
+constexpr nth_dual_t<S, Depth> make_mixed_seed(S value, const std::size_t *idx,
+                                               std::size_t k) {
   if constexpr (Depth == 0) {
     return value;
   } else if constexpr (Depth == 1) {
     return nth_dual_t<S, 1>{value, k == idx[0] ? S{1} : S{}};
   } else {
     auto inner = make_mixed_seed<S, Depth - 1>(value, idx + 1, k);
-    auto outer_tangent =
-        embed_constant<S, Depth - 1>(k == idx[0] ? S{1} : S{});
+    auto outer_tangent = embed_constant<S, Depth - 1>(k == idx[0] ? S{1} : S{});
     return nth_dual_t<S, Depth>{inner, outer_tangent};
   }
 }
@@ -240,7 +239,8 @@ template <std::size_t Order, CExpression Expr,
           std::size_t N = mp::mp_size<typename extract_symbols_from_expr<
               std::remove_cvref_t<Expr>>::type>::value>
   requires(Order > 0 && N > 0)
-[[nodiscard]] auto derivative_tensor(const Expr &expr, std::array<S, N> values) {
+[[nodiscard]] auto derivative_tensor(const Expr &expr,
+                                     std::array<S, N> values) {
   return detail::derivative_tensor_impl<Order>(expr, values);
 }
 
@@ -259,6 +259,81 @@ template <std::size_t Order, CExpression Expr,
   for (std::size_t i = 0; i < N; ++i)
     values[i] = get_real_part<dual_depth_v<T>>(current[i]);
   return detail::derivative_tensor_impl<Order>(expr, values);
+}
+
+// ===========================================================================
+// univariate_derivative<N>(expr [, x0])
+//
+// N-th order derivative of a single-variable expression using TaylorDual<S,N>.
+// Stores only N+1 coefficients (vs 2^N for nth_dual_t), making it O(N²) per
+// operation instead of O(2^N).
+//
+// Returns the raw N-th derivative value (not normalised by N!).
+// Requires the expression to contain exactly one Variable symbol.
+// ===========================================================================
+
+namespace detail {
+
+template <typename T> constexpr T compile_time_factorial(T Order) {
+  T result = 1;
+  for (std::size_t i = 1; i <= Order; ++i) {
+    result *= static_cast<T>(i);
+  }
+  return result;
+}
+
+template <std::size_t Order, CExpression Expr,
+          typename T = typename std::remove_cvref_t<Expr>::value_type,
+          typename S = scalar_base_t<T>,
+          std::size_t NVars = mp::mp_size<typename extract_symbols_from_expr<
+              std::remove_cvref_t<Expr>>::type>::value>
+  requires(Order > 0 && NVars == 1)
+[[nodiscard]] S univariate_derivative_impl(const Expr &expr, S x0) {
+  using symbols =
+      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
+  using TD = TaylorDual<S, Order>;
+
+  // Seed: value = x0, first tangent = 1, higher tangents = 0.
+  TD seed;
+  seed.c[0] = x0;
+  seed.c[1] = S{1};
+
+  TD result =
+      expr.template eval_seeded_as<TD, symbols>(std::array<TD, 1>{seed});
+
+  // c[k] = f^(k)(x0) / k!  →  multiply by Order! to recover the derivative.
+  S factorial = compile_time_factorial(Order);
+  // for (std::size_t i = 1; i <= Order; ++i) factorial *= static_cast<S>(i);
+  return result.c[Order] * factorial;
+}
+
+} // namespace detail
+
+// With explicit evaluation point:
+template <std::size_t Order, CExpression Expr,
+          typename T = typename std::remove_cvref_t<Expr>::value_type,
+          typename S = scalar_base_t<T>,
+          std::size_t NVars = mp::mp_size<typename extract_symbols_from_expr<
+              std::remove_cvref_t<Expr>>::type>::value>
+  requires(Order > 0 && NVars == 1)
+[[nodiscard]] S univariate_derivative(const Expr &expr, S x0) {
+  return detail::univariate_derivative_impl<Order>(expr, x0);
+}
+
+// Read evaluation point from the expression's current variable values:
+template <std::size_t Order, CExpression Expr,
+          typename T = typename std::remove_cvref_t<Expr>::value_type,
+          typename S = scalar_base_t<T>,
+          std::size_t NVars = mp::mp_size<typename extract_symbols_from_expr<
+              std::remove_cvref_t<Expr>>::type>::value>
+  requires(Order > 0 && NVars == 1)
+[[nodiscard]] S univariate_derivative(const Expr &expr) {
+  using symbols =
+      typename extract_symbols_from_expr<std::remove_cvref_t<Expr>>::type;
+  std::array<T, 1> current{};
+  expr.collect(symbols{}, current);
+  S x0 = get_real_part<dual_depth_v<T>>(current[0]);
+  return detail::univariate_derivative_impl<Order>(expr, x0);
 }
 
 } // namespace diff
