@@ -49,6 +49,15 @@ template <typename T>
 concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
 
 // ===========================================================================
+// is_constant trait — true iff T is Constant<U> for some Numeric U.
+// ===========================================================================
+template <typename T> struct is_constant : std::false_type {};
+template <Numeric T> struct is_constant<Constant<T>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_constant_v =
+    is_constant<std::remove_cvref_t<T>>::value;
+
+// ===========================================================================
 // EvalResult<T>
 // ===========================================================================
 template <Numeric T> struct EvalResult {

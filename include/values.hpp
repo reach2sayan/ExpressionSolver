@@ -30,87 +30,97 @@ struct IOperators {
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator+(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
-    return Expression<SumOp<value_type>, LHS, RHS>{std::move(a), std::move(b)};
+    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>)
+      return Constant<value_type>{a.get() + b.get()};
+    else
+      return Expression<SumOp<value_type>, LHS, RHS>{a, b};
   }
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator*(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
-    return Expression<MultiplyOp<value_type>, LHS, RHS>(std::move(a),
-                                                        std::move(b));
+    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>)
+      return Constant<value_type>{a.get() * b.get()};
+    else
+      return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
   }
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator-(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
-    auto neg = MonoExpression<NegateOp<value_type>, RHS>(std::move(b));
-    return Expression<SumOp<value_type>, LHS, decltype(neg)>{std::move(a),
-                                                             std::move(neg)};
+    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+      return Constant<value_type>{a.get() - b.get()};
+    } else {
+      auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
+      return Expression<SumOp<value_type>, LHS, decltype(neg)>{a, std::move(neg)};
+    }
   }
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
   friend constexpr auto operator/(const LHS &a, const RHS &b) {
     using value_type = typename LHS::value_type;
-    return Expression<DivideOp<value_type>, LHS, RHS>{std::move(a),
-                                                      std::move(b)};
+    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>)
+      return Constant<value_type>{a.get() / b.get()};
+    else
+      return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
   }
 
   template <CExpression Expr> friend constexpr auto sin(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<SineOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<SineOp<value_type>, Expr>{a};
   }
 
   template <CExpression Expr> friend constexpr auto cos(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<CosineOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<CosineOp<value_type>, Expr>{a};
   }
 
   template <CExpression Expr> friend constexpr auto exp(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<ExpOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<ExpOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto tan(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<TanOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<TanOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto log(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<LogOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<LogOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto sqrt(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<SqrtOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<SqrtOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto abs(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<AbsOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<AbsOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto asin(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<AsinOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<AsinOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto acos(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<AcosOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<AcosOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto atan(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<AtanOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<AtanOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto sinh(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<SinhOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<SinhOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto cosh(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<CoshOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<CoshOp<value_type>, Expr>{a};
   }
   template <CExpression Expr> friend constexpr auto tanh(const Expr &a) {
     using value_type = typename Expr::value_type;
-    return MonoExpression<TanhOp<value_type>, Expr>{std::move(a)};
+    return MonoExpression<TanhOp<value_type>, Expr>{a};
   }
 
   template <typename S, CExpression RHS>
@@ -173,9 +183,9 @@ template <Numeric T> class Constant : public IOperators {
       out << "_c";
     return out;
   }
-  [[nodiscard]] constexpr auto eval() const { return value; }
 
 public:
+  [[nodiscard]] constexpr auto eval() const { return value; }
   using value_type = T;
   constexpr explicit Constant(T value) : value(value) {}
   [[nodiscard]] constexpr auto get() const { return value; }
@@ -223,9 +233,9 @@ template <Numeric T, char symbol> class Variable : public IOperators {
     return out;
   }
   static constexpr inline size_t static_counter = 0;
-  [[nodiscard]] constexpr T eval() const { return value; }
 
 public:
+  [[nodiscard]] constexpr T eval() const { return value; }
   using value_type = T;
   constexpr explicit Variable(T value) : value(value) {}
   constexpr operator T() const { return value; }
