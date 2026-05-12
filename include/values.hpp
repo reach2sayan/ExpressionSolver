@@ -184,10 +184,12 @@ struct IOperators {
 template <Numeric T> class Constant : public IOperators {
   const T value;
   friend std::ostream &operator<<(std::ostream &out, const Constant<T> &c) {
-    if constexpr (PRINT_CONSTANT_VALUE)
+    if constexpr (PRINT_CONSTANT_VALUE) {
       out << std::format("{}", c.value);
-    if constexpr (PRINT_CONSTANT_LABEL)
+    }
+    if constexpr (PRINT_CONSTANT_LABEL) {
       out << "_c";
+    }
     return out;
   }
 

@@ -3,10 +3,10 @@
 #include "gradient.hpp"
 #include "values.hpp"
 #define _USE_MATH_DEFINES
-#include <math.h>
-#include <benchmark/benchmark.h>
 #include <array>
+#include <benchmark/benchmark.h>
 #include <cstddef>
+#include <math.h>
 #include <vector>
 
 using namespace diff;
@@ -156,8 +156,7 @@ static void BM_Forward_F4_FourVariables(benchmark::State &state) {
   Variable<double, 'z'> z{1.7};
   Variable<double, 'w'> w{M_PI / 6.0};
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
-  run_forward(state, expr,
-              std::array{1.0, 0.5, 1.7, M_PI / 6.0});
+  run_forward(state, expr, std::array{1.0, 0.5, 1.7, M_PI / 6.0});
 }
 BENCHMARK(BM_Forward_F4_FourVariables);
 
@@ -312,52 +311,6 @@ BENCHMARK(BM_Symbolic_Parallel_Large);
 // Rows are independent so no data races; overhead vs. benefit depends on
 // per-row work: expect loss for small expressions, gain for large ones.
 // ===========================================================================
-
-template <typename VE>
-static void run_parallel_jacobian(benchmark::State &state, const VE &ve) {
-  for (auto _ : state) {
-    auto J = ve.template parallel_reverse_jac();
-    benchmark::DoNotOptimize(J);
-    benchmark::ClobberMemory();
-  }
-}
-
-static void BM_Parallel_Future_2Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x'); auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z'); auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f());
-  run_parallel_jacobian(state, ve);
-}
-BENCHMARK(BM_Parallel_Future_2Rows);
-
-static void BM_Parallel_Future_4Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x'); auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z'); auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f(), f(), f());
-  run_parallel_jacobian(state, ve);
-}
-BENCHMARK(BM_Parallel_Future_4Rows);
-
-static void BM_Parallel_Future_6Rows(benchmark::State &state) {
-  auto x = PV(1.0, 'x'); auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z'); auto w = PV(M_PI / 6.0, 'w');
-  auto f = [&] { return exp(x * z) + sin(y * w) + x * y * z * w; };
-  auto ve = Equation(f(), f(), f(), f(), f(), f());
-  run_parallel_jacobian(state, ve);
-}
-BENCHMARK(BM_Parallel_Future_6Rows);
-
-static void BM_Parallel_Future_Large(benchmark::State &state) {
-  auto x = PV(1.0, 'x'); auto y = PV(0.5, 'y');
-  auto z = PV(1.7, 'z'); auto w = PV(M_PI / 6.0, 'w');
-  auto ve =
-      Equation(x * y + exp(z), sin(x) * cos(y) + z * w, exp(x + y) + z * z,
-               x * z * w + sin(y), cos(x * y) + exp(z + w));
-  run_parallel_jacobian(state, ve);
-}
-BENCHMARK(BM_Parallel_Future_Large);
 
 static void BM_Footprint_F4(benchmark::State &state) {
   auto xs = PV(1.0, 'x');

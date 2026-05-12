@@ -32,7 +32,7 @@ constexpr auto &nd_index(auto &arr, const std::size_t *idx) {
   }
 }
 
-enum class DiffMode { Symbolic, Forward, Reverse, ParallelReverse };
+enum class DiffMode { Symbolic, Forward, Reverse};
 namespace detail {
 
 template <CExpression Expr, typename T = typename Expr::value_type>
