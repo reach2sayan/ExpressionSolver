@@ -25,7 +25,7 @@ constexpr auto& nd_index(auto& arr, const std::size_t* idx) {
     else return nd_index<Order - 1>(arr[idx[0]], idx + 1);
 }
 
-enum class DiffMode { Symbolic, Forward, Reverse };
+enum class DiffMode { Symbolic, Forward, Reverse, ParallelReverse };
 
 // ===========================================================================
 // detail — internal implementations; use the public wrappers below.
@@ -55,8 +55,9 @@ template <CExpression Expr, typename T = typename Expr::value_type>
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
   std::array<scalar_t, N> result{};
-  for (std::size_t i = 0; i < N; i++)
+  for (std::size_t i = 0; i < N; i++) {
     result[i] = grads[i].template get<0>();
+  }
   return result;
 }
 
@@ -71,16 +72,19 @@ template <CExpression Expr,
   std::array<std::array<S, N>, N> H{};
   std::array<T, N> seeds{};
   for (std::size_t j = 0; j < N; j++) {
-    for (std::size_t i = 0; i < N; i++)
+    for (std::size_t i = 0; i < N; i++) {
       seeds[i] = T{values[i], i == j ? S{1} : S{}};
+    }
     expr.update(symbols{}, seeds);
     std::array<T, N> grads{};
     expr.backward(symbols{}, T{1}, grads);
-    for (std::size_t i = 0; i < N; i++)
+    for (std::size_t i = 0; i < N; i++) {
       H[i][j] = grads[i].template get<1>();
+    }
   }
-  for (std::size_t i = 0; i < N; i++)
+  for (std::size_t i = 0; i < N; i++) {
     seeds[i] = T{values[i], S{}};
+  }
   expr.update(symbols{}, seeds);
   return H;
 }
@@ -96,8 +100,9 @@ template <CExpression Expr,
   std::array<T, N> current{};
   expr.collect(symbols{}, current);
   std::array<S, N> values{};
-  for (std::size_t i = 0; i < N; i++)
+  for (std::size_t i = 0; i < N; i++) {
     values[i] = current[i].template get<0>();
+  }
   return reverse_mode_hessian(expr, values);
 }
 
@@ -157,8 +162,9 @@ template <std::size_t Order, CExpression Expr,
   nd_array_t<S, N, Order> result{};
 
   std::size_t total = 1;
-  for (std::size_t d = 0; d < Order; ++d)
+  for (std::size_t d = 0; d < Order; ++d) {
     total *= N;
+  }
 
   for (std::size_t flat = 0; flat < total; ++flat) {
     std::array<std::size_t, Order> idx{};
@@ -169,9 +175,9 @@ template <std::size_t Order, CExpression Expr,
     }
 
     std::array<U, N> seeds{};
-    for (std::size_t k = 0; k < N; ++k)
+    for (std::size_t k = 0; k < N; ++k) {
       seeds[k] = make_mixed_seed<S, Order>(values[k], idx.data(), k);
-
+    }
     U val = expr.template eval_seeded_as<U, symbols>(seeds);
     nd_index<Order>(result, idx.data()) = extract_nth<Order>(val);
   }

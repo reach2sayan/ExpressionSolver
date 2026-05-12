@@ -2,8 +2,10 @@
 #include "dual.hpp"
 #include "gradient.hpp"
 #include <array>
+#include <barrier>
 #include <boost/mp11/algorithm.hpp>
 #include <ranges>
+#include <thread>
 
 namespace diff {
 
@@ -97,6 +99,44 @@ private:
   using jacobian_t = decltype(make_jac_rows(std::declval<Exprs>(), symbols{}));
   Exprs expressions;
   jacobian_t jacobian_data;
+
+  // Parallel reverse-mode infrastructure.
+  // Main thread owns row 0; each worker[i] owns row i+1.
+  // Heap-allocated so Equation remains movable for output_dim == 1
+  // (null par_state_ → no workers, safe to move).
+  // Do NOT move an Equation after construction when output_dim > 1:
+  // worker lambdas capture `this` and would reference the old address.
+  static constexpr std::size_t par_nworkers =
+      output_dim > 1 ? output_dim - 1 : 0;
+
+  struct ParState {
+    std::barrier<> start;
+    std::barrier<> end;
+    std::array<std::array<value_type, input_dim>, output_dim> results{};
+    std::array<std::jthread, par_nworkers> workers;
+    explicit ParState(std::ptrdiff_t n) : start{n}, end{n} {}
+  };
+
+  mutable std::unique_ptr<ParState> par_state_{nullptr};
+
+  void spawn_parallel_workers() {
+    if constexpr (output_dim > 1) {
+      par_state_ = std::make_unique<ParState>(
+          static_cast<std::ptrdiff_t>(output_dim));
+      [this]<std::size_t... Is>(std::index_sequence<Is...>) {
+        ((par_state_->workers[Is] = std::jthread([this](std::stop_token st) {
+           while (true) {
+             par_state_->start.arrive_and_wait();
+             if (st.stop_requested()) return;
+             std::get<Is + 1>(expressions).backward(
+                 symbols{}, value_type{1}, par_state_->results[Is + 1]);
+             par_state_->end.arrive_and_wait();
+           }
+         })), ...);
+      }(std::make_index_sequence<par_nworkers>{});
+    }
+  }
+
   friend std::ostream &operator<<(std::ostream &out, const Equation &ve) {
     static_for<output_dim>([&]<std::size_t I>() {
       out << "f" << I << ": " << std::get<I>(ve.expressions);
@@ -127,6 +167,24 @@ private:
       std::get<I>(expressions).backward(symbols{}, value_type{1}, J[I]);
     });
     return J;
+  }
+
+  // --- Parallel reverse-mode Jacobian (barrier rendezvous) ---
+  // Workers pre-spawned in constructor handle rows 1..output_dim-1;
+  // main thread handles row 0.  No dynamic allocation in the hot path —
+  // just two barrier phase transitions per call.
+  [[nodiscard]] auto jacobian_reverse_parallel() const
+    requires(input_dim > 0)
+  {
+    if constexpr (output_dim == 1) {
+      return jacobian_reverse_mode();
+    } else {
+      par_state_->start.arrive_and_wait();
+      std::get<0>(expressions).backward(
+          symbols{}, value_type{1}, par_state_->results[0]);
+      par_state_->end.arrive_and_wait();
+      return par_state_->results;
+    }
   }
 
   // --- Forward-over-reverse Hessian (Dual<T> expressions) ---
@@ -198,9 +256,31 @@ private:
   }
 
 public:
-  constexpr Equation(TFirst first, TRest... rest)
+  Equation(TFirst first, TRest... rest)
       : expressions{first, rest...},
-        jacobian_data{make_jac_rows(expressions, symbols{})} {}
+        jacobian_data{make_jac_rows(expressions, symbols{})}
+  {
+    spawn_parallel_workers();
+  }
+
+  // Move is only safe when there are no pinned workers (output_dim == 1).
+  // For output_dim > 1, worker lambdas capture `this`; moving would dangle.
+  Equation(Equation &&o) noexcept
+      requires(par_nworkers == 0)
+      : expressions{std::move(o.expressions)},
+        jacobian_data{std::move(o.jacobian_data)},
+        par_state_{std::move(o.par_state_)} {}
+
+  Equation(const Equation &) = delete;
+  Equation &operator=(const Equation &) = delete;
+  Equation &operator=(Equation &&) = delete;
+
+  ~Equation() {
+    if constexpr (output_dim > 1) {
+      for (auto &w : par_state_->workers) w.request_stop();
+      par_state_->start.arrive_and_wait();  // wake workers so they see stop and exit
+    }
+  }
 
   [[nodiscard]] constexpr auto evaluate() const {
     if constexpr (output_dim == 1)
@@ -266,6 +346,21 @@ public:
   template <DiffMode Mode>
   [[nodiscard]] auto jacobian(std::array<value_type, input_dim> values)
     requires(Mode == DiffMode::Reverse && input_dim > 0)
+  {
+    update(symbols{}, values);
+    return jacobian<Mode>();
+  }
+
+  template <DiffMode Mode>
+  [[nodiscard]] auto jacobian() const
+    requires(Mode == DiffMode::ParallelReverse && input_dim > 0)
+  {
+    return jacobian_reverse_parallel();
+  }
+
+  template <DiffMode Mode>
+  [[nodiscard]] auto jacobian(std::array<value_type, input_dim> values)
+    requires(Mode == DiffMode::ParallelReverse && input_dim > 0)
   {
     update(symbols{}, values);
     return jacobian<Mode>();
@@ -344,3 +439,4 @@ auto make_equation(auto &&...args) {
 #define reverse_mode_hess hessian<diff::DiffMode::Reverse>
 #define reverse_mode_jac jacobian<diff::DiffMode::Reverse>
 #define symbolic_mode_jac jacobian<diff::DiffMode::Symbolic>
+#define parallel_reverse_jac jacobian<diff::DiffMode::ParallelReverse>
