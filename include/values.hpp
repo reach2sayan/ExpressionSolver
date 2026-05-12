@@ -54,7 +54,8 @@ struct IOperators {
       return Constant<value_type>{a.get() - b.get()};
     } else {
       auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
-      return Expression<SumOp<value_type>, LHS, decltype(neg)>{a, std::move(neg)};
+      return Expression<SumOp<value_type>, LHS, decltype(neg)>{a,
+                                                               std::move(neg)};
     }
   }
 
@@ -200,11 +201,13 @@ public:
     return value;
   }
 
-  // eval_seeded_as<U>: embed constant into the deeper type U with zero dual parts.
+  // eval_seeded_as<U>: embed constant into the deeper type U with zero dual
+  // parts.  Uses ConstantEmbedder<U> so custom numeric types (e.g. TaylorDual)
+  // can specialise the embedding without touching this code.
   template <typename U, typename Syms, std::size_t N>
   [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &) const {
     using S = scalar_base_t<U>;
-    return embed_constant<S, dual_depth_v<U>>(
+    return ConstantEmbedder<U>::embed(
         static_cast<S>(get_real_part<dual_depth_v<T>>(value)));
   }
 
@@ -237,7 +240,7 @@ template <Numeric T, char symbol> class Variable : public IOperators {
 public:
   [[nodiscard]] constexpr T eval() const { return value; }
   using value_type = T;
-  constexpr explicit Variable(T value) : value(value) {}
+  constexpr explicit Variable(T value, char = {}) : value(value) {}
   constexpr operator T() const { return value; }
   [[nodiscard]] constexpr auto get() const { return value; }
   template <typename U> constexpr decltype(auto) operator=(U &&v);

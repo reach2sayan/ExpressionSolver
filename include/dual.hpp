@@ -177,6 +177,15 @@ constexpr nth_dual_t<T, N> embed_constant(T val) {
   }
 }
 
+// ConstantEmbedder<U>: creates a "zero-derivative" U from a base scalar.
+// Specialise for custom numeric types (e.g. TaylorDual) to extend eval_seeded_as.
+template <typename U>
+struct ConstantEmbedder {
+  static constexpr U embed(scalar_base_t<U> val) {
+    return embed_constant<scalar_base_t<U>, dual_depth_v<U>>(val);
+  }
+};
+
 // get_real_part: peel N Dual<> layers to recover the base scalar.
 template <std::size_t N, typename T>
 constexpr auto get_real_part(const T &x) {
