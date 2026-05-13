@@ -136,7 +136,7 @@ consteval void make_labels_array(const Constant<T> &, std::array<char, N> &,
 template <typename Op, typename LHS, typename RHS, std::size_t N>
 consteval void make_labels_array(const Expression<Op, LHS, RHS> &expr,
                                  std::array<char, N> &out, std::size_t &index) {
-  std::visit([&](const auto &e) noexcept { make_labels_array(e, out, index); },
+  std::apply([&](const auto &...e) { (make_labels_array(e, out, index), ...); },
              expr.expressions());
 }
 
