@@ -15,8 +15,7 @@ namespace diff {
 //
 // Use univariate_derivative<N>(expr [, x0]) for a clean public API.
 
-template <Numeric S, std::size_t N>
-struct TaylorDual {
+template <Numeric S, std::size_t N> struct TaylorDual {
   std::array<S, N + 1> c{};
   constexpr TaylorDual() noexcept = default;
   constexpr explicit TaylorDual(S val) noexcept : c{} { c[0] = val; }
