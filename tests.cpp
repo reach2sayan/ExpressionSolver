@@ -1456,7 +1456,8 @@ TEST(HessianForwardTest, Quadratic) {
 }
 
 TEST(HessianForwardTest, AgreesWithForwardOverReverse) {
-  // derivative_tensor<2> must match reverse-mode Hessian for f(x,y) = (x*y, x*x).
+  // derivative_tensor<2> must match reverse-mode Hessian for f(x,y) = (x*y,
+  // x*x).
   double xv = 1.5, yv = 2.5;
 
   using D = Dual<double>;
@@ -1611,10 +1612,10 @@ TEST(DerivativeTensorTest, Order1_MatchesGradient) {
   double xv = 1.5, yv = 2.5;
   Variable<double, 'x'> x{xv};
   Variable<double, 'y'> y{yv};
-  auto expr = x * x + x * y;  // df/dx = 2x+y, df/dy = x
+  auto expr = x * x + x * y; // df/dx = 2x+y, df/dy = x
 
   auto T1 = derivative_tensor<1>(expr, std::array{xv, yv});
-  EXPECT_NEAR(T1[0], 2*xv + yv, 1e-12);
+  EXPECT_NEAR(T1[0], 2 * xv + yv, 1e-12);
   EXPECT_NEAR(T1[1], xv, 1e-12);
 }
 
@@ -1767,10 +1768,10 @@ TEST(TutorialMultiVar, Value) {
   auto x = PV(xv, 'x');
   auto y = PV(yv, 'y');
   auto z = PV(zv, 'z');
-  auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z
-           + exp(x / y + y / z);
-  double expected = 1.0 + xv + yv + zv + xv * yv + yv * zv + xv * zv
-                    + xv * yv * zv + std::exp(xv / yv + yv / zv);
+  auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
+           exp(x / y + y / z);
+  double expected = 1.0 + xv + yv + zv + xv * yv + yv * zv + xv * zv +
+                    xv * yv * zv + std::exp(xv / yv + yv / zv);
   EXPECT_NEAR(f.eval(), expected, 1e-12);
 }
 
@@ -1779,15 +1780,16 @@ TEST(TutorialMultiVar, SymbolicPartials) {
   auto x = PV(xv, 'x');
   auto y = PV(yv, 'y');
   auto z = PV(zv, 'z');
-  auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z
-           + exp(x / y + y / z);
+  auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
+           exp(x / y + y / z);
   auto eq = Equation(f);
   auto [dx, dy, dz] = eq.eval_derivatives();
   double e = std::exp(xv / yv + yv / zv);
   // df/dx = 1 + y + z + y*z + exp(.)/y
   EXPECT_NEAR(dx, 1.0 + yv + zv + yv * zv + e / yv, 1e-10);
   // df/dy = 1 + x + z + x*z + exp(.)*(−x/y² + 1/z)
-  EXPECT_NEAR(dy, 1.0 + xv + zv + xv * zv + e * (-xv / (yv * yv) + 1.0 / zv), 1e-10);
+  EXPECT_NEAR(dy, 1.0 + xv + zv + xv * zv + e * (-xv / (yv * yv) + 1.0 / zv),
+              1e-10);
   // df/dz = 1 + y + x + x*y + exp(.)*(−y/z²)
   EXPECT_NEAR(dz, 1.0 + yv + xv + xv * yv + e * (-yv / (zv * zv)), 1e-10);
 }
@@ -1797,12 +1799,13 @@ TEST(TutorialMultiVar, ReverseGradient) {
   auto x = PV(xv, 'x');
   auto y = PV(yv, 'y');
   auto z = PV(zv, 'z');
-  auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z
-           + exp(x / y + y / z);
+  auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
+           exp(x / y + y / z);
   auto g = reverse_mode_grad(f);
   double e = std::exp(xv / yv + yv / zv);
   EXPECT_NEAR(g[0], 1.0 + yv + zv + yv * zv + e / yv, 1e-10);
-  EXPECT_NEAR(g[1], 1.0 + xv + zv + xv * zv + e * (-xv / (yv * yv) + 1.0 / zv), 1e-10);
+  EXPECT_NEAR(g[1], 1.0 + xv + zv + xv * zv + e * (-xv / (yv * yv) + 1.0 / zv),
+              1e-10);
   EXPECT_NEAR(g[2], 1.0 + yv + xv + xv * yv + e * (-yv / (zv * zv)), 1e-10);
 }
 
@@ -1812,15 +1815,15 @@ TEST(TutorialMultiVar, ForwardReverseGradientAgree) {
   Variable<double, 'x'> xf{xv};
   Variable<double, 'y'> yf{yv};
   Variable<double, 'z'> zf{zv};
-  auto f_fwd = 1.0 + xf + yf + zf + xf * yf + yf * zf + xf * zf + xf * yf * zf
-               + exp(xf / yf + yf / zf);
+  auto f_fwd = 1.0 + xf + yf + zf + xf * yf + yf * zf + xf * zf + xf * yf * zf +
+               exp(xf / yf + yf / zf);
   auto T1 = derivative_tensor<1>(f_fwd, std::array{xv, yv, zv});
   // Reverse mode
   auto xr = PV(xv, 'x');
   auto yr = PV(yv, 'y');
   auto zr = PV(zv, 'z');
-  auto f_rev = PC(1.0) + xr + yr + zr + xr * yr + yr * zr + xr * zr + xr * yr * zr
-               + exp(xr / yr + yr / zr);
+  auto f_rev = PC(1.0) + xr + yr + zr + xr * yr + yr * zr + xr * zr +
+               xr * yr * zr + exp(xr / yr + yr / zr);
   auto g = reverse_mode_grad(f_rev);
   EXPECT_NEAR(T1[0], g[0], 1e-10);
   EXPECT_NEAR(T1[1], g[1], 1e-10);
@@ -1838,15 +1841,18 @@ TEST(TutorialGradient, ForwardModeDerivativeTensor) {
   Variable<double, 'y'> y{yv};
   auto f = sin(x) * cos(y) + exp(x * y);
   auto g = derivative_tensor<1>(f, std::array{xv, yv});
-  EXPECT_NEAR(g[0], std::cos(xv) * std::cos(yv) + yv * std::exp(xv * yv), 1e-12);
-  EXPECT_NEAR(g[1], -std::sin(xv) * std::sin(yv) + xv * std::exp(xv * yv), 1e-12);
+  EXPECT_NEAR(g[0], std::cos(xv) * std::cos(yv) + yv * std::exp(xv * yv),
+              1e-12);
+  EXPECT_NEAR(g[1], -std::sin(xv) * std::sin(yv) + xv * std::exp(xv * yv),
+              1e-12);
 }
 
 TEST(TutorialGradient, ForwardReverseAgree) {
   double xv = 1.0, yv = 0.5;
   Variable<double, 'x'> xf{xv};
   Variable<double, 'y'> yf{yv};
-  auto T1 = derivative_tensor<1>(sin(xf) * cos(yf) + exp(xf * yf), std::array{xv, yv});
+  auto T1 = derivative_tensor<1>(sin(xf) * cos(yf) + exp(xf * yf),
+                                 std::array{xv, yv});
   auto xr = PV(xv, 'x');
   auto yr = PV(yv, 'y');
   auto g = reverse_mode_grad(sin(xr) * cos(yr) + exp(xr * yr));
@@ -1874,7 +1880,8 @@ TEST(TutorialHigherOrder, FourthOrder_ExpX) {
   double ev = std::exp(x0);
   EXPECT_NEAR(derivative_tensor<2>(exp(x), std::array{x0})[0][0], ev, 1e-12);
   EXPECT_NEAR(derivative_tensor<3>(exp(x), std::array{x0})[0][0][0], ev, 1e-12);
-  EXPECT_NEAR(derivative_tensor<4>(exp(x), std::array{x0})[0][0][0][0], ev, 1e-9);
+  EXPECT_NEAR(derivative_tensor<4>(exp(x), std::array{x0})[0][0][0][0], ev,
+              1e-9);
 }
 
 TEST(TutorialHigherOrder, FourthOrder_AllCrossPartialsOfSinXplusY) {
@@ -1935,8 +1942,8 @@ TEST(TutorialDirectional, SecondOrder_HessianContraction) {
   Variable<double, 'x'> x{xv};
   Variable<double, 'y'> y{yv};
   auto H = derivative_tensor<2>(exp(x) * sin(y), std::array{xv, yv});
-  double d2fdu2 = H[0][0] * u * u + H[0][1] * u * u
-                + H[1][0] * u * u + H[1][1] * u * u;
+  double d2fdu2 =
+      H[0][0] * u * u + H[0][1] * u * u + H[1][0] * u * u + H[1][1] * u * u;
   EXPECT_NEAR(d2fdu2, std::exp(xv) * std::cos(yv), 1e-12);
 }
 
@@ -1971,9 +1978,9 @@ TEST(TutorialTaylor, ScalarSin_FourthOrderAccuracy) {
   auto T2 = derivative_tensor<2>(f, std::array{x0});
   auto T3 = derivative_tensor<3>(f, std::array{x0});
   auto T4 = derivative_tensor<4>(f, std::array{x0});
-  double taylor = f0 + T1[0] * h + T2[0][0] * h * h / 2.0
-                + T3[0][0][0] * h * h * h / 6.0
-                + T4[0][0][0][0] * h * h * h * h / 24.0;
+  double taylor = f0 + T1[0] * h + T2[0][0] * h * h / 2.0 +
+                  T3[0][0][0] * h * h * h / 6.0 +
+                  T4[0][0][0][0] * h * h * h * h / 24.0;
   EXPECT_NEAR(taylor, std::sin(x0 + h), 1e-7);
 }
 
@@ -1987,9 +1994,10 @@ TEST(TutorialTaylor, VectorFunction_SecondOrderAccuracy) {
   auto f0 = ve.evaluate();
   auto J = ve.derivative_tensor<1>(std::array{xv, yv});
   auto H = ve.derivative_tensor<2>(std::array{xv, yv});
-  // Component 1: f0[1] + (J[1][0]+J[1][1])*h + 0.5*(H[1][0][0]+2H[1][0][1]+H[1][1][1])*h²
-  double taylor1 = f0[1] + (J[1][0] + J[1][1]) * h
-                 + 0.5 * (H[1][0][0] + 2.0 * H[1][0][1] + H[1][1][1]) * h * h;
+  // Component 1: f0[1] + (J[1][0]+J[1][1])*h +
+  // 0.5*(H[1][0][0]+2H[1][0][1]+H[1][1][1])*h²
+  double taylor1 = f0[1] + (J[1][0] + J[1][1]) * h +
+                   0.5 * (H[1][0][0] + 2.0 * H[1][0][1] + H[1][1][1]) * h * h;
   EXPECT_NEAR(taylor1, std::exp(2.0 * h), 2e-3);
 }
 
@@ -2009,7 +2017,8 @@ TEST(TutorialReverseConditionals, UpdateReevaluatesDerivatives) {
   Variable<double, 'x'> x{2.0};
   auto eq = Equation(x * x + sin(x));
   EXPECT_NEAR(eq.evaluate(), 4.0 + std::sin(2.0), 1e-12);
-  EXPECT_NEAR(eq.eval_derivatives()[0], 4.0 + std::cos(2.0), 1e-12); // 2x + cos(x)
+  EXPECT_NEAR(eq.eval_derivatives()[0], 4.0 + std::cos(2.0),
+              1e-12); // 2x + cos(x)
 
   using Syms = decltype(eq)::symbols;
   eq.update(Syms{}, std::array{5.0}); // x←5
@@ -2044,7 +2053,8 @@ TEST(TutorialReverseParams, MultiVarWithParameter) {
 // ---------------------------------------------------------------------------
 
 TEST(TutorialReverseHessian, QuadraticForm) {
-  // f(x,y) = x² + x*y + y²: H = [[2, 1], [1, 2]] (constant, independent of point)
+  // f(x,y) = x² + x*y + y²: H = [[2, 1], [1, 2]] (constant, independent of
+  // point)
   using D = Dual<double>;
   Variable<D, 'x'> x{D{2.0}};
   Variable<D, 'y'> y{D{3.0}};
@@ -2057,7 +2067,8 @@ TEST(TutorialReverseHessian, QuadraticForm) {
 }
 
 TEST(TutorialReverseHessian, TrigFunction) {
-  // f(x,y) = sin(x)*cos(y): H = [[-sin(x)cos(y), -cos(x)sin(y)], same symmetric]
+  // f(x,y) = sin(x)*cos(y): H = [[-sin(x)cos(y), -cos(x)sin(y)], same
+  // symmetric]
   using D = Dual<double>;
   double xv = std::numbers::pi / 4.0, yv = std::numbers::pi / 6.0;
   Variable<D, 'x'> x{D{xv}};
@@ -2091,8 +2102,8 @@ TEST(TutorialReverseHigherOrder, SingleVar_SecondAndThird) {
   // f(x) = sin(x): f''(x) = -sin(x), f'''(x) = -cos(x)
   double x0 = 1.0;
   Variable<double, 'x'> x{x0};
-  EXPECT_NEAR(derivative_tensor<2>(sin(x), std::array{x0})[0][0],
-              -std::sin(x0), 1e-12);
+  EXPECT_NEAR(derivative_tensor<2>(sin(x), std::array{x0})[0][0], -std::sin(x0),
+              1e-12);
   EXPECT_NEAR(derivative_tensor<3>(sin(x), std::array{x0})[0][0][0],
               -std::cos(x0), 1e-12);
 }
