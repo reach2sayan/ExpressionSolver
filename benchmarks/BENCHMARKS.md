@@ -59,16 +59,16 @@ Functions benchmarked:
 | `F3`     | 22.0 ns | 24.0 ns |  7.50 ns |
 | `F4`     | 23.0 ns | 39.2 ns |  5.44 ns |
 
-### Linux / GCC snapshot
+### Linux / GCC snapshot (`-O3`, `-march=x86-64-v3`, 16-core)
 
 | Function | Symbolic | Forward | Reverse |
 |----------|--------:|--------:|--------:|
-| `F1`     | 0.458 ns | 0.346 ns | 0.224 ns |
-| `F2`     | 0.223 ns | 0.224 ns | 0.225 ns |
-| `F3`     | 0.227 ns | 0.227 ns | 0.224 ns |
-| `F4`     | 0.447 ns | 0.451 ns | 0.450 ns |
+| `F1`     | 36.0 ns | 14.7 ns | 19.5 ns |
+| `F2`     | 71.4 ns | 71.6 ns |  7.62 ns |
+| `F3`     | 17.3 ns | 19.8 ns |  8.67 ns |
+| `F4`     | 47.0 ns | 28.8 ns |  9.00 ns |
 
-On Linux, all three modes are fully inlined to near-zero measured time — the benchmark loop overhead dominates. The Windows numbers reflect a less aggressive inliner and show the real relative cost.
+Reverse mode wins on multi-variable functions (single backward pass). Symbolic is slower because it evaluates N pre-stored derivative expression trees. Forward mode is competitive for low-arity functions.
 
 ---
 
@@ -92,63 +92,15 @@ Compares three Jacobian paths for a 2-output, 4-input function:
 | Forward  | 140 ns  |
 | Reverse  | 6.25 ns |
 
-### Linux snapshot
+### Linux snapshot (`-O3`, `-march=x86-64-v3`, 16-core)
 
 | Method | Time |
 |--------|-----:|
-| Symbolic | 0.894 ns |
-| Forward  | 0.898 ns |
-| Reverse  | ~0.9 ns  |
+| Symbolic | 71.9 ns |
+| Forward  | 49.8 ns |
+| Reverse  | 12.7 ns |
 
-Same inlining caveat as above.
-
----
-
-## Parallel Jacobian — `std::async` experiment (reverted)
-
-`eval_jacobian_reverse` was briefly changed to launch one `std::async` task per output row, since the per-row `backward()` passes write to independent `J[i]` slices with no shared state. The sweep below measured the breakeven (same expression replicated across rows):
-
-```sh
-./build/benchmarks --benchmark_filter='.*(Parallel).*'
-```
-
-| output_dim | Symbolic (serial) | Async parallel |
-|:----------:|------------------:|---------------:|
-| 2          | 0.900 ns          | 44,372 ns      |
-| 4          | 1.79 ns           | 81,571 ns      |
-| 6          | 325 ns            | 153,560 ns     |
-| 5 (trig/exp mix) | 225 ns      | 125,471 ns     |
-
-`std::async` thread spawn costs ~40–50 µs. Each `backward()` pass costs nanoseconds. The parallel version is 50,000× slower at 2 rows and still ~470× slower at 6 rows. The change was reverted. `eval_jacobian_reverse` remains `constexpr` and serial.
-
-The benchmarks for the parallel sweep (`BM_Reverse_Parallel_*`, `BM_Symbolic_Parallel_*`) are kept in the suite as a regression guard and to document this boundary.
-
----
-
-## Parallel Jacobian — barrier-based (current, `DiffMode::ParallelReverse`)
-
-`Equation` now optionally pre-spawns `output_dim - 1` worker threads at construction time. Each call to `jacobian<DiffMode::ParallelReverse>()` synchronises with workers using two `std::barrier` phase transitions; no dynamic allocation occurs in the hot path. Workers are stopped via `std::jthread` stop tokens on destruction.
-
-```sh
-./build/benchmarks --benchmark_filter='.*(Parallel).*'
-```
-
-### Linux / GCC snapshot (16-core, `-O3`)
-
-| Benchmark | Reverse serial | Parallel (barrier) | `std::async` (old) |
-|---|---:|---:|---:|
-| `BM_Parallel_*_2Rows` | 21.9 ns | 1,299 ns | 44,372 ns |
-| `BM_Parallel_*_4Rows` | 50.9 ns | 1,896 ns | 81,571 ns |
-| `BM_Parallel_*_6Rows` | 99.1 ns | 1,891 ns | 153,560 ns |
-| `BM_Parallel_Future_Large` | 48.5 ns | 1,687 ns | 125,471 ns |
-
-The barrier approach eliminates per-call thread spawn cost (~40–50 µs → ~1.5 µs), an improvement of ~30–80× over `std::async`. However, the per-row `backward()` pass on these expressions costs only 10–50 ns — far below the barrier rendezvous overhead (~1.5 µs). Serial reverse mode remains the right choice for expressions of this size.
-
-The crossover point where parallel wins requires each row's `backward()` to cost more than the barrier overhead (~750 ns/thread). That corresponds to expressions with hundreds of nodes and deep transcendental chains.
-
-`BM_Reverse_Parallel_*` and `BM_Symbolic_Parallel_*` benchmarks are retained as regression guards for the serial path.
-
----
+Reverse mode is fastest: one backward pass over 2 output rows. Forward mode evaluates a derivative tensor in N seeded passes. Symbolic evaluates all pre-stored partial derivative trees.
 
 ---
 

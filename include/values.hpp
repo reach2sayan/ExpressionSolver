@@ -28,7 +28,7 @@ struct IOperators {
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator+(const LHS &a, const RHS &b) {
+  friend constexpr auto operator+(const LHS &a, const RHS &b) noexcept {
     using value_type = typename LHS::value_type;
     if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() + b.get()};
@@ -40,7 +40,7 @@ struct IOperators {
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator*(const LHS &a, const RHS &b) {
+  friend constexpr auto operator*(const LHS &a, const RHS &b) noexcept {
     using value_type = typename LHS::value_type;
     if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() * b.get()};
@@ -52,7 +52,7 @@ struct IOperators {
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator-(const LHS &a, const RHS &b) {
+  friend constexpr auto operator-(const LHS &a, const RHS &b) noexcept {
     using value_type = typename LHS::value_type;
     if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() - b.get()};
@@ -65,7 +65,7 @@ struct IOperators {
 
   template <CExpression LHS, CExpression RHS>
     requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator/(const LHS &a, const RHS &b) {
+  friend constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
     using value_type = typename LHS::value_type;
     if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() / b.get()};
@@ -75,107 +75,107 @@ struct IOperators {
     }
   }
 
-  template <CExpression Expr> friend constexpr auto sin(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto sin(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<SineOp<value_type>, Expr>{a};
   }
 
-  template <CExpression Expr> friend constexpr auto cos(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto cos(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<CosineOp<value_type>, Expr>{a};
   }
 
-  template <CExpression Expr> friend constexpr auto exp(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto exp(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<ExpOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto tan(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto tan(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<TanOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto log(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto log(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<LogOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto sqrt(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto sqrt(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<SqrtOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto abs(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto abs(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AbsOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto asin(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto asin(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AsinOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto acos(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto acos(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AcosOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto atan(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto atan(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AtanOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto sinh(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto sinh(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<SinhOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto cosh(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto cosh(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<CoshOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto tanh(const Expr &a) {
+  template <CExpression Expr> friend constexpr auto tanh(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<TanhOp<value_type>, Expr>{a};
   }
 
   template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator+(S s, const RHS &b) {
+  friend constexpr auto operator+(S s, const RHS &b) noexcept {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} + b;
   }
   template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator*(S s, const RHS &b) {
+  friend constexpr auto operator*(S s, const RHS &b) noexcept {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} * b;
   }
   template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator-(S s, const RHS &b) {
+  friend constexpr auto operator-(S s, const RHS &b) noexcept {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} - b;
   }
   template <typename S, CExpression RHS>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator/(S s, const RHS &b) {
+  friend constexpr auto operator/(S s, const RHS &b) noexcept {
     using VT = typename RHS::value_type;
     return Constant<VT>{static_cast<VT>(s)} / b;
   }
 
   template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator+(const LHS &a, S s) {
+  friend constexpr auto operator+(const LHS &a, S s) noexcept {
     using VT = typename LHS::value_type;
     return a + Constant<VT>{static_cast<VT>(s)};
   }
   template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator*(const LHS &a, S s) {
+  friend constexpr auto operator*(const LHS &a, S s) noexcept {
     using VT = typename LHS::value_type;
     return a * Constant<VT>{static_cast<VT>(s)};
   }
   template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator-(const LHS &a, S s) {
+  friend constexpr auto operator-(const LHS &a, S s) noexcept {
     using VT = typename LHS::value_type;
     return a - Constant<VT>{static_cast<VT>(s)};
   }
   template <CExpression LHS, typename S>
     requires std::is_arithmetic_v<S>
-  friend constexpr auto operator/(const LHS &a, S s) {
+  friend constexpr auto operator/(const LHS &a, S s) noexcept {
     using VT = typename LHS::value_type;
     return a / Constant<VT>{static_cast<VT>(s)};
   }
@@ -194,18 +194,18 @@ template <Numeric T> class Constant : public IOperators {
   }
 
 public:
-  [[nodiscard]] constexpr auto eval() const { return value; }
+  [[nodiscard]] constexpr auto eval() const noexcept { return value; }
   using value_type = T;
-  constexpr explicit Constant(T value) : value(value) {}
-  [[nodiscard]] constexpr auto get() const { return value; }
-  constexpr operator T() const { return value; }
-  [[nodiscard]] constexpr auto derivative() const { return Constant{T{}}; }
-  constexpr void update(const auto &, const auto &) const {}
-  constexpr void collect(const auto &, auto &) const {}
-  constexpr void backward(const auto &, T, auto &) const {}
+  constexpr explicit Constant(T value) noexcept : value(value) {}
+  [[nodiscard]] constexpr auto get() const noexcept { return value; }
+  constexpr operator T() const noexcept { return value; }
+  [[nodiscard]] constexpr auto derivative() const noexcept { return Constant{T{}}; }
+  constexpr void update(const auto &, const auto &) const noexcept {}
+  constexpr void collect(const auto &, auto &) const noexcept {}
+  constexpr void backward(const auto &, T, auto &) const noexcept {}
 
   template <typename Syms, std::size_t N>
-  [[nodiscard]] constexpr T eval_seeded(const std::array<T, N> &) const {
+  [[nodiscard]] constexpr T eval_seeded(const std::array<T, N> &) const noexcept {
     return value;
   }
 
@@ -213,13 +213,13 @@ public:
   // parts.  Uses ConstantEmbedder<U> so custom numeric types (e.g. TaylorDual)
   // can specialise the embedding without touching this code.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &) const {
+  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &) const noexcept {
     using S = scalar_base_t<U>;
     return ConstantEmbedder<U>::embed(
         static_cast<S>(get_real_part<dual_depth_v<T>>(value)));
   }
 
-  template <std::size_t I> [[nodiscard]] constexpr auto get() const {
+  template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
     static_assert(I < 2);
     if constexpr (requires { std::tuple_size<T>::value; }) {
       return eval().template get<I>();
@@ -246,31 +246,31 @@ template <Numeric T, char symbol> class Variable : public IOperators {
   static constexpr inline size_t static_counter = 0;
 
 public:
-  [[nodiscard]] constexpr T eval() const { return value; }
+  [[nodiscard]] constexpr T eval() const noexcept { return value; }
   using value_type = T;
-  constexpr explicit Variable(T value, char = {}) : value(value) {}
-  constexpr operator T() const { return value; }
-  [[nodiscard]] constexpr auto get() const { return value; }
-  template <typename U> constexpr decltype(auto) operator=(U &&v);
-  constexpr void update(const auto &symbols, const auto &updates);
-  constexpr void collect(const auto &symbols, auto &out) const;
-  [[nodiscard]] constexpr auto derivative() const;
-  constexpr void backward(const auto &syms, T adj, auto &grads) const;
+  constexpr explicit Variable(T value, char = {}) noexcept : value(value) {}
+  constexpr operator T() const noexcept { return value; }
+  [[nodiscard]] constexpr auto get() const noexcept { return value; }
+  template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept;
+  constexpr void update(const auto &symbols, const auto &updates) noexcept;
+  constexpr void collect(const auto &symbols, auto &out) const noexcept;
+  [[nodiscard]] constexpr auto derivative() const noexcept;
+  constexpr void backward(const auto &syms, T adj, auto &grads) const noexcept;
 
   template <typename Syms, std::size_t N>
-  [[nodiscard]] constexpr T eval_seeded(const std::array<T, N> &vals) const {
+  [[nodiscard]] constexpr T eval_seeded(const std::array<T, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_char<symbol, Syms>();
     return vals[idx];
   }
 
   // eval_seeded_as<U>: return the U-typed seed for this variable.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const {
+  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_char<symbol, Syms>();
     return vals[idx];
   }
 
-  template <std::size_t I> [[nodiscard]] constexpr auto get() const {
+  template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
     static_assert(I < 2);
     if constexpr (requires { std::tuple_size<T>::value; }) {
       return eval().template get<I>();
@@ -284,7 +284,7 @@ public:
 
 template <Numeric T, char symbol>
 template <typename U>
-constexpr decltype(auto) Variable<T, symbol>::operator=(U &&v) {
+constexpr decltype(auto) Variable<T, symbol>::operator=(U &&v) noexcept {
   if constexpr (std::is_same_v<decltype(value),
                                std::reference_wrapper<std::decay_t<U>>>) {
     value.get() = std::forward<U>(v);
@@ -299,7 +299,7 @@ constexpr decltype(auto) Variable<T, symbol>::operator=(U &&v) {
 
 template <Numeric T, char symbol>
 constexpr void Variable<T, symbol>::update(const auto &symbols,
-                                           const auto &updates) {
+                                           const auto &updates) noexcept {
   using Syms = std::decay_t<decltype(symbols)>;
   constexpr auto index = find_index_of_char<symbol, Syms>();
   *this = updates[index];
@@ -307,21 +307,21 @@ constexpr void Variable<T, symbol>::update(const auto &symbols,
 
 template <Numeric T, char symbol>
 constexpr void Variable<T, symbol>::collect(const auto &symbols,
-                                            auto &out) const {
+                                            auto &out) const noexcept {
   using Syms = std::decay_t<decltype(symbols)>;
   constexpr auto index = find_index_of_char<symbol, Syms>();
   out[index] = value;
 }
 
 template <Numeric T, char symbol>
-constexpr auto Variable<T, symbol>::derivative() const {
+constexpr auto Variable<T, symbol>::derivative() const noexcept {
   auto ret = T{};
   return Constant{++ret};
 }
 
 template <Numeric T, char symbol>
 constexpr void Variable<T, symbol>::backward(const auto &syms, T adj,
-                                             auto &grads) const {
+                                             auto &grads) const noexcept {
   using Syms = std::decay_t<decltype(syms)>;
   constexpr auto idx = find_index_of_char<symbol, Syms>();
   grads[idx] += adj;

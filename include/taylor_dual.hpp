@@ -18,24 +18,24 @@ namespace diff {
 template <Numeric S, std::size_t N>
 struct TaylorDual {
   std::array<S, N + 1> c{};
-  constexpr TaylorDual() = default;
-  constexpr explicit TaylorDual(S val) : c{} { c[0] = val; }
+  constexpr TaylorDual() noexcept = default;
+  constexpr explicit TaylorDual(S val) noexcept : c{} { c[0] = val; }
 
-  constexpr TaylorDual operator+(const TaylorDual &o) const {
+  constexpr TaylorDual operator+(const TaylorDual &o) const noexcept {
     TaylorDual r;
     for (std::size_t k = 0; k <= N; ++k) {
       r.c[k] = c[k] + o.c[k];
     }
     return r;
   }
-  constexpr TaylorDual operator-(const TaylorDual &o) const {
+  constexpr TaylorDual operator-(const TaylorDual &o) const noexcept {
     TaylorDual r;
     for (std::size_t k = 0; k <= N; ++k) {
       r.c[k] = c[k] - o.c[k];
     }
     return r;
   }
-  constexpr TaylorDual operator-() const {
+  constexpr TaylorDual operator-() const noexcept {
     TaylorDual r;
     for (std::size_t k = 0; k <= N; ++k) {
       r.c[k] = -c[k];
@@ -44,7 +44,7 @@ struct TaylorDual {
   }
 
   // Truncated polynomial multiplication: (uv)[k] = Σ_{j=0}^{k} u[j]*v[k-j]
-  constexpr TaylorDual operator*(const TaylorDual &o) const {
+  constexpr TaylorDual operator*(const TaylorDual &o) const noexcept {
     TaylorDual r;
     for (std::size_t i = 0; i <= N; ++i) {
       for (std::size_t j = 0; j + i <= N; ++j) {
@@ -56,7 +56,7 @@ struct TaylorDual {
 
   // Polynomial division via r*o = this:
   //   r[k] = (c[k] - Σ_{j=0}^{k-1} r[j]*o[k-j]) / o[0]
-  constexpr TaylorDual operator/(const TaylorDual &o) const {
+  constexpr TaylorDual operator/(const TaylorDual &o) const noexcept {
     TaylorDual r;
     for (std::size_t k = 0; k <= N; ++k) {
       S sum = c[k];
@@ -68,25 +68,25 @@ struct TaylorDual {
     return r;
   }
 
-  constexpr TaylorDual &operator+=(const TaylorDual &o) {
+  constexpr TaylorDual &operator+=(const TaylorDual &o) noexcept {
     return *this = *this + o;
   }
-  constexpr TaylorDual &operator-=(const TaylorDual &o) {
+  constexpr TaylorDual &operator-=(const TaylorDual &o) noexcept {
     return *this = *this - o;
   }
-  constexpr TaylorDual &operator*=(const TaylorDual &o) {
+  constexpr TaylorDual &operator*=(const TaylorDual &o) noexcept {
     return *this = *this * o;
   }
-  constexpr TaylorDual &operator/=(const TaylorDual &o) {
+  constexpr TaylorDual &operator/=(const TaylorDual &o) noexcept {
     return *this = *this / o;
   }
 
-  constexpr TaylorDual &operator++() {
+  constexpr TaylorDual &operator++() noexcept {
     ++c[0];
     return *this;
   }
 
-  template <std::size_t I> [[nodiscard]] constexpr S get() const {
+  template <std::size_t I> [[nodiscard]] constexpr S get() const noexcept {
     static_assert(I <= N, "TaylorDual::get<I>: index out of range");
     return c[I];
   }
@@ -96,7 +96,7 @@ struct TaylorDual {
   // -------------------------------------------------------------------------
 
   // exp: w[0]=exp(u[0]),  k*w[k] = Σ_{j=1}^{k} j*u[j]*w[k-j]
-  [[nodiscard]] friend TaylorDual exp(const TaylorDual &u) {
+  [[nodiscard]] friend TaylorDual exp(const TaylorDual &u) noexcept {
     using std::exp;
     TaylorDual w;
     w.c[0] = exp(u.c[0]);
@@ -112,7 +112,7 @@ struct TaylorDual {
 
   // log: w[0]=log(u[0]),  w[k] = (u[k] - (1/k)Σ_{j=1}^{k-1} j*w[j]*u[k-j]) /
   // u[0]
-  [[nodiscard]] friend TaylorDual log(const TaylorDual &u) {
+  [[nodiscard]] friend TaylorDual log(const TaylorDual &u) noexcept {
     using std::log;
     TaylorDual w;
     w.c[0] = log(u.c[0]);
@@ -128,7 +128,7 @@ struct TaylorDual {
 
   // sin & cos coupled: k*s[k] = Σ j*u[j]*c[k-j],  k*c[k] = -Σ j*u[j]*s[k-j]
   [[nodiscard]] friend std::pair<TaylorDual, TaylorDual>
-  sincos_td(const TaylorDual &u) {
+  sincos_td(const TaylorDual &u) noexcept {
     using std::sin, std::cos;
     TaylorDual s, c;
     s.c[0] = sin(u.c[0]);
@@ -146,20 +146,20 @@ struct TaylorDual {
     return {s, c};
   }
 
-  [[nodiscard]] constexpr friend TaylorDual sin(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual sin(const TaylorDual &u) noexcept {
     return sincos_td(u).first;
   }
-  [[nodiscard]] constexpr friend TaylorDual cos(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual cos(const TaylorDual &u) noexcept {
     return sincos_td(u).second;
   }
-  [[nodiscard]] constexpr friend TaylorDual tan(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual tan(const TaylorDual &u) noexcept {
     auto [s, c] = sincos_td(u);
     return s / c;
   }
 
   // sqrt: w[0]=sqrt(u[0]),  w[k] = (u[k] - Σ_{j=1}^{k-1} w[j]*w[k-j]) /
   // (2*w[0])
-  [[nodiscard]] constexpr friend TaylorDual sqrt(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual sqrt(const TaylorDual &u) noexcept {
     using std::sqrt;
     TaylorDual w;
     w.c[0] = sqrt(u.c[0]);
@@ -174,14 +174,14 @@ struct TaylorDual {
     return w;
   }
 
-  [[nodiscard]] constexpr friend TaylorDual abs(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual abs(const TaylorDual &u) noexcept {
     return u.c[0] >= S{} ? u : -u;
   }
 
   // sinh & cosh coupled: k*sh[k] = Σ j*u[j]*ch[k-j],  k*ch[k] = Σ
   // j*u[j]*sh[k-j]
   [[nodiscard]] constexpr friend std::pair<TaylorDual, TaylorDual>
-  sinhcosh_td(const TaylorDual &u) {
+  sinhcosh_td(const TaylorDual &u) noexcept {
     using std::sinh, std::cosh;
     TaylorDual sh, ch;
     sh.c[0] = sinh(u.c[0]);
@@ -199,20 +199,20 @@ struct TaylorDual {
     return {sh, ch};
   }
 
-  [[nodiscard]] constexpr friend TaylorDual sinh(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual sinh(const TaylorDual &u) noexcept {
     return sinhcosh_td(u).first;
   }
-  [[nodiscard]] constexpr friend TaylorDual cosh(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual cosh(const TaylorDual &u) noexcept {
     return sinhcosh_td(u).second;
   }
-  [[nodiscard]] constexpr friend TaylorDual tanh(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual tanh(const TaylorDual &u) noexcept {
     const auto [sh, ch] = sinhcosh_td(u);
     return sh / ch;
   }
 
   // asin: sqrt(1-u²)*w' = 1  →  s[0]*k*w[k] = [k==1] - Σ_{j=1}^{k-1}
   // s[j]*(k-j)*w[k-j]
-  [[nodiscard]] constexpr friend TaylorDual asin(const TaylorDual &u) {
+  [[nodiscard]] constexpr friend TaylorDual asin(const TaylorDual &u) noexcept {
     using std::asin;
     TaylorDual w;
     w.c[0] = asin(u.c[0]);
@@ -230,7 +230,7 @@ struct TaylorDual {
   }
 
   // acos = pi/2 - asin  →  same derivative coefficients, negated for k>=1
-  [[nodiscard]] friend TaylorDual acos(const TaylorDual &u) {
+  [[nodiscard]] friend TaylorDual acos(const TaylorDual &u) noexcept {
     using std::acos;
     TaylorDual w = asin(u);
     w.c[0] = acos(u.c[0]);
@@ -242,7 +242,7 @@ struct TaylorDual {
 
   // atan: (1+u²)*w' = 1  →  p[0]*k*w[k] = [k==1] - Σ_{j=1}^{k-1}
   // p[j]*(k-j)*w[k-j]
-  [[nodiscard]] friend TaylorDual atan(const TaylorDual &u) {
+  [[nodiscard]] friend TaylorDual atan(const TaylorDual &u) noexcept {
     using std::atan;
     TaylorDual w;
     w.c[0] = atan(u.c[0]);
@@ -278,7 +278,7 @@ inline constexpr std::size_t dual_depth_v<TaylorDual<S, N>> = N;
 // ---------------------------------------------------------------------------
 
 template <typename S, std::size_t N> struct ConstantEmbedder<TaylorDual<S, N>> {
-  static constexpr TaylorDual<S, N> embed(S val) {
+  static constexpr TaylorDual<S, N> embed(S val) noexcept {
     TaylorDual<S, N> t;
     t.c[0] = val;
     return t;

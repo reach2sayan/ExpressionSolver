@@ -11,14 +11,14 @@ namespace mp = boost::mp11;
 
 namespace detail {
 struct eval_func_t {
-  constexpr auto operator()(const auto &...exprs) const {
+  constexpr auto operator()(const auto &...exprs) const noexcept {
     return std::array{exprs.eval()...};
   }
 };
 template <class Syms, class Updates> struct update_func_t {
   const Syms &syms;
   const Updates &updates;
-  constexpr auto operator()(auto &...ds) const {
+  constexpr auto operator()(auto &...ds) const noexcept {
     (ds.update(syms, updates), ...);
   }
 };
@@ -44,7 +44,7 @@ constexpr std::ostream &print_tup(std::ostream &out,
 }
 
 template <typename... Syms, CExpression Expr>
-constexpr auto make_derivatives(mp::mp_list<Syms...>, const Expr &expr) {
+constexpr auto make_derivatives(mp::mp_list<Syms...>, const Expr &expr) noexcept {
   return std::tuple(
       make_all_constant_except<Syms::value>(expr).derivative()...);
 }
@@ -57,9 +57,9 @@ template <CExpression... Ts> class Equation;
 // per expression in the std::tuple es.
 template <typename... Syms, typename... Exprs>
 constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
-                             mp::mp_list<Syms...> = {}) {
+                             mp::mp_list<Syms...> = {}) noexcept {
   return std::apply(
-      [](const auto &...exprs) {
+      [](const auto &...exprs) noexcept {
         return std::make_tuple(
             make_derivatives(mp::mp_list<Syms...>{}, exprs)...);
       },
@@ -68,14 +68,6 @@ constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
 
 // ===========================================================================
 // Equation<TFirst, TRest...> — f: ℝⁿ → ℝᵐ  (sizeof...(TRest) > 0).
-//
-// Public API:
-//   evaluate()                               — std::array of output values
-//   jacobian<DiffMode::Symbolic>()           — symbolic (compile-time only)
-//   jacobian<DiffMode::Reverse>([values])    — reverse-mode AD
-//   hessian<DiffMode::Reverse>([values])     — forward-over-reverse (Dual<T>)
-//   derivative_tensor<Order>([values])       — forward-mode, any order
-//   update(syms, values)                     — update variable values
 // ===========================================================================
 template <CExpression TFirst, CExpression... TRest>
   requires(
@@ -108,7 +100,7 @@ private:
     return out;
   }
 
-  [[nodiscard]] constexpr auto jacobian_symbolic() const
+  [[nodiscard]] constexpr auto jacobian_symbolic() const noexcept
     requires(input_dim > 0)
   {
     std::array<std::array<value_type, input_dim>, output_dim> J{};
@@ -118,7 +110,7 @@ private:
     return J;
   }
 
-  [[nodiscard]] constexpr auto jacobian_reverse_mode() const
+  [[nodiscard]] constexpr auto jacobian_reverse_mode() const noexcept
     requires(input_dim > 0)
   {
     std::array<std::array<value_type, input_dim>, output_dim> J{};
@@ -129,7 +121,7 @@ private:
   }
 
   // --- Forward-over-reverse Hessian (Dual<T> expressions) ---
-  [[nodiscard]] constexpr auto hessian_forward_over_reverse()
+  [[nodiscard]] constexpr auto hessian_forward_over_reverse() noexcept
     requires(is_dual_v<value_type> && input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
@@ -163,11 +155,9 @@ private:
   }
 
   // --- Forward-mode derivative tensor (any order) ---
-  // Returns std::array<nd_array_t<S, input_dim, Order>, output_dim>.
-  // result[out][i₁]...[iOrder] = ∂^Order f_out / ∂x_{i₁}...∂x_{iOrder}
   template <std::size_t Order>
   [[nodiscard]] constexpr auto equation_derivative_tensor_impl(
-      std::array<scalar_base_t<value_type>, input_dim> values) const
+      std::array<scalar_base_t<value_type>, input_dim> values) const noexcept
     requires(input_dim > 0 && Order > 0)
   {
     using S = scalar_base_t<value_type>;
@@ -203,11 +193,11 @@ private:
   }
 
 public:
-  constexpr Equation(TFirst first, TRest... rest)
+  constexpr Equation(TFirst first, TRest... rest) noexcept
       : expressions{std::move(first), std::move(rest)...},
         jacobian_data{make_jac_rows(expressions, symbols{})} {}
 
-  [[nodiscard]] constexpr auto evaluate() const {
+  [[nodiscard]] constexpr auto evaluate() const noexcept {
     if constexpr (output_dim == 1) {
       return std::get<0>(expressions).eval();
     } else {
@@ -215,13 +205,13 @@ public:
     }
   }
 
-  constexpr operator value_type() const
+  constexpr operator value_type() const noexcept
     requires(output_dim == 1)
   {
     return std::get<0>(expressions).eval();
   }
 
-  [[nodiscard]] constexpr auto eval_derivatives() const
+  [[nodiscard]] constexpr auto eval_derivatives() const noexcept
     requires(output_dim == 1)
   {
     const auto &row = std::get<0>(jacobian_data);
@@ -232,7 +222,7 @@ public:
   }
 
   template <std::size_t N>
-  constexpr decltype(auto) operator[](std::integral_constant<std::size_t, N>)
+  constexpr decltype(auto) operator[](std::integral_constant<std::size_t, N>) noexcept
     requires(output_dim == 1)
   {
     if constexpr (N == 0) {
@@ -244,7 +234,7 @@ public:
 
   template <std::size_t N>
   constexpr decltype(auto)
-  operator[](std::integral_constant<std::size_t, N>) const
+  operator[](std::integral_constant<std::size_t, N>) const noexcept
     requires(output_dim == 1)
   {
     if constexpr (N == 0) {
@@ -257,14 +247,14 @@ public:
   // --- jacobian<Mode>() ---
 
   template <DiffMode Mode>
-  [[nodiscard]] constexpr auto jacobian() const
+  [[nodiscard]] constexpr auto jacobian() const noexcept
     requires(Mode == DiffMode::Symbolic && input_dim > 0)
   {
     return jacobian_symbolic();
   }
 
   template <DiffMode Mode>
-  [[nodiscard]] constexpr auto jacobian() const
+  [[nodiscard]] constexpr auto jacobian() const noexcept
     requires(Mode == DiffMode::Reverse && input_dim > 0)
   {
     return jacobian_reverse_mode();
@@ -272,7 +262,7 @@ public:
 
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto
-  jacobian(std::array<value_type, input_dim> values)
+  jacobian(std::array<value_type, input_dim> values) noexcept
     requires(Mode == DiffMode::Reverse && input_dim > 0)
   {
     update(symbols{}, values);
@@ -281,7 +271,7 @@ public:
 
   // --- hessian<Mode>() ---
   template <DiffMode Mode>
-  [[nodiscard]] constexpr auto hessian()
+  [[nodiscard]] constexpr auto hessian() noexcept
     requires(Mode == DiffMode::Reverse && is_dual_v<value_type> &&
              input_dim > 0)
   {
@@ -290,7 +280,7 @@ public:
 
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto
-  hessian(std::array<dual_scalar_t<value_type>, input_dim> values)
+  hessian(std::array<dual_scalar_t<value_type>, input_dim> values) noexcept
     requires(Mode == DiffMode::Reverse && is_dual_v<value_type> &&
              input_dim > 0)
   {
@@ -304,19 +294,17 @@ public:
   }
 
   // --- derivative_tensor<Order>() — forward-mode, any order ---
-  // Input is always plain scalar S = scalar_base_t<value_type>.
-  // Returns std::array<nd_array_t<S, input_dim, Order>, output_dim>.
 
   template <std::size_t Order>
   [[nodiscard]] constexpr auto derivative_tensor(
-      std::array<scalar_base_t<value_type>, input_dim> values) const
+      std::array<scalar_base_t<value_type>, input_dim> values) const noexcept
     requires(input_dim > 0 && Order > 0)
   {
     return equation_derivative_tensor_impl<Order>(std::move(values));
   }
 
   template <std::size_t Order>
-  [[nodiscard]] constexpr auto derivative_tensor() const
+  [[nodiscard]] constexpr auto derivative_tensor() const noexcept
     requires(input_dim > 0 && Order > 0)
   {
     using S = scalar_base_t<value_type>;
@@ -332,9 +320,9 @@ public:
   }
 
   // Update compile-time variables in all expressions and Jacobian rows.
-  constexpr void update(const symbols &syms, const auto &updates) {
+  constexpr void update(const symbols &syms, const auto &updates) noexcept {
     auto update_func = detail::update_func_t{syms, updates};
-    auto apply_to_tuple_func = [&](auto &...jac_rows) {
+    auto apply_to_tuple_func = [&](auto &...jac_rows) noexcept {
       (std::apply(update_func, jac_rows), ...);
     };
     std::apply(update_func, expressions);
@@ -347,7 +335,7 @@ Equation(T, Ts...) -> Equation<T, Ts...>;
 
 } // namespace diff
 
-constexpr auto make_equation(auto &&...args) {
+constexpr auto make_equation(auto &&...args) noexcept {
   return diff::Equation(std::forward<decltype(args)>(args)...);
 }
 
