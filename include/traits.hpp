@@ -1,6 +1,7 @@
 #pragma once
 #include "values.hpp"
 #include <array>
+#include <boost/mp11/integral.hpp>
 #include <boost/mp11/algorithm.hpp>
 #include <type_traits>
 

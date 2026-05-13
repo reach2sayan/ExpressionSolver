@@ -2,8 +2,7 @@
 #include "dual.hpp"
 #include "gradient.hpp"
 #include <array>
-#include <boost/mp11/algorithm.hpp>
-#include <ranges>
+#include <boost/mp11/list.hpp>
 
 namespace diff {
 

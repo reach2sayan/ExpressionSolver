@@ -5,7 +5,7 @@
 #include "taylor_dual.hpp"
 #include "traits.hpp"
 #include <array>
-#include <boost/mp11/algorithm.hpp>
+#include <boost/mp11/list.hpp>
 
 namespace diff {
 
