@@ -120,6 +120,28 @@ if (DIFF_BUILD_BENCHMARKS)
             COMMENT "Running benchmarks and exporting JSON results")
 endif ()
 
+find_program(CLANG_FORMAT_EXE NAMES clang-format clang-format-18 clang-format-17 clang-format-16)
+if (CLANG_FORMAT_EXE)
+    file(GLOB_RECURSE ALL_SOURCE_FILES
+        ${CMAKE_SOURCE_DIR}/include/*.hpp
+        ${CMAKE_SOURCE_DIR}/src/*.cpp
+        ${CMAKE_SOURCE_DIR}/tests.cpp
+        ${CMAKE_SOURCE_DIR}/benchmarks/*.cpp
+    )
+    add_custom_target(format
+        COMMAND ${CLANG_FORMAT_EXE} -i ${ALL_SOURCE_FILES}
+        COMMENT "Formatting sources with clang-format"
+        VERBATIM
+    )
+    add_custom_target(format-check
+        COMMAND ${CLANG_FORMAT_EXE} --dry-run --Werror ${ALL_SOURCE_FILES}
+        COMMENT "Checking formatting with clang-format"
+        VERBATIM
+    )
+else ()
+    message(STATUS "clang-format not found — format / format-check targets unavailable")
+endif ()
+
 if (MSVC)
     target_compile_options(main PRIVATE /Wall)
     target_compile_options(tests PRIVATE /Wall)
