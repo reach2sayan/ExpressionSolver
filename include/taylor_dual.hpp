@@ -15,8 +15,7 @@ namespace diff {
 //
 // Use univariate_derivative<N>(expr [, x0]) for a clean public API.
 
-template <typename S, std::size_t N>
-  requires std::floating_point<S>
+template <Numeric S, std::size_t N>
 struct TaylorDual {
   std::array<S, N + 1> c{};
   constexpr TaylorDual() = default;
@@ -82,13 +81,11 @@ struct TaylorDual {
     return *this = *this / o;
   }
 
-  // Needed by Variable::derivative() which does T{};  ++ret;
   constexpr TaylorDual &operator++() {
     ++c[0];
     return *this;
   }
 
-  // get<0>() = real part, get<1>() = first tangent (for trait compatibility)
   template <std::size_t I> [[nodiscard]] constexpr S get() const {
     static_assert(I <= N, "TaylorDual::get<I>: index out of range");
     return c[I];
@@ -120,7 +117,7 @@ struct TaylorDual {
     TaylorDual w;
     w.c[0] = log(u.c[0]);
     for (std::size_t k = 1; k <= N; ++k) {
-      S s = u.c[k];
+      auto s = u.c[k];
       for (std::size_t j = 1; j < k; ++j) {
         s -= static_cast<S>(j) * w.c[j] * u.c[k - j] / static_cast<S>(k);
       }
@@ -209,7 +206,7 @@ struct TaylorDual {
     return sinhcosh_td(u).second;
   }
   [[nodiscard]] constexpr friend TaylorDual tanh(const TaylorDual &u) {
-    auto [sh, ch] = sinhcosh_td(u);
+    const auto [sh, ch] = sinhcosh_td(u);
     return sh / ch;
   }
 
@@ -223,7 +220,7 @@ struct TaylorDual {
     one.c[0] = S{1};
     const TaylorDual s = sqrt(one - u * u);
     for (std::size_t k = 1; k <= N; ++k) {
-      S rhs = (k == 1) ? S{1} : S{};
+      auto rhs = (k == 1) ? S{1} : S{};
       for (std::size_t j = 1; j < k; ++j) {
         rhs -= s.c[j] * static_cast<S>(k - j) * w.c[k - j];
       }
@@ -252,7 +249,7 @@ struct TaylorDual {
     TaylorDual p = u * u;
     p.c[0] += S{1};
     for (std::size_t k = 1; k <= N; ++k) {
-      S rhs = (k == 1) ? S{1} : S{};
+      auto rhs = (k == 1) ? S{1} : S{};
       for (std::size_t j = 1; j < k; ++j) {
         rhs -= p.c[j] * static_cast<S>(k - j) * w.c[k - j];
       }

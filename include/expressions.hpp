@@ -83,7 +83,7 @@ template <COp Op> struct BaseExpression {
 template <COp Op, typename Exp>
 class MonoExpression : public BaseExpression<Op> {
   Exp expression;
-  friend std::ostream &operator<<(std::ostream &out, const MonoExpression &e) {
+  friend constexpr std::ostream &operator<<(std::ostream &out, const MonoExpression &e) {
     out << e.expression;
     return out;
   }
@@ -196,11 +196,12 @@ public:
   // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
   template <typename U, typename Syms, std::size_t N>
   [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const {
-    return Op::eval(
-        EvalResult<U>{
-            inner_expressions.first.template eval_seeded_as<U, Syms>(vals)},
-        EvalResult<U>{
-            inner_expressions.second.template eval_seeded_as<U, Syms>(vals)});
+    return std::apply(
+        [&](const auto &...e) {
+          return Op::eval(
+              EvalResult<U>{e.template eval_seeded_as<U, Syms>(vals)}...);
+        },
+        inner_expressions);
   }
 
   constexpr void update(const auto &symbols, const auto &updates) {
@@ -216,6 +217,7 @@ public:
         [&](auto const &...exprs) { (exprs.collect(symbols, out), ...); },
         inner_expressions);
   }
+
   constexpr void backward(const auto &syms, value_type adj, auto &grads) const {
     std::apply([&](const auto &...e) { Op::backward(e..., adj, syms, grads); },
                inner_expressions);

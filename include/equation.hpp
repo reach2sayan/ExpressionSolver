@@ -108,7 +108,6 @@ private:
     return out;
   }
 
-  // --- Symbolic Jacobian ---
   [[nodiscard]] constexpr auto jacobian_symbolic() const
     requires(input_dim > 0)
   {
@@ -119,7 +118,6 @@ private:
     return J;
   }
 
-  // --- Reverse-mode Jacobian ---
   [[nodiscard]] constexpr auto jacobian_reverse_mode() const
     requires(input_dim > 0)
   {
@@ -174,12 +172,12 @@ private:
   {
     using S = scalar_base_t<value_type>;
     using U = nth_dual_t<S, Order>;
-
     std::array<nd_array_t<S, input_dim, Order>, output_dim> result{};
 
     std::size_t total = 1;
-    for (std::size_t d = 0; d < Order; ++d)
+    for (std::size_t d = 0; d < Order; ++d) {
       total *= input_dim;
+    }
 
     for (std::size_t flat = 0; flat < total; ++flat) {
       std::array<std::size_t, Order> idx{};
@@ -190,8 +188,9 @@ private:
       }
 
       std::array<U, input_dim> seeds{};
-      for (std::size_t k = 0; k < input_dim; ++k)
+      for (std::size_t k = 0; k < input_dim; ++k) {
         seeds[k] = detail::make_mixed_seed<S, Order>(values[k], idx.data(), k);
+      }
 
       static_for<output_dim>([&]<std::size_t OUT>() {
         U val = std::get<OUT>(expressions)
@@ -205,14 +204,15 @@ private:
 
 public:
   constexpr Equation(TFirst first, TRest... rest)
-      : expressions{first, rest...},
+      : expressions{std::move(first), std::move(rest)...},
         jacobian_data{make_jac_rows(expressions, symbols{})} {}
 
   [[nodiscard]] constexpr auto evaluate() const {
-    if constexpr (output_dim == 1)
+    if constexpr (output_dim == 1) {
       return std::get<0>(expressions).eval();
-    else
+    } else {
       return std::apply(detail::eval_func, expressions);
+    }
   }
 
   constexpr operator value_type() const
@@ -235,10 +235,11 @@ public:
   constexpr decltype(auto) operator[](std::integral_constant<std::size_t, N>)
     requires(output_dim == 1)
   {
-    if constexpr (N == 0)
+    if constexpr (N == 0) {
       return std::get<0>(expressions);
-    else
+    } else {
       return std::get<N - 1>(std::get<0>(jacobian_data));
+    }
   }
 
   template <std::size_t N>
@@ -246,10 +247,11 @@ public:
   operator[](std::integral_constant<std::size_t, N>) const
     requires(output_dim == 1)
   {
-    if constexpr (N == 0)
+    if constexpr (N == 0) {
       return std::get<0>(expressions);
-    else
+    } else {
       return std::get<N - 1>(std::get<0>(jacobian_data));
+    }
   }
 
   // --- jacobian<Mode>() ---
@@ -294,8 +296,9 @@ public:
   {
     using S = dual_scalar_t<value_type>;
     std::array<value_type, input_dim> seeds{};
-    for (std::size_t i = 0; i < input_dim; ++i)
+    for (std::size_t i = 0; i < input_dim; ++i) {
       seeds[i] = value_type{values[i], S{}};
+    }
     update(symbols{}, seeds);
     return hessian<Mode>();
   }
@@ -309,7 +312,7 @@ public:
       std::array<scalar_base_t<value_type>, input_dim> values) const
     requires(input_dim > 0 && Order > 0)
   {
-    return equation_derivative_tensor_impl<Order>(values);
+    return equation_derivative_tensor_impl<Order>(std::move(values));
   }
 
   template <std::size_t Order>
@@ -322,9 +325,10 @@ public:
         [&](const auto &...exprs) { (exprs.collect(symbols{}, current), ...); },
         expressions);
     std::array<S, input_dim> values{};
-    for (std::size_t i = 0; i < input_dim; ++i)
-      values[i] = get_real_part<dual_depth_v<value_type>>(current[i]);
-    return equation_derivative_tensor_impl<Order>(values);
+    for (std::size_t i = 0; i < input_dim; ++i) {
+      values[i] = get_real_part<dual_depth_v<value_type>>(std::move(current[i]));
+    }
+    return equation_derivative_tensor_impl<Order>(std::move(values));
   }
 
   // Update compile-time variables in all expressions and Jacobian rows.
