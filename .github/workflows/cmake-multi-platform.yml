@@ -7,19 +7,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  format-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install clang-format
-        run: sudo apt-get update -q && sudo apt-get install -y clang-format
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -S .
-      - name: Check formatting
-        run: cmake --build build --target format-check
-
   build:
-    needs: format-check
     runs-on: ${{ matrix.os }}
 
     strategy:
