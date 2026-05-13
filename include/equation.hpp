@@ -84,9 +84,9 @@ template <CExpression TFirst, CExpression... TRest>
 class Equation<TFirst, TRest...> {
 public:
   using value_type = typename TFirst::value_type;
-  using symbols = sort_tuple_t<
-      tuple_union_t<extract_symbols_from_expr_t<TFirst>,
-                    extract_symbols_from_expr_t<TRest>...>>;
+  using symbols =
+      sort_tuple_t<tuple_union_t<extract_symbols_from_expr_t<TFirst>,
+                                 extract_symbols_from_expr_t<TRest>...>>;
 
   static constexpr std::size_t output_dim = 1 + sizeof...(TRest);
   static constexpr std::size_t input_dim = mp::mp_size<symbols>::value;
@@ -206,8 +206,7 @@ private:
 public:
   constexpr Equation(TFirst first, TRest... rest)
       : expressions{first, rest...},
-        jacobian_data{make_jac_rows(expressions, symbols{})} {
-  }
+        jacobian_data{make_jac_rows(expressions, symbols{})} {}
 
   [[nodiscard]] constexpr auto evaluate() const {
     if constexpr (output_dim == 1)
@@ -270,7 +269,8 @@ public:
   }
 
   template <DiffMode Mode>
-  [[nodiscard]] constexpr auto jacobian(std::array<value_type, input_dim> values)
+  [[nodiscard]] constexpr auto
+  jacobian(std::array<value_type, input_dim> values)
     requires(Mode == DiffMode::Reverse && input_dim > 0)
   {
     update(symbols{}, values);

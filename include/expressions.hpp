@@ -18,16 +18,16 @@ concept Numeric = std::is_arithmetic_v<T> || requires(T a, T b) {
   { -a } -> std::convertible_to<T>;
 };
 
-/// AnOp: any operation struct that carries a Numeric value_type.
+/// COp: any operation struct that carries a Numeric value_type.
 template <typename O>
-concept AnOp =
+concept COp =
     requires { typename O::value_type; } && Numeric<typename O::value_type>;
 
 // ===========================================================================
 // Forward declarations
 // ===========================================================================
-template <AnOp Op, typename LHS, typename RHS> class Expression;
-template <AnOp Op, typename Exp> class MonoExpression;
+template <COp Op, typename LHS, typename RHS> class Expression;
+template <COp Op, typename Exp> class MonoExpression;
 template <Numeric T> class Constant;
 template <Numeric T, char> class Variable;
 // ===========================================================================
@@ -39,10 +39,10 @@ template <Numeric T> struct is_expression_type<Constant<T>> : std::true_type {};
 template <Numeric T, char C>
 struct is_expression_type<Variable<T, C>> : std::true_type {};
 
-template <AnOp Op, typename LHS, typename RHS>
+template <COp Op, typename LHS, typename RHS>
 struct is_expression_type<Expression<Op, LHS, RHS>> : std::true_type {};
 
-template <AnOp Op, typename Exp>
+template <COp Op, typename Exp>
 struct is_expression_type<MonoExpression<Op, Exp>> : std::true_type {};
 
 template <typename T>
@@ -73,14 +73,14 @@ struct is_expression_type<EvalResult<T>> : std::true_type {};
 // ===========================================================================
 // BaseExpression
 // ===========================================================================
-template <AnOp Op> struct BaseExpression {
+template <COp Op> struct BaseExpression {
   using value_type = typename Op::value_type;
 };
 
 // ===========================================================================
 // MonoExpression — unary expression node.
 // ===========================================================================
-template <AnOp Op, typename Exp>
+template <COp Op, typename Exp>
 class MonoExpression : public BaseExpression<Op> {
   Exp expression;
   friend std::ostream &operator<<(std::ostream &out, const MonoExpression &e) {
@@ -121,8 +121,7 @@ public:
 
   // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U
-  eval_seeded_as(const std::array<U, N> &vals) const {
+  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const {
     return Op::eval(
         EvalResult<U>{expression.template eval_seeded_as<U, Syms>(vals)});
   }
@@ -141,7 +140,7 @@ public:
 // ===========================================================================
 // Expression — binary expression node.
 // ===========================================================================
-template <AnOp Op, typename LHS, typename RHS>
+template <COp Op, typename LHS, typename RHS>
 class Expression : public BaseExpression<Op> {
   std::pair<LHS, RHS> inner_expressions;
   friend std::ostream &operator<<(std::ostream &out, const Expression &e) {
@@ -196,20 +195,26 @@ public:
 
   // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U
-  eval_seeded_as(const std::array<U, N> &vals) const {
+  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const {
     return Op::eval(
-        EvalResult<U>{inner_expressions.first.template eval_seeded_as<U, Syms>(vals)},
-        EvalResult<U>{inner_expressions.second.template eval_seeded_as<U, Syms>(vals)});
+        EvalResult<U>{
+            inner_expressions.first.template eval_seeded_as<U, Syms>(vals)},
+        EvalResult<U>{
+            inner_expressions.second.template eval_seeded_as<U, Syms>(vals)});
   }
 
   constexpr void update(const auto &symbols, const auto &updates) {
-    inner_expressions.first.update(symbols, updates);
-    inner_expressions.second.update(symbols, updates);
+    std::apply(
+        [&](auto &...exprs) constexpr {
+          (exprs.update(symbols, updates), ...);
+        },
+        inner_expressions);
   }
+
   constexpr void collect(const auto &symbols, auto &out) const {
-    inner_expressions.first.collect(symbols, out);
-    inner_expressions.second.collect(symbols, out);
+    std::apply(
+        [&](auto const &...exprs) { (exprs.collect(symbols, out), ...); },
+        inner_expressions);
   }
   constexpr void backward(const auto &syms, value_type adj, auto &grads) const {
     std::apply([&](const auto &...e) { Op::backward(e..., adj, syms, grads); },
@@ -233,21 +238,21 @@ struct expression_element<V, I,
 } // namespace diff
 
 namespace std {
-template <diff::AnOp Op, typename LHS, typename RHS>
+template <diff::COp Op, typename LHS, typename RHS>
 struct tuple_size<diff::Expression<Op, LHS, RHS>>
     : integral_constant<size_t, 2> {};
 
-template <size_t I, diff::AnOp Op, typename LHS, typename RHS>
+template <size_t I, diff::COp Op, typename LHS, typename RHS>
 struct tuple_element<I, diff::Expression<Op, LHS, RHS>> {
   using type = typename diff::detail::expression_element<
       typename diff::Expression<Op, LHS, RHS>::value_type, I>::type;
 };
 
-template <diff::AnOp Op, typename Exp>
+template <diff::COp Op, typename Exp>
 struct tuple_size<diff::MonoExpression<Op, Exp>>
     : integral_constant<size_t, 2> {};
 
-template <size_t I, diff::AnOp Op, typename Exp>
+template <size_t I, diff::COp Op, typename Exp>
 struct tuple_element<I, diff::MonoExpression<Op, Exp>> {
   using type = typename diff::detail::expression_element<
       typename diff::MonoExpression<Op, Exp>::value_type, I>::type;

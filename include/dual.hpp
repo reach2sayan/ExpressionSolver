@@ -159,13 +159,13 @@ inline constexpr std::size_t dual_depth_v = 0;
 template <typename T>
 inline constexpr std::size_t dual_depth_v<Dual<T>> = 1 + dual_depth_v<T>;
 
-// Innermost scalar type, peeling all Dual<> wrappers
+template <typename T> auto scalar_base_impl(std::type_identity<T>) -> T;
 template <typename T>
-struct scalar_base { using type = T; };
+auto scalar_base_impl(std::type_identity<Dual<T>>)
+    -> decltype(scalar_base_impl(std::type_identity<T>{}));
+
 template <typename T>
-struct scalar_base<Dual<T>> { using type = typename scalar_base<T>::type; };
-template <typename T>
-using scalar_base_t = typename scalar_base<T>::type;
+using scalar_base_t = decltype(scalar_base_impl(std::type_identity<T>{}));
 
 // embed_constant: lift a base scalar into nth_dual_t<T,N> with zero dual parts.
 template <typename T, std::size_t N>

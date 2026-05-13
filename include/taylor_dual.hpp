@@ -166,9 +166,9 @@ struct TaylorDual {
     using std::sqrt;
     TaylorDual w;
     w.c[0] = sqrt(u.c[0]);
-    const S inv2w0 = S{1} / (S{2} * w.c[0]);
+    const auto inv2w0 = S{1} / (S{2} * w.c[0]);
     for (std::size_t k = 1; k <= N; ++k) {
-      S s = u.c[k];
+      auto s = u.c[k];
       for (std::size_t j = 1; j < k; ++j) {
         s -= w.c[j] * w.c[k - j];
       }
@@ -192,7 +192,7 @@ struct TaylorDual {
     for (std::size_t k = 1; k <= N; ++k) {
       S sv{}, cv{};
       for (std::size_t j = 1; j <= k; ++j) {
-        const S ju = static_cast<S>(j) * u.c[j];
+        const auto ju = static_cast<S>(j) * u.c[j];
         sv += ju * ch.c[k - j];
         cv += ju * sh.c[k - j];
       }
@@ -237,8 +237,9 @@ struct TaylorDual {
     using std::acos;
     TaylorDual w = asin(u);
     w.c[0] = acos(u.c[0]);
-    for (std::size_t k = 1; k <= N; ++k)
+    for (std::size_t k = 1; k <= N; ++k) {
       w.c[k] = -w.c[k];
+    }
     return w;
   }
 
@@ -252,8 +253,9 @@ struct TaylorDual {
     p.c[0] += S{1};
     for (std::size_t k = 1; k <= N; ++k) {
       S rhs = (k == 1) ? S{1} : S{};
-      for (std::size_t j = 1; j < k; ++j)
+      for (std::size_t j = 1; j < k; ++j) {
         rhs -= p.c[j] * static_cast<S>(k - j) * w.c[k - j];
+      }
       w.c[k] = rhs / (static_cast<S>(k) * p.c[0]);
     }
     return w;
@@ -266,9 +268,8 @@ template <typename T> inline constexpr bool is_taylor_dual_v = false;
 template <typename S, std::size_t N>
 inline constexpr bool is_taylor_dual_v<TaylorDual<S, N>> = true;
 
-template <typename S, std::size_t N> struct scalar_base<TaylorDual<S, N>> {
-  using type = S;
-};
+template <typename T, std::size_t N>
+auto scalar_base_impl(std::type_identity<TaylorDual<T, N>>) -> T;
 
 // dual_depth_v<TaylorDual<S,N>> = N  (mirrors nth_dual_t<S,N> depth)
 template <typename S, std::size_t N>

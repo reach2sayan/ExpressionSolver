@@ -358,13 +358,13 @@ TEST(ConceptTest, ExpressionConceptSatisfied) {
 }
 
 TEST(ConceptTest, AnOpSatisfied) {
-  static_assert(AnOp<SumOp<double>>);
-  static_assert(AnOp<MultiplyOp<float>>);
-  static_assert(AnOp<SineOp<double>>);
-  static_assert(AnOp<CosineOp<double>>);
-  static_assert(AnOp<ExpOp<double>>);
-  static_assert(AnOp<NegateOp<int>>);
-  static_assert(AnOp<DivideOp<double>>);
+  static_assert(COp<SumOp<double>>);
+  static_assert(COp<MultiplyOp<float>>);
+  static_assert(COp<SineOp<double>>);
+  static_assert(COp<CosineOp<double>>);
+  static_assert(COp<ExpOp<double>>);
+  static_assert(COp<NegateOp<int>>);
+  static_assert(COp<DivideOp<double>>);
 }
 
 // ===========================================================================

@@ -33,7 +33,6 @@ if (NOT TARGET Boost::headers)
             GIT_TAG c3eba6ac6be2e21af33a1b2ec97634cd01bcc447
     )
     FetchContent_MakeAvailable(boost_mp11)
-
     add_library(boost_headers INTERFACE)
     add_library(Boost::headers ALIAS boost_headers)
     target_include_directories(boost_headers INTERFACE
@@ -60,7 +59,6 @@ if (DIFF_BUILD_BENCHMARKS OR DIFF_BUILD_COMPARE)
 endif ()
 
 if (DIFF_BUILD_COMPARE)
-    # autodiff is header-only; disable its sub-targets to avoid extra build time.
     set(AUTODIFF_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(AUTODIFF_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
     set(AUTODIFF_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
