@@ -38,15 +38,15 @@ template <typename T> consteval auto make_all_constant_impl() {
   if constexpr (is_variable_v<T>) {
     return std::type_identity<Constant<typename T::value_type>>{};
   } else if constexpr (is_binary_expression_v<T>) {
-    using Op  = typename T::op_type;
-    using L   = typename T::lhs_type;
-    using R   = typename T::rhs_type;
+    using Op = typename T::op_type;
+    using L = typename T::lhs_type;
+    using R = typename T::rhs_type;
     using NewL = typename decltype(make_all_constant_impl<L>())::type;
     using NewR = typename decltype(make_all_constant_impl<R>())::type;
     return std::type_identity<Expression<Op, NewL, NewR>>{};
   } else if constexpr (is_mono_expression_v<T>) {
-    using Op  = typename T::op_type;
-    using E   = typename T::lhs_type;
+    using Op = typename T::op_type;
+    using E = typename T::lhs_type;
     using NewE = typename decltype(make_all_constant_impl<E>())::type;
     return std::type_identity<MonoExpression<Op, NewE>>{};
   } else {
@@ -55,7 +55,8 @@ template <typename T> consteval auto make_all_constant_impl() {
 }
 
 template <typename T>
-using make_all_constant_t = typename decltype(make_all_constant_impl<T>())::type;
+using make_all_constant_t =
+    typename decltype(make_all_constant_impl<T>())::type;
 
 template <typename TExpression>
 using as_const_expression = make_all_constant_t<
@@ -96,7 +97,7 @@ constexpr auto make_const_variable(const Variable<T, symbol> &var) noexcept {
 
 template <char symbol, typename T, char othersymbol>
   requires(symbol != othersymbol)
-constexpr auto make_const_variable(const Variable<T, othersymbol> &var) noexcept
+consteval auto make_const_variable(const Variable<T, othersymbol> &var) noexcept
     -> Variable<T, othersymbol> {
   return var;
 }
@@ -107,12 +108,13 @@ constexpr auto make_const_variable(const Constant<T> &c) noexcept {
 }
 
 template <char symbol, typename Op, typename LHS, typename RHS>
-constexpr auto make_const_variable(const Expression<Op, LHS, RHS> &expr) noexcept
+constexpr auto
+make_const_variable(const Expression<Op, LHS, RHS> &expr) noexcept
     -> Expression<Op, replace_matching_variable_as_const_t<symbol, LHS>,
                   replace_matching_variable_as_const_t<symbol, RHS>> {
-  auto [lexpr, rexpr] = expr.expressions();
-  return {make_const_variable<symbol>(std::move(lexpr)),
-          make_const_variable<symbol>(std::move(rexpr))};
+  const auto &[lexpr, rexpr] = expr.expressions();
+  return {make_const_variable<symbol>(lexpr),
+          make_const_variable<symbol>(rexpr)};
 }
 
 template <char symbol, typename Op, typename LHS>
@@ -134,8 +136,8 @@ consteval void make_labels_array(const Constant<T> &, std::array<char, N> &,
 template <typename Op, typename LHS, typename RHS, std::size_t N>
 consteval void make_labels_array(const Expression<Op, LHS, RHS> &expr,
                                  std::array<char, N> &out, std::size_t &index) {
-  make_labels_array(expr.expressions().first, out, index);
-  make_labels_array(expr.expressions().second, out, index);
+  std::visit([&](const auto &e) noexcept { make_labels_array(e, out, index); },
+             expr.expressions());
 }
 
 template <char symbol, typename Expr>
@@ -177,7 +179,8 @@ constexpr auto make_all_constant_except(const Variable<T, symbol> &v) noexcept {
 
 template <char symbol, typename T, char othersymbol>
   requires(symbol != othersymbol)
-constexpr auto make_all_constant_except(const Variable<T, othersymbol> &var) noexcept
+constexpr auto
+make_all_constant_except(const Variable<T, othersymbol> &var) noexcept
     -> Constant<T> {
   return Constant<T>{var};
 }
@@ -188,7 +191,8 @@ constexpr auto make_all_constant_except(const Constant<T> &c) noexcept {
 }
 
 template <char symbol, typename Op, typename LHS, typename RHS>
-constexpr auto make_all_constant_except(const Expression<Op, LHS, RHS> &expr) noexcept
+constexpr auto
+make_all_constant_except(const Expression<Op, LHS, RHS> &expr) noexcept
     -> constify_unmatched_var_t<symbol, Expression<Op, LHS, RHS>> {
   auto new_lhs = make_all_constant_except<symbol>(expr.expressions().first);
   auto new_rhs = make_all_constant_except<symbol>(expr.expressions().second);
@@ -196,7 +200,8 @@ constexpr auto make_all_constant_except(const Expression<Op, LHS, RHS> &expr) no
 }
 
 template <char symbol, typename Op, typename Expr>
-constexpr auto make_all_constant_except(const MonoExpression<Op, Expr> &expr) noexcept
+constexpr auto
+make_all_constant_except(const MonoExpression<Op, Expr> &expr) noexcept
     -> constify_unmatched_var_t<symbol, MonoExpression<Op, Expr>> {
   return make_all_constant_except<symbol>(expr.expressions());
 }

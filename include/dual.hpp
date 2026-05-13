@@ -57,12 +57,12 @@ public:
     return out << d.val << "+" << d.deriv << "e";
   }
 
-  template <std::size_t Index> [[nodiscard]] constexpr auto get() const noexcept {
+  template <std::size_t Index>
+  [[nodiscard]] constexpr auto get() const noexcept {
     static_assert(Index < 2, "Dual index out of bounds");
     if constexpr (Index == 0) {
       return val;
-    }
-    else {
+    } else {
       return deriv;
     }
   }
@@ -146,16 +146,20 @@ template <typename T>
 using dual_scalar_t = decltype(dual_scalar_impl(std::declval<T>()));
 
 // nth_dual_t<T, N> = Dual<Dual<...<T>...>> nested N times
+template <typename T, std::size_t N> consteval auto nth_dual_impl() noexcept {
+  if constexpr (N == 0) {
+    return std::type_identity<T>{};
+  } else {
+    using Inner = typename decltype(nth_dual_impl<T, N - 1>())::type;
+    return std::type_identity<Dual<Inner>>{};
+  }
+}
+
 template <typename T, std::size_t N>
-struct nth_dual { using type = Dual<typename nth_dual<T, N - 1>::type>; };
-template <typename T>
-struct nth_dual<T, 0> { using type = T; };
-template <typename T, std::size_t N>
-using nth_dual_t = typename nth_dual<T, N>::type;
+using nth_dual_t = typename decltype(nth_dual_impl<T, N>())::type;
 
 // How many Dual<> layers wrap T
-template <typename T>
-inline constexpr std::size_t dual_depth_v = 0;
+template <typename T> inline constexpr std::size_t dual_depth_v = 0;
 template <typename T>
 inline constexpr std::size_t dual_depth_v<Dual<T>> = 1 + dual_depth_v<T>;
 
@@ -173,14 +177,15 @@ constexpr nth_dual_t<T, N> embed_constant(T val) noexcept {
   if constexpr (N == 0) {
     return val;
   } else {
-    return nth_dual_t<T, N>{embed_constant<T, N - 1>(val), nth_dual_t<T, N - 1>{}};
+    return nth_dual_t<T, N>{embed_constant<T, N - 1>(val),
+                            nth_dual_t<T, N - 1>{}};
   }
 }
 
 // ConstantEmbedder<U>: creates a "zero-derivative" U from a base scalar.
-// Specialise for custom numeric types (e.g. TaylorDual) to extend eval_seeded_as.
-template <typename U>
-struct ConstantEmbedder {
+// Specialise for custom numeric types (e.g. TaylorDual) to extend
+// eval_seeded_as.
+template <typename U> struct ConstantEmbedder {
   static constexpr U embed(scalar_base_t<U> val) noexcept {
     return embed_constant<scalar_base_t<U>, dual_depth_v<U>>(val);
   }

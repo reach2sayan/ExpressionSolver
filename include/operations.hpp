@@ -32,10 +32,12 @@ template <typename T, typename func, char symbol>
 struct UnaryOp : Op<T, OpType::Unary> {
   using value_type = Op<T, OpType::Unary>::value_type;
   using func_type = func;
-  static constexpr void print(std::ostream &out, const CExpression auto &lhs) noexcept {
+  static constexpr void print(std::ostream &out,
+                              const CExpression auto &lhs) noexcept {
     out << symbol << lhs;
   }
-  [[nodiscard]] static constexpr auto eval(const CExpression auto &lhs) noexcept {
+  [[nodiscard]] static constexpr auto
+  eval(const CExpression auto &lhs) noexcept {
     using VT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
     return std::invoke(func{}, static_cast<VT>(lhs));
   }
@@ -47,11 +49,11 @@ struct BinaryOp : Op<T, OpType::Binary> {
   using value_type = Op<T, OpType::Binary>::value_type;
   using func_type = func;
   static constexpr void print(std::ostream &out, const CExpression auto &lhs,
-                    const CExpression auto &rhs) noexcept {
+                              const CExpression auto &rhs) noexcept {
     out << lhs << symbol << rhs;
   }
-  [[nodiscard]] static constexpr auto eval(const CExpression auto &lhs,
-                                           const CExpression auto &rhs) noexcept {
+  [[nodiscard]] static constexpr auto
+  eval(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
     using LT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
     using RT = typename std::remove_cvref_t<decltype(rhs)>::value_type;
     return std::invoke(func{}, static_cast<LT>(lhs), static_cast<RT>(rhs));
@@ -72,7 +74,8 @@ template <typename T> struct SumOp : BinaryOp<T, std::plus<void>, '+'> {
   }
 };
 
-template <Numeric T> struct MultiplyOp : BinaryOp<T, std::multiplies<void>, '*'> {
+template <Numeric T>
+struct MultiplyOp : BinaryOp<T, std::multiplies<void>, '*'> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -121,56 +124,82 @@ template <Numeric T> struct DivideOp : BinaryOp<T, std::divides<void>, '/'> {
 
 namespace detail {
 struct sine_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::sin; return sin(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::sin;
+    return sin(a);
+  }
 };
 struct cosine_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::cos; return cos(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::cos;
+    return cos(a);
+  }
 };
 struct tan_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::tan; return tan(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::tan;
+    return tan(a);
+  }
 };
 struct log_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::log; return log(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::log;
+    return log(a);
+  }
 };
 struct sqrt_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::sqrt; return sqrt(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::sqrt;
+    return sqrt(a);
+  }
 };
 struct abs_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::abs; return abs(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::abs;
+    return abs(a);
+  }
 };
 struct asin_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::asin; return asin(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::asin;
+    return asin(a);
+  }
 };
 struct acos_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::acos; return acos(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::acos;
+    return acos(a);
+  }
 };
 struct atan_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::atan; return atan(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::atan;
+    return atan(a);
+  }
 };
 struct sinh_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::sinh; return sinh(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::sinh;
+    return sinh(a);
+  }
 };
 struct cosh_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::cosh; return cosh(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::cosh;
+    return cosh(a);
+  }
 };
 struct tanh_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::tanh; return tanh(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::tanh;
+    return tanh(a);
+  }
 };
 struct exp_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a) const noexcept { using std::exp; return exp(a); }
+  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+    using std::exp;
+    return exp(a);
+  }
 };
 } // namespace detail
 

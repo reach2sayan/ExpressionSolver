@@ -32,9 +32,9 @@ static void run_reverse(benchmark::State &state, Expr &expr) {
 }
 
 template <CExpression Expr, std::size_t N>
-static void run_forward(
-    benchmark::State &state, Expr &expr,
-    std::array<scalar_base_t<typename Expr::value_type>, N> values) {
+static void
+run_forward(benchmark::State &state, Expr &expr,
+            std::array<scalar_base_t<typename Expr::value_type>, N> values) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(values);
@@ -75,7 +75,8 @@ static void run_forward_jacobian(benchmark::State &state, VE &ve) {
 }
 
 static void BM_Symbolic_F1_Univariate(benchmark::State &state) {
-  double xv = 1.25; benchmark::DoNotOptimize(xv);
+  double xv = 1.25;
+  benchmark::DoNotOptimize(xv);
   auto x = PV(xv, 'x');
   auto eq = Equation(exp(x) * sin(x) + x * x * x + 2.0 * x);
   run_symbolic(state, eq);
@@ -83,7 +84,8 @@ static void BM_Symbolic_F1_Univariate(benchmark::State &state) {
 BENCHMARK(BM_Symbolic_F1_Univariate);
 
 static void BM_Forward_F1_Univariate(benchmark::State &state) {
-  double xv = 1.25; benchmark::DoNotOptimize(xv);
+  double xv = 1.25;
+  benchmark::DoNotOptimize(xv);
   Variable<double, 'x'> x{xv};
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
   run_forward(state, expr, std::array{xv});
@@ -91,7 +93,8 @@ static void BM_Forward_F1_Univariate(benchmark::State &state) {
 BENCHMARK(BM_Forward_F1_Univariate);
 
 static void BM_Reverse_F1_Univariate(benchmark::State &state) {
-  double xv = 1.25; benchmark::DoNotOptimize(xv);
+  double xv = 1.25;
+  benchmark::DoNotOptimize(xv);
   auto x = PV(xv, 'x');
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
   run_reverse(state, expr);
@@ -100,8 +103,10 @@ BENCHMARK(BM_Reverse_F1_Univariate);
 
 static void BM_Symbolic_F2_Bivariate(benchmark::State &state) {
   double xv = 1.3, yv = 0.7;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y');
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
   auto eq = Equation(x * y + sin(x) + y * y + exp(x + y));
   run_symbolic(state, eq);
 }
@@ -109,8 +114,10 @@ BENCHMARK(BM_Symbolic_F2_Bivariate);
 
 static void BM_Forward_F2_Bivariate(benchmark::State &state) {
   double xv = 1.3, yv = 0.7;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  Variable<double, 'x'> x{xv}; Variable<double, 'y'> y{yv};
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  Variable<double, 'x'> x{xv};
+  Variable<double, 'y'> y{yv};
   auto expr = x * y + sin(x) + y * y + exp(x + y);
   run_forward(state, expr, std::array{xv, yv});
 }
@@ -118,8 +125,10 @@ BENCHMARK(BM_Forward_F2_Bivariate);
 
 static void BM_Reverse_F2_Bivariate(benchmark::State &state) {
   double xv = 1.3, yv = 0.7;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y');
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
   auto expr = x * y + sin(x) + y * y + exp(x + y);
   run_reverse(state, expr);
 }
@@ -127,8 +136,12 @@ BENCHMARK(BM_Reverse_F2_Bivariate);
 
 static void BM_Symbolic_F3_Trivariate(benchmark::State &state) {
   double xv = 0.9, yv = 1.1, zv = 0.4;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv); benchmark::DoNotOptimize(zv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y'); auto z = PV(zv, 'z');
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
+  auto z = PV(zv, 'z');
   auto eq = Equation(exp(x * y) + sin(z) * x + y * z + x * x * z);
   run_symbolic(state, eq);
 }
@@ -136,8 +149,12 @@ BENCHMARK(BM_Symbolic_F3_Trivariate);
 
 static void BM_Forward_F3_Trivariate(benchmark::State &state) {
   double xv = 0.9, yv = 1.1, zv = 0.4;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv); benchmark::DoNotOptimize(zv);
-  Variable<double, 'x'> x{xv}; Variable<double, 'y'> y{yv}; Variable<double, 'z'> z{zv};
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  Variable<double, 'x'> x{xv};
+  Variable<double, 'y'> y{yv};
+  Variable<double, 'z'> z{zv};
   auto expr = exp(x * y) + sin(z) * x + y * z + x * x * z;
   run_forward(state, expr, std::array{xv, yv, zv});
 }
@@ -145,8 +162,12 @@ BENCHMARK(BM_Forward_F3_Trivariate);
 
 static void BM_Reverse_F3_Trivariate(benchmark::State &state) {
   double xv = 0.9, yv = 1.1, zv = 0.4;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv); benchmark::DoNotOptimize(zv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y'); auto z = PV(zv, 'z');
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
+  auto z = PV(zv, 'z');
   auto expr = exp(x * y) + sin(z) * x + y * z + x * x * z;
   run_reverse(state, expr);
 }
@@ -154,21 +175,30 @@ BENCHMARK(BM_Reverse_F3_Trivariate);
 
 static void BM_Symbolic_F4_FourVariables(benchmark::State &state) {
   double xv = 1.0, yv = 0.5, zv = 1.7, wv = M_PI / 6.0;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv); benchmark::DoNotOptimize(wv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y');
-  auto z = PV(zv, 'z'); auto w = PV(wv, 'w');
-  auto eq = Equation((x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w);
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  benchmark::DoNotOptimize(wv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
+  auto z = PV(zv, 'z');
+  auto w = PV(wv, 'w');
+  auto eq =
+      Equation((x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w);
   run_symbolic(state, eq);
 }
 BENCHMARK(BM_Symbolic_F4_FourVariables);
 
 static void BM_Forward_F4_FourVariables(benchmark::State &state) {
   double xv = 1.0, yv = 0.5, zv = 1.7, wv = M_PI / 6.0;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv); benchmark::DoNotOptimize(wv);
-  Variable<double, 'x'> x{xv}; Variable<double, 'y'> y{yv};
-  Variable<double, 'z'> z{zv}; Variable<double, 'w'> w{wv};
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  benchmark::DoNotOptimize(wv);
+  Variable<double, 'x'> x{xv};
+  Variable<double, 'y'> y{yv};
+  Variable<double, 'z'> z{zv};
+  Variable<double, 'w'> w{wv};
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
   run_forward(state, expr, std::array{xv, yv, zv, wv});
 }
@@ -176,10 +206,14 @@ BENCHMARK(BM_Forward_F4_FourVariables);
 
 static void BM_Reverse_F4_FourVariables(benchmark::State &state) {
   double xv = 1.0, yv = 0.5, zv = 1.7, wv = M_PI / 6.0;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv); benchmark::DoNotOptimize(wv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y');
-  auto z = PV(zv, 'z'); auto w = PV(wv, 'w');
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  benchmark::DoNotOptimize(wv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
+  auto z = PV(zv, 'z');
+  auto w = PV(wv, 'w');
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
   run_reverse(state, expr);
 }
@@ -187,33 +221,48 @@ BENCHMARK(BM_Reverse_F4_FourVariables);
 
 static void BM_Symbolic_Vector_F4(benchmark::State &state) {
   double xv = 1.0, yv = 0.5, zv = 1.7, wv = M_PI / 6.0;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv); benchmark::DoNotOptimize(wv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y');
-  auto z = PV(zv, 'z'); auto w = PV(wv, 'w');
-  auto ve = Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  benchmark::DoNotOptimize(wv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
+  auto z = PV(zv, 'z');
+  auto w = PV(wv, 'w');
+  auto ve =
+      Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
   run_symbolic_jacobian(state, ve);
 }
 BENCHMARK(BM_Symbolic_Vector_F4);
 
 static void BM_Forward_Vector_F4(benchmark::State &state) {
   double xv = 1.0, yv = 0.5, zv = 1.7, wv = M_PI / 6.0;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv); benchmark::DoNotOptimize(wv);
-  Variable<double, 'x'> x{xv}; Variable<double, 'y'> y{yv};
-  Variable<double, 'z'> z{zv}; Variable<double, 'w'> w{wv};
-  auto ve = Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  benchmark::DoNotOptimize(wv);
+  Variable<double, 'x'> x{xv};
+  Variable<double, 'y'> y{yv};
+  Variable<double, 'z'> z{zv};
+  Variable<double, 'w'> w{wv};
+  auto ve =
+      Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
   run_forward_jacobian(state, ve);
 }
 BENCHMARK(BM_Forward_Vector_F4);
 
 static void BM_Reverse_Vector_F4(benchmark::State &state) {
   double xv = 1.0, yv = 0.5, zv = 1.7, wv = M_PI / 6.0;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv); benchmark::DoNotOptimize(wv);
-  auto x = PV(xv, 'x'); auto y = PV(yv, 'y');
-  auto z = PV(zv, 'z'); auto w = PV(wv, 'w');
-  auto ve = Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  benchmark::DoNotOptimize(wv);
+  auto x = PV(xv, 'x');
+  auto y = PV(yv, 'y');
+  auto z = PV(zv, 'z');
+  auto w = PV(wv, 'w');
+  auto ve =
+      Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
   run_reverse_jacobian(state, ve);
 }
 BENCHMARK(BM_Reverse_Vector_F4);
@@ -372,7 +421,8 @@ BENCHMARK(BM_Forward_Batched_F4)->Arg(256)->Arg(1024)->Arg(4096);
 // ===========================================================================
 
 static void BM_Reverse_Dual_F1_Univariate(benchmark::State &state) {
-  double xv = 1.25; benchmark::DoNotOptimize(xv);
+  double xv = 1.25;
+  benchmark::DoNotOptimize(xv);
   auto x = PDV(xv, 'x');
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
   run_reverse(state, expr);
@@ -381,8 +431,10 @@ BENCHMARK(BM_Reverse_Dual_F1_Univariate);
 
 static void BM_Reverse_Dual_F2_Bivariate(benchmark::State &state) {
   double xv = 1.3, yv = 0.7;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  auto x = PDV(xv, 'x'); auto y = PDV(yv, 'y');
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  auto x = PDV(xv, 'x');
+  auto y = PDV(yv, 'y');
   auto expr = x * y + sin(x) + y * y + exp(x + y);
   run_reverse(state, expr);
 }
@@ -390,10 +442,14 @@ BENCHMARK(BM_Reverse_Dual_F2_Bivariate);
 
 static void BM_Reverse_Dual_F4_FourVariables(benchmark::State &state) {
   double xv = 1.0, yv = 0.5, zv = 1.7, wv = M_PI / 6.0;
-  benchmark::DoNotOptimize(xv); benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv); benchmark::DoNotOptimize(wv);
-  auto x = PDV(xv, 'x'); auto y = PDV(yv, 'y');
-  auto z = PDV(zv, 'z'); auto w = PDV(wv, 'w');
+  benchmark::DoNotOptimize(xv);
+  benchmark::DoNotOptimize(yv);
+  benchmark::DoNotOptimize(zv);
+  benchmark::DoNotOptimize(wv);
+  auto x = PDV(xv, 'x');
+  auto y = PDV(yv, 'y');
+  auto z = PDV(zv, 'z');
+  auto w = PDV(wv, 'w');
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
   run_reverse(state, expr);
 }

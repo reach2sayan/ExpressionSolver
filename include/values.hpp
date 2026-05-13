@@ -32,8 +32,7 @@ struct IOperators {
     using value_type = typename LHS::value_type;
     if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() + b.get()};
-    }
-    else {
+    } else {
       return Expression<SumOp<value_type>, LHS, RHS>{a, b};
     }
   }
@@ -44,8 +43,7 @@ struct IOperators {
     using value_type = typename LHS::value_type;
     if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() * b.get()};
-    }
-    else {
+    } else {
       return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
     }
   }
@@ -69,63 +67,75 @@ struct IOperators {
     using value_type = typename LHS::value_type;
     if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
       return Constant<value_type>{a.get() / b.get()};
-    }
-    else {
+    } else {
       return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
     }
   }
 
-  template <CExpression Expr> friend constexpr auto sin(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto sin(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<SineOp<value_type>, Expr>{a};
   }
 
-  template <CExpression Expr> friend constexpr auto cos(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto cos(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<CosineOp<value_type>, Expr>{a};
   }
 
-  template <CExpression Expr> friend constexpr auto exp(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto exp(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<ExpOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto tan(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto tan(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<TanOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto log(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto log(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<LogOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto sqrt(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto sqrt(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<SqrtOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto abs(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto abs(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AbsOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto asin(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto asin(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AsinOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto acos(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto acos(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AcosOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto atan(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto atan(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<AtanOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto sinh(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto sinh(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<SinhOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto cosh(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto cosh(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<CoshOp<value_type>, Expr>{a};
   }
-  template <CExpression Expr> friend constexpr auto tanh(const Expr &a) noexcept {
+  template <CExpression Expr>
+  friend constexpr auto tanh(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<TanhOp<value_type>, Expr>{a};
   }
@@ -199,13 +209,16 @@ public:
   constexpr explicit Constant(T value) noexcept : value(value) {}
   [[nodiscard]] constexpr auto get() const noexcept { return value; }
   constexpr operator T() const noexcept { return value; }
-  [[nodiscard]] constexpr auto derivative() const noexcept { return Constant{T{}}; }
+  [[nodiscard]] constexpr auto derivative() const noexcept {
+    return Constant{T{}};
+  }
   constexpr void update(const auto &, const auto &) const noexcept {}
   constexpr void collect(const auto &, auto &) const noexcept {}
   constexpr void backward(const auto &, T, auto &) const noexcept {}
 
   template <typename Syms, std::size_t N>
-  [[nodiscard]] constexpr T eval_seeded(const std::array<T, N> &) const noexcept {
+  [[nodiscard]] constexpr T
+  eval_seeded(const std::array<T, N> &) const noexcept {
     return value;
   }
 
@@ -213,7 +226,8 @@ public:
   // parts.  Uses ConstantEmbedder<U> so custom numeric types (e.g. TaylorDual)
   // can specialise the embedding without touching this code.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &) const noexcept {
+  [[nodiscard]] constexpr U
+  eval_seeded_as(const std::array<U, N> &) const noexcept {
     using S = scalar_base_t<U>;
     return ConstantEmbedder<U>::embed(
         static_cast<S>(get_real_part<dual_depth_v<T>>(value)));
@@ -258,14 +272,16 @@ public:
   constexpr void backward(const auto &syms, T adj, auto &grads) const noexcept;
 
   template <typename Syms, std::size_t N>
-  [[nodiscard]] constexpr T eval_seeded(const std::array<T, N> &vals) const noexcept {
+  [[nodiscard]] constexpr T
+  eval_seeded(const std::array<T, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_char<symbol, Syms>();
     return vals[idx];
   }
 
   // eval_seeded_as<U>: return the U-typed seed for this variable.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const noexcept {
+  [[nodiscard]] constexpr U
+  eval_seeded_as(const std::array<U, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_char<symbol, Syms>();
     return vals[idx];
   }

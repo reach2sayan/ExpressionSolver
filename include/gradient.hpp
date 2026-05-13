@@ -66,8 +66,8 @@ template <CExpression Expr,
           std::size_t N = mp::mp_size<
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
   requires is_dual_v<T>
-[[nodiscard]] constexpr auto reverse_mode_hessian(Expr &expr,
-                                                  std::array<S, N> values) noexcept {
+[[nodiscard]] constexpr auto
+reverse_mode_hessian(Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   std::array<std::array<S, N>, N> H{};
   std::array<T, N> seeds{};
@@ -123,7 +123,8 @@ constexpr nth_dual_t<S, Depth> make_mixed_seed(S value, const std::size_t *idx,
   }
 }
 
-template <std::size_t N, typename T> constexpr auto extract_nth(const T &x) noexcept {
+template <std::size_t N, typename T>
+constexpr auto extract_nth(const T &x) noexcept {
   if constexpr (N == 0) {
     return x;
   } else {

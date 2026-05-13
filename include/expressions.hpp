@@ -83,13 +83,16 @@ template <COp Op> struct BaseExpression {
 template <COp Op, typename Exp>
 class MonoExpression : public BaseExpression<Op> {
   Exp expression;
-  friend constexpr std::ostream &operator<<(std::ostream &out, const MonoExpression &e) {
+  friend constexpr std::ostream &operator<<(std::ostream &out,
+                                            const MonoExpression &e) {
     out << e.expression;
     return out;
   }
 
 public:
-  [[nodiscard]] constexpr const auto &expressions() const noexcept { return expression; }
+  [[nodiscard]] constexpr const auto &expressions() const noexcept {
+    return expression;
+  }
   using lhs_type = Exp;
   using op_type = Op;
   using value_type = typename BaseExpression<Op>::value_type;
@@ -110,7 +113,9 @@ public:
     return Op::derivative(expression);
   }
   constexpr operator value_type() const noexcept { return eval(); }
-  [[nodiscard]] constexpr auto eval() const noexcept { return Op::eval(expression); }
+  [[nodiscard]] constexpr auto eval() const noexcept {
+    return Op::eval(expression);
+  }
 
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr auto
@@ -121,7 +126,8 @@ public:
 
   // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const noexcept {
+  [[nodiscard]] constexpr U
+  eval_seeded_as(const std::array<U, N> &vals) const noexcept {
     return Op::eval(
         EvalResult<U>{expression.template eval_seeded_as<U, Syms>(vals)});
   }
@@ -129,10 +135,13 @@ public:
   constexpr void update(const auto &symbols, const auto &updates) noexcept {
     expression.update(symbols, updates);
   }
+
   constexpr void collect(const auto &symbols, auto &out) const noexcept {
     expression.collect(symbols, out);
   }
-  constexpr void backward(const auto &syms, value_type adj, auto &grads) const noexcept {
+
+  constexpr void backward(const auto &syms, value_type adj,
+                          auto &grads) const noexcept {
     Op::backward(expression, adj, syms, grads);
   }
 };
@@ -179,23 +188,26 @@ public:
   }
   constexpr operator value_type() const noexcept { return eval(); }
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    return std::apply([](const auto &...e) noexcept { return Op::derivative(e...); },
-                      inner_expressions);
+    return std::apply(
+        [](const auto &...e) noexcept { return Op::derivative(e...); },
+        inner_expressions);
   }
 
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr auto
   eval_seeded(const std::array<value_type, N> &vals) const noexcept {
-    return Op::eval(
-        EvalResult<value_type>{
-            inner_expressions.first.template eval_seeded<Syms>(vals)},
-        EvalResult<value_type>{
-            inner_expressions.second.template eval_seeded<Syms>(vals)});
+    return std::apply(
+        [&](auto const &...exprs) {
+          return Op::eval(EvalResult<value_type>{
+              exprs.template eval_seeded<Syms>(vals)}...);
+        },
+        inner_expressions);
   }
 
   // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
   template <typename U, typename Syms, std::size_t N>
-  [[nodiscard]] constexpr U eval_seeded_as(const std::array<U, N> &vals) const noexcept {
+  [[nodiscard]] constexpr U
+  eval_seeded_as(const std::array<U, N> &vals) const noexcept {
     return std::apply(
         [&](const auto &...e) noexcept {
           return Op::eval(
@@ -214,13 +226,19 @@ public:
 
   constexpr void collect(const auto &symbols, auto &out) const noexcept {
     std::apply(
-        [&](auto const &...exprs) noexcept { (exprs.collect(symbols, out), ...); },
+        [&](auto const &...exprs) noexcept {
+          (exprs.collect(symbols, out), ...);
+        },
         inner_expressions);
   }
 
-  constexpr void backward(const auto &syms, value_type adj, auto &grads) const noexcept {
-    std::apply([&](const auto &...e) noexcept { Op::backward(e..., adj, syms, grads); },
-               inner_expressions);
+  constexpr void backward(const auto &syms, value_type adj,
+                          auto &grads) const noexcept {
+    std::apply(
+        [&](const auto &...e) noexcept {
+          Op::backward(e..., adj, syms, grads);
+        },
+        inner_expressions);
   }
 };
 
