@@ -14,7 +14,7 @@ private:
   T deriv{};
 
 public:
-  consteval Dual() noexcept = default;
+  constexpr Dual() noexcept = default;
   constexpr explicit Dual(T v, T d = T{}) noexcept : val(v), deriv(d) {}
 
   constexpr Dual operator+(const Dual &o) const noexcept {
