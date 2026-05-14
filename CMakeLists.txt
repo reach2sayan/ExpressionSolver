@@ -5,7 +5,7 @@ endif ()
 
 project(ExpressionDifferentiator VERSION 1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -119,6 +119,8 @@ if (DIFF_BUILD_BENCHMARKS)
             USES_TERMINAL
             COMMENT "Running benchmarks and exporting JSON results")
 endif ()
+
+add_subdirectory(minimizer)
 
 if (MSVC)
     target_compile_options(main PRIVATE /Wall)
