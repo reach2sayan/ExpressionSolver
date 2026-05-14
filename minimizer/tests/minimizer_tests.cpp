@@ -118,6 +118,139 @@ TEST(Golden, ManualBracketThenMinimize) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Brent tests
+// ─────────────────────────────────────────────────────────────
+
+TEST(Brent, QuadraticMinimum) {
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto f = (x - diff::Constant<double>{2.0}) * (x - diff::Constant<double>{2.0});
+
+    diff::min::Brent b{f};
+    double xmin = b.minimize(0.0, 5.0);
+
+    EXPECT_NEAR(xmin,   2.0, kTol);
+    EXPECT_NEAR(b.fmin, 0.0, kTol * kTol);
+}
+
+TEST(Brent, SineMinimum) {
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto f = sin(y);
+
+    diff::min::Brent b{f};
+    b.ax = 3.0; b.bx = std::numbers::pi * 1.5; b.cx = 6.0;
+    b.fa = b.eval_at(b.ax); b.fb = b.eval_at(b.bx); b.fc = b.eval_at(b.cx);
+    double xmin = b.minimize();
+
+    EXPECT_NEAR(xmin,   3.0 * std::numbers::pi / 2.0, kTol);
+    EXPECT_NEAR(b.fmin, -1.0, kTol);
+}
+
+TEST(Brent, QuarticMinimum) {
+    // f(x) = (x-1)^4  — flat near minimum, good stress test for parabolic interpolation
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto d = x - diff::Constant<double>{1.0};
+    auto f = d * d * d * d;
+
+    diff::min::Brent b{f};
+    double xmin = b.minimize(0.0, 3.0);
+
+    EXPECT_NEAR(xmin,   1.0, kTol);
+    EXPECT_NEAR(b.fmin, 0.0, kTol * kTol);
+}
+
+// ─────────────────────────────────────────────────────────────
+// LinMin tests
+// ─────────────────────────────────────────────────────────────
+
+TEST(LinMin, AxisDirection) {
+    // f(x,y) = (x-3)^2 + (y-4)^2; start (0,0), dir (1,0)
+    // minimum along x-axis at t=3 → p=(3,0)
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto f = (x - diff::Constant<double>{3.0}) * (x - diff::Constant<double>{3.0})
+           + (y - diff::Constant<double>{4.0}) * (y - diff::Constant<double>{4.0});
+
+    diff::min::LinMin lm{f};
+    std::array<double, 2> p{0.0, 0.0};
+    std::array<double, 2> dir{1.0, 0.0};
+    lm.minimize(p, dir);
+
+    EXPECT_NEAR(p[0],   3.0, kTol);
+    EXPECT_NEAR(p[1],   0.0, kTol);   // y unchanged
+    EXPECT_NEAR(lm.fret, 16.0, kTol); // (3-3)^2 + (0-4)^2 = 16
+}
+
+TEST(LinMin, DiagonalDirection) {
+    // f(x,y) = (x-3)^2 + (y-4)^2; start (0,0), dir (1,1)
+    // minimise (t-3)^2 + (t-4)^2 → t=3.5 → p=(3.5, 3.5)
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto f = (x - diff::Constant<double>{3.0}) * (x - diff::Constant<double>{3.0})
+           + (y - diff::Constant<double>{4.0}) * (y - diff::Constant<double>{4.0});
+
+    diff::min::LinMin lm{f};
+    std::array<double, 2> p{0.0, 0.0};
+    std::array<double, 2> dir{1.0, 1.0};
+    lm.minimize(p, dir);
+
+    EXPECT_NEAR(p[0],   3.5, kTol);
+    EXPECT_NEAR(p[1],   3.5, kTol);
+    EXPECT_NEAR(lm.fret, 0.5, kTol); // (3.5-3)^2 + (3.5-4)^2 = 0.5
+}
+
+TEST(LinMin, DirScaledByStep) {
+    // dir should be multiplied by xmin after minimize
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto f = (x - diff::Constant<double>{3.0}) * (x - diff::Constant<double>{3.0})
+           + (y - diff::Constant<double>{4.0}) * (y - diff::Constant<double>{4.0});
+
+    diff::min::LinMin lm{f};
+    std::array<double, 2> p{0.0, 0.0};
+    std::array<double, 2> dir{1.0, 1.0};
+    lm.minimize(p, dir);
+
+    // dir = xmin * original_dir; p = original_p + dir
+    EXPECT_NEAR(dir[0], p[0], kTol);
+    EXPECT_NEAR(dir[1], p[1], kTol);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Powell tests
+// ─────────────────────────────────────────────────────────────
+
+TEST(Powell, Bowl2D) {
+    // f(x,y) = (x-1)^2 + (y-2)^2  — minimum at (1, 2)
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto f = (x - diff::Constant<double>{1.0}) * (x - diff::Constant<double>{1.0})
+           + (y - diff::Constant<double>{2.0}) * (y - diff::Constant<double>{2.0});
+
+    diff::min::Powell pw{f};
+    auto p = pw.minimize({0.0, 0.0});
+
+    EXPECT_NEAR(p[0],   1.0, kTol);
+    EXPECT_NEAR(p[1],   2.0, kTol);
+    EXPECT_NEAR(pw.fret, 0.0, kTol * kTol);
+}
+
+TEST(Powell, Rosenbrock) {
+    // f(x,y) = (1-x)^2 + 100*(y-x^2)^2  — minimum at (1,1), fmin=0
+    auto x  = diff::Variable<double, 'x'>{0.0};
+    auto y  = diff::Variable<double, 'y'>{0.0};
+    auto t1 = diff::Constant<double>{1.0} - x;
+    auto t2 = y - x * x;
+    auto f  = t1 * t1 + diff::Constant<double>{100.0} * t2 * t2;
+
+    diff::min::Powell pw{f, 1e-10};
+    auto p = pw.minimize({-1.0, 1.0});
+
+    EXPECT_NEAR(p[0],    1.0, 1e-4);
+    EXPECT_NEAR(p[1],    1.0, 1e-4);
+    EXPECT_NEAR(pw.fret, 0.0, 1e-6);
+}
+
+// ─────────────────────────────────────────────────────────────
 // Compile-time / trait tests
 // ─────────────────────────────────────────────────────────────
 

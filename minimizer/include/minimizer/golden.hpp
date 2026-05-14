@@ -22,22 +22,24 @@ template <diff::CExpression Expr> struct Golden : Bracketmethod<Expr> {
   using Base::fb;
   using Base::fc;
 
+  // R = 1/φ ≈ 0.61803 — contraction ratio (NOT φ itself)
+  static constexpr diff::Constant<value_type> R{1.0 /
+                                                std::numbers::phi_v<double>};
+  static constexpr diff::Constant<value_type> C{
+      1.0 - 1.0 / std::numbers::phi_v<double>};
+
   value_type xmin{};
   value_type fmin{};
   const value_type tol;
 
-  constexpr explicit Golden(Expr e, value_type tol_ = static_cast<value_type>(3.0e-8))
+  constexpr explicit Golden(Expr e,
+                            value_type tol_ = static_cast<value_type>(3.0e-8))
       : Base(std::move(e)), tol(tol_) {}
 
   // Perform golden section search on the already-bracketed triplet
   // (ax, bx, cx).  Call bracket() first, or set the triplet manually.
   constexpr value_type minimize() {
     using std::abs;
-    // R = 1/φ ≈ 0.61803 — the contraction ratio (NOT φ itself)
-    constexpr value_type R =
-        static_cast<value_type>(1.0 / std::numbers::phi_v<double>);
-    constexpr value_type C =
-        static_cast<value_type>(1.0 - 1.0 / std::numbers::phi_v<double>);
 
     value_type x0 = ax, x3 = cx, x1{}, x2{};
     if (abs(cx - bx) > abs(bx - ax)) {
@@ -78,7 +80,7 @@ template <diff::CExpression Expr> struct Golden : Bracketmethod<Expr> {
   }
 
   // Convenience: bracket from (ax0, bx0) then minimize.
-  constexpr value_type minimize(value_type ax0, value_type bx0) {
+  constexpr value_type minimize(const value_type &ax0, const value_type &bx0) {
     bracket(ax0, bx0);
     return minimize();
   }
