@@ -67,18 +67,17 @@ struct Frprmn {
       fp = fret;
       auto [_, g_new] = eval_grad(p);
 
-      const value_type gg =
-          std::inner_product(g.begin(), g.end(), g.begin(), value_type{});
+      const value_type gg  = detail::norm_sq(g);
       const value_type dgg = [&] {
         if constexpr (Method == CGMethod::PolakRibiere) {
-          return std::inner_product(
-              g_new.begin(), g_new.end(), g.begin(), value_type{},
-              std::plus<>{},
-              [](const auto &gnj, const auto &gj) { return (gnj - gj) * gnj; });
+          return std::inner_product(g_new.begin(), g_new.end(), g.begin(), value_type{},
+                                    std::plus<>{},
+                                    [](const auto& gnj, const auto& gj) {
+                                      return (gnj - gj) * gnj;
+                                    });
         }
         else {
-          return std::inner_product(g_new.begin(), g_new.end(), g_new.begin(),
-                                    value_type{});
+          return detail::norm_sq(g_new);
         }
       }();
 

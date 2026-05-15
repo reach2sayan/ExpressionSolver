@@ -3,10 +3,22 @@
 #include "expressions.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
+#include <numeric>
 
 namespace diff::min::detail {
+
+template <typename T, std::size_t N>
+constexpr T dot(const std::array<T, N>& a, const std::array<T, N>& b) noexcept {
+  return std::inner_product(a.begin(), a.end(), b.begin(), T{});
+}
+
+template <typename T, std::size_t N>
+constexpr T norm_sq(const std::array<T, N>& a) noexcept {
+  return dot(a, a);
+}
 
 // NR §10.1 bracket algorithm for any callable T(T).
 // fa = f(ax) and fb = f(bx) must be set by the caller before entry.

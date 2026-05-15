@@ -4,7 +4,6 @@
 #include "linmin.hpp"
 #include <algorithm>
 #include <limits>
-#include <numeric>
 #include <ranges>
 #include <utility>
 
@@ -80,18 +79,13 @@ template <diff::CExpression Expr> struct BFGS {
 
       // hdg = H · dg
       Point hdg{};
-      for (auto [i, hi] : std::views::enumerate(hsn)) {
-        hdg[i] =
-            std::inner_product(hi.begin(), hi.end(), dg.begin(), value_type{});
-      }
-      value_type fac =
-          std::inner_product(dg.begin(), dg.end(), xi.begin(), value_type{});
-      const value_type fae =
-          std::inner_product(dg.begin(), dg.end(), hdg.begin(), value_type{});
-      const value_type sumdg =
-          std::inner_product(dg.begin(), dg.end(), dg.begin(), value_type{});
-      const value_type sumxi =
-          std::inner_product(xi.begin(), xi.end(), xi.begin(), value_type{});
+      for (auto [i, hi] : std::views::enumerate(hsn))
+        hdg[i] = detail::dot(hi, dg);
+
+      value_type       fac   = detail::dot(dg, xi);
+      const value_type fae   = detail::dot(dg, hdg);
+      const value_type sumdg = detail::norm_sq(dg);
+      const value_type sumxi = detail::norm_sq(xi);
 
       // BFGS rank-2 update — skip if curvature condition fails (avoids sqrt)
       if (fac > value_type{} && fac * fac > EPS * sumdg * sumxi) {
@@ -114,10 +108,8 @@ template <diff::CExpression Expr> struct BFGS {
       }
 
       // New direction: xi = −H · g_new
-      for (auto&& [xii, hi] : std::views::zip(xi, hsn)) {
-        xii = -std::inner_product(hi.begin(), hi.end(), g_new.begin(),
-                                    value_type{});
-      }
+      for (auto&& [xii, hi] : std::views::zip(xi, hsn))
+        xii = -detail::dot(hi, g_new);
 
       g = std::move(g_new);
       fp = fret;
