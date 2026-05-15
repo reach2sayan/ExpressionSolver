@@ -78,10 +78,7 @@ template <diff::CExpression Expr> struct BFGS {
       std::ranges::transform(g_new, g, dg.begin(), std::minus<>{});
 
       // hdg = H · dg
-      Point hdg{};
-      for (auto [i, hi] : std::views::enumerate(hsn)) {
-        hdg[i] = detail::dot(hi, dg);
-      }
+      Point hdg = detail::mat_vec(hsn, dg);
 
       value_type fac = detail::dot(dg, xi);
       const value_type fae = detail::dot(dg, hdg);
@@ -100,18 +97,14 @@ template <diff::CExpression Expr> struct BFGS {
                                });
 
         // H ← H + fac·(Δp⊗Δp) − fad·(HΔg⊗HΔg) + fae·(u⊗u)
-        for (auto [i, hi] : std::views::enumerate(hsn)) {
-          for (auto j : std::views::iota(0uz, N)) {
-            hi[j] += fac * xi[i] * xi[j] - fad * hdg[i] * hdg[j] +
-                     fae * dg[i] * dg[j];
-          }
-        }
+        detail::rank1_update(hsn, fac, xi, xi);
+        detail::rank1_update(hsn, -fad, hdg, hdg);
+        detail::rank1_update(hsn, fae, dg, dg);
       }
 
       // New direction: xi = −H · g_new
-      for (auto &&[xii, hi] : std::views::zip(xi, hsn)) {
-        xii = -detail::dot(hi, g_new);
-      }
+      xi = detail::mat_vec(hsn, g_new);
+      std::ranges::transform(xi, xi.begin(), std::negate<>{});
 
       g = std::move(g_new);
       fp = fret;

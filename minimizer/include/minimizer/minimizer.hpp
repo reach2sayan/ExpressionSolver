@@ -7,3 +7,4 @@
 #include "powell.hpp"
 #include "frprmn.hpp"
 #include "bfgs.hpp"
+#include "amoeba.hpp"

@@ -7,8 +7,12 @@
 #include <cmath>
 #include <numbers>
 #include <numeric>
+#include <ranges>
 
 namespace diff::min::detail {
+
+template <typename T, std::size_t N>
+using Matrix = std::array<std::array<T, N>, N>;
 
 template <typename T, std::size_t N>
 constexpr T dot(const std::array<T, N>& a, const std::array<T, N>& b) noexcept {
@@ -18,6 +22,54 @@ constexpr T dot(const std::array<T, N>& a, const std::array<T, N>& b) noexcept {
 template <typename T, std::size_t N>
 constexpr T norm_sq(const std::array<T, N>& a) noexcept {
   return dot(a, a);
+}
+
+template <typename T, std::size_t N>
+constexpr std::array<T, N> add(const std::array<T, N>& a,
+                               const std::array<T, N>& b) noexcept {
+  std::array<T, N> r{};
+  std::ranges::transform(a, b, r.begin(), std::plus<>{});
+  return r;
+}
+
+// a ⊗ b — rank-1 outer product
+template <typename T, std::size_t N>
+constexpr Matrix<T, N> outer(const std::array<T, N>& a,
+                             const std::array<T, N>& b) noexcept {
+  Matrix<T, N> r{};
+  for (auto [i, ri] : std::views::enumerate(r))
+    std::ranges::transform(b, ri.begin(),
+                           [ai = a[i]](const T& bj) { return ai * bj; });
+  return r;
+}
+
+template <typename T, std::size_t N>
+constexpr Matrix<T, N> mat_add(const Matrix<T, N>& A,
+                               const Matrix<T, N>& B) noexcept {
+  Matrix<T, N> r{};
+  for (auto [ri, ai, bi] : std::views::zip(r, A, B))
+    std::ranges::transform(ai, bi, ri.begin(), std::plus<>{});
+  return r;
+}
+
+// M · v
+template <typename T, std::size_t N>
+constexpr std::array<T, N> mat_vec(const Matrix<T, N>& M,
+                                   const std::array<T, N>& v) noexcept {
+  std::array<T, N> r{};
+  for (auto [i, mi] : std::views::enumerate(M))
+    r[i] = dot(mi, v);
+  return r;
+}
+
+// M += s * (a ⊗ b)  — in-place rank-1 update, no temporaries
+template <typename T, std::size_t N>
+constexpr void rank1_update(Matrix<T, N>& M, const T& s,
+                            const std::array<T, N>& a,
+                            const std::array<T, N>& b) noexcept {
+  for (auto [i, mi] : std::views::enumerate(M))
+    for (auto j : std::views::iota(0uz, N))
+      mi[j] += s * a[i] * b[j];
 }
 
 // NR §10.1 bracket algorithm for any callable T(T).
