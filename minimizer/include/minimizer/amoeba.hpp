@@ -1,5 +1,6 @@
 #pragma once
 
+#include "detail.hpp"
 #include "expressions.hpp"
 #include "traits.hpp"
 #include <algorithm>
@@ -47,26 +48,18 @@ template <diff::CExpression Expr> struct Amoeba {
     return expr.eval();
   }
 
-  // Build simplex from a single starting point and uniform step size.
   constexpr Point minimize(const Point &p, const value_type &delta) {
-    Simplex s;
-    s[0] = p;
-    for (auto i : std::views::iota(0uz, N)) {
-      s[i + 1] = p;
-      s[i + 1][i] += delta;
-    }
-    return minimize(std::move(s));
+    return minimize(detail::make_simplex(p, delta));
   }
 
   constexpr Point minimize(Simplex s) {
     FVals y;
-    for (auto &&[yi, si] : std::views::zip(y, s)) {
+    for (auto &&[yi, si] : std::views::zip(y, s))
       yi = eval_at(si);
-    }
 
     Point psum{};
     for (const auto &si : s) {
-      std::ranges::transform(psum, si, psum.begin(), std::plus<>{});
+      detail::zip_inplace(psum, si, std::plus<>{});
     }
 
     for (iter = 0; iter < ITMAX; ++iter) {
@@ -104,16 +97,15 @@ template <diff::CExpression Expr> struct Amoeba {
           // Contraction failed — shrink whole simplex toward best
           for (auto [i, si] : std::views::enumerate(s)) {
             if (i != ilo) {
-              std::ranges::transform(si, s[ilo], si.begin(),
-                                     [](const auto &a, const auto &b) {
-                                       return value_type{0.5} * (a + b);
-                                     });
+              detail::zip_inplace(si, s[ilo], [](const auto &a, const auto &b) {
+                return value_type{0.5} * (a + b);
+              });
               y[i] = eval_at(si);
             }
           }
           psum = {};
           for (const auto &si : s) {
-            std::ranges::transform(psum, si, psum.begin(), std::plus<>{});
+            detail::zip_inplace(psum, si, std::plus<>{});
           }
         }
       }
@@ -135,8 +127,8 @@ private:
                            });
     const value_type ytry = eval_at(ptry);
     if (ytry < y[ihi]) {
-      std::ranges::transform(psum, ptry, psum.begin(), std::plus<>{});
-      std::ranges::transform(psum, s[ihi], psum.begin(), std::minus<>{});
+      detail::zip_inplace(psum, ptry, std::plus<>{});
+      detail::zip_inplace(psum, s[ihi], std::minus<>{});
       s[ihi] = ptry;
       y[ihi] = ytry;
     }

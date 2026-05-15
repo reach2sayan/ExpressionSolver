@@ -8,3 +8,4 @@
 #include "frprmn.hpp"
 #include "bfgs.hpp"
 #include "amoeba.hpp"
+#include "anneal.hpp"

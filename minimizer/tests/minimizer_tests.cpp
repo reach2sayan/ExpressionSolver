@@ -416,6 +416,78 @@ TEST(Amoeba, Quadratic3D) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// SimAnneal (Simulated Annealing) tests
+//
+// SA is stochastic: tolerances are generous (1e-2) and test parameters
+// are chosen to give reliable convergence across random seeds.
+// ─────────────────────────────────────────────────────────────
+
+TEST(SimAnneal, Bowl2D) {
+    // f(x,y) = (x-1)^2 + (y-2)^2 — minimum at (1,2), f=0
+    // Slow schedule so the cold Amoeba phase can converge.
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto f = (x - diff::Constant<double>{1.0}) * (x - diff::Constant<double>{1.0})
+           + (y - diff::Constant<double>{2.0}) * (y - diff::Constant<double>{2.0});
+
+    diff::min::SimAnneal sa{f, 1.0, 0.95, 20};
+    auto p = sa.minimize({3.0, 0.0}, 1.0);
+
+    EXPECT_NEAR(p[0],    1.0, 1e-3);
+    EXPECT_NEAR(p[1],    2.0, 1e-3);
+    EXPECT_NEAR(sa.fret, 0.0, 1e-5);
+}
+
+TEST(SimAnneal, Rosenbrock) {
+    // f(x,y) = (1-x)^2 + 100(y-x^2)^2 — minimum at (1,1), f=0
+    // Higher T0 enables broad exploration; slow cooling lets it settle.
+    auto x  = diff::Variable<double, 'x'>{0.0};
+    auto y  = diff::Variable<double, 'y'>{0.0};
+    auto t1 = diff::Constant<double>{1.0} - x;
+    auto t2 = y - x * x;
+    auto f  = t1 * t1 + diff::Constant<double>{100.0} * t2 * t2;
+
+    diff::min::SimAnneal sa{f, 10.0, 0.97, 30};
+    auto p = sa.minimize({-1.0, 1.0}, 0.5);
+
+    EXPECT_NEAR(p[0],    1.0, 1e-2);
+    EXPECT_NEAR(p[1],    1.0, 1e-2);
+    EXPECT_NEAR(sa.fret, 0.0, 1e-3);
+}
+
+TEST(SimAnneal, Quadratic3D) {
+    // f(x,y,z) = x^2 + 2y^2 + 3z^2 — minimum at origin
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto z = diff::Variable<double, 'z'>{0.0};
+    auto f = x * x
+           + diff::Constant<double>{2.0} * y * y
+           + diff::Constant<double>{3.0} * z * z;
+
+    diff::min::SimAnneal sa{f, 2.0, 0.95, 30};
+    auto p = sa.minimize({3.0, 3.0, 3.0}, 1.0);
+
+    EXPECT_NEAR(p[0],    0.0, 1e-3);
+    EXPECT_NEAR(p[1],    0.0, 1e-3);
+    EXPECT_NEAR(p[2],    0.0, 1e-3);
+    EXPECT_NEAR(sa.fret, 0.0, 1e-5);
+}
+
+TEST(SimAnneal, BestPointTracked) {
+    // fret must equal f(returned point) — verifies best-tracking bookkeeping
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto y = diff::Variable<double, 'y'>{0.0};
+    auto f = (x - diff::Constant<double>{1.0}) * (x - diff::Constant<double>{1.0})
+           + (y - diff::Constant<double>{2.0}) * (y - diff::Constant<double>{2.0});
+
+    diff::min::SimAnneal sa{f, 1.0, 0.9, 50};
+    auto p = sa.minimize({0.0, 0.0}, 1.0);
+
+    const double fx = sa.eval_at(p);
+    EXPECT_NEAR(sa.fret, fx, 1e-10);
+}
+
+// ─────────────────────────────────────────────────────────────
 // Compile-time / trait tests
 // ─────────────────────────────────────────────────────────────
 

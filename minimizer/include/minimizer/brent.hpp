@@ -18,8 +18,8 @@ template <diff::CExpression Expr> struct Brent : Bracketmethod<Expr> {
   using Base::cx;
   using Base::eval_at;
 
-  static constexpr diff::Constant<value_type> ZEPS{
-      std::numeric_limits<value_type>::epsilon() * 1.0e-3};
+  static constexpr value_type ZEPS =
+      std::numeric_limits<value_type>::epsilon() * static_cast<value_type>(1.0e-3);
   static constexpr int ITMAX = 100;
 
   value_type xmin{};
@@ -32,7 +32,7 @@ template <diff::CExpression Expr> struct Brent : Bracketmethod<Expr> {
 
   constexpr value_type minimize() {
     auto f = [this](const value_type &x) { return eval_at(x); };
-    xmin = detail::brent(f, ax, bx, cx, tol, ZEPS.get(), ITMAX);
+    xmin = detail::brent(f, ax, bx, cx, tol, ZEPS, ITMAX);
     fmin = eval_at(xmin);
     return xmin;
   }

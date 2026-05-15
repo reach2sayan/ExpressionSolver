@@ -26,8 +26,8 @@ template <diff::CExpression Expr> struct LinMin {
   static constexpr std::size_t N = mp::mp_size<Syms>::value;
   using Point = std::array<value_type, N>;
 
-  static constexpr diff::Constant<value_type> ZEPS{
-      std::numeric_limits<value_type>::epsilon() * 1.0e-3};
+  static constexpr value_type ZEPS =
+      std::numeric_limits<value_type>::epsilon() * static_cast<value_type>(1.0e-3);
   static constexpr int ITMAX = 100;
 
   Expr expr;
@@ -56,11 +56,11 @@ template <diff::CExpression Expr> struct LinMin {
     value_type fa = f1(ax), fb = f1(bx), fc;
     detail::bracket(f1, ax, bx, cx, fa, fb, fc);
     const value_type xmin =
-        detail::brent(f1, ax, bx, cx, tol, ZEPS.get(), ITMAX);
+        detail::brent(f1, ax, bx, cx, tol, ZEPS, ITMAX);
 
     std::ranges::transform(dir, dir.begin(),
                            [xmin](const auto &d) { return d * xmin; });
-    std::ranges::transform(p, dir, p.begin(), std::plus<>{});
+    detail::zip_inplace(p, dir, std::plus<>{});
     fret = eval_at(p);
   }
 };

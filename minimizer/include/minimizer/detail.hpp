@@ -15,18 +15,38 @@ template <typename T, std::size_t N>
 using Matrix = std::array<std::array<T, N>, N>;
 
 template <typename T, std::size_t N>
-constexpr T dot(const std::array<T, N>& a, const std::array<T, N>& b) noexcept {
+constexpr T dot(const std::array<T, N> &a, const std::array<T, N> &b) noexcept {
   return std::inner_product(a.begin(), a.end(), b.begin(), T{});
 }
 
 template <typename T, std::size_t N>
-constexpr T norm_sq(const std::array<T, N>& a) noexcept {
+constexpr T norm_sq(const std::array<T, N> &a) noexcept {
   return dot(a, a);
 }
 
+// Build an (N+1)-vertex simplex: s[0]=p, s[i+1]=p with s[i+1][i]+=delta
 template <typename T, std::size_t N>
-constexpr std::array<T, N> add(const std::array<T, N>& a,
-                               const std::array<T, N>& b) noexcept {
+constexpr std::array<std::array<T, N>, N + 1>
+make_simplex(const std::array<T, N> &p, const T &delta) noexcept {
+  std::array<std::array<T, N>, N + 1> s{};
+  s[0] = p;
+  for (std::size_t i = 0; i < N; ++i) {
+    s[i + 1] = p;
+    s[i + 1][i] += delta;
+  }
+  return s;
+}
+
+// a[i] = op(a[i], b[i])  — in-place element-wise binary op
+template <typename T, std::size_t N, typename Op>
+constexpr void zip_inplace(std::array<T, N> &a, const std::array<T, N> &b,
+                           Op op) noexcept {
+  std::ranges::transform(a, b, a.begin(), op);
+}
+
+template <typename T, std::size_t N>
+constexpr std::array<T, N> add(const std::array<T, N> &a,
+                               const std::array<T, N> &b) noexcept {
   std::array<T, N> r{};
   std::ranges::transform(a, b, r.begin(), std::plus<>{});
   return r;
@@ -34,18 +54,18 @@ constexpr std::array<T, N> add(const std::array<T, N>& a,
 
 // a ⊗ b — rank-1 outer product
 template <typename T, std::size_t N>
-constexpr Matrix<T, N> outer(const std::array<T, N>& a,
-                             const std::array<T, N>& b) noexcept {
+constexpr Matrix<T, N> outer(const std::array<T, N> &a,
+                             const std::array<T, N> &b) noexcept {
   Matrix<T, N> r{};
   for (auto [i, ri] : std::views::enumerate(r))
     std::ranges::transform(b, ri.begin(),
-                           [ai = a[i]](const T& bj) { return ai * bj; });
+                           [ai = a[i]](const T &bj) { return ai * bj; });
   return r;
 }
 
 template <typename T, std::size_t N>
-constexpr Matrix<T, N> mat_add(const Matrix<T, N>& A,
-                               const Matrix<T, N>& B) noexcept {
+constexpr Matrix<T, N> mat_add(const Matrix<T, N> &A,
+                               const Matrix<T, N> &B) noexcept {
   Matrix<T, N> r{};
   for (auto [ri, ai, bi] : std::views::zip(r, A, B))
     std::ranges::transform(ai, bi, ri.begin(), std::plus<>{});
@@ -54,8 +74,8 @@ constexpr Matrix<T, N> mat_add(const Matrix<T, N>& A,
 
 // M · v
 template <typename T, std::size_t N>
-constexpr std::array<T, N> mat_vec(const Matrix<T, N>& M,
-                                   const std::array<T, N>& v) noexcept {
+constexpr std::array<T, N> mat_vec(const Matrix<T, N> &M,
+                                   const std::array<T, N> &v) noexcept {
   std::array<T, N> r{};
   for (auto [i, mi] : std::views::enumerate(M))
     r[i] = dot(mi, v);
@@ -64,9 +84,9 @@ constexpr std::array<T, N> mat_vec(const Matrix<T, N>& M,
 
 // M += s * (a ⊗ b)  — in-place rank-1 update, no temporaries
 template <typename T, std::size_t N>
-constexpr void rank1_update(Matrix<T, N>& M, const T& s,
-                            const std::array<T, N>& a,
-                            const std::array<T, N>& b) noexcept {
+constexpr void rank1_update(Matrix<T, N> &M, const T &s,
+                            const std::array<T, N> &a,
+                            const std::array<T, N> &b) noexcept {
   for (auto [i, mi] : std::views::enumerate(M))
     for (auto j : std::views::iota(0uz, N))
       mi[j] += s * a[i] * b[j];
@@ -144,10 +164,11 @@ constexpr void bracket(F &f, T &ax, T &bx, T &cx, T &fa, T &fb, T &fc) {
 
 // NR §10.3 Brent's method for any callable T(T).
 template <diff::Numeric T, std::invocable<T> F>
-constexpr T brent(F &f, const T& ax, const T& bx, const T& cx, const T& tol, const T& zeps, const int itmax = 100) {
+constexpr T brent(F &f, const T &ax, const T &bx, const T &cx, const T &tol,
+                  const T &zeps, const int itmax = 100) {
   using std::abs;
-  using std::min;
   using std::max;
+  using std::min;
   constexpr T CGOLD = static_cast<T>(1.0 - 1.0 / std::numbers::phi_v<double>);
 
   T a = min(ax, cx), b = max(ax, cx);
