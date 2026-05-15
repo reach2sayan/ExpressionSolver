@@ -79,11 +79,12 @@ template <diff::CExpression Expr> struct BFGS {
 
       // hdg = H · dg
       Point hdg{};
-      for (auto [i, hi] : std::views::enumerate(hsn))
+      for (auto [i, hi] : std::views::enumerate(hsn)) {
         hdg[i] = detail::dot(hi, dg);
+      }
 
-      value_type       fac   = detail::dot(dg, xi);
-      const value_type fae   = detail::dot(dg, hdg);
+      value_type fac = detail::dot(dg, xi);
+      const value_type fae = detail::dot(dg, hdg);
       const value_type sumdg = detail::norm_sq(dg);
       const value_type sumxi = detail::norm_sq(xi);
 
@@ -108,8 +109,9 @@ template <diff::CExpression Expr> struct BFGS {
       }
 
       // New direction: xi = −H · g_new
-      for (auto&& [xii, hi] : std::views::zip(xi, hsn))
+      for (auto &&[xii, hi] : std::views::zip(xi, hsn)) {
         xii = -detail::dot(hi, g_new);
+      }
 
       g = std::move(g_new);
       fp = fret;
