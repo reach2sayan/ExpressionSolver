@@ -1,5 +1,7 @@
 #pragma once
 
+#include "expressions.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -8,7 +10,7 @@ namespace diff::min::detail {
 
 // NR §10.1 bracket algorithm for any callable T(T).
 // fa = f(ax) and fb = f(bx) must be set by the caller before entry.
-template <typename T, std::invocable<T> F>
+template <diff::Numeric T, std::invocable<T> F>
 constexpr void bracket(F &f, T &ax, T &bx, T &cx, T &fa, T &fb, T &fc) {
   using std::abs;
   using std::max;
@@ -77,7 +79,7 @@ constexpr void bracket(F &f, T &ax, T &bx, T &cx, T &fa, T &fb, T &fc) {
 }
 
 // NR §10.3 Brent's method for any callable T(T).
-template <typename T, std::invocable<T> F>
+template <diff::Numeric T, std::invocable<T> F>
 constexpr T brent(F &f, const T& ax, const T& bx, const T& cx, const T& tol, const T& zeps, const int itmax = 100) {
   using std::abs;
   using std::min;

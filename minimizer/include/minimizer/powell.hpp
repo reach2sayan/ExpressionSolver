@@ -1,6 +1,7 @@
 #pragma once
 
 #include "linmin.hpp"
+#include <algorithm>
 #include <ranges>
 
 namespace diff::min {
@@ -67,11 +68,10 @@ template <diff::CExpression Expr> struct Powell {
       }
 
       Point ptt{}, xit{};
-      for (auto &&[ptti, xiti, pti, pi] : std::views::zip(ptt, xit, pt, p)) {
-        ptti = value_type{2} * pi - pti;
-        xiti = pi - pti;
-        pti = pi;
-      }
+      std::ranges::transform(p, pt, ptt.begin(),
+        [](const auto& pi, const auto& pti) { return value_type{2} * pi - pti; });
+      std::ranges::transform(p, pt, xit.begin(), std::minus<>{});
+      pt = p;
 
       const value_type fptt = eval_at(ptt);
       if (fptt < fp) {

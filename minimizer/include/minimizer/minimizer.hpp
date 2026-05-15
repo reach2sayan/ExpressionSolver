@@ -5,3 +5,5 @@
 #include "brent.hpp"
 #include "linmin.hpp"
 #include "powell.hpp"
+#include "frprmn.hpp"
+#include "bfgs.hpp"

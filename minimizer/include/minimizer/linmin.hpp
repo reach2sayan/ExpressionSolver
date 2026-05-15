@@ -4,10 +4,10 @@
 #include "expressions.hpp"
 #include "traits.hpp"
 #include "values.hpp"
+#include <algorithm>
 #include <array>
 #include <boost/mp11/list.hpp>
 #include <limits>
-#include <ranges>
 
 namespace diff::min {
 
@@ -46,9 +46,9 @@ template <diff::CExpression Expr> struct LinMin {
   constexpr void minimize(Point &p, Point &dir) {
     auto f1 = [&](const value_type &t) -> value_type {
       Point pt;
-      for (auto &&[pti, pi, diri] : std::views::zip(pt, p, dir)) {
-        pti = pi + t * diri;
-      }
+      std::ranges::transform(
+          p, dir, pt.begin(),
+          [&t](const auto &pi, const auto &diri) { return pi + t * diri; });
       return eval_at(pt);
     };
 
@@ -58,10 +58,9 @@ template <diff::CExpression Expr> struct LinMin {
     const value_type xmin =
         detail::brent(f1, ax, bx, cx, tol, ZEPS.get(), ITMAX);
 
-    for (auto &&[diri, pi] : std::views::zip(dir, p)) {
-      diri *= xmin;
-      pi += diri;
-    }
+    std::ranges::transform(dir, dir.begin(),
+                           [xmin](const auto &d) { return d * xmin; });
+    std::ranges::transform(p, dir, p.begin(), std::plus<>{});
     fret = eval_at(p);
   }
 };
