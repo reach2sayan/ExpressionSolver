@@ -73,6 +73,12 @@ struct IOperators {
   }
 
   template <CExpression Expr>
+  friend constexpr auto operator-(const Expr &a) noexcept {
+    using value_type = typename Expr::value_type;
+    return MonoExpression<NegateOp<value_type>, Expr>{a};
+  }
+
+  template <CExpression Expr>
   friend constexpr auto sin(const Expr &a) noexcept {
     using value_type = typename Expr::value_type;
     return MonoExpression<SineOp<value_type>, Expr>{a};

@@ -169,8 +169,9 @@ template <diff::CExpression Expr> struct SimAnneal {
       }
 
       const value_type denom = std::abs(y[ihi]) + std::abs(y[ilo]) + ATINY;
-      if (value_type{2} * std::abs(y[ihi] - y[ilo]) / denom < ftol)
+      if (value_type{2} * std::abs(y[ihi] - y[ilo]) / denom < ftol) {
         break;
+      }
 
       value_type ytry = amotry_cold(s, y, psum, ihi, value_type{-1});
       if (ytry <= y[ilo]) {
@@ -205,7 +206,7 @@ template <diff::CExpression Expr> struct SimAnneal {
 
 private:
   template <std::invocable<> Bolt>
-  value_type amotry(Simplex &s, FVals &y, FVals &yy, Point &psum,
+  constexpr value_type amotry(Simplex &s, FVals &y, FVals &yy, Point &psum,
                     const std::size_t ihi, Bolt &bolt, const value_type &fac) {
     const value_type fac1 = (value_type{1} - fac) / static_cast<value_type>(N);
     const value_type fac2 = fac1 - fac;
@@ -221,7 +222,7 @@ private:
     return ytry;
   }
 
-  value_type amotry_cold(Simplex &s, FVals &y, Point &psum,
+  constexpr value_type amotry_cold(Simplex &s, FVals &y, Point &psum,
                          const std::size_t ihi, const value_type &fac) {
     const value_type fac1 = (value_type{1} - fac) / static_cast<value_type>(N);
     const value_type fac2 = fac1 - fac;

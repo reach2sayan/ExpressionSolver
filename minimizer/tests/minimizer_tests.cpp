@@ -654,3 +654,112 @@ TEST(DBFGS, Quadratic3D) {
     EXPECT_NEAR(p[2],      0.0, kTol);
     EXPECT_NEAR(bfgs.fret, 0.0, kTol * kTol);
 }
+
+// ─────────────────────────────────────────────────────────────
+// LevenbergMarquardt tests
+// ─────────────────────────────────────────────────────────────
+
+// Helper: mp_list of integral_constant<char,C> — matches the symbol list type
+// used by extract_symbols_from_expr_t.
+template <char... Cs>
+using sym_list = boost::mp11::mp_list<std::integral_constant<char, Cs>...>;
+
+// Build a DataPoint for a 1D input model.
+template <typename LMT>
+typename LMT::DataPoint make_pt(double x_val, double y_val, double w = 1.0) {
+    return {typename LMT::InputVec{x_val}, y_val, w};
+}
+
+TEST(LevenbergMarquardt, LinearModel) {
+    // f(x; a, b) = a*x + b  — true params a=2, b=3
+    auto a = diff::Variable<double, 'a'>{0.0};
+    auto b = diff::Variable<double, 'b'>{0.0};
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto model = a * x + b;
+
+    using ParamSyms = sym_list<'a', 'b'>;
+    using InputSyms = sym_list<'x'>;
+    diff::min::LevenbergMarquardt<decltype(model), ParamSyms, InputSyms> lm{model};
+
+    std::vector<decltype(lm)::DataPoint> data;
+    for (int i = 0; i < 10; ++i) {
+        double xi = static_cast<double>(i);
+        data.push_back(make_pt<decltype(lm)>(xi, 2.0 * xi + 3.0));
+    }
+
+    decltype(lm)::ParamVec p0{1.0, 1.0};
+    auto p = lm.fit(p0, data);
+
+    EXPECT_NEAR(p[0], 2.0, 1e-6); // a
+    EXPECT_NEAR(p[1], 3.0, 1e-6); // b
+}
+
+TEST(LevenbergMarquardt, ExponentialDecay) {
+    // f(x; a, b) = a * exp(-b*x)  — true params a=5, b=0.5
+    auto a = diff::Variable<double, 'a'>{0.0};
+    auto b = diff::Variable<double, 'b'>{0.0};
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto model = a * exp(-b * x);
+
+    using ParamSyms = sym_list<'a', 'b'>;
+    using InputSyms = sym_list<'x'>;
+    diff::min::LevenbergMarquardt<decltype(model), ParamSyms, InputSyms> lm{model};
+
+    std::vector<decltype(lm)::DataPoint> data;
+    for (int i = 0; i < 15; ++i) {
+        double xi = 0.2 * i;
+        data.push_back(make_pt<decltype(lm)>(xi, 5.0 * std::exp(-0.5 * xi)));
+    }
+
+    decltype(lm)::ParamVec p0{3.0, 1.0}; // perturbed initial guess
+    auto p = lm.fit(p0, data);
+
+    EXPECT_NEAR(p[0], 5.0, 1e-5); // a
+    EXPECT_NEAR(p[1], 0.5, 1e-5); // b
+}
+
+TEST(LevenbergMarquardt, Gaussian) {
+    // f(x; a, b, c) = a * exp(-(x-b)^2 / (2*c^2))  true: a=4, b=2, c=1
+    auto a = diff::Variable<double, 'a'>{0.0};
+    auto b = diff::Variable<double, 'b'>{0.0};
+    auto c = diff::Variable<double, 'c'>{0.0};
+    auto x = diff::Variable<double, 'x'>{0.0};
+    auto two  = diff::Constant<double>{2.0};
+    auto model = a * exp(-(x - b) * (x - b) / (two * c * c));
+
+    using ParamSyms = sym_list<'a', 'b', 'c'>;
+    using InputSyms = sym_list<'x'>;
+    diff::min::LevenbergMarquardt<decltype(model), ParamSyms, InputSyms> lm{model};
+
+    std::vector<decltype(lm)::DataPoint> data;
+    for (int i = 0; i < 20; ++i) {
+        double xi = -3.0 + 0.3 * i;
+        data.push_back(make_pt<decltype(lm)>(
+            xi, 4.0 * std::exp(-(xi - 2.0) * (xi - 2.0) / 2.0)));
+    }
+
+    decltype(lm)::ParamVec p0{3.0, 1.5, 0.8};
+    auto p = lm.fit(p0, data);
+
+    EXPECT_NEAR(p[0], 4.0, 1e-4); // a
+    EXPECT_NEAR(p[1], 2.0, 1e-4); // b (centre)
+    EXPECT_NEAR(p[2], 1.0, 1e-4); // c (width)
+}
+
+TEST(LevenbergMarquardt, NoInputVarSingleParam) {
+    // f(a) = a — single parameter, no input variable.
+    // Multiple data points: {3,4,5,6,7}; LM should converge to a = mean = 5.
+    auto a = diff::Variable<double, 'a'>{0.0};
+    auto model = a + diff::Constant<double>{0.0}; // wrap to ensure CExpression
+
+    using LMT = diff::min::LevenbergMarquardt<decltype(model)>;
+    LMT lm{model};
+
+    std::vector<LMT::DataPoint> data;
+    for (double target : {3.0, 4.0, 5.0, 6.0, 7.0})
+        data.push_back({LMT::InputVec{}, target, 1.0});
+
+    auto p = lm.fit(LMT::ParamVec{0.0}, data);
+
+    EXPECT_NEAR(p[0], 5.0, 1e-6); // mean of {3,4,5,6,7}
+}

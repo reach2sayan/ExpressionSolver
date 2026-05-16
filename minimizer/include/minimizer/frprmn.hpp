@@ -39,17 +39,17 @@ struct Frprmn {
                             value_type ftol_ = static_cast<value_type>(3.0e-8))
       : lm(std::move(e), ftol_), ftol(ftol_) {}
 
-  value_type eval_at(const Point &p) { return lm.eval_at(p); }
+  constexpr value_type eval_at(const Point &p) { return lm.eval_at(p); }
 
   // Returns {f(p), ∇f(p)}, updating expr state to p.
-  std::pair<value_type, Point> eval_grad(const Point &p) {
+  constexpr std::pair<value_type, Point> eval_grad(const Point &p) {
     lm.expr.update(Syms{}, p);
     const auto g_arr = diff::gradient<diff::DiffMode::Reverse>(lm.expr);
     Point g = Eigen::Map<const Point>(g_arr.data());
     return {lm.expr.eval(), std::move(g)};
   }
 
-  Point minimize(Point p) {
+  constexpr Point minimize(Point p) {
     using std::abs;
 
     auto [fp, g] = eval_grad(p);

@@ -11,3 +11,4 @@
 #include "bfgs.hpp"
 #include "amoeba.hpp"
 #include "anneal.hpp"
+#include "levmar.hpp"

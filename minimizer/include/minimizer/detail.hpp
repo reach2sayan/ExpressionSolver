@@ -182,7 +182,7 @@ constexpr T brent(F &f, const T &ax, const T &bx, const T &cx, const T &tol,
 // Uses secant interpolation on f′; bisects toward the zero-crossing side
 // when the secant step is outside the bracket or not improving.
 template <diff::Numeric T, typename F>
-T dbrent(F &f, const T &ax, const T &bx, const T &cx,
+constexpr T dbrent(F &f, const T &ax, const T &bx, const T &cx,
          const T &tol, const T &zeps, int itmax = 100) {
   using std::abs;
 
