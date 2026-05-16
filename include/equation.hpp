@@ -333,7 +333,7 @@ public:
 
   // Iterate over each sub-expression, passing it by non-const reference to f.
   // Allows external code to call update(external_syms, x) on each expression
-  // independently, e.g. from AugLag which uses the objective's symbol set.
+  // independently
   template <typename F> constexpr void for_each_expr(F &&f) noexcept {
     std::apply([&](auto &...exprs) noexcept { (f(exprs), ...); }, expressions);
   }
