@@ -1,8 +1,6 @@
 #pragma once
 
 #include "linmin.hpp"
-#include <algorithm>
-#include <ranges>
 
 namespace diff::min {
 
@@ -15,9 +13,10 @@ namespace diff::min {
 template <diff::CExpression Expr> struct Powell {
   using value_type = typename LinMin<Expr>::value_type;
   using Point = typename LinMin<Expr>::Point;
-  using Dirs = std::array<Point, LinMin<Expr>::N>;
-
   static constexpr std::size_t N = LinMin<Expr>::N;
+  // Each column is one search direction; starts as identity (coordinate axes).
+  using Dirs = Eigen::Matrix<value_type, static_cast<int>(N), static_cast<int>(N)>;
+
   static constexpr diff::Constant<value_type> FTINY{1.0e-25};
   static constexpr int ITMAX = 200;
 
@@ -34,14 +33,10 @@ template <diff::CExpression Expr> struct Powell {
 
   // Minimize from p using coordinate-axis initial directions.
   constexpr Point minimize(Point p) {
-    Dirs xi{};
-    for (auto i : std::views::iota(0uz, N)) {
-      xi[i][i] = value_type{1};
-    }
-    return minimize(std::move(p), xi);
+    return minimize(std::move(p), Dirs::Identity());
   }
 
-  // Minimize from p with explicit initial direction set xi.
+  // Minimize from p with explicit initial direction set xi (columns = directions).
   constexpr Point minimize(Point p, Dirs xi) {
     using std::abs;
     fret = eval_at(p);
@@ -49,16 +44,16 @@ template <diff::CExpression Expr> struct Powell {
 
     for (iter = 0; iter < ITMAX; ++iter) {
       const value_type fp = fret;
-      std::size_t ibig = 0;
+      int ibig = 0;
       value_type del{};
 
-      for (auto [i, xii] : std::views::enumerate(xi)) {
+      for (int i = 0; i < static_cast<int>(N); ++i) {
         const value_type fptt = fret;
-        lm.minimize(p, xii);
+        lm.minimize(p, xi.col(i));
         fret = lm.fret;
         if (abs(fptt - fret) > del) {
           del = abs(fptt - fret);
-          ibig = static_cast<std::size_t>(i);
+          ibig = i;
         }
       }
 
@@ -67,10 +62,8 @@ template <diff::CExpression Expr> struct Powell {
         return p;
       }
 
-      Point ptt{}, xit{};
-      std::ranges::transform(p, pt, ptt.begin(),
-        [](const auto& pi, const auto& pti) { return value_type{2} * pi - pti; });
-      std::ranges::transform(p, pt, xit.begin(), std::minus<>{});
+      const Point ptt = value_type{2} * p - pt;
+      Point xit = p - pt;
       pt = p;
 
       const value_type fptt = eval_at(ptt);
@@ -81,8 +74,8 @@ template <diff::CExpression Expr> struct Powell {
             b * b * del) {
           lm.minimize(p, xit);
           fret = lm.fret;
-          xi[ibig] = xi[N - 1];
-          xi[N - 1] = xit;
+          xi.col(ibig) = xi.col(static_cast<int>(N) - 1);
+          xi.col(static_cast<int>(N) - 1) = xit;
         }
       }
     }

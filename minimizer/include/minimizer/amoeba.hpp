@@ -3,7 +3,7 @@
 #include "detail.hpp"
 #include "expressions.hpp"
 #include "traits.hpp"
-#include <algorithm>
+#include <Eigen/Dense>
 #include <array>
 #include <boost/mp11/list.hpp>
 #include <ranges>
@@ -27,7 +27,7 @@ template <diff::CExpression Expr> struct Amoeba {
   using value_type = typename Expr::value_type;
   using Syms = diff::extract_symbols_from_expr_t<Expr>;
   static constexpr std::size_t N = mp::mp_size<Syms>::value;
-  using Point = std::array<value_type, N>;
+  using Point = Eigen::Vector<value_type, static_cast<int>(N)>;
   using Simplex = std::array<Point, N + 1>;
   using FVals = std::array<value_type, N + 1>;
 
@@ -43,24 +43,23 @@ template <diff::CExpression Expr> struct Amoeba {
                             value_type ftol_ = static_cast<value_type>(3.0e-8))
       : expr(std::move(e)), ftol(ftol_) {}
 
-  constexpr value_type eval_at(const Point &p) {
+  value_type eval_at(const Point &p) {
     expr.update(Syms{}, p);
     return expr.eval();
   }
 
-  constexpr Point minimize(const Point &p, const value_type &delta) {
+  Point minimize(const Point &p, const value_type &delta) {
     return minimize(detail::make_simplex(p, delta));
   }
 
-  constexpr Point minimize(Simplex s) {
+  Point minimize(Simplex s) {
     FVals y;
     for (auto &&[yi, si] : std::views::zip(y, s))
       yi = eval_at(si);
 
-    Point psum{};
-    for (const auto &si : s) {
-      detail::zip_inplace(psum, si, std::plus<>{});
-    }
+    Point psum = Point::Zero();
+    for (const auto &si : s)
+      psum += si;
 
     for (iter = 0; iter < ITMAX; ++iter) {
       // Indices of best (ilo), worst (ihi), second-worst (inhi)
@@ -88,25 +87,21 @@ template <diff::CExpression Expr> struct Amoeba {
 
       value_type ytry = amotry(s, y, psum, ihi, value_type{-1});
       if (ytry <= y[ilo]) {
-        amotry(s, y, psum, ihi,
-               value_type{2}); // reflection good — try expansion
+        amotry(s, y, psum, ihi, value_type{2});
       } else if (ytry >= y[inhi]) {
         const value_type ysave = y[ihi];
-        ytry = amotry(s, y, psum, ihi, value_type{0.5}); // contraction
+        ytry = amotry(s, y, psum, ihi, value_type{0.5});
         if (ytry >= ysave) {
           // Contraction failed — shrink whole simplex toward best
           for (auto [i, si] : std::views::enumerate(s)) {
             if (i != ilo) {
-              detail::zip_inplace(si, s[ilo], [](const auto &a, const auto &b) {
-                return value_type{0.5} * (a + b);
-              });
+              si = value_type{0.5} * (si + s[ilo]);
               y[i] = eval_at(si);
             }
           }
-          psum = {};
-          for (const auto &si : s) {
-            detail::zip_inplace(psum, si, std::plus<>{});
-          }
+          psum = Point::Zero();
+          for (const auto &si : s)
+            psum += si;
         }
       }
     }
@@ -116,19 +111,14 @@ template <diff::CExpression Expr> struct Amoeba {
   }
 
 private:
-  constexpr value_type amotry(Simplex &s, FVals &y, Point &psum,
-                              const std::size_t ihi, const value_type &fac) {
+  value_type amotry(Simplex &s, FVals &y, Point &psum,
+                    const std::size_t ihi, const value_type &fac) {
     const value_type fac1 = (value_type{1} - fac) / static_cast<value_type>(N);
     const value_type fac2 = fac1 - fac;
-    Point ptry{};
-    std::ranges::transform(psum, s[ihi], ptry.begin(),
-                           [fac1, fac2](const auto &ps, const auto &sh) {
-                             return fac1 * ps - fac2 * sh;
-                           });
+    const Point ptry = fac1 * psum - fac2 * s[ihi];
     const value_type ytry = eval_at(ptry);
     if (ytry < y[ihi]) {
-      detail::zip_inplace(psum, ptry, std::plus<>{});
-      detail::zip_inplace(psum, s[ihi], std::minus<>{});
+      psum += ptry - s[ihi];
       s[ihi] = ptry;
       y[ihi] = ytry;
     }

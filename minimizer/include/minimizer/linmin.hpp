@@ -3,9 +3,7 @@
 #include "detail.hpp"
 #include "expressions.hpp"
 #include "traits.hpp"
-#include "values.hpp"
-#include <algorithm>
-#include <array>
+#include <Eigen/Dense>
 #include <boost/mp11/list.hpp>
 #include <limits>
 
@@ -24,10 +22,11 @@ template <diff::CExpression Expr> struct LinMin {
   using value_type = typename Expr::value_type;
   using Syms = diff::extract_symbols_from_expr_t<Expr>;
   static constexpr std::size_t N = mp::mp_size<Syms>::value;
-  using Point = std::array<value_type, N>;
+  using Point = Eigen::Vector<value_type, static_cast<int>(N)>;
 
   static constexpr value_type ZEPS =
-      std::numeric_limits<value_type>::epsilon() * static_cast<value_type>(1.0e-3);
+      std::numeric_limits<value_type>::epsilon() *
+      static_cast<value_type>(1.0e-3);
   static constexpr int ITMAX = 100;
 
   Expr expr;
@@ -43,24 +42,18 @@ template <diff::CExpression Expr> struct LinMin {
     return expr.eval();
   }
 
-  constexpr void minimize(Point &p, Point &dir) {
+  constexpr void minimize(Point &p, Eigen::Ref<Point> dir) {
     auto f1 = [&](const value_type &t) -> value_type {
-      Point pt;
-      std::ranges::transform(
-          p, dir, pt.begin(),
-          [&t](const auto &pi, const auto &diri) { return pi + t * diri; });
-      return eval_at(pt);
+      return eval_at(p + t * dir);
     };
 
     value_type ax{0}, bx{1}, cx;
     value_type fa = f1(ax), fb = f1(bx), fc;
     detail::bracket(f1, ax, bx, cx, fa, fb, fc);
-    const value_type xmin =
-        detail::brent(f1, ax, bx, cx, tol, ZEPS, ITMAX);
+    const value_type xmin = detail::brent(f1, ax, bx, cx, tol, ZEPS, ITMAX);
 
-    std::ranges::transform(dir, dir.begin(),
-                           [xmin](const auto &d) { return d * xmin; });
-    detail::zip_inplace(p, dir, std::plus<>{});
+    dir *= xmin;
+    p += dir;
     fret = eval_at(p);
   }
 };

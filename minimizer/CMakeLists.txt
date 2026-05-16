@@ -5,7 +5,7 @@ target_include_directories(minimizer
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(minimizer PUBLIC diff)
+target_link_libraries(minimizer PUBLIC diff Eigen3::Eigen)
 
 set_target_properties(minimizer PROPERTIES
     CXX_STANDARD 23

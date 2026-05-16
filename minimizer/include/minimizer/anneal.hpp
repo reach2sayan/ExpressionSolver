@@ -3,7 +3,7 @@
 #include "detail.hpp"
 #include "expressions.hpp"
 #include "traits.hpp"
-#include <algorithm>
+#include <Eigen/Dense>
 #include <array>
 #include <boost/mp11/list.hpp>
 #include <cmath>
@@ -30,7 +30,7 @@ template <diff::CExpression Expr> struct SimAnneal {
   using value_type = typename Expr::value_type;
   using Syms = diff::extract_symbols_from_expr_t<Expr>;
   static constexpr std::size_t N = mp::mp_size<Syms>::value;
-  using Point = std::array<value_type, N>;
+  using Point = Eigen::Vector<value_type, static_cast<int>(N)>;
   using Simplex = std::array<Point, N + 1>;
   using FVals = std::array<value_type, N + 1>;
 
@@ -46,11 +46,11 @@ template <diff::CExpression Expr> struct SimAnneal {
   const value_type ftol;
   const value_type cold_delta;
 
-  explicit SimAnneal(Expr e, value_type T0 = value_type{1},
-                     value_type cool = static_cast<value_type>(0.9),
-                     int epoch = 100,
-                     value_type ftol_ = static_cast<value_type>(3.0e-8),
-                     value_type cold_delta_ = static_cast<value_type>(0.1))
+  constexpr explicit SimAnneal(
+      Expr e, value_type T0 = value_type{1},
+      value_type cool = static_cast<value_type>(0.9), int epoch = 100,
+      value_type ftol_ = static_cast<value_type>(3.0e-8),
+      value_type cold_delta_ = static_cast<value_type>(0.1))
       : expr(std::move(e)), temperature(T0), cooling(cool), epoch_steps(epoch),
         ftol(ftol_), cold_delta(cold_delta_) {}
 
@@ -63,7 +63,7 @@ template <diff::CExpression Expr> struct SimAnneal {
     return minimize(detail::make_simplex(p, delta));
   }
 
-  Point minimize(Simplex s) {
+  constexpr Point minimize(Simplex s) {
     std::mt19937_64 rng{std::random_device{}()};
     std::uniform_real_distribution<value_type> udist{
         std::numeric_limits<value_type>::epsilon(), value_type{1}};
@@ -84,15 +84,16 @@ template <diff::CExpression Expr> struct SimAnneal {
     value_type ybest = y[ib];
     Point pbest = s[ib];
 
-    Point psum{};
-    for (const auto &si : s)
-      detail::zip_inplace(psum, si, std::plus<>{});
+    Point psum = Point::Zero();
+    for (const auto &si : s) {
+      psum += si;
+    }
 
     for (iter = 0; iter < NMAX && temperature > TINY; ++iter) {
       if (iter > 0 && iter % epoch_steps == 0) {
         temperature *= cooling;
-        for (auto i : std::views::iota(0uz, N + 1))
-          yy[i] = y[i] + bolt();
+        for (auto &&[yyi, yi] : std::views::zip(yy, y))
+          yyi = yi + bolt();
       }
 
       const std::size_t ilo =
@@ -124,16 +125,14 @@ template <diff::CExpression Expr> struct SimAnneal {
         if (ytry >= ysave) {
           for (auto [i, si] : std::views::enumerate(s)) {
             if (static_cast<std::size_t>(i) != ilo) {
-              detail::zip_inplace(si, s[ilo], [](const auto &a, const auto &b) {
-                return value_type{0.5} * (a + b);
-              });
+              si = value_type{0.5} * (si + s[ilo]);
               y[i] = eval_at(si);
               yy[i] = y[i] + bolt();
             }
           }
-          psum = {};
+          psum = Point::Zero();
           for (const auto &si : s)
-            detail::zip_inplace(psum, si, std::plus<>{});
+            psum += si;
         }
       }
     }
@@ -145,9 +144,9 @@ template <diff::CExpression Expr> struct SimAnneal {
     for (auto i : std::views::iota(0uz, N + 1))
       y[i] = eval_at(s[i]);
 
-    psum = {};
+    psum = Point::Zero();
     for (const auto &si : s)
-      detail::zip_inplace(psum, si, std::plus<>{});
+      psum += si;
 
     static constexpr value_type ATINY{1.0e-20};
     for (int cold = 0; cold < NMAX; ++cold, ++iter) {
@@ -182,15 +181,13 @@ template <diff::CExpression Expr> struct SimAnneal {
         if (ytry >= ysave) {
           for (auto [i, si] : std::views::enumerate(s)) {
             if (static_cast<std::size_t>(i) != ilo) {
-              detail::zip_inplace(si, s[ilo], [](const auto &a, const auto &b) {
-                return value_type{0.5} * (a + b);
-              });
+              si = value_type{0.5} * (si + s[ilo]);
               y[i] = eval_at(si);
             }
           }
-          psum = {};
+          psum = Point::Zero();
           for (const auto &si : s)
-            detail::zip_inplace(psum, si, std::plus<>{});
+            psum += si;
         }
       }
     }
@@ -212,16 +209,11 @@ private:
                     const std::size_t ihi, Bolt &bolt, const value_type &fac) {
     const value_type fac1 = (value_type{1} - fac) / static_cast<value_type>(N);
     const value_type fac2 = fac1 - fac;
-    Point ptry{};
-    std::ranges::transform(psum, s[ihi], ptry.begin(),
-                           [fac1, fac2](const auto &ps, const auto &sh) {
-                             return fac1 * ps - fac2 * sh;
-                           });
+    const Point ptry = fac1 * psum - fac2 * s[ihi];
     const value_type ytry_real = eval_at(ptry);
     const value_type ytry = ytry_real + bolt();
     if (ytry < yy[ihi]) {
-      detail::zip_inplace(psum, ptry, std::plus<>{});
-      detail::zip_inplace(psum, s[ihi], std::minus<>{});
+      psum += ptry - s[ihi];
       s[ihi] = ptry;
       y[ihi] = ytry_real;
       yy[ihi] = ytry;
@@ -233,15 +225,10 @@ private:
                          const std::size_t ihi, const value_type &fac) {
     const value_type fac1 = (value_type{1} - fac) / static_cast<value_type>(N);
     const value_type fac2 = fac1 - fac;
-    Point ptry{};
-    std::ranges::transform(psum, s[ihi], ptry.begin(),
-                           [fac1, fac2](const auto &ps, const auto &sh) {
-                             return fac1 * ps - fac2 * sh;
-                           });
+    const Point ptry = fac1 * psum - fac2 * s[ihi];
     const value_type ytry = eval_at(ptry);
     if (ytry < y[ihi]) {
-      detail::zip_inplace(psum, ptry, std::plus<>{});
-      detail::zip_inplace(psum, s[ihi], std::minus<>{});
+      psum += ptry - s[ihi];
       s[ihi] = ptry;
       y[ihi] = ytry;
     }

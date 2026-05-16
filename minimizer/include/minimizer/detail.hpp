@@ -2,94 +2,23 @@
 
 #include "expressions.hpp"
 
+#include <Eigen/Dense>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <numbers>
-#include <numeric>
-#include <ranges>
 
 namespace diff::min::detail {
 
-template <typename T, std::size_t N>
-using Matrix = std::array<std::array<T, N>, N>;
-
-template <typename T, std::size_t N>
-constexpr T dot(const std::array<T, N> &a, const std::array<T, N> &b) noexcept {
-  return std::inner_product(a.begin(), a.end(), b.begin(), T{});
-}
-
-template <typename T, std::size_t N>
-constexpr T norm_sq(const std::array<T, N> &a) noexcept {
-  return dot(a, a);
-}
-
 // Build an (N+1)-vertex simplex: s[0]=p, s[i+1]=p with s[i+1][i]+=delta
-template <typename T, std::size_t N>
-constexpr std::array<std::array<T, N>, N + 1>
-make_simplex(const std::array<T, N> &p, const T &delta) noexcept {
-  std::array<std::array<T, N>, N + 1> s{};
-  s[0] = p;
-  for (std::size_t i = 0; i < N; ++i) {
-    s[i + 1] = p;
+template <typename T, int N>
+std::array<Eigen::Vector<T, N>, N + 1>
+constexpr make_simplex(const Eigen::Vector<T, N> &p, const T &delta) noexcept {
+  std::array<Eigen::Vector<T, N>, N + 1> s;
+  std::fill(s.begin(), s.end(), p);
+  for (int i = 0; i < N; ++i)
     s[i + 1][i] += delta;
-  }
   return s;
-}
-
-// a[i] = op(a[i], b[i])  — in-place element-wise binary op
-template <typename T, std::size_t N, typename Op>
-constexpr void zip_inplace(std::array<T, N> &a, const std::array<T, N> &b,
-                           Op op) noexcept {
-  std::ranges::transform(a, b, a.begin(), op);
-}
-
-template <typename T, std::size_t N>
-constexpr std::array<T, N> add(const std::array<T, N> &a,
-                               const std::array<T, N> &b) noexcept {
-  std::array<T, N> r{};
-  std::ranges::transform(a, b, r.begin(), std::plus<>{});
-  return r;
-}
-
-// a ⊗ b — rank-1 outer product
-template <typename T, std::size_t N>
-constexpr Matrix<T, N> outer(const std::array<T, N> &a,
-                             const std::array<T, N> &b) noexcept {
-  Matrix<T, N> r{};
-  for (auto [i, ri] : std::views::enumerate(r))
-    std::ranges::transform(b, ri.begin(),
-                           [ai = a[i]](const T &bj) { return ai * bj; });
-  return r;
-}
-
-template <typename T, std::size_t N>
-constexpr Matrix<T, N> mat_add(const Matrix<T, N> &A,
-                               const Matrix<T, N> &B) noexcept {
-  Matrix<T, N> r{};
-  for (auto [ri, ai, bi] : std::views::zip(r, A, B))
-    std::ranges::transform(ai, bi, ri.begin(), std::plus<>{});
-  return r;
-}
-
-// M · v
-template <typename T, std::size_t N>
-constexpr std::array<T, N> mat_vec(const Matrix<T, N> &M,
-                                   const std::array<T, N> &v) noexcept {
-  std::array<T, N> r{};
-  for (auto [i, mi] : std::views::enumerate(M))
-    r[i] = dot(mi, v);
-  return r;
-}
-
-// M += s * (a ⊗ b)  — in-place rank-1 update, no temporaries
-template <typename T, std::size_t N>
-constexpr void rank1_update(Matrix<T, N> &M, const T &s,
-                            const std::array<T, N> &a,
-                            const std::array<T, N> &b) noexcept {
-  for (auto [i, mi] : std::views::enumerate(M))
-    for (auto j : std::views::iota(0uz, N))
-      mi[j] += s * a[i] * b[j];
 }
 
 // NR §10.1 bracket algorithm for any callable T(T).
@@ -242,6 +171,80 @@ constexpr T brent(F &f, const T &ax, const T &bx, const T &cx, const T &tol,
       } else if (fu <= fv || v == x || v == w) {
         v = u;
         fv = fu;
+      }
+    }
+  }
+  return x;
+}
+
+// NR §10.4 Dbrent — Brent's method with derivative information.
+// Functor F must expose operator()(T) (value) and df(T) (derivative).
+// Uses secant interpolation on f′; bisects toward the zero-crossing side
+// when the secant step is outside the bracket or not improving.
+template <diff::Numeric T, typename F>
+T dbrent(F &f, const T &ax, const T &bx, const T &cx,
+         const T &tol, const T &zeps, int itmax = 100) {
+  using std::abs;
+
+  T a = std::min(ax, cx), b = std::max(ax, cx);
+  T x = bx, w = bx, v = bx;
+  T fx = f(bx), fw = fx, fv = fx;
+  T dx = f.df(bx), dw = dx, dv = dx;
+  T d{}, e{};
+
+  for (int i = 0; i < itmax; ++i) {
+    const T xm   = T{0.5} * (a + b);
+    const T tol1 = tol * abs(x) + zeps;
+    const T tol2 = T{2} * tol1;
+    if (abs(x - xm) <= tol2 - T{0.5} * (b - a))
+      return x;
+
+    if (abs(e) > tol1) {
+      // Attempt secant steps using (x,w) and (x,v) pairs
+      T d1 = T{2} * (b - a), d2 = d1;
+      if (dw != dx) d1 = (w - x) * dx / (dx - dw);
+      if (dv != dx) d2 = (v - x) * dx / (dx - dv);
+      const T u1 = x + d1, u2 = x + d2;
+      const bool ok1 = (a - u1) * (u1 - b) > T{} && dx * d1 <= T{};
+      const bool ok2 = (a - u2) * (u2 - b) > T{} && dx * d2 <= T{};
+      const T olde = e;
+      e = d;
+      if (ok1 || ok2) {
+        d = (ok1 && ok2) ? (abs(d1) < abs(d2) ? d1 : d2)
+                         : (ok1 ? d1 : d2);
+        if (abs(d) <= abs(T{0.5} * olde)) {
+          const T u = x + d;
+          if (u - a < tol2 || b - u < tol2)
+            d = (xm >= x ? tol1 : -tol1);
+        } else {
+          e = (dx >= T{} ? a - x : b - x);
+          d = T{0.5} * e;
+        }
+      } else {
+        e = (dx >= T{} ? a - x : b - x);
+        d = T{0.5} * e;
+      }
+    } else {
+      e = (dx >= T{} ? a - x : b - x);
+      d = T{0.5} * e;
+    }
+
+    const T u  = (abs(d) >= tol1 ? x + d : x + (d >= T{} ? tol1 : -tol1));
+    const T fu = f(u);
+    const T du = f.df(u);
+
+    if (fu <= fx) {
+      (u < x ? b : a) = x;
+      v = w; fv = fw; dv = dw;
+      w = x; fw = fx; dw = dx;
+      x = u; fx = fu; dx = du;
+    } else {
+      (u < x ? a : b) = u;
+      if (fu <= fw || w == x) {
+        v = w; fv = fw; dv = dw;
+        w = u; fw = fu; dw = du;
+      } else if (fu <= fv || v == x || v == w) {
+        v = u; fv = fu; dv = du;
       }
     }
   }
