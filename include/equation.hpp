@@ -43,7 +43,8 @@ constexpr std::ostream &print_tup(std::ostream &out,
 }
 
 template <typename... Syms, CExpression Expr>
-constexpr auto make_derivatives(mp::mp_list<Syms...>, const Expr &expr) noexcept {
+constexpr auto make_derivatives(mp::mp_list<Syms...>,
+                                const Expr &expr) noexcept {
   return std::tuple(
       make_all_constant_except<Syms::value>(expr).derivative()...);
 }
@@ -221,7 +222,8 @@ public:
   }
 
   template <std::size_t N>
-  constexpr decltype(auto) operator[](std::integral_constant<std::size_t, N>) noexcept
+  constexpr decltype(auto)
+  operator[](std::integral_constant<std::size_t, N>) noexcept
     requires(output_dim == 1)
   {
     if constexpr (N == 0) {
@@ -313,7 +315,8 @@ public:
         expressions);
     std::array<S, input_dim> values{};
     for (std::size_t i = 0; i < input_dim; ++i) {
-      values[i] = get_real_part<dual_depth_v<value_type>>(std::move(current[i]));
+      values[i] =
+          get_real_part<dual_depth_v<value_type>>(std::move(current[i]));
     }
     return equation_derivative_tensor_impl<Order>(std::move(values));
   }
@@ -331,8 +334,7 @@ public:
   // Iterate over each sub-expression, passing it by non-const reference to f.
   // Allows external code to call update(external_syms, x) on each expression
   // independently, e.g. from AugLag which uses the objective's symbol set.
-  template <typename F>
-  constexpr void for_each_expr(F &&f) noexcept {
+  template <typename F> constexpr void for_each_expr(F &&f) noexcept {
     std::apply([&](auto &...exprs) noexcept { (f(exprs), ...); }, expressions);
   }
 };
