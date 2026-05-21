@@ -502,3 +502,4 @@ build/
 *.aux
 *.toc
 /*/settings.local.json
+/build_test/*

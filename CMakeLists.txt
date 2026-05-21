@@ -47,6 +47,7 @@ FetchContent_Declare(
 )
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
+include(GoogleTest)
 
 if (DIFF_BUILD_BENCHMARKS OR DIFF_BUILD_COMPARE)
     FetchContent_Declare(
@@ -95,11 +96,11 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     add_executable(main src/main.cpp)
     target_link_libraries(main PUBLIC diff)
 
-    add_executable(tests tests.cpp expression_differentiator.hpp)
+    add_executable(tests tests.cpp)
     target_link_libraries(tests gtest_main diff)
 
-    add_test(NAME tests COMMAND tests)
     enable_testing()
+    gtest_discover_tests(tests)
 
     if (DIFF_BUILD_COMPARE)
         add_executable(benchmarks_compare benchmarks/benchmark_compare.cpp)
