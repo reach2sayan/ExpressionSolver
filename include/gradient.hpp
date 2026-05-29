@@ -132,9 +132,6 @@ constexpr auto extract_nth(const T &x) noexcept {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Core forward derivative_tensor implementation.
-// ---------------------------------------------------------------------------
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
@@ -172,10 +169,6 @@ template <std::size_t Order, CExpression Expr,
 
 } // namespace detail
 
-// ===========================================================================
-// Public API — reverse mode
-// ===========================================================================
-
 template <DiffMode Mode, CExpression Expr>
   requires(Mode == DiffMode::Reverse)
 [[nodiscard]] constexpr auto gradient(const Expr &expr) noexcept {
@@ -201,10 +194,6 @@ template <DiffMode Mode, CExpression Expr,
 [[nodiscard]] auto hessian(Expr &expr) noexcept {
   return detail::reverse_mode_hessian(expr);
 }
-
-// ===========================================================================
-// Public API — forward mode (derivative_tensor)
-// ===========================================================================
 
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
@@ -232,10 +221,6 @@ template <std::size_t Order, CExpression Expr,
     values[i] = get_real_part<dual_depth_v<T>>(current[i]);
   return detail::derivative_tensor_impl<Order>(expr, values);
 }
-
-// ===========================================================================
-// univariate_derivative<N>(expr [, x0])
-// ===========================================================================
 
 namespace detail {
 
@@ -280,7 +265,6 @@ template <std::size_t Order, CExpression Expr,
 
 } // namespace detail
 
-// With explicit evaluation point:
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
@@ -291,7 +275,6 @@ template <std::size_t Order, CExpression Expr,
   return detail::univariate_derivative_impl<Order>(expr, x0);
 }
 
-// Read evaluation point from the expression's current variable values:
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,

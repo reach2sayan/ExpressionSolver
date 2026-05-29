@@ -264,13 +264,13 @@ template <Numeric T> struct ScalarHook {
 };
 
 template <Numeric T> struct FuncHook {
-  std::function<T()>     get_f_fn;
+  std::function<T()> get_f_fn;
   std::function<void(T)> accum_df_fn;
-  std::function<void()>  zero_df_fn;
+  std::function<void()> zero_df_fn;
 
-  [[nodiscard]] T get_f()  const { return get_f_fn(); }
-  void accum_df(T adj)     const { accum_df_fn(adj); }
-  void zero_df()           const { zero_df_fn(); }
+  [[nodiscard]] T get_f() const { return get_f_fn(); }
+  void accum_df(T adj) const { accum_df_fn(adj); }
+  void zero_df() const { zero_df_fn(); }
 };
 
 // VectorHook: N-element hook; use element(i) to obtain a ScalarHook per index.

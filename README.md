@@ -85,6 +85,20 @@ Math functions: `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `asin`, `acos`
 | `nth_dual_t<S, N>` | N-th order nested dual; 2^N doubles, O(2^N) cost per operation |
 | `TaylorDual<S, N>` | N-th order univariate AD; N+1 coefficients, O(N²) cost per operation |
 
+### Variable storage hooks
+
+A `Variable<T, "x", Storage>` can hold its value in three ways depending on `Storage`:
+
+| Storage type | Owns value? | Description |
+|---|---|---|
+| `T` (default) | yes | Value stored directly in the variable |
+| `ScalarHook<T>` | no | Points into an external `T` buffer via raw pointer |
+| `VectorHook<T, N>` | no | Factory: points into an `array<T,N>` buffer; call `.element(i)` to get a `ScalarHook` |
+| `FuncHook<T>` | no | Reads via a `std::function<T()>` callable; gradient accumulates via `std::function<void(T)>` |
+| any `CHook<H,T>` type | no | Custom hook — implement `get_f()`, `accum_df(adj)`, `zero_df()` |
+
+Hooked variables skip `update()` / `collect()` entirely — the expression tree reads and writes through the hook directly. `Variable::operator=` is a no-op for hook types without `set_f`.
+
 ### Higher-level wrappers
 
 | Type | Description |
@@ -248,6 +262,55 @@ auto ve = Equation(x * y, x * x);
 
 auto H = ve.hessian<DiffMode::Forward>();
 ```
+
+### ScalarHook — live binding to an external buffer
+
+Useful when values change frequently in a loop; no `update()` call needed between iterations.
+
+```cpp
+double f_x = 2.0, df_x = 0.0;
+double f_y = 3.0, df_y = 0.0;
+
+Variable<double, FixedString{"x"}, ScalarHook<double>> x{ScalarHook<double>{&f_x, &df_x}};
+Variable<double, FixedString{"y"}, ScalarHook<double>> y{ScalarHook<double>{&f_y, &df_y}};
+auto expr = x * x * y;
+
+using Syms = extract_symbols_from_expr_t<decltype(expr)>;
+std::array<double, 2> grads{};
+
+for (auto [new_x, new_y] : data) {
+    f_x = new_x; f_y = new_y;       // write directly — no update() needed
+    df_x = 0.0;  df_y = 0.0;
+    double val = expr.eval();
+    expr.backward(Syms{}, 1.0, grads);
+    // gradients land in df_x and df_y directly
+}
+```
+
+### FuncHook — callable value source
+
+Lets a variable read from any callable — a sensor, a computed value, an external system.
+
+```cpp
+double sensor_val = 0.0, sensor_grad = 0.0;
+
+FuncHook<double> hook{
+    [&]{ return sensor_val; },             // get_f
+    [&](double adj){ sensor_grad += adj; },// accum_df
+    [&]{ sensor_grad = 0.0; }             // zero_df
+};
+Variable<double, FixedString{"x"}, FuncHook<double>> x{hook};
+auto expr = x * x;
+
+using Syms = extract_symbols_from_expr_t<decltype(expr)>;
+std::array<double, 1> grads{};
+
+sensor_val = 4.0;
+expr.eval();                               // returns 16.0
+expr.backward(Syms{}, 1.0, grads);        // sensor_grad == 8.0
+```
+
+`FuncHook` uses `std::function` internally — prefer `ScalarHook` for tight loops over plain buffers.
 
 ### Higher-order univariate derivative (TaylorDual)
 

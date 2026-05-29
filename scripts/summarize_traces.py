@@ -51,9 +51,9 @@ def summarise(events: list[dict], top: int, min_ms: float, category: str | None)
     for cat, entries in cats_by_total:
         entries.sort(reverse=True)
         total_ms = sum(t for t, _, _ in entries)
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print(f"  {cat}  —  {len(entries)} events  —  total {total_ms:.1f} ms")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         for dur, detail, fname in entries[:top]:
             label = detail[:80] if detail else "(no detail)"
             print(f"  {dur:8.1f} ms   {label}   [{fname}]")
@@ -63,9 +63,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trace_dir", type=Path)
-    ap.add_argument("--top",      type=int,   default=20,   help="entries per category")
-    ap.add_argument("--min-ms",   type=float, default=1.0,  help="ignore events shorter than N ms")
-    ap.add_argument("--category", type=str,   default=None, help="filter to one category name")
+    ap.add_argument("--top", type=int, default=20, help="entries per category")
+    ap.add_argument("--min-ms", type=float, default=1.0, help="ignore events shorter than N ms")
+    ap.add_argument("--category", type=str, default=None, help="filter to one category name")
     args = ap.parse_args()
 
     if not args.trace_dir.is_dir():

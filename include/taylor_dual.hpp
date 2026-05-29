@@ -90,10 +90,6 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return c[I];
   }
 
-  // -------------------------------------------------------------------------
-  // Transcendentals — all use recurrences on the normalized c[k] = f^(k)/k!
-  // -------------------------------------------------------------------------
-
   // exp: w[0]=exp(u[0]),  k*w[k] = Σ_{j=1}^{k} j*u[j]*w[k-j]
   [[nodiscard]] friend TaylorDual exp(const TaylorDual &u) noexcept {
     using std::exp;
