@@ -66,9 +66,6 @@ constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
       es);
 }
 
-// ===========================================================================
-// Equation<TFirst, TRest...> — f: ℝⁿ → ℝᵐ  (sizeof...(TRest) > 0).
-// ===========================================================================
 template <CExpression TFirst, CExpression... TRest>
   requires(
       (std::same_as<typename TFirst::value_type, typename TRest::value_type> &&
@@ -120,7 +117,6 @@ private:
     return J;
   }
 
-  // --- Forward-over-reverse Hessian (Dual<T> expressions) ---
   [[nodiscard]] constexpr auto hessian_forward_over_reverse() noexcept
     requires(is_dual_v<value_type> && input_dim > 0)
   {
@@ -154,7 +150,6 @@ private:
     return H;
   }
 
-  // --- Forward-mode derivative tensor (any order) ---
   template <std::size_t Order>
   [[nodiscard]] constexpr auto equation_derivative_tensor_impl(
       std::array<scalar_base_t<value_type>, input_dim> values) const noexcept
@@ -245,8 +240,6 @@ public:
     }
   }
 
-  // --- jacobian<Mode>() ---
-
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto jacobian() const noexcept
     requires(Mode == DiffMode::Symbolic && input_dim > 0)
@@ -270,7 +263,6 @@ public:
     return jacobian<Mode>();
   }
 
-  // --- hessian<Mode>() ---
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto hessian() noexcept
     requires(Mode == DiffMode::Reverse && is_dual_v<value_type> &&
@@ -293,8 +285,6 @@ public:
     update(symbols{}, seeds);
     return hessian<Mode>();
   }
-
-  // --- derivative_tensor<Order>() — forward-mode, any order ---
 
   template <std::size_t Order>
   [[nodiscard]] constexpr auto derivative_tensor(

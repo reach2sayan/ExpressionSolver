@@ -6,6 +6,7 @@
 #include "values.hpp"
 #include <gtest/gtest.h>
 #include <numbers>
+#include <random>
 
 using namespace diff;
 
@@ -358,13 +359,13 @@ TEST(ConceptTest, ExpressionConceptSatisfied) {
 }
 
 TEST(ConceptTest, AnOpSatisfied) {
-  static_assert(COp<SumOp<double>>);
-  static_assert(COp<MultiplyOp<float>>);
-  static_assert(COp<SineOp<double>>);
-  static_assert(COp<CosineOp<double>>);
-  static_assert(COp<ExpOp<double>>);
-  static_assert(COp<NegateOp<int>>);
-  static_assert(COp<DivideOp<double>>);
+  static_assert(COperation<SumOp<double>>);
+  static_assert(COperation<MultiplyOp<float>>);
+  static_assert(COperation<SineOp<double>>);
+  static_assert(COperation<CosineOp<double>>);
+  static_assert(COperation<ExpOp<double>>);
+  static_assert(COperation<NegateOp<int>>);
+  static_assert(COperation<DivideOp<double>>);
 }
 
 // ===========================================================================
@@ -2137,4 +2138,250 @@ TEST(TutorialReverseHigherOrder, ForwardReverseHessianAgree) {
   for (int i : {0, 1})
     for (int j : {0, 1})
       EXPECT_NEAR(H_fwd[i][j], H_rev[i][j], 1e-12);
+}
+
+// ===========================================================================
+// ScalarHook tests — runtime hook for f and df
+// ===========================================================================
+
+TEST(ScalarHookTest, ForwardEval) {
+  // Hook a Variable into external f/df buffers and verify eval reads f.
+  double f_buf = 3.0, df_buf = 0.0;
+  ScalarHook<double> hook{&f_buf, &df_buf};
+  Variable<double, diff::FixedString{"x"}, ScalarHook<double>> x{hook};
+  EXPECT_DOUBLE_EQ(x.eval(), 3.0);
+
+  f_buf = 7.5;
+  EXPECT_DOUBLE_EQ(x.eval(), 7.5);  // reflects change in external buffer
+}
+
+TEST(ScalarHookTest, ReverseGradientAccumulated) {
+  // Reverse-mode backward should write gradient directly into df_buf.
+  double f_buf = 2.0, df_buf = 0.0;
+  ScalarHook<double> hook{&f_buf, &df_buf};
+  Variable<double, diff::FixedString{"x"}, ScalarHook<double>> x{hook};
+  // f = x^2 → df/dx = 2x = 4
+  auto expr = x * x;
+  std::array<double, 1> grads{};
+  expr.backward(extract_symbols_from_expr_t<decltype(expr)>{}, 1.0, grads);
+  EXPECT_DOUBLE_EQ(df_buf, 2.0 * f_buf);  // 4.0
+}
+
+TEST(ScalarHookTest, ZeroAndReuse) {
+  // zero_df resets the accumulator; subsequent backward adds fresh gradient.
+  double f_buf = 3.0, df_buf = 5.0;  // pre-existing df
+  ScalarHook<double> hook{&f_buf, &df_buf};
+  hook.zero_df();
+  EXPECT_DOUBLE_EQ(df_buf, 0.0);
+
+  Variable<double, diff::FixedString{"x"}, ScalarHook<double>> x{hook};
+  auto expr = x * x * x;  // f = x^3 → df/dx = 3x^2 = 27
+  std::array<double, 1> grads{};
+  expr.backward(extract_symbols_from_expr_t<decltype(expr)>{}, 1.0, grads);
+  EXPECT_DOUBLE_EQ(df_buf, 3.0 * f_buf * f_buf);
+}
+
+TEST(ScalarHookTest, DualForwardMode) {
+  // With T = Dual<double>, the hook carries a Dual value; eval() returns it.
+  using D = Dual<double>;
+  D f_buf{2.0, 1.0};  // value=2, tangent=1 (seed for x)
+  D df_buf{};
+  ScalarHook<D> hook{&f_buf, &df_buf};
+  Variable<D, diff::FixedString{"x"}, ScalarHook<D>> x{hook};
+  // f = x^2 → dual part = 2x*tangent = 4
+  auto expr = x * x;
+  auto result = expr.eval();
+  EXPECT_DOUBLE_EQ(result.get<0>(), 4.0);   // value: x^2 = 4
+  EXPECT_DOUBLE_EQ(result.get<1>(), 4.0);   // tangent: 2x*1 = 4
+}
+
+TEST(VectorHookTest, ElementAccessAndGradients) {
+  // VectorHook.element(i) yields a ScalarHook for the i-th slot.
+  std::array<double, 2> f_buf{3.0, 4.0};
+  std::array<double, 2> df_buf{0.0, 0.0};
+  VectorHook<double, 2> vh{&f_buf, &df_buf};
+
+  Variable<double, diff::FixedString{"x"}, ScalarHook<double>> x{vh.element(0)};
+  Variable<double, diff::FixedString{"y"}, ScalarHook<double>> y{vh.element(1)};
+
+  // f = x*y → ∂f/∂x = y = 4, ∂f/∂y = x = 3
+  auto expr = x * y;
+  std::array<double, 2> grads{};
+  expr.backward(extract_symbols_from_expr_t<decltype(expr)>{}, 1.0, grads);
+  EXPECT_DOUBLE_EQ(df_buf[0], 4.0);  // ∂f/∂x
+  EXPECT_DOUBLE_EQ(df_buf[1], 3.0);  // ∂f/∂y
+}
+
+TEST(ScalarHookTest, MixedStaticAndHooked) {
+  // One Variable is a plain owned node (static value baked in at construction);
+  // the other is a hooked node whose coefficient is mutated at runtime.
+  //
+  // f(a, x) = a * x^2   where  a is hooked (runtime) and x is static (owned).
+  // ∂f/∂a = x^2
+  // ∂f/∂x = 2*a*x
+  //
+  // We change only 'a' through its hook and verify both eval and gradients
+  // update while x stays fixed at its static value.
+
+  // static owned node — value fixed at construction
+  Variable<double, diff::FixedString{"x"}> x{3.0};
+
+  // hooked node — coefficient sampled at runtime
+  double f_a{}, df_a{};
+  Variable<double, diff::FixedString{"a"}, ScalarHook<double>> a{
+      ScalarHook<double>{&f_a, &df_a}};
+
+  auto expr = a * x * x;
+  using Syms = extract_symbols_from_expr_t<decltype(expr)>;
+
+  std::mt19937_64 rng{0xCAFEBABE};
+  std::uniform_real_distribution<double> dist{-4.0, 4.0};
+
+  for (int trial = 0; trial < 20; ++trial) {
+    f_a  = dist(rng);
+    df_a = 0.0;
+
+    // x is static — always reads its baked-in value of 3.0
+    EXPECT_NEAR(expr.eval(), f_a * 9.0, 1e-12);
+
+    std::array<double, 2> grads{};
+    expr.backward(Syms{}, 1.0, grads);
+
+    constexpr auto x_idx = find_index_of_symbol<diff::FixedString{"x"}, Syms>();
+    EXPECT_NEAR(df_a,          9.0,             1e-12);  // ∂f/∂a = x^2 = 9
+    EXPECT_NEAR(grads[x_idx], 2.0 * f_a * 3.0, 1e-12);  // ∂f/∂x = 2*a*x
+  }
+}
+
+TEST(ScalarHookTest, RandomRuntimeCoefficients) {
+  // The expression tree is built once. Coefficients are sampled randomly at
+  // runtime by writing directly into the hook buffers — no update()/collect()
+  // calls. The test verifies that both eval() and reverse-mode gradients stay
+  // consistent with the analytic formula for each fresh sample.
+  //
+  // f(x, y) = x^2 * y + 3*x
+  // ∂f/∂x   = 2*x*y + 3
+  // ∂f/∂y   = x^2
+
+  double f_x{}, df_x{}, f_y{}, df_y{};
+  Variable<double, diff::FixedString{"x"}, ScalarHook<double>> x{
+      ScalarHook<double>{&f_x, &df_x}};
+  Variable<double, diff::FixedString{"y"}, ScalarHook<double>> y{
+      ScalarHook<double>{&f_y, &df_y}};
+
+  auto expr = x * x * y + 3.0 * x;
+  using Syms = extract_symbols_from_expr_t<decltype(expr)>;
+
+  std::mt19937_64 rng{0xDEADBEEF};
+  std::uniform_real_distribution<double> dist{-5.0, 5.0};
+
+  for (int trial = 0; trial < 20; ++trial) {
+    // Inject fresh random runtime values through the hook buffers.
+    f_x = dist(rng);
+    f_y = dist(rng);
+    df_x = 0.0;
+    df_y = 0.0;
+
+    EXPECT_NEAR(expr.eval(), f_x * f_x * f_y + 3.0 * f_x, 1e-12);
+
+    std::array<double, 2> grads{};
+    expr.backward(Syms{}, 1.0, grads);
+    EXPECT_NEAR(df_x, 2.0 * f_x * f_y + 3.0, 1e-12);
+    EXPECT_NEAR(df_y, f_x * f_x,              1e-12);
+  }
+}
+
+// ===========================================================================
+// FuncHook tests — callable-source hook
+// ===========================================================================
+
+static_assert(CHook<FuncHook<double>, double>);
+static_assert(CHook<FuncHook<float>, float>);
+
+TEST(FuncHookTest, ForwardEvalTracksCallable) {
+  double source = 3.0;
+  double grad_acc = 0.0;
+  FuncHook<double> hook{[&] { return source; },
+                        [&](double adj) { grad_acc += adj; },
+                        [&] { grad_acc = 0.0; }};
+  Variable<double, diff::FixedString{"x"}, FuncHook<double>> x{hook};
+
+  EXPECT_DOUBLE_EQ(x.eval(), 3.0);
+  source = 7.5;
+  EXPECT_DOUBLE_EQ(x.eval(), 7.5);
+}
+
+TEST(FuncHookTest, ReverseGradientAccumulated) {
+  double source = 2.0;
+  double grad_acc = 0.0;
+  FuncHook<double> hook{[&] { return source; },
+                        [&](double adj) { grad_acc += adj; },
+                        [&] { grad_acc = 0.0; }};
+  Variable<double, diff::FixedString{"x"}, FuncHook<double>> x{hook};
+  auto expr = x * x;  // f = x^2, df/dx = 2x
+
+  using Syms = extract_symbols_from_expr_t<decltype(expr)>;
+  std::array<double, 1> grads{};
+  expr.backward(Syms{}, 1.0, grads);
+  EXPECT_DOUBLE_EQ(grad_acc, 2.0 * source);
+}
+
+TEST(FuncHookTest, ZeroAndReuse) {
+  double source = 4.0;
+  double grad_acc = 0.0;
+  FuncHook<double> hook{[&] { return source; },
+                        [&](double adj) { grad_acc += adj; },
+                        [&] { grad_acc = 0.0; }};
+  Variable<double, diff::FixedString{"x"}, FuncHook<double>> x{hook};
+  auto expr = x * x;
+
+  using Syms = extract_symbols_from_expr_t<decltype(expr)>;
+  std::array<double, 1> grads{};
+  expr.backward(Syms{}, 1.0, grads);
+  EXPECT_DOUBLE_EQ(grad_acc, 8.0);
+
+  hook.zero_df();
+  EXPECT_DOUBLE_EQ(grad_acc, 0.0);
+
+  source = 3.0;
+  grads = {};
+  expr.backward(Syms{}, 1.0, grads);
+  EXPECT_DOUBLE_EQ(grad_acc, 6.0);
+}
+
+TEST(FuncHookTest, AssignmentIsNoOp) {
+  double source = 5.0;
+  double grad_acc = 0.0;
+  FuncHook<double> hook{[&] { return source; },
+                        [&](double adj) { grad_acc += adj; },
+                        [&] { grad_acc = 0.0; }};
+  Variable<double, diff::FixedString{"x"}, FuncHook<double>> x{hook};
+
+  x = 99.0;  // no set_f — no-op
+  EXPECT_DOUBLE_EQ(x.eval(), 5.0);  // still reads from source
+}
+
+TEST(FuncHookTest, ParityWithScalarHook) {
+  double f_buf = 3.0, df_buf = 0.0;
+  ScalarHook<double> sh{&f_buf, &df_buf};
+  Variable<double, diff::FixedString{"x"}, ScalarHook<double>> xs{sh};
+
+  double grad_acc = 0.0;
+  FuncHook<double> fh{[&] { return f_buf; },
+                      [&](double adj) { grad_acc += adj; },
+                      [&] { grad_acc = 0.0; }};
+  Variable<double, diff::FixedString{"x"}, FuncHook<double>> xf{fh};
+
+  EXPECT_DOUBLE_EQ(xs.eval(), xf.eval());
+
+  auto es = xs * xs;
+  auto ef = xf * xf;
+
+  using Syms = extract_symbols_from_expr_t<decltype(es)>;
+  std::array<double, 1> grads{};
+  es.backward(Syms{}, 1.0, grads);
+  grads = {};
+  ef.backward(Syms{}, 1.0, grads);
+
+  EXPECT_DOUBLE_EQ(df_buf, grad_acc);
 }

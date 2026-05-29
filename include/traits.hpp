@@ -1,8 +1,8 @@
 #pragma once
 #include "values.hpp"
 #include <array>
-#include <boost/mp11/integral.hpp>
 #include <boost/mp11/algorithm.hpp>
+#include <boost/mp11/integral.hpp>
 #include <type_traits>
 
 namespace diff {
@@ -20,8 +20,8 @@ template <typename T> constexpr static bool is_const = false;
 template <typename T> constexpr static bool is_const<Constant<T>> = true;
 
 template <typename T> inline constexpr bool is_variable_v = false;
-template <typename T, CFixedString auto C>
-inline constexpr bool is_variable_v<Variable<T, C>> = true;
+template <typename T, CFixedString auto C, typename S>
+inline constexpr bool is_variable_v<Variable<T, C, S>> = true;
 
 template <typename T> inline constexpr bool is_mono_expression_v = false;
 template <typename Op, typename E>
@@ -92,15 +92,17 @@ template <CFixedString auto symbol, typename T>
 using replace_matching_variable_as_const_t =
     typename decltype(replace_matching_var_impl<symbol, T>())::type;
 
-template <CFixedString auto symbol, typename T>
-constexpr auto make_const_variable(const Variable<T, symbol> &var) noexcept {
-  return Constant<T>(var);
+template <CFixedString auto symbol, typename T, typename S>
+constexpr auto make_const_variable(const Variable<T, symbol, S> &var) noexcept {
+  return Constant<T>{static_cast<T>(var)};
 }
 
-template <CFixedString auto symbol, typename T, CFixedString auto othersymbol>
+template <CFixedString auto symbol, typename T, CFixedString auto othersymbol,
+          typename S>
   requires(symbol != othersymbol)
-consteval auto make_const_variable(const Variable<T, othersymbol> &var) noexcept
-    -> Variable<T, othersymbol> {
+consteval auto
+make_const_variable(const Variable<T, othersymbol, S> &var) noexcept
+    -> Variable<T, othersymbol, S> {
   return var;
 }
 
@@ -125,8 +127,8 @@ constexpr auto make_const_variable(const MonoExpression<Op, LHS> &expr) noexcept
   return {make_const_variable<symbol>(expr.expressions())};
 }
 
-template <typename T, CFixedString auto C, std::size_t N>
-consteval void make_labels_array(const Variable<T, C> &,
+template <typename T, CFixedString auto C, typename S, std::size_t N>
+consteval void make_labels_array(const Variable<T, C, S> &,
                                  std::array<std::string_view, N> &out,
                                  std::size_t &index) {
   out[index++] = C.view();
@@ -155,7 +157,8 @@ consteval auto constify_unmatched_var_impl() {
     } else {
       return std::type_identity<Constant<typename Expr::value_type>>{};
     }
-  } else if constexpr (is_binary_expression_v<Expr>) {  // already nested correctly
+  } else if constexpr (is_binary_expression_v<Expr>) { // already nested
+                                                       // correctly
     using L = typename Expr::lhs_type;
     using R = typename Expr::rhs_type;
     using Op = typename Expr::op_type;
@@ -177,17 +180,19 @@ template <CFixedString auto symbol, typename Expr>
 using constify_unmatched_var_t =
     typename decltype(constify_unmatched_var_impl<symbol, Expr>())::type;
 
-template <CFixedString auto symbol, typename T>
-constexpr auto make_all_constant_except(const Variable<T, symbol> &v) noexcept {
+template <CFixedString auto symbol, typename T, typename S>
+constexpr auto
+make_all_constant_except(const Variable<T, symbol, S> &v) noexcept {
   return v;
 }
 
-template <CFixedString auto symbol, typename T, CFixedString auto othersymbol>
+template <CFixedString auto symbol, typename T, CFixedString auto othersymbol,
+          typename S>
   requires(symbol != othersymbol)
 constexpr auto
-make_all_constant_except(const Variable<T, othersymbol> &var) noexcept
+make_all_constant_except(const Variable<T, othersymbol, S> &var) noexcept
     -> Constant<T> {
-  return Constant<T>{var};
+  return Constant<T>{static_cast<T>(var)};
 }
 
 template <CFixedString auto symbol, typename T>

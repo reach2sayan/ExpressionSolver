@@ -8,7 +8,6 @@
 
 namespace diff {
 
-/// Numeric: any scalar type that supports arithmetic operations.
 template <typename T>
 concept Numeric = std::is_arithmetic_v<T> || requires(T a, T b) {
   T{};
@@ -19,25 +18,19 @@ concept Numeric = std::is_arithmetic_v<T> || requires(T a, T b) {
   { -a } -> std::convertible_to<T>;
 };
 
-/// COp: any operation struct that carries a Numeric value_type.
 template <typename O>
-concept COp =
+concept COperation =
     requires { typename O::value_type; } && Numeric<typename O::value_type>;
 
-// ===========================================================================
-// Forward declarations
-// ===========================================================================
-template <COp Op, typename LHS, typename RHS> class Expression;
-template <COp Op, typename Exp> class MonoExpression;
+template <COperation Op, typename LHS, typename RHS> class Expression;
+template <COperation Op, typename Exp> class MonoExpression;
 template <Numeric T> class Constant;
-// ===========================================================================
-// FixedString — structural NTTP type for compile-time variable labels.
-// ===========================================================================
-template <std::size_t N>
-struct FixedString {
+
+template <std::size_t N> struct FixedString {
   char data[N];
   constexpr FixedString(const char (&str)[N]) noexcept {
-    for (std::size_t i = 0; i < N; ++i) data[i] = str[i];
+    for (std::size_t i = 0; i < N; ++i)
+      data[i] = str[i];
   }
   constexpr bool operator==(const FixedString &) const noexcept = default;
   template <std::size_t M>
@@ -57,43 +50,41 @@ struct is_fixed_string_t<FixedString<N>> : std::true_type {};
 template <typename T>
 concept CFixedString = detail::is_fixed_string_t<T>::value;
 
-template <auto S>
-struct symbol_type {
+template <auto S> struct symbol_type {
   static constexpr auto value = S;
   static constexpr std::string_view name = S.view();
 };
 
-template <Numeric T, CFixedString auto> class Variable;
-// ===========================================================================
-// Tag trait: true for any first-class expression node.
-// ===========================================================================
+template <typename H, typename T>
+concept CHook = requires(H h, T adj) {
+  { h.get_f() } -> std::convertible_to<T>;
+  h.accum_df(adj);
+  h.zero_df();
+};
+
+template <Numeric T, CFixedString auto, typename Storage = T> class Variable;
+
 template <typename T> struct is_expression_type : std::false_type {};
 template <Numeric T> struct is_expression_type<Constant<T>> : std::true_type {};
 
-template <Numeric T, CFixedString auto C>
-struct is_expression_type<Variable<T, C>> : std::true_type {};
+template <Numeric T, CFixedString auto C, typename S>
+struct is_expression_type<Variable<T, C, S>> : std::true_type {};
 
-template <COp Op, typename LHS, typename RHS>
+template <COperation Op, typename LHS, typename RHS>
 struct is_expression_type<Expression<Op, LHS, RHS>> : std::true_type {};
 
-template <COp Op, typename Exp>
+template <COperation Op, typename Exp>
 struct is_expression_type<MonoExpression<Op, Exp>> : std::true_type {};
 
 template <typename T>
 concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
 
-// ===========================================================================
-// is_constant trait — true iff T is Constant<U> for some Numeric U.
-// ===========================================================================
 template <typename T> struct is_constant : std::false_type {};
 template <Numeric T> struct is_constant<Constant<T>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_constant_v =
     is_constant<std::remove_cvref_t<T>>::value;
 
-// ===========================================================================
-// EvalResult<T>
-// ===========================================================================
 template <Numeric T> struct EvalResult {
   using value_type = T;
   T value;
@@ -104,17 +95,11 @@ template <Numeric T> struct EvalResult {
 template <Numeric T>
 struct is_expression_type<EvalResult<T>> : std::true_type {};
 
-// ===========================================================================
-// BaseExpression
-// ===========================================================================
-template <COp Op> struct BaseExpression {
+template <COperation Op> struct BaseExpression {
   using value_type = typename Op::value_type;
 };
 
-// ===========================================================================
-// MonoExpression — unary expression node.
-// ===========================================================================
-template <COp Op, typename Exp>
+template <COperation Op, typename Exp>
 class MonoExpression : public BaseExpression<Op> {
   Exp expression;
   friend constexpr std::ostream &operator<<(std::ostream &out,
@@ -183,7 +168,7 @@ public:
 // ===========================================================================
 // Expression — binary expression node.
 // ===========================================================================
-template <COp Op, typename LHS, typename RHS>
+template <COperation Op, typename LHS, typename RHS>
 class Expression : public BaseExpression<Op> {
   std::pair<LHS, RHS> inner_expressions;
   friend std::ostream &operator<<(std::ostream &out, const Expression &e) {
@@ -292,21 +277,21 @@ struct expression_element<V, I,
 } // namespace diff
 
 namespace std {
-template <diff::COp Op, typename LHS, typename RHS>
+template <diff::COperation Op, typename LHS, typename RHS>
 struct tuple_size<diff::Expression<Op, LHS, RHS>>
     : integral_constant<size_t, 2> {};
 
-template <size_t I, diff::COp Op, typename LHS, typename RHS>
+template <size_t I, diff::COperation Op, typename LHS, typename RHS>
 struct tuple_element<I, diff::Expression<Op, LHS, RHS>> {
   using type = typename diff::detail::expression_element<
       typename diff::Expression<Op, LHS, RHS>::value_type, I>::type;
 };
 
-template <diff::COp Op, typename Exp>
+template <diff::COperation Op, typename Exp>
 struct tuple_size<diff::MonoExpression<Op, Exp>>
     : integral_constant<size_t, 2> {};
 
-template <size_t I, diff::COp Op, typename Exp>
+template <size_t I, diff::COperation Op, typename Exp>
 struct tuple_element<I, diff::MonoExpression<Op, Exp>> {
   using type = typename diff::detail::expression_element<
       typename diff::MonoExpression<Op, Exp>::value_type, I>::type;

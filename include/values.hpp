@@ -5,6 +5,7 @@
 #include <boost/mp11/algorithm.hpp>
 #include <concepts>
 #include <format>
+#include <functional>
 #include <string_view>
 
 namespace diff {
@@ -252,12 +253,50 @@ public:
   }
 };
 
-template <Numeric T, CFixedString auto symbol> class Variable : public IOperators {
-  T value;
+template <Numeric T> struct ScalarHook {
+  T *f;
+  T *df;
+  constexpr ScalarHook(T *f_ptr, T *df_ptr) noexcept : f(f_ptr), df(df_ptr) {}
+  [[nodiscard]] constexpr T get_f() const noexcept { return *f; }
+  constexpr void set_f(T val) const noexcept { *f = std::move(val); }
+  constexpr void accum_df(T adj) const noexcept { *df += adj; }
+  constexpr void zero_df() const noexcept { *df = T{}; }
+};
+
+template <Numeric T> struct FuncHook {
+  std::function<T()>     get_f_fn;
+  std::function<void(T)> accum_df_fn;
+  std::function<void()>  zero_df_fn;
+
+  [[nodiscard]] T get_f()  const { return get_f_fn(); }
+  void accum_df(T adj)     const { accum_df_fn(adj); }
+  void zero_df()           const { zero_df_fn(); }
+};
+
+// VectorHook: N-element hook; use element(i) to obtain a ScalarHook per index.
+template <Numeric T, std::size_t N> struct VectorHook {
+  std::array<T, N> *f;
+  std::array<T, N> *df;
+  constexpr VectorHook(std::array<T, N> *f_ptr,
+                       std::array<T, N> *df_ptr) noexcept
+      : f(f_ptr), df(df_ptr) {}
+  [[nodiscard]] constexpr T get_f(std::size_t i) const noexcept {
+    return (*f)[i];
+  }
+  constexpr void accum_df(std::size_t i, T adj) noexcept { (*df)[i] += adj; }
+  constexpr void zero_df() noexcept { df->fill(T{}); }
+  [[nodiscard]] constexpr ScalarHook<T> element(std::size_t i) noexcept {
+    return ScalarHook<T>{&(*f)[i], &(*df)[i]};
+  }
+};
+
+template <Numeric T, CFixedString auto symbol, typename Storage>
+class Variable : public IOperators {
+  Storage storage;
   friend std::ostream &operator<<(std::ostream &out,
-                                  const Variable<T, symbol> &c) {
+                                  const Variable<T, symbol, Storage> &c) {
     if constexpr (PRINT_VARIABLE_VALUE) {
-      out << std::format("{}_", c.value);
+      out << std::format("{}_", c.eval());
     }
     if constexpr (PRINT_VARIABLE_LABEL) {
       out << symbol.view();
@@ -267,11 +306,16 @@ template <Numeric T, CFixedString auto symbol> class Variable : public IOperator
 
 public:
   static constexpr auto label = symbol;
-  [[nodiscard]] constexpr T eval() const noexcept { return value; }
+  [[nodiscard]] constexpr T eval() const noexcept {
+    if constexpr (CHook<Storage, T>)
+      return storage.get_f();
+    else
+      return storage;
+  }
   using value_type = T;
-  constexpr explicit Variable(T value) noexcept : value(value) {}
-  constexpr operator T() const noexcept { return value; }
-  [[nodiscard]] constexpr auto get() const noexcept { return value; }
+  constexpr explicit Variable(Storage s) noexcept : storage(std::move(s)) {}
+  constexpr operator T() const noexcept { return eval(); }
+  [[nodiscard]] constexpr auto get() const noexcept { return eval(); }
   template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept;
   constexpr void update(const auto &symbols, const auto &updates) noexcept;
   constexpr void collect(const auto &symbols, auto &out) const noexcept;
@@ -304,49 +348,66 @@ public:
   }
 };
 
-template <Numeric T, CFixedString auto symbol>
+template <Numeric T, CFixedString auto symbol, typename Storage>
 template <typename U>
-constexpr decltype(auto) Variable<T, symbol>::operator=(U &&v) noexcept {
-  if constexpr (std::is_same_v<decltype(value),
-                               std::reference_wrapper<std::decay_t<U>>>) {
-    value.get() = std::forward<U>(v);
+constexpr decltype(auto)
+Variable<T, symbol, Storage>::operator=(U &&v) noexcept {
+  if constexpr (CHook<Storage, T>) {
+    if constexpr (requires { storage.set_f(T{}); })
+      storage.set_f(static_cast<T>(std::forward<U>(v)));
+  } else if constexpr (std::is_same_v<
+                           Storage, std::reference_wrapper<std::decay_t<U>>>) {
+    storage.get() = std::forward<U>(v);
   } else if constexpr (!std::is_same_v<std::decay_t<U>, T> &&
                        std::is_constructible_v<T, U>) {
-    value = T{std::forward<U>(v)};
+    storage = T{std::forward<U>(v)};
   } else {
-    value = std::forward<U>(v);
+    storage = std::forward<U>(v);
   }
   return *this;
 }
 
-template <Numeric T, CFixedString auto symbol>
-constexpr void Variable<T, symbol>::update(const auto &symbols,
-                                           const auto &updates) noexcept {
-  using Syms = std::decay_t<decltype(symbols)>;
-  constexpr auto index = find_index_of_symbol<symbol, Syms>();
-  *this = updates[index];
+template <Numeric T, CFixedString auto symbol, typename Storage>
+constexpr void
+Variable<T, symbol, Storage>::update(const auto &symbols,
+                                     const auto &updates) noexcept {
+  if constexpr (!CHook<Storage, T>) {
+    using Syms = std::decay_t<decltype(symbols)>;
+    constexpr auto index = find_index_of_symbol<symbol, Syms>();
+    *this = updates[index];
+  }
+  // hooked: caller writes to the buffer directly — no-op here
 }
 
-template <Numeric T, CFixedString auto symbol>
-constexpr void Variable<T, symbol>::collect(const auto &symbols,
-                                            auto &out) const noexcept {
-  using Syms = std::decay_t<decltype(symbols)>;
-  constexpr auto index = find_index_of_symbol<symbol, Syms>();
-  out[index] = value;
+template <Numeric T, CFixedString auto symbol, typename Storage>
+constexpr void Variable<T, symbol, Storage>::collect(const auto &symbols,
+                                                     auto &out) const noexcept {
+  if constexpr (!CHook<Storage, T>) {
+    using Syms = std::decay_t<decltype(symbols)>;
+    constexpr auto index = find_index_of_symbol<symbol, Syms>();
+    out[index] = storage;
+  }
+  // hooked: caller reads from the buffer directly — no-op here
 }
 
-template <Numeric T, CFixedString auto symbol>
-constexpr auto Variable<T, symbol>::derivative() const noexcept {
+template <Numeric T, CFixedString auto symbol, typename Storage>
+constexpr auto Variable<T, symbol, Storage>::derivative() const noexcept {
   auto ret = T{};
   return Constant{++ret};
 }
 
-template <Numeric T, CFixedString auto symbol>
-constexpr void Variable<T, symbol>::backward(const auto &syms, T adj,
-                                             auto &grads) const noexcept {
-  using Syms = std::decay_t<decltype(syms)>;
-  constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-  grads[idx] += adj;
+template <Numeric T, CFixedString auto symbol, typename Storage>
+constexpr void
+Variable<T, symbol, Storage>::backward(const auto &syms, T adj,
+                                       auto &grads) const noexcept {
+  if constexpr (CHook<Storage, T>) {
+    // gradient flows directly into the hook's df buffer
+    storage.accum_df(adj);
+  } else {
+    using Syms = std::decay_t<decltype(syms)>;
+    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+    grads[idx] += adj;
+  }
 }
 
 #define DEFINE_CONST_UDL(type, suffix)                                         \
@@ -360,10 +421,12 @@ constexpr void Variable<T, symbol>::backward(const auto &syms, T adj,
 
 #define DEFINE_VAR_UDL(type, suffix, label)                                    \
   consteval auto operator"" _##suffix(unsigned long long val) {                \
-    return diff::Variable<type, diff::FixedString{label}>{static_cast<type>(val)}; \
+    return diff::Variable<type, diff::FixedString{label}>{                     \
+        static_cast<type>(val)};                                               \
   }                                                                            \
   consteval auto operator"" _##suffix(long double val) {                       \
-    return diff::Variable<type, diff::FixedString{label}>{static_cast<type>(val)}; \
+    return diff::Variable<type, diff::FixedString{label}>{                     \
+        static_cast<type>(val)};                                               \
   }
 
 } // namespace diff
@@ -382,16 +445,18 @@ struct tuple_element<I, diff::Constant<T>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
 
-template <diff::Numeric T, diff::CFixedString auto C>
-struct tuple_size<diff::Variable<T, C>> : integral_constant<std::size_t, 2> {};
+template <diff::Numeric T, diff::CFixedString auto C, typename S>
+struct tuple_size<diff::Variable<T, C, S>> : integral_constant<std::size_t, 2> {
+};
 
-template <std::size_t I, diff::Numeric T, diff::CFixedString auto C>
-struct tuple_element<I, diff::Variable<T, C>> {
+template <std::size_t I, diff::Numeric T, diff::CFixedString auto C, typename S>
+struct tuple_element<I, diff::Variable<T, C, S>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
 } // namespace std
 
 #define PDV(x, label)                                                          \
-  diff::Variable<diff::Dual<decltype(x)>, diff::FixedString{label}>(diff::Dual<decltype(x)>{x, 0})
+  diff::Variable<diff::Dual<decltype(x)>, diff::FixedString{label}>(           \
+      diff::Dual<decltype(x)>{x, 0})
 #define PV(x, label) diff::Variable<decltype(x), diff::FixedString{label}>(x)
 #define PC(x) diff::Constant(x)
