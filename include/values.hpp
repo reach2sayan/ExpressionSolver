@@ -328,11 +328,48 @@ public:
   constexpr explicit Variable(Storage s) noexcept : storage(std::move(s)) {}
   constexpr operator T() const noexcept { return eval(); }
   [[nodiscard]] constexpr auto get() const noexcept { return eval(); }
-  template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept;
-  constexpr void update(const auto &symbols, const auto &updates) noexcept;
-  constexpr void collect(const auto &symbols, auto &out) const noexcept;
-  [[nodiscard]] constexpr auto derivative() const noexcept;
-  constexpr void backward(const auto &syms, T adj, auto &grads) const noexcept;
+  template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept {
+    if constexpr (CHook<Storage, T>) {
+      if constexpr (requires { storage.set_f(T{}); })
+        storage.set_f(static_cast<T>(std::forward<U>(v)));
+    } else if constexpr (std::is_same_v<
+                             Storage, std::reference_wrapper<std::decay_t<U>>>) {
+      storage.get() = std::forward<U>(v);
+    } else if constexpr (!std::is_same_v<std::decay_t<U>, T> &&
+                         std::is_constructible_v<T, U>) {
+      storage = T{std::forward<U>(v)};
+    } else {
+      storage = std::forward<U>(v);
+    }
+    return *this;
+  }
+  constexpr void update(const auto &symbols, const auto &updates) noexcept {
+    if constexpr (!CHook<Storage, T>) {
+      using Syms = std::decay_t<decltype(symbols)>;
+      constexpr auto index = find_index_of_symbol<symbol, Syms>();
+      *this = updates[index];
+    }
+  }
+  constexpr void collect(const auto &symbols, auto &out) const noexcept {
+    if constexpr (!CHook<Storage, T>) {
+      using Syms = std::decay_t<decltype(symbols)>;
+      constexpr auto index = find_index_of_symbol<symbol, Syms>();
+      out[index] = storage;
+    }
+  }
+  [[nodiscard]] constexpr auto derivative() const noexcept {
+    auto ret = T{};
+    return Constant{++ret};
+  }
+  constexpr void backward(const auto &syms, T adj, auto &grads) const noexcept {
+    if constexpr (CHook<Storage, T>) {
+      storage.accum_df(adj);
+    } else {
+      using Syms = std::decay_t<decltype(syms)>;
+      constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+      grads[idx] += adj;
+    }
+  }
 
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr T
@@ -360,67 +397,6 @@ public:
   }
 };
 
-template <Numeric T, CFixedString auto symbol, typename Storage>
-template <typename U>
-constexpr decltype(auto)
-Variable<T, symbol, Storage>::operator=(U &&v) noexcept {
-  if constexpr (CHook<Storage, T>) {
-    if constexpr (requires { storage.set_f(T{}); })
-      storage.set_f(static_cast<T>(std::forward<U>(v)));
-  } else if constexpr (std::is_same_v<
-                           Storage, std::reference_wrapper<std::decay_t<U>>>) {
-    storage.get() = std::forward<U>(v);
-  } else if constexpr (!std::is_same_v<std::decay_t<U>, T> &&
-                       std::is_constructible_v<T, U>) {
-    storage = T{std::forward<U>(v)};
-  } else {
-    storage = std::forward<U>(v);
-  }
-  return *this;
-}
-
-template <Numeric T, CFixedString auto symbol, typename Storage>
-constexpr void
-Variable<T, symbol, Storage>::update(const auto &symbols,
-                                     const auto &updates) noexcept {
-  if constexpr (!CHook<Storage, T>) {
-    using Syms = std::decay_t<decltype(symbols)>;
-    constexpr auto index = find_index_of_symbol<symbol, Syms>();
-    *this = updates[index];
-  }
-  // hooked: caller writes to the buffer directly — no-op here
-}
-
-template <Numeric T, CFixedString auto symbol, typename Storage>
-constexpr void Variable<T, symbol, Storage>::collect(const auto &symbols,
-                                                     auto &out) const noexcept {
-  if constexpr (!CHook<Storage, T>) {
-    using Syms = std::decay_t<decltype(symbols)>;
-    constexpr auto index = find_index_of_symbol<symbol, Syms>();
-    out[index] = storage;
-  }
-  // hooked: caller reads from the buffer directly — no-op here
-}
-
-template <Numeric T, CFixedString auto symbol, typename Storage>
-constexpr auto Variable<T, symbol, Storage>::derivative() const noexcept {
-  auto ret = T{};
-  return Constant{++ret};
-}
-
-template <Numeric T, CFixedString auto symbol, typename Storage>
-constexpr void
-Variable<T, symbol, Storage>::backward(const auto &syms, T adj,
-                                       auto &grads) const noexcept {
-  if constexpr (CHook<Storage, T>) {
-    // gradient flows directly into the hook's df buffer
-    storage.accum_df(adj);
-  } else {
-    using Syms = std::decay_t<decltype(syms)>;
-    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-    grads[idx] += adj;
-  }
-}
 
 #define DEFINE_CONST_UDL(type, suffix)                                         \
   consteval diff::Constant<type> operator"" _##suffix(                         \
