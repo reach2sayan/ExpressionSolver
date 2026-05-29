@@ -20,12 +20,8 @@ template <typename T> constexpr static bool is_const = false;
 template <typename T> constexpr static bool is_const<Constant<T>> = true;
 
 template <typename T> inline constexpr bool is_variable_v = false;
-template <typename T, char C>
+template <typename T, CFixedString auto C>
 inline constexpr bool is_variable_v<Variable<T, C>> = true;
-
-template <typename T> inline constexpr char variable_symbol_v = '\0';
-template <typename T, char C>
-inline constexpr char variable_symbol_v<Variable<T, C>> = C;
 
 template <typename T> inline constexpr bool is_mono_expression_v = false;
 template <typename Op, typename E>
@@ -64,9 +60,14 @@ using as_const_expression = make_all_constant_t<
     Expression<typename TExpression::op_type, typename TExpression::lhs_type,
                typename TExpression::rhs_type>>;
 
-template <char symbol, typename T> consteval auto replace_matching_var_impl() {
-  if constexpr (is_variable_v<T> && variable_symbol_v<T> == symbol) {
-    return std::type_identity<Constant<typename T::value_type>>{};
+template <CFixedString auto symbol, typename T>
+consteval auto replace_matching_var_impl() {
+  if constexpr (is_variable_v<T>) {
+    if constexpr (T::label == symbol) {
+      return std::type_identity<Constant<typename T::value_type>>{};
+    } else {
+      return std::type_identity<T>{};
+    }
   } else if constexpr (is_binary_expression_v<T>) {
     using L = typename T::lhs_type;
     using R = typename T::rhs_type;
@@ -87,28 +88,28 @@ template <char symbol, typename T> consteval auto replace_matching_var_impl() {
   }
 }
 
-template <char symbol, typename T>
+template <CFixedString auto symbol, typename T>
 using replace_matching_variable_as_const_t =
     typename decltype(replace_matching_var_impl<symbol, T>())::type;
 
-template <char symbol, typename T>
+template <CFixedString auto symbol, typename T>
 constexpr auto make_const_variable(const Variable<T, symbol> &var) noexcept {
   return Constant<T>(var);
 }
 
-template <char symbol, typename T, char othersymbol>
+template <CFixedString auto symbol, typename T, CFixedString auto othersymbol>
   requires(symbol != othersymbol)
 consteval auto make_const_variable(const Variable<T, othersymbol> &var) noexcept
     -> Variable<T, othersymbol> {
   return var;
 }
 
-template <char symbol, typename T>
+template <CFixedString auto symbol, typename T>
 constexpr auto make_const_variable(const Constant<T> &c) noexcept {
   return c;
 }
 
-template <char symbol, typename Op, typename LHS, typename RHS>
+template <CFixedString auto symbol, typename Op, typename LHS, typename RHS>
 constexpr auto
 make_const_variable(const Expression<Op, LHS, RHS> &expr) noexcept
     -> Expression<Op, replace_matching_variable_as_const_t<symbol, LHS>,
@@ -118,40 +119,43 @@ make_const_variable(const Expression<Op, LHS, RHS> &expr) noexcept
           make_const_variable<symbol>(rexpr)};
 }
 
-template <char symbol, typename Op, typename LHS>
+template <CFixedString auto symbol, typename Op, typename LHS>
 constexpr auto make_const_variable(const MonoExpression<Op, LHS> &expr) noexcept
     -> MonoExpression<Op, replace_matching_variable_as_const_t<symbol, LHS>> {
   return {make_const_variable<symbol>(expr.expressions())};
 }
 
-template <typename T, char C, std::size_t N>
+template <typename T, CFixedString auto C, std::size_t N>
 consteval void make_labels_array(const Variable<T, C> &,
-                                 std::array<char, N> &out, std::size_t &index) {
-  out[index++] = C;
+                                 std::array<std::string_view, N> &out,
+                                 std::size_t &index) {
+  out[index++] = C.view();
 }
 
 template <typename T, std::size_t N>
-consteval void make_labels_array(const Constant<T> &, std::array<char, N> &,
+consteval void make_labels_array(const Constant<T> &,
+                                 std::array<std::string_view, N> &,
                                  std::size_t &) {}
 
 template <typename Op, typename LHS, typename RHS, std::size_t N>
 consteval void make_labels_array(const Expression<Op, LHS, RHS> &expr,
-                                 std::array<char, N> &out, std::size_t &index) {
+                                 std::array<std::string_view, N> &out,
+                                 std::size_t &index) {
   std::apply([&](const auto &...e) { (make_labels_array(e, out, index), ...); },
              expr.expressions());
 }
 
-template <char symbol, typename Expr>
+template <CFixedString auto symbol, typename Expr>
 consteval auto constify_unmatched_var_impl() {
   if constexpr (is_constant_v<Expr>) {
     return std::type_identity<Expr>{};
   } else if constexpr (is_variable_v<Expr>) {
-    if constexpr (variable_symbol_v<Expr> == symbol) {
+    if constexpr (Expr::label == symbol) {
       return std::type_identity<Expr>{};
     } else {
       return std::type_identity<Constant<typename Expr::value_type>>{};
     }
-  } else if constexpr (is_binary_expression_v<Expr>) {
+  } else if constexpr (is_binary_expression_v<Expr>) {  // already nested correctly
     using L = typename Expr::lhs_type;
     using R = typename Expr::rhs_type;
     using Op = typename Expr::op_type;
@@ -169,16 +173,16 @@ consteval auto constify_unmatched_var_impl() {
   }
 }
 
-template <char symbol, typename Expr>
+template <CFixedString auto symbol, typename Expr>
 using constify_unmatched_var_t =
     typename decltype(constify_unmatched_var_impl<symbol, Expr>())::type;
 
-template <char symbol, typename T>
+template <CFixedString auto symbol, typename T>
 constexpr auto make_all_constant_except(const Variable<T, symbol> &v) noexcept {
   return v;
 }
 
-template <char symbol, typename T, char othersymbol>
+template <CFixedString auto symbol, typename T, CFixedString auto othersymbol>
   requires(symbol != othersymbol)
 constexpr auto
 make_all_constant_except(const Variable<T, othersymbol> &var) noexcept
@@ -186,12 +190,12 @@ make_all_constant_except(const Variable<T, othersymbol> &var) noexcept
   return Constant<T>{var};
 }
 
-template <char Symbol, typename T>
+template <CFixedString auto symbol, typename T>
 constexpr auto make_all_constant_except(const Constant<T> &c) noexcept {
   return c;
 }
 
-template <char symbol, typename Op, typename LHS, typename RHS>
+template <CFixedString auto symbol, typename Op, typename LHS, typename RHS>
 constexpr auto
 make_all_constant_except(const Expression<Op, LHS, RHS> &expr) noexcept
     -> constify_unmatched_var_t<symbol, Expression<Op, LHS, RHS>> {
@@ -200,7 +204,7 @@ make_all_constant_except(const Expression<Op, LHS, RHS> &expr) noexcept
   return {new_lhs, new_rhs};
 }
 
-template <char symbol, typename Op, typename Expr>
+template <CFixedString auto symbol, typename Op, typename Expr>
 constexpr auto
 make_all_constant_except(const MonoExpression<Op, Expr> &expr) noexcept
     -> constify_unmatched_var_t<symbol, MonoExpression<Op, Expr>> {
@@ -208,8 +212,8 @@ make_all_constant_except(const MonoExpression<Op, Expr> &expr) noexcept
 }
 
 template <typename A, typename B>
-using ic_less = mp::mp_bool<(A::value < B::value)>;
-template <typename List> using sort_tuple_t = mp::mp_sort<List, ic_less>;
+using symbol_less = mp::mp_bool<(A::name < B::name)>;
+template <typename List> using sort_tuple_t = mp::mp_sort<List, symbol_less>;
 
 template <typename List>
 using unique_tuple_t = mp::mp_unique<sort_tuple_t<List>>;
@@ -223,8 +227,7 @@ using tuple_union_t = unique_tuple_t<mp::mp_append<Lists...>>;
 
 template <typename T> consteval auto extract_symbols_impl() {
   if constexpr (is_variable_v<T>) {
-    return std::type_identity<
-        mp::mp_list<std::integral_constant<char, variable_symbol_v<T>>>>{};
+    return std::type_identity<mp::mp_list<symbol_type<T::label>>>{};
   } else if constexpr (is_binary_expression_v<T>) {
     using L = typename T::lhs_type;
     using R = typename T::rhs_type;

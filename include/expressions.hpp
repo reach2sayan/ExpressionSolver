@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <ostream>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 
@@ -29,14 +30,47 @@ concept COp =
 template <COp Op, typename LHS, typename RHS> class Expression;
 template <COp Op, typename Exp> class MonoExpression;
 template <Numeric T> class Constant;
-template <Numeric T, char> class Variable;
+// ===========================================================================
+// FixedString — structural NTTP type for compile-time variable labels.
+// ===========================================================================
+template <std::size_t N>
+struct FixedString {
+  char data[N];
+  constexpr FixedString(const char (&str)[N]) noexcept {
+    for (std::size_t i = 0; i < N; ++i) data[i] = str[i];
+  }
+  constexpr bool operator==(const FixedString &) const noexcept = default;
+  template <std::size_t M>
+  constexpr bool operator==(const FixedString<M> &) const noexcept {
+    return false;
+  }
+  constexpr std::string_view view() const noexcept { return {data, N - 1}; }
+};
+template <std::size_t N> FixedString(const char (&)[N]) -> FixedString<N>;
+
+namespace detail {
+template <typename T> struct is_fixed_string_t : std::false_type {};
+template <std::size_t N>
+struct is_fixed_string_t<FixedString<N>> : std::true_type {};
+} // namespace detail
+
+template <typename T>
+concept CFixedString = detail::is_fixed_string_t<T>::value;
+
+template <auto S>
+struct symbol_type {
+  static constexpr auto value = S;
+  static constexpr std::string_view name = S.view();
+};
+
+template <Numeric T, CFixedString auto> class Variable;
 // ===========================================================================
 // Tag trait: true for any first-class expression node.
 // ===========================================================================
 template <typename T> struct is_expression_type : std::false_type {};
 template <Numeric T> struct is_expression_type<Constant<T>> : std::true_type {};
 
-template <Numeric T, char C>
+template <Numeric T, CFixedString auto C>
 struct is_expression_type<Variable<T, C>> : std::true_type {};
 
 template <COp Op, typename LHS, typename RHS>

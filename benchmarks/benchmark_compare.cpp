@@ -60,7 +60,7 @@ static void run_our_reverse(benchmark::State &state, const Expr &expr) {
 
 static void BM_Ours_Forward_F1(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, 'x'> x{D{1.25}};
+  Variable<D, diff::FixedString{"x"}> x{D{1.25}};
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
   run_our_forward(state, expr, std::array{1.25});
 }
@@ -69,7 +69,7 @@ BENCHMARK(BM_Ours_Forward_F1);
 static void BM_Ours_Reverse_F1(benchmark::State &state) {
   double xv = 1.25;
   benchmark::DoNotOptimize(xv);
-  auto x = PV(xv, 'x');
+  auto x = PV(xv, "x");
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
   run_our_reverse(state, expr);
 }
@@ -111,8 +111,8 @@ BENCHMARK(BM_AD_Reverse_F1);
 
 static void BM_Ours_Forward_F2(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, 'x'> x{D{1.3}};
-  Variable<D, 'y'> y{D{0.7}};
+  Variable<D, diff::FixedString{"x"}> x{D{1.3}};
+  Variable<D, diff::FixedString{"y"}> y{D{0.7}};
   auto expr = x * y + sin(x) + y * y + exp(x + y);
   run_our_forward(state, expr, std::array{1.3, 0.7});
 }
@@ -122,8 +122,8 @@ static void BM_Ours_Reverse_F2(benchmark::State &state) {
   double xv = 1.3, yv = 0.7;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, 'x');
-  auto y = PV(yv, 'y');
+  auto x = PV(xv, "x");
+  auto y = PV(yv, "y");
   auto expr = x * y + sin(x) + y * y + exp(x + y);
   run_our_reverse(state, expr);
 }
@@ -173,10 +173,10 @@ static const double W0 = std::numbers::pi_v<double> / 6.0;
 
 static void BM_Ours_Forward_F4(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, 'x'> x{D{1.0}};
-  Variable<D, 'y'> y{D{0.5}};
-  Variable<D, 'z'> z{D{1.7}};
-  Variable<D, 'w'> w{D{W0}};
+  Variable<D, diff::FixedString{"x"}> x{D{1.0}};
+  Variable<D, diff::FixedString{"y"}> y{D{0.5}};
+  Variable<D, diff::FixedString{"z"}> z{D{1.7}};
+  Variable<D, diff::FixedString{"w"}> w{D{W0}};
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
   run_our_forward(state, expr, std::array{1.0, 0.5, 1.7, W0});
 }
@@ -188,10 +188,10 @@ static void BM_Ours_Reverse_F4(benchmark::State &state) {
   benchmark::DoNotOptimize(yv);
   benchmark::DoNotOptimize(zv);
   benchmark::DoNotOptimize(wv);
-  auto x = PV(xv, 'x');
-  auto y = PV(yv, 'y');
-  auto z = PV(zv, 'z');
-  auto w = PV(wv, 'w');
+  auto x = PV(xv, "x");
+  auto y = PV(yv, "y");
+  auto z = PV(zv, "z");
+  auto w = PV(wv, "w");
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
   run_our_reverse(state, expr);
 }
@@ -247,7 +247,7 @@ BENCHMARK(BM_AD_Reverse_F4);
 
 static void BM_Ours_Forward_T1(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, 'x'> x{D{2.0}};
+  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
   auto expr = 1.0 + x + x * x + 1.0 / x + log(x);
   run_our_forward(state, expr, std::array{2.0});
 }
@@ -256,9 +256,9 @@ BENCHMARK(BM_Ours_Forward_T1);
 static void BM_Ours_Reverse_T1(benchmark::State &state) {
   double xv = 2.0;
   benchmark::DoNotOptimize(xv);
-  auto x = PV(xv, 'x');
+  auto x = PV(xv, "x");
   auto expr = PC(1.0) + x + x * x + PC(1.0) / x + log(x);
-  using Syms = boost::mp11::mp_list<std::integral_constant<char, 'x'>>;
+  using Syms = boost::mp11::mp_list<diff::symbol_type<diff::FixedString{"x"}>>;
   for (auto _ : state) {
     benchmark::DoNotOptimize(xv);
     expr.update(Syms{}, std::array{xv});
@@ -306,9 +306,9 @@ BENCHMARK(BM_AD_Reverse_T1);
 
 static void BM_Ours_Forward_TMulti3(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, 'x'> x{D{1.0}};
-  Variable<D, 'y'> y{D{2.0}};
-  Variable<D, 'z'> z{D{3.0}};
+  Variable<D, diff::FixedString{"x"}> x{D{1.0}};
+  Variable<D, diff::FixedString{"y"}> y{D{2.0}};
+  Variable<D, diff::FixedString{"z"}> z{D{3.0}};
   auto expr =
       1.0 + x + y + z + x * y + y * z + x * z + x * y * z + exp(x / y + y / z);
   run_our_forward(state, expr, std::array{1.0, 2.0, 3.0});
@@ -320,9 +320,9 @@ static void BM_Ours_Reverse_TMulti3(benchmark::State &state) {
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
   benchmark::DoNotOptimize(zv);
-  auto x = PV(xv, 'x');
-  auto y = PV(yv, 'y');
-  auto z = PV(zv, 'z');
+  auto x = PV(xv, "x");
+  auto y = PV(yv, "y");
+  auto z = PV(zv, "z");
   auto expr = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
               exp(x / y + y / z);
   run_our_reverse(state, expr);
@@ -377,8 +377,8 @@ BENCHMARK(BM_AD_Reverse_TMulti3);
 
 static void BM_Ours_Forward_TGrad2(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, 'x'> x{D{1.0}};
-  Variable<D, 'y'> y{D{0.5}};
+  Variable<D, diff::FixedString{"x"}> x{D{1.0}};
+  Variable<D, diff::FixedString{"y"}> y{D{0.5}};
   auto expr = sin(x) * cos(y) + exp(x * y);
   run_our_forward(state, expr, std::array{1.0, 0.5});
 }
@@ -388,8 +388,8 @@ static void BM_Ours_Reverse_TGrad2(benchmark::State &state) {
   double xv = 1.0, yv = 0.5;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, 'x');
-  auto y = PV(yv, 'y');
+  auto x = PV(xv, "x");
+  auto y = PV(yv, "y");
   auto expr = sin(x) * cos(y) + exp(x * y);
   run_our_reverse(state, expr);
 }
@@ -437,7 +437,7 @@ static const double T4_X0 = std::numbers::pi_v<double> / 4.0;
 
 static void BM_Ours_Forward_T4th(benchmark::State &state) {
   double x0 = T4_X0;
-  auto x = PV(x0, 'x');
+  auto x = PV(x0, "x");
   auto expr = sin(x);
   for (auto _ : state) {
     auto vals = std::array{T4_X0};
@@ -468,7 +468,7 @@ BENCHMARK(BM_AD_Forward_T4th);
 static void BM_Ours_Taylor_T4th(benchmark::State &state) {
   double x0 = T4_X0;
   benchmark::DoNotOptimize(x0);
-  auto x = PV(x0, 'x');
+  auto x = PV(x0, "x");
   auto expr = sin(x);
   for (auto _ : state) {
     benchmark::DoNotOptimize(x0);
@@ -487,8 +487,8 @@ static void BM_Ours_Forward_THess(benchmark::State &state) {
   double xv = 2.0, yv = 3.0;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, 'x');
-  auto y = PV(yv, 'y');
+  auto x = PV(xv, "x");
+  auto y = PV(yv, "y");
   auto expr = x * x + x * y + y * y;
   for (auto _ : state) {
     auto vals = std::array{xv, yv};
@@ -505,8 +505,8 @@ static void BM_Ours_Reverse_THess(benchmark::State &state) {
   double xv = 2.0, yv = 3.0;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  Variable<D, 'x'> x{D{xv}};
-  Variable<D, 'y'> y{D{yv}};
+  Variable<D, diff::FixedString{"x"}> x{D{xv}};
+  Variable<D, diff::FixedString{"y"}> y{D{yv}};
   auto expr = x * x + x * y + y * y;
   for (auto _ : state) {
     auto vals = std::array{xv, yv};
@@ -554,8 +554,8 @@ static void BM_Ours_Forward_TDir(benchmark::State &state) {
   double xv = 1.0, yv = 0.5;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  Variable<D, 'x'> x{D{xv, DIR_UXY}};
-  Variable<D, 'y'> y{D{yv, DIR_UXY}};
+  Variable<D, diff::FixedString{"x"}> x{D{xv, DIR_UXY}};
+  Variable<D, diff::FixedString{"y"}> y{D{yv, DIR_UXY}};
   auto expr = exp(x) * sin(y);
   for (auto _ : state) {
     auto val = expr.eval();
@@ -570,8 +570,8 @@ static void BM_Ours_Reverse_TDir(benchmark::State &state) {
   double xv = 1.0, yv = 0.5;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, 'x');
-  auto y = PV(yv, 'y');
+  auto x = PV(xv, "x");
+  auto y = PV(yv, "y");
   auto expr = exp(x) * sin(y);
   for (auto _ : state) {
     auto g = reverse_mode_grad(expr);

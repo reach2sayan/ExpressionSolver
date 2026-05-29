@@ -4,8 +4,8 @@
 
 int main() {
   // f(x, y) = x * y + 3 * x * y^2
-  auto x = PV(4, 'x');
-  auto y = PV(2, 'y');
+  auto x = PV(4, "x");
+  auto y = PV(2, "y");
   auto expr = x * y + PC(3) * x * y * y;
 
   std::cout << "f(x,y) = " << expr << "\n";
@@ -17,15 +17,15 @@ int main() {
   std::cout << "df/dy at (4,2) = " << dy << "\n";
 
   // trig: g(x) = sin(x) * cos(x)
-  auto vx = PV(1.0, 'x');
+  auto vx = PV(1.0, "x");
   auto trig = sin(vx) * cos(vx);
   std::cout << "\ng(1.0) = sin(x)*cos(x) = " << trig.eval() << "\n";
   std::cout << "g'(1.0) = " << trig.derivative().eval() << "\n";
 
   // --- Equation: f: R^2 -> R^2 ---
   // f(x, y) = (x + y,  x * y)
-  auto vx2 = PV(3.0, 'x');
-  auto vy2 = PV(4.0, 'y');
+  auto vx2 = PV(3.0, "x");
+  auto vy2 = PV(4.0, "y");
   auto ve = diff::Equation(vx2 + vy2, vx2 * 3 * vy2 * 2 + 1);
   std::cout << "\n--- Equation f(x,y) = (x+y, x*y) at (3, 4) ---\n";
   std::cout << ve;
@@ -40,8 +40,8 @@ int main() {
 
   // --- Equation: f: R^2 -> R^3 ---
   // f(x, y) = (x*x,  sin(x)*y,  x + y*y)
-  auto vx3 = PV(1.0, 'x');
-  auto vy3 = PV(2.0, 'y');
+  auto vx3 = PV(1.0, "x");
+  auto vy3 = PV(2.0, "y");
   auto ve3 = diff::Equation(vx3 * vx3, sin(vx3) * vy3, vx3 + vy3 * vy3);
   std::cout << "\n--- Equation f(x,y) = (x^2, sin(x)*y, x+y^2) at (1, 2) ---\n";
   std::cout << ve3;

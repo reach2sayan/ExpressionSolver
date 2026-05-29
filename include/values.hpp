@@ -20,8 +20,9 @@ concept CompatibleValueTypes =
     std::is_convertible_v<typename LHS::value_type, typename RHS::value_type> ||
     std::is_convertible_v<typename RHS::value_type, typename LHS::value_type>;
 
-template <char C, typename SymList> consteval std::size_t find_index_of_char() {
-  return boost::mp11::mp_find<SymList, std::integral_constant<char, C>>::value;
+template <CFixedString auto S, typename SymList>
+consteval std::size_t find_index_of_symbol() noexcept {
+  return boost::mp11::mp_find<SymList, symbol_type<S>>::value;
 }
 
 struct IOperators {
@@ -251,7 +252,7 @@ public:
   }
 };
 
-template <Numeric T, char symbol> class Variable : public IOperators {
+template <Numeric T, CFixedString auto symbol> class Variable : public IOperators {
   T value;
   friend std::ostream &operator<<(std::ostream &out,
                                   const Variable<T, symbol> &c) {
@@ -259,16 +260,16 @@ template <Numeric T, char symbol> class Variable : public IOperators {
       out << std::format("{}_", c.value);
     }
     if constexpr (PRINT_VARIABLE_LABEL) {
-      out << symbol;
+      out << symbol.view();
     }
     return out;
   }
-  static constexpr inline size_t static_counter = 0;
 
 public:
+  static constexpr auto label = symbol;
   [[nodiscard]] constexpr T eval() const noexcept { return value; }
   using value_type = T;
-  constexpr explicit Variable(T value, char = {}) noexcept : value(value) {}
+  constexpr explicit Variable(T value) noexcept : value(value) {}
   constexpr operator T() const noexcept { return value; }
   [[nodiscard]] constexpr auto get() const noexcept { return value; }
   template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept;
@@ -280,15 +281,14 @@ public:
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr T
   eval_seeded(const std::array<T, N> &vals) const noexcept {
-    constexpr auto idx = find_index_of_char<symbol, Syms>();
+    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
     return vals[idx];
   }
 
-  // eval_seeded_as<U>: return the U-typed seed for this variable.
   template <typename U, typename Syms, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded_as(const std::array<U, N> &vals) const noexcept {
-    constexpr auto idx = find_index_of_char<symbol, Syms>();
+    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
     return vals[idx];
   }
 
@@ -304,7 +304,7 @@ public:
   }
 };
 
-template <Numeric T, char symbol>
+template <Numeric T, CFixedString auto symbol>
 template <typename U>
 constexpr decltype(auto) Variable<T, symbol>::operator=(U &&v) noexcept {
   if constexpr (std::is_same_v<decltype(value),
@@ -319,33 +319,33 @@ constexpr decltype(auto) Variable<T, symbol>::operator=(U &&v) noexcept {
   return *this;
 }
 
-template <Numeric T, char symbol>
+template <Numeric T, CFixedString auto symbol>
 constexpr void Variable<T, symbol>::update(const auto &symbols,
                                            const auto &updates) noexcept {
   using Syms = std::decay_t<decltype(symbols)>;
-  constexpr auto index = find_index_of_char<symbol, Syms>();
+  constexpr auto index = find_index_of_symbol<symbol, Syms>();
   *this = updates[index];
 }
 
-template <Numeric T, char symbol>
+template <Numeric T, CFixedString auto symbol>
 constexpr void Variable<T, symbol>::collect(const auto &symbols,
                                             auto &out) const noexcept {
   using Syms = std::decay_t<decltype(symbols)>;
-  constexpr auto index = find_index_of_char<symbol, Syms>();
+  constexpr auto index = find_index_of_symbol<symbol, Syms>();
   out[index] = value;
 }
 
-template <Numeric T, char symbol>
+template <Numeric T, CFixedString auto symbol>
 constexpr auto Variable<T, symbol>::derivative() const noexcept {
   auto ret = T{};
   return Constant{++ret};
 }
 
-template <Numeric T, char symbol>
+template <Numeric T, CFixedString auto symbol>
 constexpr void Variable<T, symbol>::backward(const auto &syms, T adj,
                                              auto &grads) const noexcept {
   using Syms = std::decay_t<decltype(syms)>;
-  constexpr auto idx = find_index_of_char<symbol, Syms>();
+  constexpr auto idx = find_index_of_symbol<symbol, Syms>();
   grads[idx] += adj;
 }
 
@@ -360,18 +360,18 @@ constexpr void Variable<T, symbol>::backward(const auto &syms, T adj,
 
 #define DEFINE_VAR_UDL(type, suffix, label)                                    \
   consteval auto operator"" _##suffix(unsigned long long val) {                \
-    return diff::Variable<type, label>{static_cast<type>(val)};                \
+    return diff::Variable<type, diff::FixedString{label}>{static_cast<type>(val)}; \
   }                                                                            \
   consteval auto operator"" _##suffix(long double val) {                       \
-    return diff::Variable<type, label>{static_cast<type>(val)};                \
+    return diff::Variable<type, diff::FixedString{label}>{static_cast<type>(val)}; \
   }
 
 } // namespace diff
 
 DEFINE_CONST_UDL(int, ci)
 DEFINE_CONST_UDL(double, cd)
-DEFINE_VAR_UDL(int, vi, 'c')
-DEFINE_VAR_UDL(double, vd, 'v')
+DEFINE_VAR_UDL(int, vi, "c")
+DEFINE_VAR_UDL(double, vd, "v")
 
 namespace std {
 template <diff::Numeric T>
@@ -382,16 +382,16 @@ struct tuple_element<I, diff::Constant<T>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
 
-template <diff::Numeric T, char C>
+template <diff::Numeric T, diff::CFixedString auto C>
 struct tuple_size<diff::Variable<T, C>> : integral_constant<std::size_t, 2> {};
 
-template <std::size_t I, diff::Numeric T, char C>
+template <std::size_t I, diff::Numeric T, diff::CFixedString auto C>
 struct tuple_element<I, diff::Variable<T, C>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
 } // namespace std
 
 #define PDV(x, label)                                                          \
-  diff::Variable<diff::Dual<decltype(x)>, label>(diff::Dual<decltype(x)>{x, 0})
-#define PV(x, label) diff::Variable<decltype(x), label>(x)
+  diff::Variable<diff::Dual<decltype(x)>, diff::FixedString{label}>(diff::Dual<decltype(x)>{x, 0})
+#define PV(x, label) diff::Variable<decltype(x), diff::FixedString{label}>(x)
 #define PC(x) diff::Constant(x)
