@@ -18,6 +18,10 @@ jobs:
             build_type: Release
             c_compiler: clang
             cpp_compiler: clang++
+          - os: ubuntu-latest
+            build_type: Release
+            c_compiler: gcc
+            cpp_compiler: g++
           - os: windows-latest
             build_type: Release
             c_compiler: cl
@@ -26,11 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Clang and Boost (Ubuntu)
+      - name: Install compilers and Boost (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang libboost-dev
+          sudo apt-get install -y clang gcc libboost-dev
 
       - name: Install Boost headers via vcpkg (Windows)
         if: runner.os == 'Windows'

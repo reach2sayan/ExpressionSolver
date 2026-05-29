@@ -26,180 +26,192 @@ consteval std::size_t find_index_of_symbol() noexcept {
   return boost::mp11::mp_find<SymList, symbol_type<S>>::value;
 }
 
-struct IOperators {
+template <CExpression LHS, CExpression RHS>
+  requires CompatibleValueTypes<LHS, RHS>
+constexpr auto operator+(const LHS &a, const RHS &b) noexcept {
+  using value_type = typename LHS::value_type;
+  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+    return Constant<value_type>{a.get() + b.get()};
+  } else {
+    return Expression<SumOp<value_type>, LHS, RHS>{a, b};
+  }
+}
 
-  template <CExpression LHS, CExpression RHS>
-    requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator+(const LHS &a, const RHS &b) noexcept {
-    using value_type = typename LHS::value_type;
-    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
-      return Constant<value_type>{a.get() + b.get()};
-    } else {
-      return Expression<SumOp<value_type>, LHS, RHS>{a, b};
-    }
+template <CExpression LHS, CExpression RHS>
+  requires CompatibleValueTypes<LHS, RHS>
+constexpr auto operator*(const LHS &a, const RHS &b) noexcept {
+  using value_type = typename LHS::value_type;
+  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+    return Constant<value_type>{a.get() * b.get()};
+  } else {
+    return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
   }
+}
 
-  template <CExpression LHS, CExpression RHS>
-    requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator*(const LHS &a, const RHS &b) noexcept {
-    using value_type = typename LHS::value_type;
-    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
-      return Constant<value_type>{a.get() * b.get()};
-    } else {
-      return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
-    }
+template <CExpression LHS, CExpression RHS>
+  requires CompatibleValueTypes<LHS, RHS>
+constexpr auto operator-(const LHS &a, const RHS &b) noexcept {
+  using value_type = typename LHS::value_type;
+  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+    return Constant<value_type>{a.get() - b.get()};
+  } else {
+    auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
+    return Expression<SumOp<value_type>, LHS, decltype(neg)>{a, std::move(neg)};
   }
+}
 
-  template <CExpression LHS, CExpression RHS>
-    requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator-(const LHS &a, const RHS &b) noexcept {
-    using value_type = typename LHS::value_type;
-    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
-      return Constant<value_type>{a.get() - b.get()};
-    } else {
-      auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
-      return Expression<SumOp<value_type>, LHS, decltype(neg)>{a,
-                                                               std::move(neg)};
-    }
+template <CExpression LHS, CExpression RHS>
+  requires CompatibleValueTypes<LHS, RHS>
+constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
+  using value_type = typename LHS::value_type;
+  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+    return Constant<value_type>{a.get() / b.get()};
+  } else {
+    return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
   }
+}
 
-  template <CExpression LHS, CExpression RHS>
-    requires CompatibleValueTypes<LHS, RHS>
-  friend constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
-    using value_type = typename LHS::value_type;
-    if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
-      return Constant<value_type>{a.get() / b.get()};
-    } else {
-      return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
-    }
-  }
+template <CExpression Expr>
+constexpr auto operator-(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<NegateOp<value_type>, Expr>{a};
+}
 
-  template <CExpression Expr>
-  friend constexpr auto operator-(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<NegateOp<value_type>, Expr>{a};
-  }
+template <CExpression Expr>
+constexpr auto sin(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<SineOp<value_type>, Expr>{a};
+}
 
-  template <CExpression Expr>
-  friend constexpr auto sin(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<SineOp<value_type>, Expr>{a};
-  }
+template <CExpression Expr>
+constexpr auto cos(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<CosineOp<value_type>, Expr>{a};
+}
 
-  template <CExpression Expr>
-  friend constexpr auto cos(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<CosineOp<value_type>, Expr>{a};
-  }
+template <CExpression Expr>
+constexpr auto exp(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<ExpOp<value_type>, Expr>{a};
+}
 
-  template <CExpression Expr>
-  friend constexpr auto exp(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<ExpOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto tan(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<TanOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto log(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<LogOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto sqrt(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<SqrtOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto abs(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<AbsOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto asin(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<AsinOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto acos(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<AcosOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto atan(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<AtanOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto sinh(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<SinhOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto cosh(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<CoshOp<value_type>, Expr>{a};
-  }
-  template <CExpression Expr>
-  friend constexpr auto tanh(const Expr &a) noexcept {
-    using value_type = typename Expr::value_type;
-    return MonoExpression<TanhOp<value_type>, Expr>{a};
-  }
+template <CExpression Expr>
+constexpr auto tan(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<TanOp<value_type>, Expr>{a};
+}
 
-  template <typename S, CExpression RHS>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator+(S s, const RHS &b) noexcept {
-    using VT = typename RHS::value_type;
-    return Constant<VT>{static_cast<VT>(s)} + b;
-  }
-  template <typename S, CExpression RHS>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator*(S s, const RHS &b) noexcept {
-    using VT = typename RHS::value_type;
-    return Constant<VT>{static_cast<VT>(s)} * b;
-  }
-  template <typename S, CExpression RHS>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator-(S s, const RHS &b) noexcept {
-    using VT = typename RHS::value_type;
-    return Constant<VT>{static_cast<VT>(s)} - b;
-  }
-  template <typename S, CExpression RHS>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator/(S s, const RHS &b) noexcept {
-    using VT = typename RHS::value_type;
-    return Constant<VT>{static_cast<VT>(s)} / b;
-  }
+template <CExpression Expr>
+constexpr auto log(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<LogOp<value_type>, Expr>{a};
+}
 
-  template <CExpression LHS, typename S>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator+(const LHS &a, S s) noexcept {
-    using VT = typename LHS::value_type;
-    return a + Constant<VT>{static_cast<VT>(s)};
-  }
-  template <CExpression LHS, typename S>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator*(const LHS &a, S s) noexcept {
-    using VT = typename LHS::value_type;
-    return a * Constant<VT>{static_cast<VT>(s)};
-  }
-  template <CExpression LHS, typename S>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator-(const LHS &a, S s) noexcept {
-    using VT = typename LHS::value_type;
-    return a - Constant<VT>{static_cast<VT>(s)};
-  }
-  template <CExpression LHS, typename S>
-    requires std::is_arithmetic_v<S>
-  friend constexpr auto operator/(const LHS &a, S s) noexcept {
-    using VT = typename LHS::value_type;
-    return a / Constant<VT>{static_cast<VT>(s)};
-  }
-};
+template <CExpression Expr>
+constexpr auto sqrt(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<SqrtOp<value_type>, Expr>{a};
+}
 
-template <Numeric T> class Constant : public IOperators {
+template <CExpression Expr>
+constexpr auto abs(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<AbsOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr>
+constexpr auto asin(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<AsinOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr>
+constexpr auto acos(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<AcosOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr>
+constexpr auto atan(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<AtanOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr>
+constexpr auto sinh(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<SinhOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr>
+constexpr auto cosh(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<CoshOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr>
+constexpr auto tanh(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<TanhOp<value_type>, Expr>{a};
+}
+
+template <typename S, CExpression RHS>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator+(S s, const RHS &b) noexcept {
+  using VT = typename RHS::value_type;
+  return Constant<VT>{static_cast<VT>(s)} + b;
+}
+
+template <typename S, CExpression RHS>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator*(S s, const RHS &b) noexcept {
+  using VT = typename RHS::value_type;
+  return Constant<VT>{static_cast<VT>(s)} * b;
+}
+
+template <typename S, CExpression RHS>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator-(S s, const RHS &b) noexcept {
+  using VT = typename RHS::value_type;
+  return Constant<VT>{static_cast<VT>(s)} - b;
+}
+
+template <typename S, CExpression RHS>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator/(S s, const RHS &b) noexcept {
+  using VT = typename RHS::value_type;
+  return Constant<VT>{static_cast<VT>(s)} / b;
+}
+
+template <CExpression LHS, typename S>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator+(const LHS &a, S s) noexcept {
+  using VT = typename LHS::value_type;
+  return a + Constant<VT>{static_cast<VT>(s)};
+}
+
+template <CExpression LHS, typename S>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator*(const LHS &a, S s) noexcept {
+  using VT = typename LHS::value_type;
+  return a * Constant<VT>{static_cast<VT>(s)};
+}
+
+template <CExpression LHS, typename S>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator-(const LHS &a, S s) noexcept {
+  using VT = typename LHS::value_type;
+  return a - Constant<VT>{static_cast<VT>(s)};
+}
+
+template <CExpression LHS, typename S>
+  requires std::is_arithmetic_v<S>
+constexpr auto operator/(const LHS &a, S s) noexcept {
+  using VT = typename LHS::value_type;
+  return a / Constant<VT>{static_cast<VT>(s)};
+}
+
+template <Numeric T> class Constant {
   const T value;
   friend std::ostream &operator<<(std::ostream &out, const Constant<T> &c) {
     if constexpr (PRINT_CONSTANT_VALUE) {
@@ -291,7 +303,7 @@ template <Numeric T, std::size_t N> struct VectorHook {
 };
 
 template <Numeric T, CFixedString auto symbol, typename Storage>
-class Variable : public IOperators {
+class Variable {
   Storage storage;
   friend std::ostream &operator<<(std::ostream &out,
                                   const Variable<T, symbol, Storage> &c) {
