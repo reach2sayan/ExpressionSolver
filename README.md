@@ -87,14 +87,13 @@ Math functions: `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `asin`, `acos`
 
 ### Variable storage hooks
 
-A `Variable<T, "x", Storage>` can hold its value in three ways depending on `Storage`:
+A `Variable<T, "x", Storage>` can hold its value in two ways depending on `Storage`:
 
 | Storage type | Owns value? | Description |
 |---|---|---|
 | `T` (default) | yes | Value stored directly in the variable |
-| `ScalarHook<T>` | no | Points into an external `T` buffer via raw pointer |
-| `VectorHook<T, N>` | no | Factory: points into an `array<T,N>` buffer; call `.element(i)` to get a `ScalarHook` |
-| `FuncHook<T>` | no | Reads via a `std::function<T()>` callable; gradient accumulates via `std::function<void(T)>` |
+| `FuncHook<T, GetF, AccumDF, ZeroDF>` | no | Reads/writes through user-supplied callables; all types deduced via CTAD |
+| `VectorFuncHook<T, GetF, AccumDF, ZeroDF>` | no | Multi-slot callable hook; call `.element(i)` to get a per-index `FuncHook` |
 | any `CHook<H,T>` type | no | Custom hook — implement `get_f()`, `accum_df(adj)`, `zero_df()` |
 
 Hooked variables skip `update()` / `collect()` entirely — the expression tree reads and writes through the hook directly. `Variable::operator=` is a no-op for hook types without `set_f`.
@@ -263,54 +262,52 @@ auto ve = Equation(x * y, x * x);
 auto H = ve.hessian<DiffMode::Forward>();
 ```
 
-### ScalarHook — live binding to an external buffer
-
-Useful when values change frequently in a loop; no `update()` call needed between iterations.
-
-```cpp
-double f_x = 2.0, df_x = 0.0;
-double f_y = 3.0, df_y = 0.0;
-
-Variable<double, FixedString{"x"}, ScalarHook<double>> x{ScalarHook<double>{&f_x, &df_x}};
-Variable<double, FixedString{"y"}, ScalarHook<double>> y{ScalarHook<double>{&f_y, &df_y}};
-auto expr = x * x * y;
-
-using Syms = extract_symbols_from_expr_t<decltype(expr)>;
-std::array<double, 2> grads{};
-
-for (auto [new_x, new_y] : data) {
-    f_x = new_x; f_y = new_y;       // write directly — no update() needed
-    df_x = 0.0;  df_y = 0.0;
-    double val = expr.eval();
-    expr.backward(Syms{}, 1.0, grads);
-    // gradients land in df_x and df_y directly
-}
-```
-
 ### FuncHook — callable value source
 
-Lets a variable read from any callable — a sensor, a computed value, an external system.
+Lets a variable read from any callable — a sensor, a computed value, an external system. All callable types are deduced at construction (CTAD); no `std::function` overhead.
 
 ```cpp
 double sensor_val = 0.0, sensor_grad = 0.0;
 
-FuncHook<double> hook{
-    [&]{ return sensor_val; },             // get_f
-    [&](double adj){ sensor_grad += adj; },// accum_df
-    [&]{ sensor_grad = 0.0; }             // zero_df
+auto hook = FuncHook{
+    [&]{ return sensor_val; },              // get_f
+    [&](double adj){ sensor_grad += adj; }, // accum_df
+    [&]{ sensor_grad = 0.0; }              // zero_df
 };
-Variable<double, FixedString{"x"}, FuncHook<double>> x{hook};
+Variable<double, FixedString{"x"}, decltype(hook)> x{hook};
 auto expr = x * x;
 
 using Syms = extract_symbols_from_expr_t<decltype(expr)>;
 std::array<double, 1> grads{};
 
 sensor_val = 4.0;
-expr.eval();                               // returns 16.0
-expr.backward(Syms{}, 1.0, grads);        // sensor_grad == 8.0
+expr.eval();                                // returns 16.0
+expr.backward(Syms{}, 1.0, grads);         // sensor_grad == 8.0
 ```
 
-`FuncHook` uses `std::function` internally — prefer `ScalarHook` for tight loops over plain buffers.
+### VectorFuncHook — multi-slot callable hook
+
+Like `FuncHook` but indexed; `element(i)` returns a `FuncHook` bound to slot `i`. Useful when a block of variables share the same get/accumulate logic over an array, matrix row, etc.
+
+```cpp
+std::array<double, 2> f{3.0, 4.0}, df{};
+
+auto vh = VectorFuncHook{
+    [&](std::size_t i){ return f[i]; },
+    [&](std::size_t i, double adj){ df[i] += adj; },
+    [&]{ df.fill(0.0); }
+};
+
+auto hx = vh.element(0);
+auto hy = vh.element(1);
+Variable<double, FixedString{"x"}, decltype(hx)> x{hx};
+Variable<double, FixedString{"y"}, decltype(hy)> y{hy};
+
+auto expr = x * y;
+using Syms = extract_symbols_from_expr_t<decltype(expr)>;
+std::array<double, 2> grads{};
+expr.backward(Syms{}, 1.0, grads);  // df[0] == 4.0, df[1] == 3.0
+```
 
 ### Higher-order univariate derivative (TaylorDual)
 

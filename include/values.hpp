@@ -5,7 +5,6 @@
 #include <boost/mp11/algorithm.hpp>
 #include <concepts>
 #include <format>
-#include <functional>
 #include <string_view>
 
 namespace diff {
@@ -71,86 +70,72 @@ constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
   }
 }
 
-template <CExpression Expr>
-constexpr auto operator-(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<NegateOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto sin(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto sin(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<SineOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto cos(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto cos(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<CosineOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto exp(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto exp(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<ExpOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto tan(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto tan(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<TanOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto log(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto log(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<LogOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto sqrt(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto sqrt(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<SqrtOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto abs(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto abs(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<AbsOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto asin(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto asin(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<AsinOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto acos(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto acos(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<AcosOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto atan(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto atan(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<AtanOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto sinh(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto sinh(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<SinhOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto cosh(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto cosh(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<CoshOp<value_type>, Expr>{a};
 }
 
-template <CExpression Expr>
-constexpr auto tanh(const Expr &a) noexcept {
+template <CExpression Expr> constexpr auto tanh(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
   return MonoExpression<TanhOp<value_type>, Expr>{a};
 }
@@ -265,42 +250,48 @@ public:
   }
 };
 
-template <Numeric T> struct ScalarHook {
-  T *f;
-  T *df;
-  constexpr ScalarHook(T *f_ptr, T *df_ptr) noexcept : f(f_ptr), df(df_ptr) {}
-  [[nodiscard]] constexpr T get_f() const noexcept { return *f; }
-  constexpr void set_f(T val) const noexcept { *f = std::move(val); }
-  constexpr void accum_df(T adj) const noexcept { *df += adj; }
-  constexpr void zero_df() const noexcept { *df = T{}; }
+template <Numeric T, typename GetF, typename AccumDF, typename ZeroDF>
+struct FuncHook {
+  [[no_unique_address]] GetF get_f_fn;
+  [[no_unique_address]] AccumDF accum_df_fn;
+  [[no_unique_address]] ZeroDF zero_df_fn;
+
+  [[nodiscard]] constexpr T get_f() const noexcept { return get_f_fn(); }
+  constexpr void accum_df(T adj) const noexcept { accum_df_fn(adj); }
+  constexpr void zero_df() const noexcept { zero_df_fn(); }
 };
 
-template <Numeric T> struct FuncHook {
-  std::function<T()> get_f_fn;
-  std::function<void(T)> accum_df_fn;
-  std::function<void()> zero_df_fn;
+template <typename GetF, typename AccumDF, typename ZeroDF>
+FuncHook(GetF, AccumDF, ZeroDF)
+    -> FuncHook<std::invoke_result_t<GetF>, GetF, AccumDF, ZeroDF>;
 
-  [[nodiscard]] T get_f() const { return get_f_fn(); }
-  void accum_df(T adj) const { accum_df_fn(adj); }
-  void zero_df() const { zero_df_fn(); }
-};
+// VectorFuncHook: indexed callable hook.
+// element(i) returns a FuncHook bound to slot i — all types deduced.
+template <Numeric T, typename GetF, typename AccumDF, typename ZeroDF>
+struct VectorFuncHook {
+  [[no_unique_address]] GetF get_f_fn;
+  [[no_unique_address]] AccumDF accum_df_fn;
+  [[no_unique_address]] ZeroDF zero_df_fn;
 
-// VectorHook: N-element hook; use element(i) to obtain a ScalarHook per index.
-template <Numeric T, std::size_t N> struct VectorHook {
-  std::array<T, N> *f;
-  std::array<T, N> *df;
-  constexpr VectorHook(std::array<T, N> *f_ptr,
-                       std::array<T, N> *df_ptr) noexcept
-      : f(f_ptr), df(df_ptr) {}
   [[nodiscard]] constexpr T get_f(std::size_t i) const noexcept {
-    return (*f)[i];
+    return get_f_fn(i);
   }
-  constexpr void accum_df(std::size_t i, T adj) noexcept { (*df)[i] += adj; }
-  constexpr void zero_df() noexcept { df->fill(T{}); }
-  [[nodiscard]] constexpr ScalarHook<T> element(std::size_t i) noexcept {
-    return ScalarHook<T>{&(*f)[i], &(*df)[i]};
+  constexpr void accum_df(std::size_t i, T adj) const noexcept {
+    accum_df_fn(i, adj);
+  }
+  constexpr void zero_df() const noexcept { zero_df_fn(); }
+
+  [[nodiscard]] constexpr auto element(std::size_t i) const noexcept {
+    return FuncHook{[gf = get_f_fn, i] { return gf(i); },
+                    [ad = accum_df_fn, i](T adj) { ad(i, adj); },
+                    [zd = zero_df_fn] { zd(); }};
   }
 };
+
+template <typename GetF, typename AccumDF, typename ZeroDF>
+VectorFuncHook(GetF, AccumDF, ZeroDF)
+    -> VectorFuncHook<std::invoke_result_t<GetF, std::size_t>, GetF, AccumDF,
+                      ZeroDF>;
 
 template <Numeric T, CFixedString auto symbol, typename Storage>
 class Variable {
@@ -332,8 +323,8 @@ public:
     if constexpr (CHook<Storage, T>) {
       if constexpr (requires { storage.set_f(T{}); })
         storage.set_f(static_cast<T>(std::forward<U>(v)));
-    } else if constexpr (std::is_same_v<
-                             Storage, std::reference_wrapper<std::decay_t<U>>>) {
+    } else if constexpr (std::is_same_v<Storage, std::reference_wrapper<
+                                                     std::decay_t<U>>>) {
       storage.get() = std::forward<U>(v);
     } else if constexpr (!std::is_same_v<std::decay_t<U>, T> &&
                          std::is_constructible_v<T, U>) {
@@ -396,7 +387,6 @@ public:
     }
   }
 };
-
 
 #define DEFINE_CONST_UDL(type, suffix)                                         \
   consteval diff::Constant<type> operator"" _##suffix(                         \
