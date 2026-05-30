@@ -1,7 +1,6 @@
 [![CMake](https://github.com/reach2sayan/ExpressionSolver/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/reach2sayan/ExpressionSolver/actions/workflows/cmake-multi-platform.yml)
 [![C++](https://img.shields.io/badge/C++-%2300599C.svg?logo=c%2B%2B&logoColor=white)](#)
 
-
 # Expression Differentiator
 
 A header-only C++20 library for symbolic expression trees, symbolic differentiation, and automatic differentiation — forward mode (dual numbers), reverse mode (adjoint backpropagation), and second-order (Hessian) computation.
