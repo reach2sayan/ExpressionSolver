@@ -11,11 +11,11 @@ A header-only C++20 library for symbolic expression trees, symbolic differentiat
 - Compute exact symbolic derivatives with product, quotient, and chain rules.
 - Wrap a scalar expression in `Equation` to evaluate all partial derivatives symbolically.
 - Wrap multiple outputs in `Equation<F0, F1, ...>` to evaluate Jacobians (f: ℝⁿ → ℝᵐ).
-- Use `Dual<T>` for forward-mode AD; nest as `Dual<Dual<T>>` for second-order.
-- Use `TaylorDual<S, N>` for efficient N-th order univariate derivatives in O(N²) time.
-- Select differentiation mode with `DiffMode::Forward` / `DiffMode::Reverse` / `DiffMode::Symbolic`.
-- Use `gradient<DiffMode>` for scalar gradients; `hessian<DiffMode>` for scalar Hessians.
-- Use `eq.jacobian<DiffMode>()` for vector Jacobians; `eq.hessian<DiffMode>()` for per-output Hessians.
+- Use `gradient<DiffMode::Reverse>(expr)` for scalar gradients.
+- Use `hessian<DiffMode::Reverse>(expr)` for scalar Hessians (forward-over-reverse) — requires `Dual<T>`-valued variables.
+- Use `derivative_tensor<K>(expr)` for forward-mode K-th order derivatives (gradient at `K=1`, Hessian at `K=2`); works on plain scalar variables.
+- Use `univariate_derivative<K>(expr)` / `TaylorDual<S, N>` for efficient N-th order single-variable derivatives in O(N²) time.
+- Use `eq.jacobian<DiffMode::Symbolic | Reverse>()` for vector Jacobians and `eq.derivative_tensor<K>()` for forward-mode Jacobians (`K=1`) / per-output Hessians (`K=2`); `eq.hessian<DiffMode::Reverse>()` gives reverse-mode per-output Hessians.
 - Evaluate constant-only expressions at compile time.
 
 ## Requirements
@@ -60,7 +60,7 @@ See [BENCHMARKS.md](benchmarks/BENCHMARKS.md) for the full suite description, sn
 | Type | Description |
 |---|---|
 | `Constant<T>` | Fixed numeric value; derivative is zero |
-| `Variable<T, 'x'>` | Named symbolic variable |
+| `Variable<T, FixedString{"x"}>` | Named symbolic variable |
 
 ### Expression nodes
 
@@ -109,36 +109,41 @@ Hooked variables skip `update()` / `collect()` entirely — the expression tree 
 | Syntax | Meaning |
 |---|---|
 | `PC(v)` | `Constant<decltype(v)>{v}` |
-| `PV(v, 'x')` | `Variable<decltype(v), 'x'>{v}` |
-| `PDV(v, 'x')` | `Variable<Dual<decltype(v)>, 'x'>{Dual<decltype(v)>{v, 0}}` |
+| `PV(v, "x")` | `Variable<decltype(v), FixedString{"x"}>{v}` |
+| `PDV(v, "x")` | `Variable<Dual<decltype(v)>, FixedString{"x"}>{Dual<decltype(v)>{v, 0}}` |
 | `3_ci` | `Constant<int>{3}` |
 | `1.5_cd` | `Constant<double>{1.5}` |
-| `4_vi` | `Variable<int, 'c'>{4}` |
-| `2.0_vd` | `Variable<double, 'v'>{2.0}` |
+| `4_vi` | `Variable<int, FixedString{"c"}>{4}` |
+| `2.0_vd` | `Variable<double, FixedString{"v"}>{2.0}` |
 | `idx<N>()` | Compile-time derivative index for scalar `Equation` |
 | `IDX(N)` | Macro form of `idx<N>()` |
 
 ## Examples
 
+> All examples assume `using namespace diff;`. The `PC` / `PV` / `PDV` / `IDX` macros and the `_cd` / `_vd` literals are global; everything else (`Equation`, `gradient`, `hessian`, `Dual`, `DiffMode`, `Variable`, `idx<>()`, …) lives in `namespace diff`. A bare scalar mixed with an expression or a `Dual` operand (e.g. `x + 2.0`) is automatically promoted to a zero-derivative constant, so literals never need explicit wrapping.
+
 ### Symbolic differentiation
 
-```cpp
-auto x = PV(4.0, 'x');
-auto y = PV(2.0, 'y');
-auto expr = x * y + PC(3.0) * x * y * y;
+`derivative()` is the single-variable symbolic derivative, so use a one-variable expression here; for partials of a multi-variable function use `Equation` (next section).
 
-expr.eval();            // 56
-expr.derivative().eval(); // df/dx at current point
+```cpp
+auto x = PV(4.0, "x");
+auto expr = x * x + PC(3.0) * x; // f(x) = x² + 3x
+
+expr.eval();              // 28
+expr.derivative().eval(); // f'(x) = 2x + 3 = 11
 ```
 
 ### Scalar partial derivatives
 
+`Equation` wraps a scalar expression so all of its partial derivatives can be evaluated and indexed: build one with CTAD as `Equation(expr)`, then `eq[idx<0>()]` is the value and `eq[idx<k>()]` is the k-th partial.
+
 ```cpp
-auto x = PV(4, 'x');
-auto y = PV(2, 'y');
+auto x = PV(4, "x");
+auto y = PV(2, "y");
 auto eq = Equation(x * y);
 
-eq.eval();              // 8
+eq.evaluate();          // 8
 eq[idx<1>()].eval();    // df/dx = y = 2
 eq[idx<2>()].eval();    // df/dy = x = 4
 auto [dx, dy] = eq.eval_derivatives();
@@ -147,32 +152,30 @@ auto [dx, dy] = eq.eval_derivatives();
 ### Reverse-mode gradient (scalar)
 
 ```cpp
-auto x = PV(1.0, 'x');
-auto y = PV(2.0, 'y');
+auto x = PV(1.0, "x");
+auto y = PV(2.0, "y");
 auto g = gradient<DiffMode::Reverse>(exp(x) * sin(y));
 // g[0] = ∂f/∂x,  g[1] = ∂f/∂y
-
-// Or with Dual<double> variables:
-auto xd = PDV(1.0, 'x');
-auto g2 = gradient<DiffMode::Reverse>(exp(xd) * sin(PDV(2.0, 'y')));
 ```
 
 ### Forward-mode gradient (scalar)
 
+Forward mode is exposed through `derivative_tensor<K>`; `K=1` returns the gradient. It seeds dual tangents internally, so the variables stay plain scalars.
+
 ```cpp
-using D = Dual<double>;
-Variable<D, 'x'> x{D{3.0}};
-Variable<D, 'y'> y{D{4.0}};
-auto g = gradient<DiffMode::Forward>(x * y, std::array{3.0, 4.0});
-// g[0] = ∂f/∂x,  g[1] = ∂f/∂y
+auto x = PV(3.0, "x");
+auto y = PV(4.0, "y");
+auto g = derivative_tensor<1>(x * y, std::array{3.0, 4.0});
+// g[0] = ∂f/∂x = 4,  g[1] = ∂f/∂y = 3
 ```
 
 ### Scalar Hessian — reverse mode (forward-over-reverse)
 
+Reverse-mode Hessians need `Dual`-valued variables (`PDV`) so tangents can be seeded.
+
 ```cpp
-using D = Dual<double>;
-Variable<D, 'x'> x{D{2.0}};
-Variable<D, 'y'> y{D{3.0}};
+auto x = PDV(2.0, "x");
+auto y = PDV(3.0, "y");
 auto expr = x * y;
 
 // Pass values explicitly:
@@ -184,81 +187,87 @@ auto H2 = hessian<DiffMode::Reverse>(expr);
 
 ### Scalar Hessian — forward mode (forward-over-forward, stateless)
 
+`derivative_tensor<2>` returns the Hessian. It builds the nested duals internally, so the variables stay plain scalars.
+
 ```cpp
-using DD = Dual<Dual<double>>;
-using D  = Dual<double>;
-Variable<DD, 'x'> x{DD{D{2.0}, D{}}};
-Variable<DD, 'y'> y{DD{D{3.0}, D{}}};
+auto x = PV(2.0, "x");
+auto y = PV(3.0, "y");
 auto expr = x * y;
 
-auto H = hessian<DiffMode::Forward>(expr, std::array{2.0, 3.0});
-// Or: auto H = hessian<DiffMode::Forward>(expr);
+auto H = derivative_tensor<2>(expr, std::array{2.0, 3.0});
+// Or read from variable state: auto H = derivative_tensor<2>(expr);
+// H[i][j] = ∂²f/∂xᵢ∂xⱼ
 ```
 
 ### Vector Jacobian — symbolic
 
+`Equation<F0, F1, ...>` wraps multiple outputs (f: ℝⁿ → ℝᵐ); `jacobian` returns `J[i][j] = ∂fᵢ/∂xⱼ`.
+
 ```cpp
-auto x = PV(3.0, 'x');
-auto y = PV(4.0, 'y');
+auto x = PV(3.0, "x");
+auto y = PV(4.0, "y");
 auto ve = Equation(x + y, x * y);
 
 auto J = ve.jacobian<DiffMode::Symbolic>();
-// J(0,0)=1, J(0,1)=1, J(1,0)=4, J(1,1)=3
+// J[0][0]=1, J[0][1]=1, J[1][0]=4, J[1][1]=3
 ```
 
 ### Vector Jacobian — reverse-mode
 
 ```cpp
-auto x = PV(2.0, 'x');
-auto y = PV(3.0, 'y');
+auto x = PV(2.0, "x");
+auto y = PV(3.0, "y");
 auto ve = Equation(x * y, sin(x) + y * y);
 
 auto J = ve.jacobian<DiffMode::Reverse>();
 // Evaluate at a new point:
-auto J2 = ve.jacobian<DiffMode::Reverse>(Eigen::Vector2d{1.0, 2.0});
+auto J2 = ve.jacobian<DiffMode::Reverse>(std::array{1.0, 2.0});
 ```
 
 ### Vector Jacobian — forward-mode
 
+Forward-mode Jacobian is `derivative_tensor<1>` on the `Equation`; variables stay plain scalars.
+
 ```cpp
-using D = Dual<double>;
-Variable<D, 'x'> x{D{2.0}};
-Variable<D, 'y'> y{D{3.0}};
+auto x = PV(2.0, "x");
+auto y = PV(3.0, "y");
 auto ve = Equation(x * y, sin(x) + y * y);
 
-auto J = ve.jacobian<DiffMode::Forward>();
+auto J = ve.derivative_tensor<1>();
 // Or with explicit point:
-auto J2 = ve.jacobian<DiffMode::Forward>(Eigen::Vector2d{2.0, 3.0});
+auto J2 = ve.derivative_tensor<1>(std::array{2.0, 3.0});
 ```
 
 ### Per-output Hessian — reverse mode (forward-over-reverse)
 
-`H` is `std::array<Eigen::Matrix<S, n, n>, m>` where `S` is the base scalar type.
+`H` is `std::array<std::array<std::array<S, n>, n>, m>` where `S` is the base scalar type.
+
+Reverse-mode per-output Hessians need `Dual`-valued variables (`PDV`).
 
 ```cpp
-using D = Dual<double>;
-Variable<D, 'x'> x{D{2.0}};
-Variable<D, 'y'> y{D{3.0}};
+auto x = PDV(2.0, "x");
+auto y = PDV(3.0, "y");
 auto ve = Equation(x * y, x * x);
 
 auto H = ve.hessian<DiffMode::Reverse>();
-// H[0](i,j) = ∂²(x*y)/∂xᵢ∂xⱼ  →  [[0,1],[1,0]]
-// H[1](i,j) = ∂²(x²)/∂xᵢ∂xⱼ   →  [[2,0],[0,0]]
+// H[0][i][j] = ∂²(x*y)/∂xᵢ∂xⱼ  →  [[0,1],[1,0]]
+// H[1][i][j] = ∂²(x²)/∂xᵢ∂xⱼ   →  [[2,0],[0,0]]
 
 // Or with explicit point:
-auto H2 = ve.hessian<DiffMode::Reverse>(Eigen::Vector2d{2.0, 3.0});
+auto H2 = ve.hessian<DiffMode::Reverse>(std::array{2.0, 3.0});
 ```
 
 ### Per-output Hessian — forward mode (forward-over-forward)
 
+Forward-mode per-output Hessian is `derivative_tensor<2>` on the `Equation`; variables stay plain scalars.
+
 ```cpp
-using DD = Dual<Dual<double>>;
-using D  = Dual<double>;
-Variable<DD, 'x'> x{DD{D{2.0}, D{}}};
-Variable<DD, 'y'> y{DD{D{3.0}, D{}}};
+auto x = PV(2.0, "x");
+auto y = PV(3.0, "y");
 auto ve = Equation(x * y, x * x);
 
-auto H = ve.hessian<DiffMode::Forward>();
+auto H = ve.derivative_tensor<2>();
+// H[k][i][j] = ∂²fₖ/∂xᵢ∂xⱼ
 ```
 
 ### FuncHook — callable value source
@@ -315,7 +324,7 @@ Taylor coefficients and costs O(N²) per operation — far cheaper than the O(2^
 `Dual<Dual<...>>` approach.
 
 ```cpp
-auto x = PV(1.0, 'x');
+auto x = PV(1.0, "x");
 auto expr = sin(x);
 
 // 4th derivative of sin at x=1.0: should be sin(1.0)
@@ -328,8 +337,8 @@ double d4_current = univariate_derivative<4>(expr);
 For multi-variable expressions, use `derivative_tensor<K>` instead:
 
 ```cpp
-auto x = PV(1.0, 'x');
-auto y = PV(2.0, 'y');
+auto x = PV(1.0, "x");
+auto y = PV(2.0, "y");
 auto expr = x * y + sin(x);
 
 // Full rank-2 Hessian tensor: result[i][j] = ∂²f/∂xᵢ∂xⱼ
@@ -346,38 +355,40 @@ enum class DiffMode { Symbolic, Forward, Reverse };
 
 ### `gradient.hpp` — scalar free functions
 
+There are no `gradient`/`hessian` overloads for `DiffMode::Forward`; forward-mode derivatives are produced by `derivative_tensor<K>` (`K=1` gradient, `K=2` Hessian) and `univariate_derivative<K>`. `gradient` / `hessian` only exist for `DiffMode::Reverse`. The `expr`-only overloads read the current variable values via `collect()`.
+
 | Call | Mode | Mutates | Cost |
 |---|---|---|---|
 | `gradient<DiffMode::Reverse>(expr)` | reverse | no | 1 backward pass |
-| `gradient<DiffMode::Forward>(expr, values)` | forward | no | N `eval_seeded` passes |
 | `hessian<DiffMode::Reverse>(expr, values)` | forward-over-reverse | yes (restored) | N backward passes |
 | `hessian<DiffMode::Reverse>(expr)` | forward-over-reverse | yes (restored) | N backward passes |
-| `hessian<DiffMode::Forward>(expr, values)` | forward-over-forward | no | N² `eval_seeded` passes |
-| `hessian<DiffMode::Forward>(expr)` | forward-over-forward | no | N² `eval_seeded` passes |
 | `derivative_tensor<K>(expr, values)` | forward | no | N^K `eval_seeded_as` passes |
+| `derivative_tensor<K>(expr)` | forward | no | N^K `eval_seeded_as` passes |
 | `univariate_derivative<K>(expr, x0)` | forward (TaylorDual) | no | 1 pass, O(K²) |
 | `univariate_derivative<K>(expr)` | forward (TaylorDual) | no | 1 pass, O(K²) |
+
+`hessian<DiffMode::Reverse>` requires `Dual<T>`-valued variables; `derivative_tensor` / `univariate_derivative` work on plain scalar variables.
 
 ### `Equation<F0, F1, ...>` — vector methods
 
 | Method | Returns |
 |---|---|
-| `evaluate()` | `std::array<T, m>` |
+| `evaluate()` | `T` for `m=1`, else `std::array<T, m>` |
 | `jacobian<DiffMode::Symbolic>()` | `std::array<std::array<T, n>, m>` (symbolic, compile-time only) |
 | `jacobian<DiffMode::Reverse>([values])` | `std::array<std::array<T, n>, m>` — reverse-mode |
-| `jacobian<DiffMode::Forward>([values])` | `std::array<std::array<S, n>, m>` — forward-mode, requires `Dual<T>` |
-| `hessian<DiffMode::Reverse>([values])` | `std::array<Eigen::Matrix<S, n, n>, m>` — forward-over-reverse, requires `Dual<T>` |
-| `hessian<DiffMode::Forward>([values])` | `std::array<Eigen::Matrix<S, n, n>, m>` — forward-over-forward, requires `Dual<Dual<T>>` |
+| `derivative_tensor<1>([values])` | `std::array<std::array<S, n>, m>` — forward-mode Jacobian |
+| `hessian<DiffMode::Reverse>([values])` | `std::array<std::array<std::array<S, n>, n>, m>` — forward-over-reverse, requires `Dual<T>` |
+| `derivative_tensor<2>([values])` | `std::array<std::array<std::array<S, n>, n>, m>` — forward-over-forward |
 
-`S` is the base scalar type (extracted from `Dual<S>` or `Dual<Dual<S>>`).
+There are no `jacobian`/`hessian` overloads for `DiffMode::Forward`; use `derivative_tensor<K>` (which works on plain scalar variables). `S` is the base scalar type (extracted from any `Dual<…>` nesting).
 
 ## Notes
 
 - Symbol order is derived from variable type labels and sorted at compile time.
 - `Equation<F0, F1, ...>` deduces and unions all symbols across all component expressions.
-- Hessian methods require `Dual`-valued variables; the base scalar `S` is extracted automatically.
-- `hessian<DiffMode::Forward>` and `gradient<DiffMode::Forward>` are fully stateless (`const` expr).
-- `hessian<DiffMode::Reverse>` (scalar) mutates the expression to seed dual tangents but restores on exit.
+- `hessian<DiffMode::Reverse>` (scalar and per-output) requires `Dual`-valued variables; the base scalar `S` is extracted automatically.
+- `derivative_tensor<K>` and `univariate_derivative<K>` are fully stateless (`const` expr) and work on plain scalar variables — they build the dual tangents internally.
+- `hessian<DiffMode::Reverse>` mutates the expression to seed dual tangents but restores on exit.
 
 ## Contributing
 
