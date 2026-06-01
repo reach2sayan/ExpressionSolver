@@ -29,6 +29,35 @@ public:
   constexpr Dual operator/(const Dual &o) const noexcept {
     return Dual{val / o.val, (deriv * o.val - val * o.deriv) / (o.val * o.val)};
   }
+
+  // Mixed Dual/scalar arithmetic: a bare scalar is promoted to a
+  // zero-derivative Dual.  Hidden friends, so they only participate in overload
+  // resolution via ADL when a Dual operand is present.
+  friend constexpr Dual operator+(const Dual &a, const T &s) noexcept {
+    return a + Dual{s};
+  }
+  friend constexpr Dual operator+(const T &s, const Dual &a) noexcept {
+    return Dual{s} + a;
+  }
+  friend constexpr Dual operator-(const Dual &a, const T &s) noexcept {
+    return a - Dual{s};
+  }
+  friend constexpr Dual operator-(const T &s, const Dual &a) noexcept {
+    return Dual{s} - a;
+  }
+  friend constexpr Dual operator*(const Dual &a, const T &s) noexcept {
+    return a * Dual{s};
+  }
+  friend constexpr Dual operator*(const T &s, const Dual &a) noexcept {
+    return Dual{s} * a;
+  }
+  friend constexpr Dual operator/(const Dual &a, const T &s) noexcept {
+    return a / Dual{s};
+  }
+  friend constexpr Dual operator/(const T &s, const Dual &a) noexcept {
+    return Dual{s} / a;
+  }
+
   constexpr Dual &operator+=(const Dual &o) noexcept {
     val += o.val;
     deriv += o.deriv;
@@ -47,6 +76,20 @@ public:
     *this = *this / o;
     return *this;
   }
+
+  friend constexpr Dual &operator+=(Dual &a, const T &s) noexcept {
+    return a += Dual{s};
+  }
+  friend constexpr Dual &operator-=(Dual &a, const T &s) noexcept {
+    return a -= Dual{s};
+  }
+  friend constexpr Dual &operator*=(Dual &a, const T &s) noexcept {
+    return a *= Dual{s};
+  }
+  friend constexpr Dual &operator/=(Dual &a, const T &s) noexcept {
+    return a /= Dual{s};
+  }
+
   constexpr Dual operator-() const noexcept { return Dual{-val, -deriv}; }
   constexpr Dual &operator++() noexcept {
     ++val;

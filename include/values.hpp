@@ -140,60 +140,62 @@ template <CExpression Expr> constexpr auto tanh(const Expr &a) noexcept {
   return MonoExpression<TanhOp<value_type>, Expr>{a};
 }
 
+// Promote a bare scalar `s` into the expression's value_type as a
+// zero-derivative constant.  ConstantEmbedder recurses through every Dual<>
+// nesting level, so this is correct even when VT is a multi-level dual (e.g.
+// Dual<Dual<double>>); for non-dual VT it is just a cast.
+template <typename VT, typename S>
+constexpr Constant<VT> promote_scalar(S s) noexcept {
+  return Constant<VT>{
+      ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
+}
+
 template <typename S, CExpression RHS>
   requires std::is_arithmetic_v<S>
 constexpr auto operator+(S s, const RHS &b) noexcept {
-  using VT = typename RHS::value_type;
-  return Constant<VT>{static_cast<VT>(s)} + b;
+  return promote_scalar<typename RHS::value_type>(s) + b;
 }
 
 template <typename S, CExpression RHS>
   requires std::is_arithmetic_v<S>
 constexpr auto operator*(S s, const RHS &b) noexcept {
-  using VT = typename RHS::value_type;
-  return Constant<VT>{static_cast<VT>(s)} * b;
+  return promote_scalar<typename RHS::value_type>(s) * b;
 }
 
 template <typename S, CExpression RHS>
   requires std::is_arithmetic_v<S>
 constexpr auto operator-(S s, const RHS &b) noexcept {
-  using VT = typename RHS::value_type;
-  return Constant<VT>{static_cast<VT>(s)} - b;
+  return promote_scalar<typename RHS::value_type>(s) - b;
 }
 
 template <typename S, CExpression RHS>
   requires std::is_arithmetic_v<S>
 constexpr auto operator/(S s, const RHS &b) noexcept {
-  using VT = typename RHS::value_type;
-  return Constant<VT>{static_cast<VT>(s)} / b;
+  return promote_scalar<typename RHS::value_type>(s) / b;
 }
 
 template <CExpression LHS, typename S>
   requires std::is_arithmetic_v<S>
 constexpr auto operator+(const LHS &a, S s) noexcept {
-  using VT = typename LHS::value_type;
-  return a + Constant<VT>{static_cast<VT>(s)};
+  return a + promote_scalar<typename LHS::value_type>(s);
 }
 
 template <CExpression LHS, typename S>
   requires std::is_arithmetic_v<S>
 constexpr auto operator*(const LHS &a, S s) noexcept {
-  using VT = typename LHS::value_type;
-  return a * Constant<VT>{static_cast<VT>(s)};
+  return a * promote_scalar<typename LHS::value_type>(s);
 }
 
 template <CExpression LHS, typename S>
   requires std::is_arithmetic_v<S>
 constexpr auto operator-(const LHS &a, S s) noexcept {
-  using VT = typename LHS::value_type;
-  return a - Constant<VT>{static_cast<VT>(s)};
+  return a - promote_scalar<typename LHS::value_type>(s);
 }
 
 template <CExpression LHS, typename S>
   requires std::is_arithmetic_v<S>
 constexpr auto operator/(const LHS &a, S s) noexcept {
-  using VT = typename LHS::value_type;
-  return a / Constant<VT>{static_cast<VT>(s)};
+  return a / promote_scalar<typename LHS::value_type>(s);
 }
 
 template <Numeric T> class Constant {

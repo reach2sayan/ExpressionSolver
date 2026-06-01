@@ -935,6 +935,56 @@ TEST(ForwardModeAD, BasicArithmetic) {
   EXPECT_DOUBLE_EQ(quot_deriv, 0.5); // (1*2 - 3*0)/4 = 0.5
 }
 
+TEST(ForwardModeAD, DualScalarArithmetic) {
+  // A bare scalar promotes to a zero-derivative Dual, so the derivative part
+  // of `d` is preserved (or scaled, for * and /) and the value part shifts.
+  constexpr Dual<double> d{3.0, 1.0};
+
+  auto [add_v, add_d] = d + 2.0;
+  EXPECT_DOUBLE_EQ(add_v, 5.0);
+  EXPECT_DOUBLE_EQ(add_d, 1.0);
+  auto [radd_v, radd_d] = 2.0 + d;
+  EXPECT_DOUBLE_EQ(radd_v, 5.0);
+  EXPECT_DOUBLE_EQ(radd_d, 1.0);
+
+  auto [sub_v, sub_d] = d - 2.0;
+  EXPECT_DOUBLE_EQ(sub_v, 1.0);
+  EXPECT_DOUBLE_EQ(sub_d, 1.0);
+  auto [rsub_v, rsub_d] = 2.0 - d;
+  EXPECT_DOUBLE_EQ(rsub_v, -1.0);
+  EXPECT_DOUBLE_EQ(rsub_d, -1.0);
+
+  auto [mul_v, mul_d] = 2.0 * d;
+  EXPECT_DOUBLE_EQ(mul_v, 6.0);
+  EXPECT_DOUBLE_EQ(mul_d, 2.0); // scalar scales the derivative
+
+  auto [div_v, div_d] = d / 2.0;
+  EXPECT_DOUBLE_EQ(div_v, 1.5);
+  EXPECT_DOUBLE_EQ(div_d, 0.5);
+
+  Dual<double> acc{3.0, 1.0};
+  acc += 2.0;
+  EXPECT_DOUBLE_EQ(acc.template get<0>(), 5.0);
+  EXPECT_DOUBLE_EQ(acc.template get<1>(), 1.0);
+}
+
+TEST(ForwardModeAD, ScalarPromotionDeepDual) {
+  // Second-order dual value_type (Dual<Dual<double>>): `expr + scalar` must
+  // compile and embed a zero derivative at every nesting level.  The old
+  // single static_cast required two chained explicit-ctor conversions and was
+  // a hard compile error here.
+  using DD = Dual<Dual<double>>;
+  Variable<DD, diff::FixedString{"x"}> x{
+      DD{Dual<double>{2.0, 0.0}, Dual<double>{0.0, 0.0}}};
+  auto expr = x + 2.0;
+  DD result = expr.eval();
+  EXPECT_DOUBLE_EQ(get_real_part<2>(result), 4.0); // peel both Dual<> layers
+
+  // Plain (non-dual) expression still behaves as before.
+  auto y = PV(3.0, "y");
+  EXPECT_DOUBLE_EQ((y + 2.0).eval(), 5.0);
+}
+
 TEST(ForwardModeAD, PolynomialDerivative) {
   // f(x) = x^2 + x,  f'(x) = 2x + 1
   // At x=3: f=12, f'=7
