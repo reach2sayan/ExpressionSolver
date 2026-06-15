@@ -83,9 +83,12 @@ add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/values.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/equation.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dual.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/forward_driver.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/gradient.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/expression_differentiator.hpp
 )
+# Namespaced alias so consumers can link a stable target name.
+add_library(ExpressionDifferentiator::diff ALIAS diff)
 target_include_directories(diff INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(diff INTERFACE Boost::headers)
 target_include_directories(diff SYSTEM INTERFACE

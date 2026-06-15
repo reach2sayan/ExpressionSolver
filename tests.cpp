@@ -1,9 +1,12 @@
 #include "dual.hpp"
 #include "equation.hpp"
+#include "forward_driver.hpp"
 #include "gradient.hpp"
 #include "operations.hpp"
 #include "traits.hpp"
 #include "values.hpp"
+#include <array>
+#include <cmath>
 #include <gtest/gtest.h>
 #include <numbers>
 #include <random>
@@ -2255,5 +2258,81 @@ TEST(FuncHookTest, AssignmentIsNoOp) {
 
   x = 99.0;  // no set_f — no-op
   EXPECT_DOUBLE_EQ(x.eval(), 5.0);  // still reads from source
+}
+
+// ===========================================================================
+// autodiff-compatible freestanding scalar contract + forward-mode drivers.
+// These cover the surface a generic templated f(const Scalar*) needs to be
+// differentiated the way autodiff::dual2nd + hessian(...) is used downstream.
+// ===========================================================================
+
+TEST(DualScalarContract, ValAndToDouble) {
+  const dual2nd a = embed_constant<double, 2>(3.5);
+  EXPECT_DOUBLE_EQ(val(a), 3.5);
+  EXPECT_DOUBLE_EQ(to_double(a), 3.5);
+  EXPECT_DOUBLE_EQ(val(2.0), 2.0); // identity on a plain scalar
+}
+
+TEST(DualScalarContract, ScalarMixingAtDepth) {
+  // x = 2, seeded so the outer first-derivative slot tracks d/dx.
+  const dual2nd x{Dual<double>{2.0, 1.0}, Dual<double>{1.0, 0.0}};
+  // f = 3*x + x*2 - 1  ->  value 9, df/dx = 5  (bare doubles mix at depth 2)
+  const dual2nd f = 3.0 * x + x * 2.0 - 1.0;
+  EXPECT_DOUBLE_EQ(val(f), 9.0);
+  EXPECT_DOUBLE_EQ(f.get<1>().get<0>(), 5.0);
+}
+
+TEST(DualScalarContract, PowMaxMinAndComparisons) {
+  const dual2nd x = embed_constant<double, 2>(2.0);
+  EXPECT_DOUBLE_EQ(val(pow(x, 3.0)), 8.0); // scalar exponent
+  EXPECT_DOUBLE_EQ(val(pow(x, x)), 4.0);   // dual exponent
+  EXPECT_DOUBLE_EQ(val(max(x, 5.0)), 5.0);
+  EXPECT_DOUBLE_EQ(val(min(x, 5.0)), 2.0);
+  EXPECT_TRUE(x < 3.0);
+  EXPECT_TRUE(x <= 2.0);
+  EXPECT_FALSE(x > 2.0);
+  EXPECT_TRUE(x == 2.0);
+  EXPECT_TRUE(x != 1.0);
+}
+
+TEST(ForwardDriver, GradientAndHessianCrossTerm) {
+  // f(x0,x1) = x0^2 x1 + x1^3
+  auto f = [](const auto *x) { return x[0] * x[0] * x[1] + x[1] * x[1] * x[1]; };
+  const std::array<double, 2> x{2.0, 3.0};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  const auto H = diff::hessian(f, xs);
+  EXPECT_DOUBLE_EQ(H.value, 39.0);          // 4*3 + 27
+  ASSERT_EQ(H.gradient.size(), 2u);
+  EXPECT_DOUBLE_EQ(H.gradient[0], 12.0);    // 2 x0 x1
+  EXPECT_DOUBLE_EQ(H.gradient[1], 31.0);    // x0^2 + 3 x1^2
+  EXPECT_DOUBLE_EQ(H.h(0, 0), 6.0);         // 2 x1
+  EXPECT_DOUBLE_EQ(H.h(0, 1), 4.0);         // 2 x0
+  EXPECT_DOUBLE_EQ(H.h(1, 0), 4.0);
+  EXPECT_DOUBLE_EQ(H.h(1, 1), 18.0);        // 6 x1
+
+  const auto g = diff::gradient(f, xs);
+  EXPECT_DOUBLE_EQ(g[0], 12.0);
+  EXPECT_DOUBLE_EQ(g[1], 31.0);
+}
+
+TEST(ForwardDriver, IdealMixingHessianMatchesClosedForm) {
+  // Mirrors the downstream CALPHAD oracle: G = R T (y0 ln y0 + y1 ln y1).
+  const double R = 8.31446261815324;
+  const double T = 1000.0;
+  auto f = [R, T](const auto *y) {
+    using std::log; // ADL still picks diff::log for the dual argument
+    return R * T * (y[0] * log(y[0]) + y[1] * log(y[1]));
+  };
+  const std::array<double, 2> y{0.3, 0.7};
+  const auto H = diff::hessian(f, std::span<const double>{y.data(), y.size()});
+
+  EXPECT_NEAR(H.value, R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
+              1e-6);
+  EXPECT_NEAR(H.gradient[0], R * T * (std::log(0.3) + 1.0), 1e-6);
+  EXPECT_NEAR(H.gradient[1], R * T * (std::log(0.7) + 1.0), 1e-6);
+  EXPECT_NEAR(H.h(0, 0), R * T / 0.3, 1e-3);
+  EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
+  EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6); // no cross term
 }
 

@@ -9,6 +9,7 @@
 #include "include/taylor_dual.hpp"
 #include "include/dual.hpp"
 #include "include/equation.hpp"
+#include "include/forward_driver.hpp"
 #include "include/gradient.hpp"
 #include "include/values.hpp"
 
