@@ -1,0 +1,127 @@
+#pragma once
+
+// Forward-mode, callable-based multivariate derivative drivers.
+//
+// Unlike the symbolic gradient()/hessian() in gradient.hpp (which operate on
+// CExpression trees), these take a *generic numeric callable* over an array of
+// dual scalars — the role autodiff's hessian(f, wrt(y), at(y), u, grad) plays.
+// This is what lets a function written once as
+//
+//     template <typename Scalar> Scalar f(const Scalar* x);
+//
+// be differentiated for an arbitrary, runtime-determined set of variables.
+
+#include "dual.hpp"
+
+#include <cstddef>
+#include <span>
+#include <vector>
+
+namespace diff {
+
+namespace detail {
+inline std::vector<std::size_t> iota_indices(std::size_t n) {
+  std::vector<std::size_t> v(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    v[i] = i;
+  }
+  return v;
+}
+} // namespace detail
+
+// Result of a second-order forward sweep over `active` variables.
+struct HessianResult {
+  double value{};                  // f(x)
+  std::vector<double> gradient;    // size = active.size()
+  std::vector<double> hessian;     // row-major, active.size() x active.size()
+
+  std::size_t n() const noexcept { return gradient.size(); }
+  double &h(std::size_t i, std::size_t j) noexcept {
+    return hessian[i * n() + j];
+  }
+  double h(std::size_t i, std::size_t j) const noexcept {
+    return hessian[i * n() + j];
+  }
+};
+
+// First-order gradient of f at x, w.r.t. the variables listed in `active`.
+//
+// f must be callable as f(const dual*) and return a dual, evaluating the
+// function over a full dof array of length x.size().
+template <typename F>
+std::vector<double> gradient(F &&f, std::span<const double> x,
+                             std::span<const std::size_t> active) {
+  const std::size_t n = x.size();
+  const std::size_t m = active.size();
+  std::vector<double> g(m, 0.0);
+  std::vector<dual> dof(n);
+
+  for (std::size_t j = 0; j < m; ++j) {
+    for (std::size_t k = 0; k < n; ++k) {
+      dof[k] = dual{x[k], 0.0};
+    }
+    dof[active[j]] = dual{x[active[j]], 1.0};
+    const dual r = f(dof.data());
+    g[j] = r.template get<1>(); // d f / d x_{active[j]}
+  }
+  return g;
+}
+
+// Convenience: differentiate every variable.
+template <typename F>
+std::vector<double> gradient(F &&f, std::span<const double> x) {
+  const auto all = detail::iota_indices(x.size());
+  return gradient(static_cast<F &&>(f), x, all);
+}
+
+// Value, gradient, and (symmetric) Hessian of f at x, w.r.t. `active`.
+//
+// Uses second-order forward-over-forward seeding on dual2nd
+// (= Dual<Dual<double>>).  For a probe pair (i, j) we seed variable
+// active[i] in the outer derivative slot and active[j] in the inner derivative
+// slot; evaluating f then yields, in the result D = ((A0,A1),(B0,B1)):
+//   A0 = f(x),  B0 = df/dx_i,  A1 = df/dx_j,  B1 = d2f/dx_i dx_j.
+template <typename F>
+HessianResult hessian(F &&f, std::span<const double> x,
+                      std::span<const std::size_t> active) {
+  const std::size_t n = x.size();
+  const std::size_t m = active.size();
+
+  HessianResult res;
+  res.gradient.assign(m, 0.0);
+  res.hessian.assign(m * m, 0.0);
+
+  std::vector<dual2nd> dof(n);
+  using Inner = Dual<double>;
+
+  for (std::size_t j = 0; j < m; ++j) {
+    for (std::size_t i = 0; i <= j; ++i) {
+      for (std::size_t k = 0; k < n; ++k) {
+        const double inner_seed = (k == active[j]) ? 1.0 : 0.0; // v = e_j
+        const double outer_seed = (k == active[i]) ? 1.0 : 0.0; // u = e_i
+        dof[k] = dual2nd{Inner{x[k], inner_seed}, Inner{outer_seed, 0.0}};
+      }
+
+      const dual2nd r = f(dof.data());
+      const Inner A = r.template get<0>(); // value-component
+      const Inner B = r.template get<1>(); // outer-derivative component
+
+      res.value = A.template get<0>();             // f(x)
+      res.gradient[i] = B.template get<0>();       // df/dx_i
+      res.gradient[j] = A.template get<1>();       // df/dx_j
+      const double d2 = B.template get<1>();       // d2f/dx_i dx_j
+      res.hessian[i * m + j] = d2;
+      res.hessian[j * m + i] = d2;
+    }
+  }
+  return res;
+}
+
+// Convenience: differentiate every variable.
+template <typename F>
+HessianResult hessian(F &&f, std::span<const double> x) {
+  const auto all = detail::iota_indices(x.size());
+  return hessian(static_cast<F &&>(f), x, all);
+}
+
+} // namespace diff
