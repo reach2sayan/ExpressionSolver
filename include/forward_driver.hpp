@@ -1,19 +1,9 @@
 #pragma once
 
-// Forward-mode, callable-based multivariate derivative drivers.
-//
-// Unlike the symbolic gradient()/hessian() in gradient.hpp (which operate on
-// CExpression trees), these take a *generic numeric callable* over an array of
-// dual scalars — the role autodiff's hessian(f, wrt(y), at(y), u, grad) plays.
-// This is what lets a function written once as
-//
-//     template <typename Scalar> Scalar f(const Scalar* x);
-//
-// be differentiated for an arbitrary, runtime-determined set of variables.
-
 #include "dual.hpp"
 
 #include <cstddef>
+#include <numeric>
 #include <span>
 #include <vector>
 
@@ -22,9 +12,7 @@ namespace diff {
 namespace detail {
 inline std::vector<std::size_t> iota_indices(std::size_t n) {
   std::vector<std::size_t> v(n);
-  for (std::size_t i = 0; i < n; ++i) {
-    v[i] = i;
-  }
+  std::iota(v.begin(), v.end(), std::size_t{0});
   return v;
 }
 } // namespace detail
@@ -44,10 +32,6 @@ struct HessianResult {
   }
 };
 
-// First-order gradient of f at x, w.r.t. the variables listed in `active`.
-//
-// f must be callable as f(const dual*) and return a dual, evaluating the
-// function over a full dof array of length x.size().
 template <typename F>
 std::vector<double> gradient(F &&f, std::span<const double> x,
                              std::span<const std::size_t> active) {
@@ -57,12 +41,12 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   std::vector<dual> dof(n);
 
   for (std::size_t j = 0; j < m; ++j) {
+    std::ranges::fill(dof, dual{0.0, 0.0});
     for (std::size_t k = 0; k < n; ++k) {
       dof[k] = dual{x[k], 0.0};
     }
     dof[active[j]] = dual{x[active[j]], 1.0};
-    const dual r = f(dof.data());
-    g[j] = r.template get<1>(); // d f / d x_{active[j]}
+    g[j] = f(dof.data()).template get<1>();
   }
   return g;
 }

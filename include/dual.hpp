@@ -18,6 +18,14 @@ public:
   constexpr Dual() noexcept = default;
   constexpr explicit Dual(T v, T d = T{}) noexcept : val(v), deriv(d) {}
 
+  // Implicit lift of a base arithmetic scalar to a zero-derivative constant.
+  // Recurses through nesting (the functional cast T(s) re-enters this ctor for
+  // the inner Dual), so `Dual<Dual<...>>{x}` and `S c = 1.0;` work at any depth
+  // — matching autodiff's implicit double->dual conversion that callers rely on.
+  template <typename U>
+    requires std::is_arithmetic_v<U>
+  constexpr Dual(U s) noexcept : val(T(s)), deriv(T{}) {}
+
   constexpr Dual operator+(const Dual &o) const noexcept {
     return Dual{val + o.val, deriv + o.deriv};
   }
@@ -245,19 +253,9 @@ constexpr auto get_real_part(const T &x) noexcept {
   }
 }
 
-// ===========================================================================
-// autodiff-compatible scalar contract for Dual<>.
-//
-// These additions let a nested Dual (e.g. nth_dual_t<double, 2>) be used as a
-// freestanding numeric scalar inside ordinary templated code — the same role
-// autodiff::dual2nd plays.  They cover: value extraction (val/to_double),
-// mixing with plain arithmetic scalars at any nesting depth, pow/max/min,
-// comparisons (branch-on-value), and isfinite.
-// ===========================================================================
-
 // Public aliases matching autodiff's spelling.
-using dual = nth_dual_t<double, 1>;      // first-order forward dual
-using dual2nd = nth_dual_t<double, 2>;   // second-order (Hessian-capable) dual
+using dual = nth_dual_t<double, 1>;    // first-order forward dual
+using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 
 // X is a dual or a plain arithmetic scalar — the set of operands these
 // helpers accept.
@@ -275,27 +273,18 @@ template <typename T> constexpr auto val(const Dual<T> &d) noexcept {
   return val(d.template get<0>());
 }
 
-// to_double(): val() coerced to double, for branch decisions.
 template <typename X> constexpr double to_double(const X &x) noexcept {
   return static_cast<double>(val(x));
 }
 
 namespace detail {
-// Lift a plain arithmetic scalar into the (possibly nested) dual type D, with
-// all derivative parts zero.
-template <typename D, typename U>
-constexpr D as_constant(U s) noexcept {
+template <typename D, typename U> constexpr D as_constant(U s) noexcept {
   using Base = scalar_base_t<D>;
   return embed_constant<Base, dual_depth_v<D>>(static_cast<Base>(s));
 }
 } // namespace detail
 
-// Mixed Dual/arithmetic arithmetic.  The in-class hidden friends only mix with
-// the *inner* type T; these handle Dual<Dual<...>> combined with a bare scalar
-// (e.g. dual2nd * 2.0), promoting the scalar through every layer.  The
-// !is_same<U, T> guard keeps the innermost Dual<base> ∘ base case on the
-// existing in-class overloads.
-#define DIFF_DUAL_SCALAR_OP(OP)                                                 \
+#define DIFF_DUAL_SCALAR_OP(OP)                                                \
   template <typename T, typename U>                                            \
     requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)                 \
   constexpr Dual<T> operator OP(const Dual<T> &a, U s) noexcept {              \
@@ -304,7 +293,7 @@ constexpr D as_constant(U s) noexcept {
   template <typename T, typename U>                                            \
     requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)                 \
   constexpr Dual<T> operator OP(U s, const Dual<T> &a) noexcept {              \
-    return detail::as_constant<Dual<T>>(s) OP a;                              \
+    return detail::as_constant<Dual<T>>(s) OP a;                               \
   }
 DIFF_DUAL_SCALAR_OP(+)
 DIFF_DUAL_SCALAR_OP(-)
@@ -312,14 +301,11 @@ DIFF_DUAL_SCALAR_OP(*)
 DIFF_DUAL_SCALAR_OP(/)
 #undef DIFF_DUAL_SCALAR_OP
 
-// At least one operand is a Dual (plain scalar/scalar pairs stay built-in).
 template <typename A, typename B>
-concept DualMix = DualOrArithmetic<A> && DualOrArithmetic<B> &&
-                  (is_dual_v<std::remove_cvref_t<A>> ||
-                   is_dual_v<std::remove_cvref_t<B>>);
+concept DualMix =
+    DualOrArithmetic<A> && DualOrArithmetic<B> &&
+    (is_dual_v<std::remove_cvref_t<A>> || is_dual_v<std::remove_cvref_t<B>>);
 
-// Comparisons decided on the fully-reduced base value.  Only <=> and == are
-// written; C++20 synthesises <, >, <=, >=, != from them.
 template <typename A, typename B>
   requires DualMix<A, B>
 constexpr auto operator<=>(const A &a, const B &b) noexcept {
@@ -342,8 +328,6 @@ constexpr Dual<T> pow(const Dual<T> &a, const Dual<T> &b) noexcept {
   return Dual<T>{p, p * (bd * log(av) + bv * ad / av)};
 }
 
-// max/min: select the larger/smaller operand by value (derivative follows the
-// winner; a constant winner contributes zero derivative).
 template <typename T>
 constexpr Dual<T> max(const Dual<T> &a, const Dual<T> &b) noexcept {
   return val(a) < val(b) ? b : a;
@@ -353,17 +337,14 @@ constexpr Dual<T> min(const Dual<T> &a, const Dual<T> &b) noexcept {
   return val(b) < val(a) ? b : a;
 }
 
-// For every binary that has a Dual/Dual core above, generate the two
-// scalar-mixing overloads by promoting the bare scalar to a constant Dual and
-// forwarding.  One macro covers pow, max and min uniformly.
 #define DIFF_PROMOTE_BINARY(NAME)                                              \
-  template <typename T, typename U>                                           \
-    requires std::is_arithmetic_v<U>                                          \
+  template <typename T, typename U>                                            \
+    requires std::is_arithmetic_v<U>                                           \
   constexpr Dual<T> NAME(const Dual<T> &a, U s) noexcept {                     \
     return NAME(a, detail::as_constant<Dual<T>>(s));                           \
-  }                                                                           \
-  template <typename T, typename U>                                           \
-    requires std::is_arithmetic_v<U>                                          \
+  }                                                                            \
+  template <typename T, typename U>                                            \
+    requires std::is_arithmetic_v<U>                                           \
   constexpr Dual<T> NAME(U s, const Dual<T> &a) noexcept {                     \
     return NAME(detail::as_constant<Dual<T>>(s), a);                           \
   }
@@ -372,7 +353,6 @@ DIFF_PROMOTE_BINARY(max)
 DIFF_PROMOTE_BINARY(min)
 #undef DIFF_PROMOTE_BINARY
 
-// isfinite on the reduced value.
 template <typename T> constexpr bool isfinite(const Dual<T> &d) noexcept {
   using std::isfinite;
   return isfinite(val(d));

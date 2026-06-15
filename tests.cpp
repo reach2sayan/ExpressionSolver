@@ -2295,6 +2295,21 @@ TEST(DualScalarContract, PowMaxMinAndComparisons) {
   EXPECT_TRUE(x != 1.0);
 }
 
+TEST(DualScalarContract, ImplicitConstantFromScalarAtDepth) {
+  // The S{0} / S c = 1.0 idiom must work for nested duals as a zero-derivative
+  // constant (generic numeric code written against a plain scalar relies on it).
+  const dual2nd a{0};               // brace-init from int
+  const dual2nd b = 2.5;            // copy-init needs a non-explicit ctor
+  const std::vector<dual2nd> v(3, dual2nd{1}); // vector fill from a scalar
+  EXPECT_DOUBLE_EQ(val(a), 0.0);
+  EXPECT_DOUBLE_EQ(val(b), 2.5);
+  EXPECT_DOUBLE_EQ(val(v[0]), 1.0);
+  // All derivative slots are zero (it is a constant).
+  EXPECT_DOUBLE_EQ(b.get<1>().get<0>(), 0.0);
+  EXPECT_DOUBLE_EQ(b.get<0>().get<1>(), 0.0);
+  EXPECT_DOUBLE_EQ(b.get<1>().get<1>(), 0.0);
+}
+
 TEST(ForwardDriver, GradientAndHessianCrossTerm) {
   // f(x0,x1) = x0^2 x1 + x1^3
   auto f = [](const auto *x) { return x[0] * x[0] * x[1] + x[1] * x[1] * x[1]; };
