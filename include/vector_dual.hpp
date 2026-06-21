@@ -128,30 +128,38 @@ template <std::size_t N> struct VectorDual {
     }
     return r;
   }
+  // a^b.  d(a^b) = a^b (b' ln a + b a'/a).  Needed by Dual<VectorDual>'s own
+  // pow(), which calls pow on the inner scalar (e.g. VolumeContribution's
+  // press_shape raises an RK base to a non-integer exponent).
+  [[nodiscard]] friend constexpr VectorDual pow(const VectorDual &a,
+                                                const VectorDual &b) noexcept {
+    using std::log, std::pow;
+    const double p = pow(a.value, b.value);
+    const double la = log(a.value);
+    const double inva = double{1} / a.value;
+    VectorDual r;
+    r.value = p;
+    for (std::size_t k = 0; k < N; ++k) {
+      r.grad[k] = p * (b.grad[k] * la + b.value * a.grad[k] * inva);
+    }
+    return r;
+  }
 };
 
 // val(): recover the underlying scalar.  Lets the dual.hpp val()/to_double()/
 // comparison overloads peel a Dual<VectorDual<N>> down to its base double.
-template <std::size_t N>
-constexpr double val(const VectorDual<N> &d) noexcept {
+template <std::size_t N> constexpr double val(const VectorDual<N> &d) noexcept {
   return d.value;
 }
 
 static_assert(Numeric<VectorDual<1>>);
 static_assert(Numeric<VectorDual<8>>);
 
-// Single fixed VectorDual capacity for the vector-forward Hessian driver.
-// Covers the realistic active-variable count of every model (multi-sublattice
-// orderings, ionic phases, MQMQA quadruplets all sit comfortably below 32);
-// larger problems fall back to the scalar O(m^2) hessian().  A single capacity
-// (rather than a 4/8/16/32 bucket ladder) keeps to ONE Dual<VectorDual<N>>
-// element type, which matters because every consumer that defines its energy
-// template in a .cpp must explicitly instantiate it for this type.
-inline constexpr std::size_t kVForwardN = 32;
-
-// The forward-dual element type the vector-forward driver evaluates `f` with.
-// Consumers explicitly instantiating their energy template should add an
-// instantiation for diff::dual_vforward alongside their diff::dual2nd one.
+#ifndef DIFF_VFORWARD_CAPACITY
+#define DIFF_VFORWARD_CAPACITY 32
+#endif
+inline constexpr std::size_t kVForwardN = DIFF_VFORWARD_CAPACITY;
+static_assert(kVForwardN > 0, "DIFF_VFORWARD_CAPACITY must be positive");
 using dual_vforward = Dual<VectorDual<kVForwardN>>;
 
 } // namespace diff
