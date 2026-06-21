@@ -12,5 +12,7 @@
 #include "include/gradient.hpp"
 #include "include/taylor_dual.hpp"
 #include "include/values.hpp"
+#include "include/vector_dual.hpp"
+#include "include/vforward_driver.hpp"
 
 #endif // EXPRESSIONDIFFERENTIATOR_EXPRESSION_DIFFERENTIATOR_HPP

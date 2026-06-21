@@ -5,6 +5,7 @@
 #include "operations.hpp"
 #include "traits.hpp"
 #include "values.hpp"
+#include "vforward_driver.hpp"
 #include <array>
 #include <cmath>
 #include <gtest/gtest.h>
@@ -2349,5 +2350,77 @@ TEST(ForwardDriver, IdealMixingHessianMatchesClosedForm) {
   EXPECT_NEAR(H.h(0, 0), R * T / 0.3, 1e-3);
   EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
   EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6); // no cross term
+}
+
+// ===========================================================================
+// Vector-forward Hessian (hessian_vforward) — the O(m) vector-forward driver
+// must reproduce the scalar O(m^2) hessian() bit-close, across every dispatch
+// bucket (m<=8,16,32) and the scalar fallback (m>32).
+// ===========================================================================
+namespace {
+// Non-trivial multivariate function exercising +,-,*,/,log,exp and
+// scalar*dual on the forward-dual element type.
+template <typename T> T vf_sample(const T *y, std::size_t n) {
+  using std::exp, std::log; // ADL selects the dual overloads
+  T g = T{0};
+  for (std::size_t i = 0; i < n; ++i) {
+    g = g + y[i] * log(y[i]);
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t j = i + 1; j < n; ++j) {
+      const double c =
+          0.1 * static_cast<double>(i + 1) - 0.05 * static_cast<double>(j);
+      g = g + c * (y[i] * y[j]) / (T{1} + y[i]);
+    }
+  }
+  g = g + exp(y[0] * y[n - 1]);
+  return g;
+}
+} // namespace
+
+TEST(VectorForwardHessian, MatchesScalarDriver) {
+  for (std::size_t n : {std::size_t{2}, std::size_t{5}, std::size_t{9},
+                        std::size_t{12}, std::size_t{20}, std::size_t{40}}) {
+    std::vector<double> x(n);
+    for (std::size_t k = 0; k < n; ++k) {
+      x[k] = 0.15 + 0.6 * (k + 1.0) / (n + 1.0);
+    }
+    auto f = [n](const auto *dof) { return vf_sample(dof, n); };
+    const std::span<const double> xs{x.data(), x.size()};
+
+    const auto Hs = diff::hessian(f, xs);
+    const auto Hv = diff::hessian_vforward(f, xs);
+
+    ASSERT_EQ(Hs.gradient.size(), Hv.gradient.size());
+    EXPECT_NEAR(Hs.value, Hv.value, 1e-9) << "n=" << n;
+    for (std::size_t i = 0; i < n; ++i) {
+      EXPECT_NEAR(Hs.gradient[i], Hv.gradient[i], 1e-9)
+          << "grad i=" << i << " n=" << n;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+      for (std::size_t j = 0; j < n; ++j) {
+        EXPECT_NEAR(Hs.h(i, j), Hv.h(i, j), 1e-7)
+            << "H(" << i << "," << j << ") n=" << n;
+      }
+    }
+  }
+}
+
+TEST(VectorForwardHessian, IdealMixingClosedForm) {
+  constexpr double R = 8.31446261815324, T = 1000.0;
+  auto f = [](const auto *y) {
+    using std::log;
+    return R * T * (y[0] * log(y[0]) + y[1] * log(y[1]));
+  };
+  const std::array<double, 2> y{0.3, 0.7};
+  const auto H = diff::hessian_vforward(
+      f, std::span<const double>{y.data(), y.size()});
+  EXPECT_NEAR(H.value, R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
+              1e-6);
+  EXPECT_NEAR(H.gradient[0], R * T * (std::log(0.3) + 1.0), 1e-6);
+  EXPECT_NEAR(H.gradient[1], R * T * (std::log(0.7) + 1.0), 1e-6);
+  EXPECT_NEAR(H.h(0, 0), R * T / 0.3, 1e-3);
+  EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
+  EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6);
 }
 
