@@ -10,10 +10,6 @@
 
 namespace diff {
 
-// kVForwardN and dual_vforward live in vector_dual.hpp so consumers can pull in
-// just the element type (for their explicit energy instantiation) without the
-// driver's <span>/<vector> baggage.
-
 namespace detail {
 
 // Vector-forward Hessian for a known compile-time capacity N >= m.
@@ -22,11 +18,9 @@ namespace detail {
 // of every dof carries the full identity tangent pack (lane t ==
 // d/dx_active[t]), so each sweep also yields the gradient; the *outer*
 // derivative level carries the scalar seed e_i.  After f(dof):
-//   r.get<0>() : value-level VectorDual -> value = f(x), grad[t] = df/dx_t
-//   r.get<1>() : outer-deriv VectorDual -> grad[t] = d2f/dx_i dx_t  (Hessian
-//   row i)
-// Cost: m sweeps of N-wide (SIMD) arithmetic vs the m(m+1)/2 scalar sweeps of
-// hessian().  Transcendentals (log/exp) are evaluated m times, not m(m+1)/2.
+// r.get<0>() : value-level VectorDual -> value = f(x), grad[t] = df/dx_t
+// r.get<1>() : outer-deriv VectorDual -> grad[t] = d2f/dx_i dx_t (Hessianrow i)
+
 template <std::size_t N, typename F>
 HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
                                     std::span<const std::size_t> active) {
@@ -89,10 +83,7 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
 // Value, gradient and (symmetric) Hessian of f at x w.r.t. `active`, via
 // vector-forward-over-forward mode.  Drop-in for hessian(): identical
 // signature and HessianResult, but O(m) sweeps of the energy lambda instead of
-// O(m^2).  `f` must be callable with any forward-dual element type (write the
-// call-site lambda as `[&](const auto *dof){ ... }`): the active branch
-// evaluates it at diff::dual_vforward, while m == 0 or m > kVForwardN falls
-// back to the scalar driver at diff::dual2nd.
+// O(m^2).
 template <typename F>
 HessianResult hessian_vforward(F &&f, std::span<const double> x,
                                std::span<const std::size_t> active) {
