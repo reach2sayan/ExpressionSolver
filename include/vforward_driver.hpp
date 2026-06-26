@@ -4,7 +4,9 @@
 #include "forward_driver.hpp" // HessianResult + scalar hessian() fallback
 #include "vector_dual.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <ranges>
 #include <span>
 #include <vector>
 
@@ -35,9 +37,7 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
 
   // Value-level seeds: identity tangents over `active`, identical every sweep.
   std::vector<V> base(n);
-  for (std::size_t k = 0; k < n; ++k) {
-    base[k] = V{x[k]};
-  }
+  std::ranges::transform(x, base.begin(), [](double v) { return V{v}; });
   for (std::size_t t = 0; t < m; ++t) {
     base[active[t]].grad[t] = 1.0;
   }
@@ -51,17 +51,13 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
     }
 
     const D r = f(dof.data());
-    const V A = r.template get<0>(); // value component
-    const V B = r.template get<1>(); // outer-derivative component
+    const auto &[A, B] = r; // value & outer-derivative component (no copy)
     if (i == 0) {
       res.value = A.value;
-      for (std::size_t t = 0; t < m; ++t) {
-        res.gradient[t] = A.grad[t];
-      }
+      std::ranges::copy(A.grad | std::views::take(m), res.gradient.begin());
     }
-    for (std::size_t t = 0; t < m; ++t) {
-      res.hessian[i * m + t] = B.grad[t];
-    }
+    std::ranges::copy(B.grad | std::views::take(m),
+                      res.hessian.begin() + i * m);
   }
 
   // Each row was computed by an independent sweep, so H(i,j) and H(j,i) can
@@ -103,13 +99,15 @@ HessianResult vforward_pick(std::size_t m, F &&f, std::span<const double> x,
 // vector-forward-over-forward mode.  Drop-in for hessian(): identical
 // signature and HessianResult, but O(m) sweeps of the energy lambda instead of
 // O(m^2).  The lane capacity is bucketed to the smallest power of two >= m
-// (capped at kVForwardN); m > kVForwardN falls back to the scalar O(m^2) driver.
+// (capped at kVForwardN); m > kVForwardN falls back to the scalar O(m^2)
+// driver.
 template <typename F>
 HessianResult hessian_vforward(F &&f, std::span<const double> x,
                                std::span<const std::size_t> active) {
   const std::size_t m = active.size();
   if (m == 0 || m > kVForwardN) {
-    return hessian(static_cast<F &&>(f), x, active); // scalar O(m^2) fallback
+    // scalar O(m^2) fallback
+    return detail::hessian_scalar(static_cast<F &&>(f), x, active);
   }
   return detail::vforward_pick<1>(m, static_cast<F &&>(f), x, active);
 }
@@ -119,6 +117,15 @@ template <typename F>
 HessianResult hessian_vforward(F &&f, std::span<const double> x) {
   const auto all = detail::iota_indices(x.size());
   return hessian_vforward(static_cast<F &&>(f), x, all);
+}
+
+template <typename F>
+HessianResult hessian(F &&f, std::span<const double> x,
+                      std::span<const std::size_t> active) {
+  return hessian_vforward(static_cast<F &&>(f), x, active);
+}
+template <typename F> HessianResult hessian(F &&f, std::span<const double> x) {
+  return hessian_vforward(static_cast<F &&>(f), x);
 }
 
 } // namespace diff

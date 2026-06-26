@@ -15,12 +15,12 @@ using ExpressionType = OpType;
 
 template <typename F, typename T>
 concept cunary_op = std::regular_invocable<F, const T &> &&
-                    std::same_as<std::invoke_result_t<F, const T &>, T>;
+                    std::convertible_to<std::invoke_result_t<F, const T &>, T>;
 
 template <typename F, typename T>
 concept cbinary_op =
     std::regular_invocable<F, const T &, const T &> &&
-    std::same_as<std::invoke_result_t<F, const T &, const T &>, T>;
+    std::convertible_to<std::invoke_result_t<F, const T &, const T &>, T>;
 
 template <typename T, OpType type> struct Op {
   using value_type = T;
@@ -56,6 +56,7 @@ struct BinaryOp : Op<T, OpType::Binary> {
   eval(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
     using LT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
     using RT = typename std::remove_cvref_t<decltype(rhs)>::value_type;
+    // Returns a lazy node; materializes at the consumption boundary.
     return std::invoke(func{}, static_cast<LT>(lhs), static_cast<RT>(rhs));
   }
 };

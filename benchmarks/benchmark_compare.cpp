@@ -685,7 +685,7 @@ static void BM_Ours_Forward_Hess(benchmark::State &state) {
   auto f = [n](const auto *dof) { return vf_energy(dof, n); };
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian(f, xs);
+    auto H = diff::detail::hessian_scalar(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -771,7 +771,7 @@ static void BM_Ours_Forward_HessSparse(benchmark::State &state) {
   auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian(f, xs);
+    auto H = diff::detail::hessian_scalar(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -890,7 +890,7 @@ static void ours_forward_expr(benchmark::State &state, MakeExpr make) {
   const std::span<const double> xs{x.data(), x.size()};
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian(f, xs);
+    auto H = diff::detail::hessian_scalar(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }

@@ -11,7 +11,9 @@ namespace mp = boost::mp11;
 namespace detail {
 struct eval_func_t {
   constexpr auto operator()(const auto &...exprs) const noexcept {
-    return std::array{exprs.eval()...};
+    return std::array{
+        static_cast<typename std::remove_cvref_t<decltype(exprs)>::value_type>(
+            exprs)...};
   }
 };
 template <class Syms, class Updates> struct update_func_t {
@@ -174,14 +176,13 @@ private:
 
       std::array<U, input_dim> seeds{};
       for (std::size_t k = 0; k < input_dim; ++k) {
-        seeds[k] = detail::make_mixed_seed<S, Order>(values[k], idx.data(), k);
+        seeds[k] = detail::make_mixed_seed<S, Order>(values[k], idx, k);
       }
 
       static_for<output_dim>([&]<std::size_t OUT>() {
         U val = std::get<OUT>(expressions)
                     .template eval_seeded_as<U, symbols>(seeds);
-        nd_index<Order>(result[OUT], idx.data()) =
-            detail::extract_nth<Order>(val);
+        nd_index<Order>(result[OUT], idx) = detail::extract_nth<Order>(val);
       });
     }
     return result;

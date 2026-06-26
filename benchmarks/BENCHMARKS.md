@@ -170,6 +170,96 @@ For the 4th derivative of `sin(x)`:
 `TaylorDual` halves the cost over nested duals. For higher orders (N ≥ 6) the 2^N
 blowup of nested duals makes `TaylorDual` the only practical choice.
 
+### Vector-valued (dense) Hessian vs autodiff
+
+`benchmark_compare.cpp` also benchmarks a full `n × n` Hessian of a multivariate
+energy `f: Rⁿ → R`, swept over `n`, three ways:
+
+- **Ours VForward** — `hessian_vforward()`, vector-forward-over-forward: one graph
+  sweep per row via `Dual<VectorDual<N>>`, O(n) sweeps. Lane capacity is bucketed
+  to the smallest power of two ≥ n (`DIFF_VFORWARD_CAPACITY`, default 32).
+- **Ours Forward** — scalar `hessian()`, forward-over-forward `dual2nd`, O(n²) sweeps.
+- **autodiff** — `autodiff::hessian()` with `VectorXdual2nd` + Eigen (also O(n²)).
+
+```sh
+cmake -S . -B build_compare -DCMAKE_BUILD_TYPE=Release -DDIFF_BUILD_COMPARE=ON
+cmake --build build_compare --target benchmarks_compare
+./build_compare/benchmarks_compare --benchmark_filter='Hess/|HessSparse/|HessExpr'
+```
+
+Three energy regimes are covered:
+
+| Regime | Energy | Eval cost |
+|---|---|---|
+| Dense | `Σ yᵢlog yᵢ + Σ_{i<j} c_ij·yᵢyⱼ/(1+yᵢ) + exp(y₀y_{n-1})` | O(n²) |
+| Sparse | `Σ yᵢlog yᵢ + Σ c_i·(yᵢ−yᵢ₊₁)² + exp(y₀y_{n-1})` | O(n) |
+| Expr-template | same sparse math, built as a compile-time `Variable`/`+`/`*`/`log`/`exp` graph and bridged into the driver via `eval_seeded_as<T,Syms>` | O(n) |
+
+#### Linux / GCC snapshot (16-core, `-O3`, `-march=x86-64-v3`)
+
+The box is unpinned, so run-to-run variance is ~±15%; treat sub-15% gaps as ties.
+
+**Dense** (ns):
+
+| n | Ours VForward | Ours Forward | autodiff |
+|---|---:|---:|---:|
+| 4  | 722 | 797 | **630** |
+| 8  | **5,660** | 7,154 | 5,875 |
+| 16 | **66,988** | 87,530 | 69,429 |
+| 32 | 2,387,536 | 1,438,000 | **915,000** |
+
+**Sparse** (ns):
+
+| n | Ours VForward | Ours Forward | autodiff |
+|---|---:|---:|---:|
+| 4  | 467 | 611 | **398** |
+| 8  | **2,259** | 3,560 | 2,511 |
+| 16 | **15,826** | 24,292 | 18,175 |
+| 32 | 241,877 | 180,348 | **136,700** |
+
+**Expression-template graph** (ns; autodiff baseline = sparse at same n):
+
+| n | Ours VForward | Ours Forward | autodiff |
+|---|---:|---:|---:|
+| 4 | 2,113 | **533** | 398 |
+| 8 | 7,592 | **3,380** | 2,511 |
+
+Takeaways:
+
+- **Vector-forward wins at mid `n` (8, 16)** on both dense and sparse energies, and
+  ties/leads autodiff there. At small `n` (4) autodiff's leaner per-op forward dual
+  still wins; at `n = 32` (full lane capacity) the wide-pack cost dominates and both
+  autodiff and our scalar driver are faster.
+- **The expression-template graph hurts vector-forward badly** (n=4: 2,113 vs 533 ns
+  scalar). Expression nodes return intermediates by value, so each graph node copies a
+  full `Dual<VectorDual<N>>` (wide array) — the cost scales with pack width and dwarfs
+  the fewer-sweeps saving. For the expression-template API, the **scalar forward driver
+  is the better default**, not vector-forward.
+
+#### Two optimizations behind these numbers
+
+1. **Capacity bucketing** (`vforward_driver.hpp`): `hessian_vforward` dispatches the
+   smallest power-of-two lane bucket ≥ n instead of always using the full 32-wide pack.
+   Small dense Hessians dropped up to ~9× (n=4: 6,620 → 710 ns).
+
+2. **Scalar↔dual fusion** (`dual.hpp`): mixed `scalar OP dual` operations distribute
+   the constant straight through `val`/`deriv` instead of promoting it to a zero-seeded
+   `Dual` and running dual×dual arithmetic against the zeros (autodiff gets the same via
+   its `NumberDualMulExpr`). Bit-identical for finite operands, so no value test moves.
+   The **vector-forward (`VectorDual`) path benefited most** — its scalar-times-pack
+   terms were multiplying through an N-wide array of zeros:
+
+   | Dense n | VForward before fusion | after fusion |
+   |---|---:|---:|
+   | 8  | 7,816 ns | 5,660 ns |
+   | 16 | 130,194 ns | 66,988 ns (≈1.9×) |
+
+   The `dual2nd` scalar path barely moved (at depth 2 the promoted zeros are only 4
+   doubles, which `-O3` already elided). A leaf `std::fma` in the multiply/divide
+   derivative was tried and reverted — it was a wash-to-negative (the
+   `is_constant_evaluated` guard inhibits vectorization and FMA doesn't shorten the
+   dependency chain here).
+
 ---
 
 ## Object footprint and batched throughput

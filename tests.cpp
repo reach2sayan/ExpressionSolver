@@ -355,8 +355,9 @@ TEST(ConceptTest, NumericSatisfied) {
 TEST(ConceptTest, ExpressionConceptSatisfied) {
   static_assert(CExpression<Constant<double>>);
   static_assert(CExpression<Variable<double, diff::FixedString{"x"}>>);
-  using SumExpr = decltype(std::declval<Variable<double, diff::FixedString{"x"}>>() +
-                           std::declval<Constant<double>>());
+  using SumExpr =
+      decltype(std::declval<Variable<double, diff::FixedString{"x"}>>() +
+               std::declval<Constant<double>>());
   static_assert(CExpression<SumExpr>);
   static_assert(!CExpression<int>);
   static_assert(!CExpression<double>);
@@ -421,13 +422,15 @@ TEST(ExpressionTest, StaticTests) {
   static_assert(
       std::is_same_v<
           as_const_expression<
-              Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>, Constant<int>>>,
+              Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>,
+                         Constant<int>>>,
           Expression<MultiplyOp<int>, Constant<int>, Constant<int>>>);
 
   static_assert(
       std::is_same_v<
-          as_const_expression<Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>,
-                                         Variable<int, diff::FixedString{"y"}>>>,
+          as_const_expression<
+              Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>,
+                         Variable<int, diff::FixedString{"y"}>>>,
           Expression<MultiplyOp<int>, Constant<int>, Constant<int>>>);
 
   auto x = 4_vi;
@@ -2201,9 +2204,9 @@ TEST(TutorialReverseHigherOrder, ForwardReverseHessianAgree) {
 TEST(FuncHookTest, ForwardEvalTracksCallable) {
   double source = 3.0;
   double grad_acc = 0.0;
-  auto hook = FuncHook{[&] { return source; },
-                       [&](double adj) { grad_acc += adj; },
-                       [&] { grad_acc = 0.0; }};
+  auto hook =
+      FuncHook{[&] { return source; }, [&](double adj) { grad_acc += adj; },
+               [&] { grad_acc = 0.0; }};
   Variable<double, diff::FixedString{"x"}, decltype(hook)> x{hook};
 
   EXPECT_DOUBLE_EQ(x.eval(), 3.0);
@@ -2214,11 +2217,11 @@ TEST(FuncHookTest, ForwardEvalTracksCallable) {
 TEST(FuncHookTest, ReverseGradientAccumulated) {
   double source = 2.0;
   double grad_acc = 0.0;
-  auto hook = FuncHook{[&] { return source; },
-                       [&](double adj) { grad_acc += adj; },
-                       [&] { grad_acc = 0.0; }};
+  auto hook =
+      FuncHook{[&] { return source; }, [&](double adj) { grad_acc += adj; },
+               [&] { grad_acc = 0.0; }};
   Variable<double, diff::FixedString{"x"}, decltype(hook)> x{hook};
-  auto expr = x * x;  // f = x^2, df/dx = 2x
+  auto expr = x * x; // f = x^2, df/dx = 2x
 
   using Syms = extract_symbols_from_expr_t<decltype(expr)>;
   std::array<double, 1> grads{};
@@ -2229,9 +2232,9 @@ TEST(FuncHookTest, ReverseGradientAccumulated) {
 TEST(FuncHookTest, ZeroAndReuse) {
   double source = 4.0;
   double grad_acc = 0.0;
-  auto hook = FuncHook{[&] { return source; },
-                       [&](double adj) { grad_acc += adj; },
-                       [&] { grad_acc = 0.0; }};
+  auto hook =
+      FuncHook{[&] { return source; }, [&](double adj) { grad_acc += adj; },
+               [&] { grad_acc = 0.0; }};
   Variable<double, diff::FixedString{"x"}, decltype(hook)> x{hook};
   auto expr = x * x;
 
@@ -2252,13 +2255,13 @@ TEST(FuncHookTest, ZeroAndReuse) {
 TEST(FuncHookTest, AssignmentIsNoOp) {
   double source = 5.0;
   double grad_acc = 0.0;
-  auto hook = FuncHook{[&] { return source; },
-                       [&](double adj) { grad_acc += adj; },
-                       [&] { grad_acc = 0.0; }};
+  auto hook =
+      FuncHook{[&] { return source; }, [&](double adj) { grad_acc += adj; },
+               [&] { grad_acc = 0.0; }};
   Variable<double, diff::FixedString{"x"}, decltype(hook)> x{hook};
 
-  x = 99.0;  // no set_f — no-op
-  EXPECT_DOUBLE_EQ(x.eval(), 5.0);  // still reads from source
+  x = 99.0;                        // no set_f — no-op
+  EXPECT_DOUBLE_EQ(x.eval(), 5.0); // still reads from source
 }
 
 // ===========================================================================
@@ -2298,9 +2301,10 @@ TEST(DualScalarContract, PowMaxMinAndComparisons) {
 
 TEST(DualScalarContract, ImplicitConstantFromScalarAtDepth) {
   // The S{0} / S c = 1.0 idiom must work for nested duals as a zero-derivative
-  // constant (generic numeric code written against a plain scalar relies on it).
-  const dual2nd a{0};               // brace-init from int
-  const dual2nd b = 2.5;            // copy-init needs a non-explicit ctor
+  // constant (generic numeric code written against a plain scalar relies on
+  // it).
+  const dual2nd a{0};    // brace-init from int
+  const dual2nd b = 2.5; // copy-init needs a non-explicit ctor
   const std::vector<dual2nd> v(3, dual2nd{1}); // vector fill from a scalar
   EXPECT_DOUBLE_EQ(val(a), 0.0);
   EXPECT_DOUBLE_EQ(val(b), 2.5);
@@ -2313,19 +2317,21 @@ TEST(DualScalarContract, ImplicitConstantFromScalarAtDepth) {
 
 TEST(ForwardDriver, GradientAndHessianCrossTerm) {
   // f(x0,x1) = x0^2 x1 + x1^3
-  auto f = [](const auto *x) { return x[0] * x[0] * x[1] + x[1] * x[1] * x[1]; };
+  auto f = [](const auto *x) {
+    return x[0] * x[0] * x[1] + x[1] * x[1] * x[1];
+  };
   const std::array<double, 2> x{2.0, 3.0};
   const std::span<const double> xs{x.data(), x.size()};
 
   const auto H = diff::hessian(f, xs);
-  EXPECT_DOUBLE_EQ(H.value, 39.0);          // 4*3 + 27
+  EXPECT_DOUBLE_EQ(H.value, 39.0); // 4*3 + 27
   ASSERT_EQ(H.gradient.size(), 2u);
-  EXPECT_DOUBLE_EQ(H.gradient[0], 12.0);    // 2 x0 x1
-  EXPECT_DOUBLE_EQ(H.gradient[1], 31.0);    // x0^2 + 3 x1^2
-  EXPECT_DOUBLE_EQ(H.h(0, 0), 6.0);         // 2 x1
-  EXPECT_DOUBLE_EQ(H.h(0, 1), 4.0);         // 2 x0
+  EXPECT_DOUBLE_EQ(H.gradient[0], 12.0); // 2 x0 x1
+  EXPECT_DOUBLE_EQ(H.gradient[1], 31.0); // x0^2 + 3 x1^2
+  EXPECT_DOUBLE_EQ(H.h(0, 0), 6.0);      // 2 x1
+  EXPECT_DOUBLE_EQ(H.h(0, 1), 4.0);      // 2 x0
   EXPECT_DOUBLE_EQ(H.h(1, 0), 4.0);
-  EXPECT_DOUBLE_EQ(H.h(1, 1), 18.0);        // 6 x1
+  EXPECT_DOUBLE_EQ(H.h(1, 1), 18.0); // 6 x1
 
   const auto g = diff::gradient(f, xs);
   EXPECT_DOUBLE_EQ(g[0], 12.0);
@@ -2388,7 +2394,7 @@ TEST(VectorForwardHessian, MatchesScalarDriver) {
     auto f = [n](const auto *dof) { return vf_sample(dof, n); };
     const std::span<const double> xs{x.data(), x.size()};
 
-    const auto Hs = diff::hessian(f, xs);
+    const auto Hs = diff::detail::hessian_scalar(f, xs);
     const auto Hv = diff::hessian_vforward(f, xs);
 
     ASSERT_EQ(Hs.gradient.size(), Hv.gradient.size());
@@ -2413,8 +2419,8 @@ TEST(VectorForwardHessian, IdealMixingClosedForm) {
     return R * T * (y[0] * log(y[0]) + y[1] * log(y[1]));
   };
   const std::array<double, 2> y{0.3, 0.7};
-  const auto H = diff::hessian_vforward(
-      f, std::span<const double>{y.data(), y.size()});
+  const auto H =
+      diff::hessian_vforward(f, std::span<const double>{y.data(), y.size()});
   EXPECT_NEAR(H.value, R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
               1e-6);
   EXPECT_NEAR(H.gradient[0], R * T * (std::log(0.3) + 1.0), 1e-6);
@@ -2423,4 +2429,3 @@ TEST(VectorForwardHessian, IdealMixingClosedForm) {
   EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
   EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6);
 }
-

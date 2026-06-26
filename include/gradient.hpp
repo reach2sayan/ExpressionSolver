@@ -4,31 +4,35 @@
 #include "expressions.hpp"
 #include "taylor_dual.hpp"
 #include "traits.hpp"
+#include <algorithm>
 #include <array>
 #include <boost/mp11/list.hpp>
+#include <span>
 
 namespace diff {
 
 namespace mp = boost::mp11;
 
-// Compile-time N-dimensional array: nd_array_t<S, N, Order> is std::array
-// nested Order times.
-template <typename S, std::size_t N, std::size_t Order> struct nd_array {
-  using type = std::array<typename nd_array<S, N, Order - 1>::type, N>;
-};
-template <typename S, std::size_t N> struct nd_array<S, N, 0> {
-  using type = S;
-};
+namespace detail {
+template <typename S, std::size_t N, std::size_t Order> auto nd_array_fn() {
+  if constexpr (Order == 0)
+    return std::type_identity<S>{};
+  else
+    return std::type_identity<std::array<
+        typename decltype(nd_array_fn<S, N, Order - 1>())::type, N>>{};
+}
+} // namespace detail
+
 template <typename S, std::size_t N, std::size_t Order>
-using nd_array_t = typename nd_array<S, N, Order>::type;
+using nd_array_t = typename decltype(detail::nd_array_fn<S, N, Order>())::type;
 
 // arr[idx[0]][idx[1]]...[idx[Order-1]]
 template <std::size_t Order>
-constexpr auto &nd_index(auto &arr, const std::size_t *idx) noexcept {
+constexpr auto &nd_index(auto &arr, std::span<const std::size_t> idx) noexcept {
   if constexpr (Order == 0) {
     return arr;
   } else {
-    return nd_index<Order - 1>(arr[idx[0]], idx + 1);
+    return nd_index<Order - 1>(arr[idx[0]], idx.subspan(1));
   }
 }
 
@@ -54,9 +58,8 @@ template <CExpression Expr, typename T = typename Expr::value_type>
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
   std::array<scalar_t, N> result{};
-  for (std::size_t i = 0; i < N; i++) {
-    result[i] = grads[i].template get<0>();
-  }
+  std::ranges::transform(grads, result.begin(),
+                         [](const T &g) { return g.template get<0>(); });
   return result;
 }
 
@@ -100,24 +103,22 @@ template <CExpression Expr,
   std::array<T, N> current{};
   expr.collect(symbols{}, current);
   std::array<S, N> values{};
-  for (std::size_t i = 0; i < N; i++) {
-    values[i] = current[i].template get<0>();
-  }
+  std::ranges::transform(current, values.begin(),
+                         [](const T &c) { return c.template get<0>(); });
   return reverse_mode_hessian(expr, values);
 }
 
-// ---------------------------------------------------------------------------
-// Forward-mode: mixed-partial seed construction.
-// ---------------------------------------------------------------------------
 template <typename S, std::size_t Depth>
-constexpr nth_dual_t<S, Depth> make_mixed_seed(S value, const std::size_t *idx,
+constexpr nth_dual_t<S, Depth> make_mixed_seed(S value,
+                                               std::span<const std::size_t> idx,
                                                std::size_t k) noexcept {
   if constexpr (Depth == 0) {
     return value;
   } else if constexpr (Depth == 1) {
     return nth_dual_t<S, 1>{value, k == idx[0] ? S{1} : S{}};
   } else {
-    auto inner = make_mixed_seed<S, Depth - 1>(std::move(value), idx + 1, k);
+    auto inner =
+        make_mixed_seed<S, Depth - 1>(std::move(value), idx.subspan(1), k);
     auto outer_tangent = embed_constant<S, Depth - 1>(k == idx[0] ? S{1} : S{});
     return nth_dual_t<S, Depth>{std::move(inner), std::move(outer_tangent)};
   }
@@ -159,10 +160,10 @@ template <std::size_t Order, CExpression Expr,
 
     std::array<U, N> seeds{};
     for (std::size_t k = 0; k < N; ++k) {
-      seeds[k] = make_mixed_seed<S, Order>(values[k], idx.data(), k);
+      seeds[k] = make_mixed_seed<S, Order>(values[k], idx, k);
     }
     U val = expr.template eval_seeded_as<U, symbols>(seeds);
-    nd_index<Order>(result, idx.data()) = extract_nth<Order>(val);
+    nd_index<Order>(result, idx) = extract_nth<Order>(val);
   }
   return result;
 }
@@ -217,8 +218,9 @@ template <std::size_t Order, CExpression Expr,
   std::array<T, N> current{};
   expr.collect(symbols{}, current);
   std::array<S, N> values{};
-  for (std::size_t i = 0; i < N; ++i)
-    values[i] = get_real_part<dual_depth_v<T>>(current[i]);
+  std::ranges::transform(current, values.begin(), [](const T &c) {
+    return get_real_part<dual_depth_v<T>>(c);
+  });
   return detail::derivative_tensor_impl<Order>(expr, values);
 }
 
