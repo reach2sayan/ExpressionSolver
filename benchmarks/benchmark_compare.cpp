@@ -16,12 +16,14 @@
 // Run  with:  ./benchmarks_compare --benchmark_counters_tabular=true
 
 #include <autodiff/forward/dual.hpp>
+#include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/reverse/var.hpp>
 
 #include "../include/gradient.hpp"
 #include "dual.hpp"
 #include "gradient.hpp"
 #include "values.hpp"
+#include "vforward_driver.hpp"
 
 #include <array>
 #include <benchmark/benchmark.h>
@@ -615,5 +617,303 @@ static void BM_AD_Reverse_TDir(benchmark::State &state) {
   }
 }
 BENCHMARK(BM_AD_Reverse_TDir);
+
+// ===========================================================================
+// Vector-valued dense Hessian  f: R^n -> R, full n x n Hessian, swept over n.
+//
+//   f(y) = Σ_i y_i·log(y_i)
+//        + Σ_{i<j} c_ij · (y_i·y_j)/(1 + y_i)        c_ij = 0.1(i+1) - 0.05 j
+//        + exp(y_0 · y_{n-1})
+//
+// This is the workload the new vector-forward driver targets: one templated
+// energy, three ways to get its Hessian —
+//   Ours_VForward — hessian_vforward(): O(n) sweeps, inner pack = identity
+//   Ours_Forward  — hessian():          O(n^2) scalar forward-over-forward
+//   AD_Forward    — autodiff::hessian(): Eigen VectorXdual2nd, O(n^2)
+//
+// n is swept up to kVForwardN (=32 by default) so the vector-forward path
+// stays engaged rather than falling back to the scalar O(n^2) driver.
+// ===========================================================================
+
+// Single templated energy shared by every implementation — `y` is anything
+// indexable (a raw Dual<...>* from our drivers, or an Eigen VectorXdual2nd).
+template <typename Vec>
+static auto vf_energy(const Vec &y, std::size_t n) {
+  using std::exp, std::log; // ADL selects the dual / autodiff overloads
+  using Scalar = std::remove_cvref_t<decltype(y[0])>;
+  Scalar g{0};
+  for (std::size_t i = 0; i < n; ++i) {
+    g = g + y[i] * log(y[i]);
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t j = i + 1; j < n; ++j) {
+      const double c =
+          0.1 * static_cast<double>(i + 1) - 0.05 * static_cast<double>(j);
+      g = g + c * (y[i] * y[j]) / (Scalar{1} + y[i]);
+    }
+  }
+  g = g + exp(y[0] * y[n - 1]);
+  return g;
+}
+
+static std::vector<double> vf_point(std::size_t n) {
+  std::vector<double> x(n);
+  for (std::size_t k = 0; k < n; ++k) {
+    x[k] = 0.15 + 0.6 * (k + 1.0) / (n + 1.0);
+  }
+  return x;
+}
+
+static void BM_Ours_VForward_Hess(benchmark::State &state) {
+  const std::size_t n = static_cast<std::size_t>(state.range(0));
+  auto x = vf_point(n);
+  const std::span<const double> xs{x.data(), x.size()};
+  auto f = [n](const auto *dof) { return vf_energy(dof, n); };
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian_vforward(f, xs);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_Ours_VForward_Hess)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+
+static void BM_Ours_Forward_Hess(benchmark::State &state) {
+  const std::size_t n = static_cast<std::size_t>(state.range(0));
+  auto x = vf_point(n);
+  const std::span<const double> xs{x.data(), x.size()};
+  auto f = [n](const auto *dof) { return vf_energy(dof, n); };
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian(f, xs);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_Ours_Forward_Hess)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+
+static void BM_AD_Forward_Hess(benchmark::State &state) {
+  using autodiff::dual2nd;
+  using autodiff::VectorXdual2nd;
+  using autodiff::detail::at;
+  using autodiff::detail::hessian;
+  using autodiff::detail::wrt;
+  const std::size_t n = static_cast<std::size_t>(state.range(0));
+  auto x0 = vf_point(n);
+  VectorXdual2nd x(static_cast<Eigen::Index>(n));
+  for (std::size_t k = 0; k < n; ++k) {
+    x[static_cast<Eigen::Index>(k)] = x0[k];
+  }
+  auto f = [](const VectorXdual2nd &y) -> dual2nd {
+    return vf_energy(y, static_cast<std::size_t>(y.size()));
+  };
+  dual2nd u;
+  Eigen::VectorXd g;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(x);
+    Eigen::MatrixXd H = hessian(f, wrt(x), at(x), u, g);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_AD_Forward_Hess)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+
+// ===========================================================================
+// Sparse / cheap energy  f: R^n -> R, O(n) to evaluate, tridiagonal Hessian.
+//
+//   f(y) = Σ_i y_i·log(y_i)                    (separable -> diagonal)
+//        + Σ_i c_i·(y_i - y_{i+1})^2           (nearest-neighbour -> tridiagonal)
+//        + exp(y_0 · y_{n-1})                  (one dense corner)
+//
+// Unlike the dense quadratic above (O(n^2) to evaluate, which cancels the
+// vector-forward sweep advantage), this energy costs O(n) per evaluation, so
+// the O(n)-sweep vector-forward driver does O(n^2) lane-work vs the scalar
+// driver's O(n^2) sweeps of O(n) work — same order, but the vector path's
+// inner lane loops are contiguous and auto-vectorize.  This is the regime the
+// vector-forward Hessian is built for.
+// ===========================================================================
+
+template <typename Vec>
+static auto vf_energy_sparse(const Vec &y, std::size_t n) {
+  using std::exp, std::log;
+  using Scalar = std::remove_cvref_t<decltype(y[0])>;
+  Scalar g{0};
+  for (std::size_t i = 0; i < n; ++i) {
+    g = g + y[i] * log(y[i]);
+  }
+  for (std::size_t i = 0; i + 1 < n; ++i) {
+    const double c = 0.5 + 0.01 * static_cast<double>(i);
+    const Scalar d = y[i] - y[i + 1];
+    g = g + c * d * d;
+  }
+  g = g + exp(y[0] * y[n - 1]);
+  return g;
+}
+
+static void BM_Ours_VForward_HessSparse(benchmark::State &state) {
+  const std::size_t n = static_cast<std::size_t>(state.range(0));
+  auto x = vf_point(n);
+  const std::span<const double> xs{x.data(), x.size()};
+  auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian_vforward(f, xs);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_Ours_VForward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+
+static void BM_Ours_Forward_HessSparse(benchmark::State &state) {
+  const std::size_t n = static_cast<std::size_t>(state.range(0));
+  auto x = vf_point(n);
+  const std::span<const double> xs{x.data(), x.size()};
+  auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian(f, xs);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_Ours_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+
+static void BM_AD_Forward_HessSparse(benchmark::State &state) {
+  using autodiff::dual2nd;
+  using autodiff::VectorXdual2nd;
+  using autodiff::detail::at;
+  using autodiff::detail::hessian;
+  using autodiff::detail::wrt;
+  const std::size_t n = static_cast<std::size_t>(state.range(0));
+  auto x0 = vf_point(n);
+  VectorXdual2nd x(static_cast<Eigen::Index>(n));
+  for (std::size_t k = 0; k < n; ++k) {
+    x[static_cast<Eigen::Index>(k)] = x0[k];
+  }
+  auto f = [](const VectorXdual2nd &y) -> dual2nd {
+    return vf_energy_sparse(y, static_cast<std::size_t>(y.size()));
+  };
+  dual2nd u;
+  Eigen::VectorXd g;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(x);
+    Eigen::MatrixXd H = hessian(f, wrt(x), at(x), u, g);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+
+// ===========================================================================
+// Expression-template energy  — same sparse-chain math, but the energy is now
+// an actual compile-time expression *graph* (Variable / + / * / log / exp
+// nodes) rather than a flat arithmetic loop.  This is the regime the
+// vector-forward driver is built for: each Hessian row is one traversal of the
+// graph, so O(n) sweeps vs the scalar driver's O(n^2) traversals.
+//
+//   E(x) = Σ_k x_k·log(x_k) + Σ_k c_k·(x_k - x_{k+1})^2 + exp(x_0·x_{n-1})
+//          c_k = 0.5 + 0.01 k          (identical to vf_energy_sparse)
+//
+// The graph is bridged into the runtime driver via eval_seeded_as<T, Syms>:
+// the driver hands us seeded dual dofs, we pack them in symbol order and
+// traverse the graph once.  autodiff has no expression-template layer, so its
+// side reuses vf_energy_sparse — the same closed form — for an honest compare.
+//
+// Labels are zero-padded ("x00","x01",...) so the symbol set, which the library
+// sorts lexicographically, lands in index order.
+// ===========================================================================
+
+static auto make_chain_expr4() {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  diff::Variable<D, FixedString{"x00"}> a{D{1.0}};
+  diff::Variable<D, FixedString{"x01"}> b{D{1.0}};
+  diff::Variable<D, FixedString{"x02"}> c{D{1.0}};
+  diff::Variable<D, FixedString{"x03"}> d{D{1.0}};
+  return a * log(a) + b * log(b) + c * log(c) + d * log(d) +
+         0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
+         0.52 * (c - d) * (c - d) + exp(a * d);
+}
+
+static auto make_chain_expr8() {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  diff::Variable<D, FixedString{"x00"}> a{D{1.0}};
+  diff::Variable<D, FixedString{"x01"}> b{D{1.0}};
+  diff::Variable<D, FixedString{"x02"}> c{D{1.0}};
+  diff::Variable<D, FixedString{"x03"}> d{D{1.0}};
+  diff::Variable<D, FixedString{"x04"}> e{D{1.0}};
+  diff::Variable<D, FixedString{"x05"}> g{D{1.0}};
+  diff::Variable<D, FixedString{"x06"}> h{D{1.0}};
+  diff::Variable<D, FixedString{"x07"}> i{D{1.0}};
+  return a * log(a) + b * log(b) + c * log(c) + d * log(d) + e * log(e) +
+         g * log(g) + h * log(h) + i * log(i) + 0.50 * (a - b) * (a - b) +
+         0.51 * (b - c) * (b - c) + 0.52 * (c - d) * (c - d) +
+         0.53 * (d - e) * (d - e) + 0.54 * (e - g) * (e - g) +
+         0.55 * (g - h) * (g - h) + 0.56 * (h - i) * (h - i) + exp(a * i);
+}
+
+// Build the runtime-driver energy lambda for an expression graph: pack the
+// driver's seeded dofs (symbol order) and traverse the graph once.
+template <std::size_t Nv, typename Expr>
+static auto expr_energy(const Expr &E) {
+  using Syms = diff::extract_symbols_from_expr_t<Expr>;
+  return [&E](const auto *dof) {
+    using T = std::remove_cvref_t<decltype(dof[0])>;
+    std::array<T, Nv> s{};
+    for (std::size_t k = 0; k < Nv; ++k) {
+      s[k] = dof[k];
+    }
+    return E.template eval_seeded_as<T, Syms>(s);
+  };
+}
+
+template <std::size_t Nv, typename MakeExpr>
+static void ours_vforward_expr(benchmark::State &state, MakeExpr make) {
+  auto E = make();
+  auto f = expr_energy<Nv>(E);
+  auto x = vf_point(Nv);
+  const std::span<const double> xs{x.data(), x.size()};
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian_vforward(f, xs);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+
+template <std::size_t Nv, typename MakeExpr>
+static void ours_forward_expr(benchmark::State &state, MakeExpr make) {
+  auto E = make();
+  auto f = expr_energy<Nv>(E);
+  auto x = vf_point(Nv);
+  const std::span<const double> xs{x.data(), x.size()};
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian(f, xs);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+
+static void BM_Ours_VForward_HessExpr4(benchmark::State &state) {
+  ours_vforward_expr<4>(state, make_chain_expr4);
+}
+BENCHMARK(BM_Ours_VForward_HessExpr4);
+static void BM_Ours_Forward_HessExpr4(benchmark::State &state) {
+  ours_forward_expr<4>(state, make_chain_expr4);
+}
+BENCHMARK(BM_Ours_Forward_HessExpr4);
+// autodiff baseline for n=4/8 is BM_AD_Forward_HessSparse/{4,8} — identical
+// closed form (autodiff has no expression-template layer to mirror).
+
+static void BM_Ours_VForward_HessExpr8(benchmark::State &state) {
+  ours_vforward_expr<8>(state, make_chain_expr8);
+}
+BENCHMARK(BM_Ours_VForward_HessExpr8);
+static void BM_Ours_Forward_HessExpr8(benchmark::State &state) {
+  ours_forward_expr<8>(state, make_chain_expr8);
+}
+BENCHMARK(BM_Ours_Forward_HessExpr8);
 
 BENCHMARK_MAIN();

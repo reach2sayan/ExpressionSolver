@@ -78,12 +78,32 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
   return res;
 }
 
+// Compile-time bucket ladder 1,2,4,...,kVForwardN.  Walk it at runtime and
+// dispatch the smallest capacity N >= m, so a small active set runs narrow
+// lanes instead of always paying for the full kVForwardN-wide pack.  Only the
+// buckets on this ladder are instantiated (log2(kVForwardN)+1 of them).
+template <std::size_t N, typename F>
+HessianResult vforward_pick(std::size_t m, F &&f, std::span<const double> x,
+                            std::span<const std::size_t> active) {
+  if constexpr (N >= kVForwardN) {
+    // Top of the ladder: caller already guaranteed m <= kVForwardN.
+    return hessian_vforward_impl<kVForwardN>(static_cast<F &&>(f), x, active);
+  } else {
+    if (m <= N) {
+      return hessian_vforward_impl<N>(static_cast<F &&>(f), x, active);
+    }
+    constexpr std::size_t Next = (N * 2 < kVForwardN) ? N * 2 : kVForwardN;
+    return vforward_pick<Next>(m, static_cast<F &&>(f), x, active);
+  }
+}
+
 } // namespace detail
 
 // Value, gradient and (symmetric) Hessian of f at x w.r.t. `active`, via
 // vector-forward-over-forward mode.  Drop-in for hessian(): identical
 // signature and HessianResult, but O(m) sweeps of the energy lambda instead of
-// O(m^2).
+// O(m^2).  The lane capacity is bucketed to the smallest power of two >= m
+// (capped at kVForwardN); m > kVForwardN falls back to the scalar O(m^2) driver.
 template <typename F>
 HessianResult hessian_vforward(F &&f, std::span<const double> x,
                                std::span<const std::size_t> active) {
@@ -91,8 +111,7 @@ HessianResult hessian_vforward(F &&f, std::span<const double> x,
   if (m == 0 || m > kVForwardN) {
     return hessian(static_cast<F &&>(f), x, active); // scalar O(m^2) fallback
   }
-  return detail::hessian_vforward_impl<kVForwardN>(static_cast<F &&>(f), x,
-                                                   active);
+  return detail::vforward_pick<1>(m, static_cast<F &&>(f), x, active);
 }
 
 // Convenience: differentiate every variable.

@@ -39,32 +39,37 @@ public:
     return Dual{val / o.val, (deriv * o.val - val * o.deriv) / (o.val * o.val)};
   }
 
-  // Mixed Dual/scalar arithmetic: a bare scalar is promoted to a
-  // zero-derivative Dual.  Hidden friends, so they only participate in overload
-  // resolution via ADL when a Dual operand is present.
+  // Mixed Dual/scalar arithmetic.  A bare scalar is a zero-derivative constant,
+  // so instead of promoting it to a full Dual{s} (deriv = 0) and running
+  // dual*dual arithmetic against those zeros, we distribute it straight through
+  // val/deriv.  The result is bit-identical for finite operands (x+0 == x,
+  // x*0 == 0) but skips the wasted +0 / *0 work — which is not free at dual2nd
+  // depth, where each promoted zero is itself a nested Dual.  This is the same
+  // fusion autodiff gets from its NumberDualMulExpr node.  Hidden friends, so
+  // they only join overload resolution via ADL when a Dual operand is present.
   friend constexpr Dual operator+(const Dual &a, const T &s) noexcept {
-    return a + Dual{s};
+    return Dual{a.val + s, a.deriv};
   }
   friend constexpr Dual operator+(const T &s, const Dual &a) noexcept {
-    return Dual{s} + a;
+    return Dual{s + a.val, a.deriv};
   }
   friend constexpr Dual operator-(const Dual &a, const T &s) noexcept {
-    return a - Dual{s};
+    return Dual{a.val - s, a.deriv};
   }
   friend constexpr Dual operator-(const T &s, const Dual &a) noexcept {
-    return Dual{s} - a;
+    return Dual{s - a.val, -a.deriv};
   }
   friend constexpr Dual operator*(const Dual &a, const T &s) noexcept {
-    return a * Dual{s};
+    return Dual{a.val * s, a.deriv * s};
   }
   friend constexpr Dual operator*(const T &s, const Dual &a) noexcept {
-    return Dual{s} * a;
+    return Dual{s * a.val, s * a.deriv};
   }
   friend constexpr Dual operator/(const Dual &a, const T &s) noexcept {
-    return a / Dual{s};
+    return Dual{a.val / s, a.deriv / s};
   }
   friend constexpr Dual operator/(const T &s, const Dual &a) noexcept {
-    return Dual{s} / a;
+    return Dual{s / a.val, -(s * a.deriv) / (a.val * a.val)};
   }
 
   constexpr Dual &operator+=(const Dual &o) noexcept {
@@ -284,22 +289,60 @@ template <typename D, typename U> constexpr D as_constant(U s) noexcept {
 }
 } // namespace detail
 
-#define DIFF_DUAL_SCALAR_OP(OP)                                                \
-  template <typename T, typename U>                                            \
-    requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)                 \
-  constexpr Dual<T> operator OP(const Dual<T> &a, U s) noexcept {              \
-    return a OP detail::as_constant<Dual<T>>(s);                               \
-  }                                                                            \
-  template <typename T, typename U>                                            \
-    requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)                 \
-  constexpr Dual<T> operator OP(U s, const Dual<T> &a) noexcept {              \
-    return detail::as_constant<Dual<T>>(s) OP a;                               \
-  }
-DIFF_DUAL_SCALAR_OP(+)
-DIFF_DUAL_SCALAR_OP(-)
-DIFF_DUAL_SCALAR_OP(*)
-DIFF_DUAL_SCALAR_OP(/)
-#undef DIFF_DUAL_SCALAR_OP
+// Mixed Dual/arithmetic operators (e.g. `double * dual2nd`), reached when the
+// scalar's type differs from the Dual's stored type — i.e. at nesting depth
+// >= 2.  Same fusion as the hidden friends above: distribute the constant
+// through val/deriv rather than promoting it to a zero-seeded Dual<T> and
+// recursing dual*dual through the zeros.  Free functions, so they go through
+// the public get<> accessors; the inner `val OP s` (T OP arithmetic) then hits
+// the depth-1 hidden friends, fusing all the way down to the scalar leaf.
+// The dual type is kept on the left of every inner operation: a custom inner
+// scalar (e.g. VectorDual) supplies member operators + an implicit lift from
+// double, but no `double OP VectorDual` free operators — so `val OP s` works
+// while `s OP val` would not.  The scalar-on-the-left overloads therefore route
+// through the (Dual,U) ones (commuting +/*), a negation (-), or a single
+// value-level lift T(s) (/), never the old full zero-seeded Dual<T> promotion.
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator+(const Dual<T> &a, U s) noexcept {
+  return Dual<T>{a.template get<0>() + s, a.template get<1>()};
+}
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator+(U s, const Dual<T> &a) noexcept {
+  return a + s; // addition commutes
+}
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator-(const Dual<T> &a, U s) noexcept {
+  return Dual<T>{a.template get<0>() - s, a.template get<1>()};
+}
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator-(U s, const Dual<T> &a) noexcept {
+  return -(a - s); // s - a == -(a - s)
+}
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator*(const Dual<T> &a, U s) noexcept {
+  return Dual<T>{a.template get<0>() * s, a.template get<1>() * s};
+}
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator*(U s, const Dual<T> &a) noexcept {
+  return a * s; // multiplication commutes
+}
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator/(const Dual<T> &a, U s) noexcept {
+  return Dual<T>{a.template get<0>() / s, a.template get<1>() / s};
+}
+template <typename T, typename U>
+  requires(std::is_arithmetic_v<U> && !std::is_same_v<U, T>)
+constexpr Dual<T> operator/(U s, const Dual<T> &a) noexcept {
+  const auto& [v, v2] = a;
+  return Dual<T>{T(s) / v, -(v2 * s) / (v * v)};
+}
 
 template <typename A, typename B>
 concept DualMix =
