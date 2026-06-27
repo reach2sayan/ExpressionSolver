@@ -129,18 +129,32 @@ Plus `F1`/`F2`/`F4` from the scalar gradient suite above.
 
 ### Linux / GCC snapshot (16-core, `-O3`)
 
-**Forward mode:**
+**Forward mode** (gradient via `derivative_tensor<1>`):
 
 | Benchmark | Ours | autodiff | Notes |
 |---|---:|---:|---|
-| F1, F2, F4 | 14–33 ns | 14–29 ns | ~Tie |
-| T1 | 2.68 ns | 1.05 ns | autodiff 2.5× |
-| TMulti3 | 25.7 ns | 19.6 ns | autodiff 1.3× |
-| TGrad2 | 44.7 ns | 28.5 ns | autodiff 1.6× |
+| F1 (N=1) | 15.4 ns | 14.7 ns | ~Tie |
+| F2 (N=2) | ~16 ns | 16.3 ns | ~Tie |
+| **F4 (N=4)** | **15.8 ns** | 30.4 ns | **Ours 1.9×** |
+| T1 (N=1) | 1.49 ns | 1.05 ns | autodiff 1.4× |
+| **TMulti3 (N=3)** | **21.8 ns** | 21.0 ns | parity |
+| TGrad2 (N=2) | 47.7 ns | 30.3 ns | autodiff 1.6× |
 | T4th (nested dual) | 31.9 ns | 7.70 ns | autodiff 4× |
 | **T4th (TaylorDual)** | **14.9 ns** | 7.70 ns | autodiff 2× |
 | THess | **3.24 ns** | 14.5 ns | Ours 4.5× |
 | TDir | **4.65 ns** | 28.0 ns | Ours 6× |
+
+**Vector-forward gradient (N ≥ 3).** A full forward-mode gradient was previously
+N scalar `Dual` passes — one per variable, each re-evaluating the whole expression
+(every `sin`/`exp`/shared subexpression recomputed N times), the same shape autodiff
+uses. For `N ≥ 3`, `derivative_tensor<1>` now takes a **single `VectorDual<N>` pass**:
+identity tangents are seeded as lanes, so all N partials propagate together and the
+value-level work is computed once. This flips **F4 (N=4) from a ~1.5× loss to a ~1.9×
+win** and brings **TMulti3 (N=3) to parity** — autodiff still does N passes. `N ≤ 2`
+keeps the leaner scalar path (one shared evaluation barely offsets the lane overhead at
+N=2, and the box is too noisy there to measure a reliable difference); `N = 1` is a
+single plain `Dual` pass. Gated to double-scalar expressions (`VectorDual` lanes are
+double); bit-correct against the scalar path (212 tests pass).
 
 **Reverse mode** (median of 9, single-core pinned).
 
@@ -191,9 +205,36 @@ backward), this library is **3–32× faster**; the remaining headline factor is
 autodiff paying to rebuild its tape on every call.
 
 A namespace-scope cross-check in `benchmark_compare.cpp` runs at static-init and
-asserts our reverse gradient matches autodiff's at a sample point for F1/F2/F4
+asserts our reverse gradient matches autodiff's at a sample point for F1/F2/F4/G4
 (F4's symbols sort to `{w,x,y,z}` — the canonical-vs-source ordering trap the
 `make_values`/`named<>` binding guards).
+
+#### Reverse gradient over a compile-time expression graph (CExpression)
+
+The reverse pass is not limited to small hand-written expressions — it traverses an
+arbitrary compile-time `CExpression` graph (Variable / `+` / `*` / `log` / `exp`
+nodes) in a single backward sweep with no allocation. The benchmark differentiates the
+sparse-chain energy `Σ xₖ·log xₖ + Σ cₖ(xₖ−xₖ₊₁)² + exp(x₀·x_{n−1})` built as an actual
+graph, against autodiff's `var` tape on the identical energy.
+
+| n (graph) | Ours Scratch | Ours Reuse | AD Scratch | AD Reuse | Headline (Scr/Scr) | Structural (Reuse/Reuse) |
+|---|---:|---:|---:|---:|---:|---:|
+| G4 (~20 nodes) | 26.6 ns | 21.2 ns | 866 ns  | 245 ns | 33× | **11.6×** |
+| G8 (~40 nodes) | 170 ns  | 38.1 ns | 1920 ns | 531 ns | 11× | **13.9×** |
+
+- **The structural advantage grows with graph size** (11.6× → 13.9×): our backward is
+  one inlined traversal of a stack-resident type, while autodiff allocates and walks
+  one heap `shared_ptr` node per operation — a per-node cost that compounds as the
+  graph grows.
+- **Build-once-reuse is the realistic case** for a graph (define it once, differentiate
+  it repeatedly), and there we are 12–14× faster.
+- **From-scratch caveat (honest):** our rebuild is **O(n²)** because expression nodes
+  store their operands *by value* (nested `std::pair`), so a re-formed left-leaning
+  n-term sum recopies its growing left subtree. That is why `G8 Scratch` (170 ns) is
+  dominated by graph *construction*, not the backward pass (`G8 Reuse` = 38 ns).
+  autodiff's from-scratch is O(n) heap allocations but with a far larger constant
+  (1920 ns). Reuse sidesteps both; for repeated differentiation of a fixed graph it is
+  the right path on both sides.
 
 Forward mode is competitive. The gap on simple expressions (T1, TGrad2) comes from autodiff's leaner per-operation dual arithmetic for low-depth cases. The library wins on higher-order expressions (THess, TDir) where the static expression tree allows the compiler to specialise and inline more aggressively.
 

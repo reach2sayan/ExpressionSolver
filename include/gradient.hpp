@@ -4,6 +4,7 @@
 #include "expressions.hpp"
 #include "taylor_dual.hpp"
 #include "traits.hpp"
+#include "vector_dual.hpp"
 #include <algorithm>
 #include <array>
 #include <boost/mp11/list.hpp>
@@ -213,6 +214,31 @@ template <std::size_t Order, CExpression Expr,
   using U = nth_dual_t<S, Order>;
 
   nd_array_t<S, N, Order> result{};
+
+  // First-order gradient fast path (N >= 3): one vector-forward pass instead of
+  // N scalar Dual passes.  Seeding identity tangents into a VectorDual<N> carries
+  // every partial as a lane, so the value-level work — transcendentals and shared
+  // subexpressions — is computed once rather than recomputed per variable. The
+  // scalar passes evaluate e.g. sin(x)/exp(x*y) once *per variable*; this shares
+  // them, a win that grows with N (TMulti3 N=3 reaches parity with autodiff, F4
+  // N=4 overtakes it ~2x).  N <= 2 keeps the leaner scalar path: at N=2 the single
+  // shared evaluation barely offsets the VectorDual lane overhead (and N==1 is one
+  // plain Dual pass).  VectorDual lanes are double, so this is gated to
+  // double-scalar expressions.
+  if constexpr (Order == 1 && N >= 3 && std::is_same_v<S, double>) {
+    using V = VectorDual<N>;
+    std::array<V, N> seeds{};
+    for (std::size_t k = 0; k < N; ++k) {
+      seeds[k] = V{values[k]};
+      seeds[k].grad[k] = double{1};
+    }
+    const V r = expr.template eval_seeded_as<V, symbols>(seeds);
+    for (std::size_t k = 0; k < N; ++k) {
+      result[k] = r.grad[k];
+    }
+    return result;
+  }
+
   std::size_t total = 1;
   for (std::size_t d = 0; d < Order; ++d) {
     total *= N;

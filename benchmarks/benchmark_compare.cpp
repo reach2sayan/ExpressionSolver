@@ -1112,6 +1112,132 @@ static void BM_Ours_Hessian_HessExpr8(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Hessian_HessExpr8);
 
+// ===========================================================================
+// Reverse-mode GRADIENT over a compile-time expression graph (CExpression).
+//
+// Same sparse-chain energy as the HessExpr benchmarks, but the value type is
+// plain double and we take a single reverse-mode gradient — one backward pass
+// over the Variable/+/*/log/exp graph — instead of a Hessian. This is the regime
+// where the structural advantage is starkest: our "graph" is a compile-time type
+// the backward pass inlines into straight-line code, whereas autodiff builds the
+// identical energy as a heap shared_ptr `var` tape (one node per operation) and
+// walks it with virtual dispatch. Same Scratch/Reuse framing as the scalar
+// reverse benchmarks above; symbols are zero-padded so canonical order == index
+// order.
+//   E(x) = Σ_k x_k·log(x_k) + Σ_k c_k·(x_k − x_{k+1})² + exp(x_0·x_{n-1})
+// ===========================================================================
+
+static const std::array<double, 4> GP4{0.27, 0.39, 0.51, 0.63};
+static const std::array<double, 8> GP8{0.21666667, 0.28333333, 0.35, 0.41666667,
+                                       0.48333333, 0.55,       0.61666667,
+                                       0.68333333};
+
+// Ours: double-valued chain graph (usable directly as the Scratch builder).
+static auto grad_chain4(double x0, double x1, double x2, double x3) {
+  auto a = PV(x0, "x00");
+  auto b = PV(x1, "x01");
+  auto c = PV(x2, "x02");
+  auto d = PV(x3, "x03");
+  return a * log(a) + b * log(b) + c * log(c) + d * log(d) +
+         0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
+         0.52 * (c - d) * (c - d) + exp(a * d);
+}
+static auto grad_chain8(double x0, double x1, double x2, double x3, double x4,
+                        double x5, double x6, double x7) {
+  auto a = PV(x0, "x00");
+  auto b = PV(x1, "x01");
+  auto c = PV(x2, "x02");
+  auto d = PV(x3, "x03");
+  auto e = PV(x4, "x04");
+  auto g = PV(x5, "x05");
+  auto h = PV(x6, "x06");
+  auto i = PV(x7, "x07");
+  return a * log(a) + b * log(b) + c * log(c) + d * log(d) + e * log(e) +
+         g * log(g) + h * log(h) + i * log(i) + 0.50 * (a - b) * (a - b) +
+         0.51 * (b - c) * (b - c) + 0.52 * (c - d) * (c - d) +
+         0.53 * (d - e) * (d - e) + 0.54 * (e - g) * (e - g) +
+         0.55 * (g - h) * (g - h) + 0.56 * (h - i) * (h - i) + exp(a * i);
+}
+
+// autodiff: the identical energy built from a tuple of `var` leaf references.
+static auto make_u_grad4 = [](auto &L) {
+  auto &a = std::get<0>(L);
+  auto &b = std::get<1>(L);
+  auto &c = std::get<2>(L);
+  auto &d = std::get<3>(L);
+  return a * log(a) + b * log(b) + c * log(c) + d * log(d) +
+         0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
+         0.52 * (c - d) * (c - d) + exp(a * d);
+};
+static auto make_u_grad8 = [](auto &L) {
+  auto &a = std::get<0>(L);
+  auto &b = std::get<1>(L);
+  auto &c = std::get<2>(L);
+  auto &d = std::get<3>(L);
+  auto &e = std::get<4>(L);
+  auto &g = std::get<5>(L);
+  auto &h = std::get<6>(L);
+  auto &i = std::get<7>(L);
+  return a * log(a) + b * log(b) + c * log(c) + d * log(d) + e * log(e) +
+         g * log(g) + h * log(h) + i * log(i) + 0.50 * (a - b) * (a - b) +
+         0.51 * (b - c) * (b - c) + 0.52 * (c - d) * (c - d) +
+         0.53 * (d - e) * (d - e) + 0.54 * (e - g) * (e - g) +
+         0.55 * (g - h) * (g - h) + 0.56 * (h - i) * (h - i) + exp(a * i);
+};
+
+static void BM_Ours_ReverseGraph_G4_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<4>(state, GP4, grad_chain4);
+}
+BENCHMARK(BM_Ours_ReverseGraph_G4_Scratch);
+static void BM_Ours_ReverseGraph_G4_Reuse(benchmark::State &state) {
+  auto expr = grad_chain4(GP4[0], GP4[1], GP4[2], GP4[3]);
+  run_ours_reverse_reuse(
+      state, expr,
+      make_values<decltype(expr)>(named<"x00">(GP4[0]), named<"x01">(GP4[1]),
+                                  named<"x02">(GP4[2]), named<"x03">(GP4[3])));
+}
+BENCHMARK(BM_Ours_ReverseGraph_G4_Reuse);
+static void BM_AD_ReverseGraph_G4_Scratch(benchmark::State &state) {
+  autodiff::var a = GP4[0], b = GP4[1], c = GP4[2], d = GP4[3];
+  run_ad_reverse_scratch<4>(state, GP4, std::tie(a, b, c, d), make_u_grad4);
+}
+BENCHMARK(BM_AD_ReverseGraph_G4_Scratch);
+static void BM_AD_ReverseGraph_G4_Reuse(benchmark::State &state) {
+  autodiff::var a = GP4[0], b = GP4[1], c = GP4[2], d = GP4[3];
+  run_ad_reverse_reuse<4>(state, GP4, std::tie(a, b, c, d), make_u_grad4);
+}
+BENCHMARK(BM_AD_ReverseGraph_G4_Reuse);
+
+static void BM_Ours_ReverseGraph_G8_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<8>(state, GP8, grad_chain8);
+}
+BENCHMARK(BM_Ours_ReverseGraph_G8_Scratch);
+static void BM_Ours_ReverseGraph_G8_Reuse(benchmark::State &state) {
+  auto expr = grad_chain8(GP8[0], GP8[1], GP8[2], GP8[3], GP8[4], GP8[5],
+                          GP8[6], GP8[7]);
+  run_ours_reverse_reuse(
+      state, expr,
+      make_values<decltype(expr)>(
+          named<"x00">(GP8[0]), named<"x01">(GP8[1]), named<"x02">(GP8[2]),
+          named<"x03">(GP8[3]), named<"x04">(GP8[4]), named<"x05">(GP8[5]),
+          named<"x06">(GP8[6]), named<"x07">(GP8[7])));
+}
+BENCHMARK(BM_Ours_ReverseGraph_G8_Reuse);
+static void BM_AD_ReverseGraph_G8_Scratch(benchmark::State &state) {
+  autodiff::var a = GP8[0], b = GP8[1], c = GP8[2], d = GP8[3], e = GP8[4],
+                g = GP8[5], h = GP8[6], i = GP8[7];
+  run_ad_reverse_scratch<8>(state, GP8, std::tie(a, b, c, d, e, g, h, i),
+                            make_u_grad8);
+}
+BENCHMARK(BM_AD_ReverseGraph_G8_Scratch);
+static void BM_AD_ReverseGraph_G8_Reuse(benchmark::State &state) {
+  autodiff::var a = GP8[0], b = GP8[1], c = GP8[2], d = GP8[3], e = GP8[4],
+                g = GP8[5], h = GP8[6], i = GP8[7];
+  run_ad_reverse_reuse<8>(state, GP8, std::tie(a, b, c, d, e, g, h, i),
+                          make_u_grad8);
+}
+BENCHMARK(BM_AD_ReverseGraph_G8_Reuse);
+
 // ---------------------------------------------------------------------------
 // One-time correctness cross-check (runs at static-init, before any benchmark).
 // Guards the canonical-vs-source symbol-order footgun (esp. F4, whose symbols
@@ -1184,6 +1310,18 @@ double ours_partial(const Expr &expr, std::string_view sym) {
     reverse_check("F4 d/dy", ours_partial(e, "y"), dy);
     reverse_check("F4 d/dz", ours_partial(e, "z"), dz);
     reverse_check("F4 d/dw", ours_partial(e, "w"), dw);
+  }
+  // G4: reverse gradient over a compile-time expression graph vs autodiff var.
+  {
+    auto e = grad_chain4(GP4[0], GP4[1], GP4[2], GP4[3]);
+    autodiff::var a = GP4[0], b = GP4[1], c = GP4[2], d = GP4[3];
+    auto leaves = std::tie(a, b, c, d);
+    autodiff::var u = make_u_grad4(leaves);
+    auto [da, db, dc, dd] = ad::derivatives(u, ad::wrt(a, b, c, d));
+    reverse_check("G4 d/dx00", ours_partial(e, "x00"), da);
+    reverse_check("G4 d/dx01", ours_partial(e, "x01"), db);
+    reverse_check("G4 d/dx02", ours_partial(e, "x02"), dc);
+    reverse_check("G4 d/dx03", ours_partial(e, "x03"), dd);
   }
   return true;
 }();
