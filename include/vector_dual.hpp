@@ -123,6 +123,37 @@ template <std::size_t N> struct VectorDual {
     }
     return r;
   }
+  [[nodiscard]] friend constexpr VectorDual sin(const VectorDual &d) noexcept {
+    using std::cos, std::sin;
+    VectorDual r;
+    r.value = sin(d.value);
+    const double c = cos(d.value);
+    for (std::size_t k = 0; k < N; ++k) {
+      r.grad[k] = c * d.grad[k];
+    }
+    return r;
+  }
+  [[nodiscard]] friend constexpr VectorDual cos(const VectorDual &d) noexcept {
+    using std::cos, std::sin;
+    VectorDual r;
+    r.value = cos(d.value);
+    const double ms = -sin(d.value);
+    for (std::size_t k = 0; k < N; ++k) {
+      r.grad[k] = ms * d.grad[k];
+    }
+    return r;
+  }
+  [[nodiscard]] friend constexpr VectorDual tan(const VectorDual &d) noexcept {
+    using std::tan;
+    const double t = tan(d.value);
+    VectorDual r;
+    r.value = t;
+    const double sec2 = double{1} + t * t; // sec^2 = 1 + tan^2
+    for (std::size_t k = 0; k < N; ++k) {
+      r.grad[k] = sec2 * d.grad[k];
+    }
+    return r;
+  }
   [[nodiscard]] friend constexpr VectorDual sqrt(const VectorDual &d) noexcept {
     using std::sqrt;
     const double s = sqrt(d.value);
