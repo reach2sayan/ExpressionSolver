@@ -42,15 +42,20 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
     base[active[t]].grad[t] = 1.0;
   }
 
+  // Build dof once: value level = the identity tangent pack (constant across
+  // sweeps), outer-derivative level = all zero.  Across sweeps only the single
+  // outer-derivative *value* at k == active[i] toggles 0->1->0, so per sweep we
+  // flip that one scalar instead of rewriting all n entries (was O(n*N)/sweep).
   std::vector<D> dof(n);
+  for (std::size_t k = 0; k < n; ++k) {
+    dof[k] = D{base[k], V{}};
+  }
   for (std::size_t i = 0; i < m; ++i) {
     const std::size_t ai = active[i];
-    for (std::size_t k = 0; k < n; ++k) {
-      // outer-derivative slot = scalar seed e_i (value 1 at k==ai, grad 0)
-      dof[k] = D{base[k], V{(k == ai) ? double{1} : double{0}}};
-    }
+    dof[ai].template get<1>().value = double{1}; // outer-deriv seed e_i
 
     const D r = f(dof.data());
+    dof[ai].template get<1>().value = double{0}; // reset for next sweep
     const auto &[A, B] = r; // value & outer-derivative component (no copy)
     if (i == 0) {
       res.value = A.value;

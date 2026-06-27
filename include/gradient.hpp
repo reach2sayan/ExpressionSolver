@@ -8,10 +8,79 @@
 #include <array>
 #include <boost/mp11/list.hpp>
 #include <span>
+#include <string_view>
+#include <utility>
 
 namespace diff {
 
 namespace mp = boost::mp11;
+
+// ===========================================================================
+// Order-safe seeding for the symbolic value-array APIs.
+//
+// derivative_tensor(expr, values) and the reverse-mode hessian(expr, values)
+// take a positional std::array whose slot i must hold the value of the i-th
+// symbol in CANONICAL order — which is alphabetical by symbol name (see
+// extract_symbols_from_expr_t / symbol_less in traits.hpp), NOT source order.
+// Passing them in the wrong order silently computes a derivative at the wrong
+// point.  make_values() removes that footgun: values bind by symbol *name*, so
+// a missing, extra, duplicated, or misspelled symbol is a compile error and
+// position is irrelevant.  symbol_order() exposes the canonical order for
+// introspection / building arrays by hand.
+// ===========================================================================
+
+template <FixedString Sym, typename V> struct NamedValue {
+  static constexpr auto symbol = Sym;
+  V value;
+};
+
+// named<"x">(1.25) — bind a value to a symbol by name.
+template <FixedString Sym, typename V>
+[[nodiscard]] constexpr NamedValue<Sym, V> named(V v) noexcept {
+  return {v};
+}
+
+// The canonical (alphabetical-by-name) order of an expression's free symbols.
+template <CExpression Expr>
+[[nodiscard]] constexpr auto symbol_order() noexcept {
+  using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  constexpr std::size_t N = mp::mp_size<SymList>::value;
+  std::array<std::string_view, N> out{};
+  [&]<std::size_t... I>(std::index_sequence<I...>) {
+    ((out[I] = mp::mp_at_c<SymList, I>::name), ...);
+  }(std::make_index_sequence<N>{});
+  return out;
+}
+
+// Build the canonical-order value array for `Expr` from named values.  Scalar
+// defaults to the type derivative_tensor expects (scalar_base_t); override it
+// for the reverse-mode hessian path (e.g. make_values<Expr, dual_scalar_t<T>>).
+template <CExpression Expr,
+          typename Scalar =
+              scalar_base_t<typename std::remove_cvref_t<Expr>::value_type>,
+          FixedString... Syms, typename... Vs>
+[[nodiscard]] constexpr std::array<
+    Scalar, mp::mp_size<extract_symbols_from_expr_t<
+                std::remove_cvref_t<Expr>>>::value>
+make_values(NamedValue<Syms, Vs>... nv) noexcept {
+  using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  constexpr std::size_t N = mp::mp_size<SymList>::value;
+  static_assert(sizeof...(Syms) == N,
+                "make_values: supply exactly one value per symbol");
+  static_assert(
+      mp::mp_size<mp::mp_unique<mp::mp_list<symbol_type<Syms>...>>>::value ==
+          sizeof...(Syms),
+      "make_values: duplicate symbol");
+  std::array<Scalar, N> out{};
+  (
+      [&]<FixedString Sy, typename Vv>(const NamedValue<Sy, Vv> &v) {
+        constexpr std::size_t idx = find_index_of_symbol<Sy, SymList>();
+        static_assert(idx < N, "make_values: symbol not present in expression");
+        out[idx] = static_cast<Scalar>(v.value);
+      }(nv),
+      ...);
+  return out;
+}
 
 namespace detail {
 template <typename S, std::size_t N, std::size_t Order> auto nd_array_fn() {
@@ -186,6 +255,15 @@ template <DiffMode Mode, CExpression Expr,
   return detail::reverse_mode_hessian(expr, values);
 }
 
+// Order-safe named form: values bind by symbol name (see make_values).
+template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
+          typename T = typename std::remove_cvref_t<Expr>::value_type>
+  requires(Mode == DiffMode::Reverse && is_dual_v<T>)
+[[nodiscard]] auto hessian(Expr &expr, NamedValue<Syms, Vs>... nv) noexcept {
+  return detail::reverse_mode_hessian(
+      expr, make_values<Expr, dual_scalar_t<T>>(nv...));
+}
+
 template <DiffMode Mode, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
@@ -205,6 +283,15 @@ template <std::size_t Order, CExpression Expr,
 [[nodiscard]] auto derivative_tensor(const Expr &expr,
                                      std::array<S, N> values) noexcept {
   return detail::derivative_tensor_impl<Order>(expr, values);
+}
+
+// Order-safe named form: values bind by symbol name (see make_values).
+template <std::size_t Order, CExpression Expr, FixedString... Syms,
+          typename... Vs>
+  requires(Order > 0 && sizeof...(Syms) > 0)
+[[nodiscard]] auto derivative_tensor(const Expr &expr,
+                                     NamedValue<Syms, Vs>... nv) noexcept {
+  return detail::derivative_tensor_impl<Order>(expr, make_values<Expr>(nv...));
 }
 
 template <std::size_t Order, CExpression Expr,

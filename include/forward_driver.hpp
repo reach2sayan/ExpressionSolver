@@ -39,13 +39,17 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   const std::size_t n = x.size();
   const std::size_t m = active.size();
   std::vector<double> g(m, 0.0);
+
+  // Build the seed pack once (all derivative parts zero); across passes only the
+  // active[j] seed's derivative toggles 1->0, so flip that one entry per pass
+  // instead of rebuilding all n duals every pass.
   std::vector<dual> dof(n);
+  std::ranges::transform(x, dof.begin(), [](double v) { return dual{v, 0.0}; });
 
   for (std::size_t j = 0; j < m; ++j) {
-    std::ranges::transform(x, dof.begin(),
-                           [](double v) { return dual{v, 0.0}; });
-    dof[active[j]] = dual{x[active[j]], 1.0};
+    dof[active[j]].template get<1>() = 1.0;
     g[j] = f(dof.data()).template get<1>();
+    dof[active[j]].template get<1>() = 0.0;
   }
   return g;
 }
@@ -82,12 +86,22 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
   std::vector<dual2nd> dof(n);
   using Inner = Dual<double>;
 
+  // Seed once to the zero-derivative base; each (i,j) pair then touches only the
+  // (at most) two active dofs and resets them afterwards — O(m^2) seeding, not
+  // O(m^2 * n) (autodiff seeds the same way).  Non-active dofs stay at base.
+  for (std::size_t k = 0; k < n; ++k) {
+    dof[k] = dual2nd{Inner{x[k], 0.0}, Inner{0.0, 0.0}};
+  }
+
   for (std::size_t j = 0; j < m; ++j) {
+    const std::size_t aj = active[j];
     for (std::size_t i = 0; i <= j; ++i) {
-      for (std::size_t k = 0; k < n; ++k) {
-        const double inner_seed = (k == active[j]) ? 1.0 : 0.0; // v = e_j
-        const double outer_seed = (k == active[i]) ? 1.0 : 0.0; // u = e_i
-        dof[k] = dual2nd{Inner{x[k], inner_seed}, Inner{outer_seed, 0.0}};
+      const std::size_t ai = active[i];
+
+      // Seed: inner slot = e_j on aj, outer slot = e_i on ai (i==j coincides).
+      dof[aj] = dual2nd{Inner{x[aj], 1.0}, Inner{(ai == aj) ? 1.0 : 0.0, 0.0}};
+      if (ai != aj) {
+        dof[ai] = dual2nd{Inner{x[ai], 0.0}, Inner{1.0, 0.0}};
       }
 
       const dual2nd r = f(dof.data());
@@ -100,6 +114,12 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
       res.gradient[j] = a1;
       res.hessian[i * m + j] = b1;
       res.hessian[j * m + i] = b1;
+
+      // Reset the touched dofs back to base for the next pair.
+      dof[aj] = dual2nd{Inner{x[aj], 0.0}, Inner{0.0, 0.0}};
+      if (ai != aj) {
+        dof[ai] = dual2nd{Inner{x[ai], 0.0}, Inner{0.0, 0.0}};
+      }
     }
   }
   return res;

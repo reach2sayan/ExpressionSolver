@@ -26,7 +26,13 @@ namespace diff {
 // into this otherwise dependency-free, constexpr header library).
 template <std::size_t N> struct VectorDual {
   double value{};
-  std::array<double, N> grad{}; // partials, lanes [0, N)
+  // Over-align the partial pack so the elementwise lane loops below vectorize
+  // without a scalar peel prologue: under -march=x86-64-v3 (AVX2, 32-byte
+  // vectors) an 8-byte-aligned array forces the compiler to emit an alignment
+  // peel + remainder.  The Hessian driver buckets N to powers of two >= 4
+  // (vforward_pick), so a 32-byte start makes each loop a clean run of whole
+  // 256-bit stores.  std::vector uses aligned new for the over-aligned element.
+  alignas(32) std::array<double, N> grad{}; // partials, lanes [0, N)
 
   constexpr VectorDual() noexcept = default;
   constexpr VectorDual(double v, const std::array<double, N> &g) noexcept

@@ -12,7 +12,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(DIFF_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
 option(DIFF_BUILD_COMPARE "Build comparison benchmarks against autodiff" OFF)
-option(ENABLE_NATIVE_ARCH "Build optimized for this machine" OFF)
+option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
 
 if (MSVC)
    add_compile_options(/arch:AVX2)

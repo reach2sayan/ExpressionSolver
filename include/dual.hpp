@@ -2,7 +2,6 @@
 
 #include "expressions.hpp"
 #include <cmath>
-#include <functional>
 #include <ostream>
 #include <tuple>
 #include <type_traits>
@@ -79,29 +78,37 @@ inline constexpr bool is_dual_v = is_dual_impl(std::type_identity<T>{});
 template <typename T>
 using dual_scalar_t = decltype(dual_scalar_impl(std::declval<T>()));
 
-template <typename T, typename F> struct DualExpr {
-  F fn;
-  using value_type = Dual<T>;
-  [[nodiscard]] constexpr Dual<T> eval() const noexcept { return fn(); }
-  constexpr operator Dual<T>() const noexcept { return fn(); }
-  template <std::size_t I> [[nodiscard]] constexpr T get() const noexcept {
-    return fn().template get<I>();
-  }
-};
+// ===========================================================================
+// Lazy expression-template layer for Dual — struct-based nodes (same shape as
+// autodiff's forward dual, so the optimizer collapses an expression to the
+// eager computation with no closure/indirection overhead).  Bin/Mono hold their
+// operands and materialize to Dual<T> on demand (conversion / get<> /
+// structured binding / assignment).  An Op tag is a stateless functor carrying
+// the exact eager formula, so results are bit-identical.
+// ===========================================================================
+template <typename T, typename Op, typename L, typename R> struct Bin;
+template <typename T, typename Op, typename E> struct Mono;
 
 template <typename X> struct is_dual_expr_impl : std::false_type {};
-template <typename T, typename F>
-struct is_dual_expr_impl<DualExpr<T, F>> : std::true_type {};
+template <typename T, typename Op, typename L, typename R>
+struct is_dual_expr_impl<Bin<T, Op, L, R>> : std::true_type {};
+template <typename T, typename Op, typename E>
+struct is_dual_expr_impl<Mono<T, Op, E>> : std::true_type {};
 template <typename X>
 inline constexpr bool is_dual_expr_v =
     is_dual_expr_impl<std::remove_cvref_t<X>>::value;
 
-// dual_value_t<X>: the stored component type T of a Dual<T> or DualExpr<T,F>.
+// dual_value_t<X>: the component type T of a Dual<T> or a lazy node over it.
 template <typename X> struct dual_value_type;
 template <typename T> struct dual_value_type<Dual<T>> {
   using type = T;
 };
-template <typename T, typename F> struct dual_value_type<DualExpr<T, F>> {
+template <typename T, typename Op, typename L, typename R>
+struct dual_value_type<Bin<T, Op, L, R>> {
+  using type = T;
+};
+template <typename T, typename Op, typename E>
+struct dual_value_type<Mono<T, Op, E>> {
   using type = T;
 };
 template <typename X>
@@ -111,22 +118,53 @@ using dual_value_t = typename dual_value_type<std::remove_cvref_t<X>>::type;
 template <typename X>
 concept DualLike = is_dual_v<std::remove_cvref_t<X>> || is_dual_expr_v<X>;
 
-// Laziness is the default, but only pays off for narrow arithmetic-leaf duals
-// (e.g. dual2nd: a few doubles the optimizer keeps in registers).  For a wide
-// custom scalar like VectorDual<N> (an N-lane SIMD array) the whole performance
-// story is auto-vectorizing the lane loops — and any closure/eval indirection
-// defeats that.  So for those the operators evaluate eagerly with no node at
-// all (see lazy_node): minimum eagerness, applied only where it's needed.
+// mat(): collapse an operand to its concrete form — a node to its Dual<T>, a
+// Dual/scalar stays as-is (by reference).
+template <typename X> constexpr decltype(auto) mat(const X &x) noexcept {
+  if constexpr (is_dual_expr_v<X>) {
+    return x.eval();
+  } else {
+    return (x);
+  }
+}
+
+// Operand storage in a node: lvalues by const reference (no copy — matters for
+// wide scalars like VectorDual<N>); rvalues owned by value (moved in), so a
+// node stays valid even when returned from an `auto` energy lambda.  Standard
+// expression-template lifetime rule applies: consume a node within the
+// full-expression that built it.
+template <typename U>
+using dual_hold_t = std::conditional_t<std::is_lvalue_reference_v<U>,
+                                       const std::remove_reference_t<U> &,
+                                       std::remove_cvref_t<U>>;
+
+template <typename T, typename Op, typename L, typename R> struct Bin {
+  dual_hold_t<L> lhs;
+  dual_hold_t<R> rhs;
+  using value_type = Dual<T>;
+  [[nodiscard]] constexpr Dual<T> eval() const noexcept {
+    return Op{}(mat(lhs), mat(rhs));
+  }
+  constexpr operator Dual<T>() const noexcept { return eval(); }
+  template <std::size_t I> [[nodiscard]] constexpr T get() const noexcept {
+    return eval().template get<I>();
+  }
+};
+template <typename T, typename Op, typename E> struct Mono {
+  dual_hold_t<E> e;
+  using value_type = Dual<T>;
+  [[nodiscard]] constexpr Dual<T> eval() const noexcept { return Op{}(mat(e)); }
+  constexpr operator Dual<T>() const noexcept { return eval(); }
+  template <std::size_t I> [[nodiscard]] constexpr T get() const noexcept {
+    return eval().template get<I>();
+  }
+};
+
+// Laziness pays off only for narrow arithmetic-leaf duals (e.g. dual2nd).  For
+// a wide custom scalar like VectorDual<N> (an N-lane SIMD array) the operators
+// evaluate eagerly so the lane loops stay vectorizable (see operators below).
 template <typename T> struct dual_leaf_arith : std::is_arithmetic<T> {};
 template <typename T> struct dual_leaf_arith<Dual<T>> : dual_leaf_arith<T> {};
-
-// Wrap a closure as a lazy node (always — the eager decision is made by the
-// caller, lazy_node, which never reaches here for wide scalars).
-template <typename T, typename F>
-[[nodiscard]] constexpr DualExpr<T, std::decay_t<F>>
-make_dual_expr(F &&f) noexcept {
-  return DualExpr<T, std::decay_t<F>>{static_cast<F &&>(f)};
-}
 
 } // namespace diff
 
@@ -139,10 +177,16 @@ struct tuple_size<diff::Dual<T>> : integral_constant<std::size_t, 2> {};
 template <typename T, std::size_t N> struct tuple_element<N, diff::Dual<T>> {
   using type = T;
 };
-template <typename T, typename F>
-struct tuple_size<diff::DualExpr<T, F>> : integral_constant<std::size_t, 2> {};
-template <typename T, typename F, std::size_t N>
-struct tuple_element<N, diff::DualExpr<T, F>> {
+template <typename T, typename Op, typename L, typename R>
+struct tuple_size<diff::Bin<T, Op, L, R>> : integral_constant<std::size_t, 2> {};
+template <typename T, typename Op, typename L, typename R, std::size_t N>
+struct tuple_element<N, diff::Bin<T, Op, L, R>> {
+  using type = T;
+};
+template <typename T, typename Op, typename E>
+struct tuple_size<diff::Mono<T, Op, E>> : integral_constant<std::size_t, 2> {};
+template <typename T, typename Op, typename E, std::size_t N>
+struct tuple_element<N, diff::Mono<T, Op, E>> {
   using type = T;
 };
 } // namespace std
@@ -235,22 +279,11 @@ template <typename D, typename U> constexpr D as_constant(U s) noexcept {
 }
 } // namespace detail
 
-template <typename T, typename F>
-constexpr auto val(const DualExpr<T, F> &e) noexcept {
-  return val(e.eval());
-}
-
-template <typename T> constexpr const Dual<T> &mat(const Dual<T> &d) noexcept {
-  return d;
-}
-template <typename T, typename F>
-constexpr Dual<T> mat(const DualExpr<T, F> &e) noexcept {
-  return e.eval();
-}
+// val() on a lazy node: materialize, then peel.
 template <typename X>
-  requires(!is_dual_v<std::remove_cvref_t<X>> && !is_dual_expr_v<X>)
-constexpr const X &mat(const X &x) noexcept {
-  return x;
+  requires is_dual_expr_v<X>
+constexpr auto val(const X &e) noexcept {
+  return val(e.eval());
 }
 
 template <typename C, typename A>
@@ -300,148 +333,153 @@ constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
   return Dual<T>{av * s, ad * s};
 }
+// Division in reciprocal form: compute inv = 1/denominator once, then use
+// multiplies (one hardware division per nesting level instead of two).  This is
+// what VectorDual and autodiff do; it's not bit-identical to the textbook
+// quotient form (it reassociates) but agrees to rounding.  Inner ops stay
+// T-on-T so VectorDual is safe.
 template <typename T>
 constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
-  return Dual<T>{av / bv, (ad * bv - av * bd) / (bv * bv)};
+  const T inv = T{1} / bv;
+  const T q = av * inv; // value = a / b
+  return Dual<T>{q, (ad - q * bd) * inv};
 }
 template <typename T, typename C>
   requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
 constexpr Dual<T> dual_div(const Dual<T> &a, const C &s) noexcept {
-  const auto &[av, ad] = a;
-  return Dual<T>{av / s, ad / s};
+  const auto &[av, ad] = a; // s is a zero-derivative constant
+  const T inv = T{1} / T(s);
+  return Dual<T>{av * inv, ad * inv};
 }
 template <typename T, typename C>
   requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
 constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (VectorDual-safe)
-  return Dual<T>{T(s) / av, -(ad * s) / (av * av)};
+  const T inv = T{1} / av;
+  const T q = T(s) * inv; // value = s / a
+  return Dual<T>{q, -(q * ad) * inv};
 }
 
-// ---- forwarding-capture lazy-node builder ---------------------------------
-// Operands are captured per value category: lvalues by reference (no copy —
-// important for wide scalars like VectorDual), rvalues moved into the node so
-// it owns them and stays valid even if it escapes the full-expression (e.g. an
-// energy lambda that `return`s an `auto` expression).
-namespace detail {
-template <typename X> struct is_ref_wrap : std::false_type {};
-template <typename X>
-struct is_ref_wrap<std::reference_wrapper<X>> : std::true_type {};
+// ---- Op tags: stateless combiners carrying the exact eager formulas --------
+// Each picks the (Dual,Dual) or (Dual,C) formula by overload resolution on the
+// materialized operands.
+struct add_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    return dual_add(x, y);
+  }
+};
+struct sub_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    return dual_sub(x, y);
+  }
+};
+struct mul_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    return dual_mul(x, y);
+  }
+};
+struct div_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    return dual_div(x, y);
+  }
+};
 
-template <typename U> constexpr auto fwd_cap(U &&u) noexcept {
-  if constexpr (std::is_lvalue_reference_v<U>) {
-    return std::reference_wrapper<std::remove_reference_t<U>>(u);
-  } else {
-    return std::remove_cvref_t<U>(std::move(u));
-  }
-}
-template <typename X> constexpr const auto &unwrap(const X &x) noexcept {
-  if constexpr (is_ref_wrap<X>::value) {
-    return x.get();
-  } else {
-    return x;
-  }
-}
-template <typename T, typename Comb, typename... Ops>
-constexpr auto lazy_node(Comb comb, Ops &&...ops) noexcept {
-  if constexpr (dual_leaf_arith<T>::value) {
-    return make_dual_expr<T>([comb, ... caps = fwd_cap(static_cast<Ops &&>(
-                                        ops))]() constexpr noexcept {
-      return std::invoke(comb, mat(unwrap(caps))...);
-    });
-  } else {
-    return std::invoke(comb,mat(static_cast<Ops &&>(ops))...);
-  }
-}
-} // namespace detail
-
-// ---- lazy binary operators (return DualExpr nodes) ------------------------
-// Both overloads share one combiner: dual_add/sub/mul/div pick the (Dual,Dual)
-// or (Dual,C) formula by overload resolution on the materialized operands.
-#define DIFF_LAZY_BINOP(OP, COMBINE)                                           \
+// ---- lazy binary operators ------------------------------------------------
+// Arithmetic-leaf duals build a Bin node (lazy, struct-based — no closure);
+// wide scalars (VectorDual) evaluate eagerly so the lane loops stay vectorizable.
+#define DIFF_LAZY_BINOP(OP, COMB)                                              \
   template <DualLike A, DualLike B>                                            \
     requires(std::is_same_v<dual_value_t<A>, dual_value_t<B>>)                 \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
-    return detail::lazy_node<dual_value_t<A>>(                                 \
-        [](const auto &x, const auto &y) constexpr noexcept {                  \
-          return COMBINE(x, y);                                                \
-        },                                                                     \
-        static_cast<A &&>(a), static_cast<B &&>(b));                           \
+    using T = dual_value_t<A>;                                                 \
+    if constexpr (dual_leaf_arith<T>::value)                                   \
+      return Bin<T, COMB, A, B>{static_cast<A &&>(a), static_cast<B &&>(b)};   \
+    else                                                                       \
+      return COMB{}(mat(a), mat(b));                                           \
   }                                                                            \
-  template <typename A, typename C>                                            \
-    requires(DualLike<A> && ConstOperand<C, A>)                                \
+  template <typename A, typename C>                                           \
+    requires(DualLike<A> && ConstOperand<C, A>)                               \
   constexpr auto operator OP(A &&a, C &&s) noexcept {                          \
-    return detail::lazy_node<dual_value_t<A>>(                                 \
-        [](const auto &x, const auto &y) constexpr noexcept {                  \
-          return COMBINE(x, y);                                                \
-        },                                                                     \
-        static_cast<A &&>(a), static_cast<C &&>(s));                           \
+    using T = dual_value_t<A>;                                                 \
+    if constexpr (dual_leaf_arith<T>::value)                                   \
+      return Bin<T, COMB, A, C>{static_cast<A &&>(a), static_cast<C &&>(s)};   \
+    else                                                                       \
+      return COMB{}(mat(a), mat(s));                                           \
   }
-DIFF_LAZY_BINOP(+, dual_add)
-DIFF_LAZY_BINOP(-, dual_sub)
-DIFF_LAZY_BINOP(*, dual_mul)
-DIFF_LAZY_BINOP(/, dual_div)
+DIFF_LAZY_BINOP(+, add_combine)
+DIFF_LAZY_BINOP(-, sub_combine)
+DIFF_LAZY_BINOP(*, mul_combine)
+DIFF_LAZY_BINOP(/, div_combine)
 #undef DIFF_LAZY_BINOP
 
-// Scalar-on-the-left: + and * commute (pass the dual first); - and / use the
-// reversed (C, Dual) combine.
+// Scalar-on-the-left: + and * commute (store the dual first); - and / use the
+// reversed (C, Dual) combine (store the scalar first).
 template <typename C, typename A>
   requires(DualLike<A> && ConstOperand<C, A>)
 constexpr auto operator+(C &&s, A &&a) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x, const auto &y) constexpr noexcept {
-        return dual_add(x, y);
-      },
-      static_cast<A &&>(a), static_cast<C &&>(s));
+  using T = dual_value_t<A>;
+  if constexpr (dual_leaf_arith<T>::value)
+    return Bin<T, add_combine, A, C>{static_cast<A &&>(a), static_cast<C &&>(s)};
+  else
+    return add_combine{}(mat(a), mat(s));
 }
 template <typename C, typename A>
   requires(DualLike<A> && ConstOperand<C, A>)
 constexpr auto operator*(C &&s, A &&a) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x, const auto &y) constexpr noexcept {
-        return dual_mul(x, y);
-      },
-      static_cast<A &&>(a), static_cast<C &&>(s));
+  using T = dual_value_t<A>;
+  if constexpr (dual_leaf_arith<T>::value)
+    return Bin<T, mul_combine, A, C>{static_cast<A &&>(a), static_cast<C &&>(s)};
+  else
+    return mul_combine{}(mat(a), mat(s));
 }
 template <typename C, typename A>
   requires(DualLike<A> && ConstOperand<C, A>)
 constexpr auto operator-(C &&s, A &&a) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x, const auto &y) constexpr noexcept {
-        return dual_sub(x, y);
-      },
-      static_cast<C &&>(s), static_cast<A &&>(a));
+  using T = dual_value_t<A>;
+  if constexpr (dual_leaf_arith<T>::value)
+    return Bin<T, sub_combine, C, A>{static_cast<C &&>(s), static_cast<A &&>(a)};
+  else
+    return sub_combine{}(mat(s), mat(a));
 }
 template <typename C, typename A>
   requires(DualLike<A> && ConstOperand<C, A>)
 constexpr auto operator/(C &&s, A &&a) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x, const auto &y) constexpr noexcept {
-        return dual_div(x, y);
-      },
-      static_cast<C &&>(s), static_cast<A &&>(a));
+  using T = dual_value_t<A>;
+  if constexpr (dual_leaf_arith<T>::value)
+    return Bin<T, div_combine, C, A>{static_cast<C &&>(s), static_cast<A &&>(a)};
+  else
+    return div_combine{}(mat(s), mat(a));
 }
 
-// ---- unary minus + math functions (return nodes) --------------------------
+// ---- unary minus + math functions (return Mono nodes) ---------------------
+struct neg_combine {
+  constexpr auto operator()(const auto &x) const noexcept {
+    const auto &[v, d] = x;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    return DT{-v, -d};
+  }
+};
 template <typename A>
   requires DualLike<A>
 constexpr auto operator-(A &&a) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x) constexpr noexcept {
-        const auto &[v, d] = x;
-        using DT = std::remove_cvref_t<decltype(x)>;
-        return DT{-v, -d};
-      },
-      static_cast<A &&>(a));
+  using T = dual_value_t<A>;
+  if constexpr (dual_leaf_arith<T>::value)
+    return Mono<T, neg_combine, A>{static_cast<A &&>(a)};
+  else
+    return neg_combine{}(mat(a));
 }
 
 #define DIFF_LAZY_UNARY(NAME)                                                  \
   template <typename A>                                                        \
     requires DualLike<A>                                                       \
   constexpr auto NAME(A &&a) noexcept {                                        \
-    return detail::lazy_node<dual_value_t<A>>(NAME##_combine{},                \
-                                              static_cast<A &&>(a));           \
+    using T = dual_value_t<A>;                                                 \
+    if constexpr (dual_leaf_arith<T>::value)                                   \
+      return Mono<T, NAME##_combine, A>{static_cast<A &&>(a)};                 \
+    else                                                                       \
+      return NAME##_combine{}(mat(a));                                         \
   }
 struct sin_combine {
   constexpr auto operator()(const auto &x) const noexcept {
@@ -595,44 +633,44 @@ constexpr bool operator==(const A &a, const B &b) noexcept {
 
 // ---- pow / max / min ------------------------------------------------------
 // pow(a, b) = a^b.  d(a^b) = a^b (b' ln a + b a'/a).
-template <typename A, typename B>
-  requires(DualLike<A> && DualLike<B> &&
-           std::is_same_v<dual_value_t<A>, dual_value_t<B>>)
-constexpr auto pow(A &&a, B &&b) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x, const auto &y) constexpr noexcept {
-        using std::log, std::pow;
-        const auto &[av, ad] = x;
-        const auto &[bv, bd] = y;
-        using DT = std::remove_cvref_t<decltype(x)>;
-        using T = std::remove_cvref_t<decltype(av)>;
-        const T p = pow(av, bv);
-        return DT{p, p * (bd * log(av) + bv * ad / av)};
-      },
-      static_cast<A &&>(a), static_cast<B &&>(b));
-}
-template <typename A, typename B>
-  requires(DualLike<A> && DualLike<B> &&
-           std::is_same_v<dual_value_t<A>, dual_value_t<B>>)
-constexpr auto max(A &&a, B &&b) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x, const auto &y) constexpr noexcept {
-        using DT = std::remove_cvref_t<decltype(x)>;
-        return val(x) < val(y) ? DT{y} : DT{x};
-      },
-      static_cast<A &&>(a), static_cast<B &&>(b));
-}
-template <typename A, typename B>
-  requires(DualLike<A> && DualLike<B> &&
-           std::is_same_v<dual_value_t<A>, dual_value_t<B>>)
-constexpr auto min(A &&a, B &&b) noexcept {
-  return detail::lazy_node<dual_value_t<A>>(
-      [](const auto &x, const auto &y) constexpr noexcept {
-        using DT = std::remove_cvref_t<decltype(x)>;
-        return val(y) < val(x) ? DT{y} : DT{x};
-      },
-      static_cast<A &&>(a), static_cast<B &&>(b));
-}
+struct pow_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    using std::log, std::pow;
+    const auto &[av, ad] = x;
+    const auto &[bv, bd] = y;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    using T = std::remove_cvref_t<decltype(av)>;
+    const T p = pow(av, bv);
+    return DT{p, p * (bd * log(av) + bv * ad / av)};
+  }
+};
+struct max_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    using DT = std::remove_cvref_t<decltype(x)>;
+    return val(x) < val(y) ? DT{y} : DT{x};
+  }
+};
+struct min_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    using DT = std::remove_cvref_t<decltype(x)>;
+    return val(y) < val(x) ? DT{y} : DT{x};
+  }
+};
+#define DIFF_LAZY_BINFN(NAME, COMB)                                            \
+  template <typename A, typename B>                                            \
+    requires(DualLike<A> && DualLike<B> &&                                     \
+             std::is_same_v<dual_value_t<A>, dual_value_t<B>>)                 \
+  constexpr auto NAME(A &&a, B &&b) noexcept {                                 \
+    using T = dual_value_t<A>;                                                 \
+    if constexpr (dual_leaf_arith<T>::value)                                   \
+      return Bin<T, COMB, A, B>{static_cast<A &&>(a), static_cast<B &&>(b)};   \
+    else                                                                       \
+      return COMB{}(mat(a), mat(b));                                           \
+  }
+DIFF_LAZY_BINFN(pow, pow_combine)
+DIFF_LAZY_BINFN(max, max_combine)
+DIFF_LAZY_BINFN(min, min_combine)
+#undef DIFF_LAZY_BINFN
 
 #define DIFF_PROMOTE_BINARY(NAME)                                              \
   template <typename A, typename U>                                            \

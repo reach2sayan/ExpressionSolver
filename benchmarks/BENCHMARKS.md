@@ -175,10 +175,13 @@ blowup of nested duals makes `TaylorDual` the only practical choice.
 `benchmark_compare.cpp` also benchmarks a full `n × n` Hessian of a multivariate
 energy `f: Rⁿ → R`, swept over `n`, three ways:
 
-- **Ours VForward** — `hessian_vforward()`, vector-forward-over-forward: one graph
-  sweep per row via `Dual<VectorDual<N>>`, O(n) sweeps. Lane capacity is bucketed
-  to the smallest power of two ≥ n (`DIFF_VFORWARD_CAPACITY`, default 32).
-- **Ours Forward** — scalar `hessian()`, forward-over-forward `dual2nd`, O(n²) sweeps.
+- **Ours VForward** — `hessian_vforward()`, vector-forward-over-forward: one sweep
+  per row via `Dual<VectorDual<N>>`, O(n) sweeps. Lane capacity is bucketed to the
+  smallest power of two ≥ n (`DIFF_VFORWARD_CAPACITY`, default 32). **This is also
+  what the public `hessian()` now routes to** (it delegates to `hessian_vforward`
+  for `m ≤ kVForwardN`, scalar fallback otherwise).
+- **Ours Forward** — the scalar O(n²) forward-over-forward `dual2nd` driver, now
+  exposed as `detail::hessian_scalar` (the fallback + bit-exact cross-check path).
 - **autodiff** — `autodiff::hessian()` with `VectorXdual2nd` + Eigen (also O(n²)).
 
 ```sh
@@ -195,70 +198,116 @@ Three energy regimes are covered:
 | Sparse | `Σ yᵢlog yᵢ + Σ c_i·(yᵢ−yᵢ₊₁)² + exp(y₀y_{n-1})` | O(n) |
 | Expr-template | same sparse math, built as a compile-time `Variable`/`+`/`*`/`log`/`exp` graph and bridged into the driver via `eval_seeded_as<T,Syms>` | O(n) |
 
-#### Linux / GCC snapshot (16-core, `-O3`, `-march=x86-64-v3`)
+#### Linux / GCC snapshot (`-O3`, `-march=x86-64-v3`, `taskset`-pinned, median of 7)
 
-The box is unpinned, so run-to-run variance is ~±15%; treat sub-15% gaps as ties.
+The box is shared and noisy: *unpinned* run-to-run variance is large (±30%+) and can
+flip mid-`n` orderings, so these are pinned to one core. Even so, treat ~10% gaps as ties.
 
-**Dense** (ns):
+**Dense** (ns) — division-heavy (`yᵢyⱼ/(1+yᵢ)`):
 
-| n | Ours VForward | Ours Forward | autodiff |
+| n | Ours VForward (= `hessian()`) | Ours scalar | autodiff |
 |---|---:|---:|---:|
-| 4  | 722 | 797 | **630** |
-| 8  | **5,660** | 7,154 | 5,875 |
-| 16 | **66,988** | 87,530 | 69,429 |
-| 32 | 2,387,536 | 1,438,000 | **915,000** |
+| 4  | 926 | 980 | **668** |
+| 8  | **5,262** | 7,308 | 6,232 |
+| 16 | 85,548 | 76,240 | **72,899** |
+| 32 | 3,065,057 | **979,178** | 956,926 |
 
-**Sparse** (ns):
+**Sparse** (ns) — no divisions:
 
-| n | Ours VForward | Ours Forward | autodiff |
+| n | Ours VForward (= `hessian()`) | Ours scalar | autodiff |
 |---|---:|---:|---:|
-| 4  | 467 | 611 | **398** |
-| 8  | **2,259** | 3,560 | 2,511 |
-| 16 | **15,826** | 24,292 | 18,175 |
-| 32 | 241,877 | 180,348 | **136,700** |
+| 4  | 443 | 760 | **416** |
+| 8  | **1,940** | 4,393 | 2,640 |
+| 16 | 25,112 | 28,886 | **19,093** |
+| 32 | 269,194 | 206,545 | **142,981** |
 
 **Expression-template graph** (ns; autodiff baseline = sparse at same n):
 
-| n | Ours VForward | Ours Forward | autodiff |
+| n | Ours VForward | Ours scalar | autodiff |
 |---|---:|---:|---:|
-| 4 | 2,113 | **533** | 398 |
-| 8 | 7,592 | **3,380** | 2,511 |
+| 4 | 4,095 | **723** | 439 |
+| 8 | 7,578 | **3,309** | 2,769 |
+
+#### Per-evaluation cost (`dual2nd`, one seeded eval, compile-time arity)
+
+Isolating a single forward-over-forward evaluation of the sparse energy with `N=16` as a
+compile-time constant (so the energy loops unroll), no Hessian driver loop:
+
+| variant | ns |
+|---|---:|
+| Ours — struct-node lazy ET | **158** |
+| Ours — eager (reference) | 142 |
+| autodiff | 161 |
+| Ours — earlier closure-based lazy | 288 |
+
+With a compile-time arity the struct-based expression-template `Dual` matches autodiff
+(158 vs 161); the earlier closure-based attempt was 2× slower (288). What actually governs
+the realistic runtime-`n` driver is the per-*operation* cost of the two dominant ops:
+
+#### Per-operation cost (`dual2nd`, runtime n, varied inputs)
+
+| op | ours | autodiff |
+|---|---:|---:|
+| multiply | **130** | 187 |
+| divide | **183** | 217 |
+
+Both now beat autodiff. Divide is the one that mattered: the textbook quotient form
+`(a'b − ab')/b²` did **two** divisions per level (304 ns, 1.4× slower than autodiff); the
+reciprocal form `inv = 1/b; {a·inv, (a' − (a·inv)b')·inv}` does **one** (183 ns). The dense
+energy is division-heavy, so this is what was losing it.
 
 Takeaways:
 
-- **Vector-forward wins at mid `n` (8, 16)** on both dense and sparse energies, and
-  ties/leads autodiff there. At small `n` (4) autodiff's leaner per-op forward dual
-  still wins; at `n = 32` (full lane capacity) the wide-pack cost dominates and both
-  autodiff and our scalar driver are faster.
-- **The expression-template graph hurts vector-forward badly** (n=4: 2,113 vs 533 ns
-  scalar). Expression nodes return intermediates by value, so each graph node copies a
-  full `Dual<VectorDual<N>>` (wide array) — the cost scales with pack width and dwarfs
-  the fewer-sweeps saving. For the expression-template API, the **scalar forward driver
-  is the better default**, not vector-forward.
+- **`hessian()` (vector-forward) wins at small `n` (≈4–8)** — dense n=8 5,262 vs 6,232,
+  sparse n=8 1,940 vs 2,640. At `n ≥ 16` the per-lane × per-sweep cost overtakes the
+  fewer-sweeps saving and autodiff wins. The vector-forward sweet spot is *small* Hessians.
+- **The scalar `dual2nd` path now matches autodiff on the division-heavy dense Hessian**
+  (n=16: 76µs vs 73µs; n=32: 979µs vs 957µs) once `Dual` divide uses the reciprocal form —
+  the dense gap *was* our divide. On the **sparse** energy (no divisions) the scalar path
+  is still ~1.5× behind: that residual is scalar-driver per-probe overhead (seeding /
+  eval-call / extraction), not arithmetic.
+- **The expression-template graph hurts vector-forward badly** (n=4: 4,095 vs 723 ns
+  scalar). Graph nodes carry wide `Dual<VectorDual<N>>` intermediates whose per-node
+  cost scales with pack width and dwarfs the fewer-sweeps saving. For the
+  expression-template API, the **scalar driver is the better default**, not vector-forward.
 
-#### Two optimizations behind these numbers
+#### Optimizations behind these numbers
 
 1. **Capacity bucketing** (`vforward_driver.hpp`): `hessian_vforward` dispatches the
-   smallest power-of-two lane bucket ≥ n instead of always using the full 32-wide pack.
-   Small dense Hessians dropped up to ~9× (n=4: 6,620 → 710 ns).
+   smallest power-of-two lane bucket ≥ n instead of always using the full 32-wide pack —
+   a large win for small dense Hessians (which is where vector-forward beats autodiff).
 
 2. **Scalar↔dual fusion** (`dual.hpp`): mixed `scalar OP dual` operations distribute
    the constant straight through `val`/`deriv` instead of promoting it to a zero-seeded
    `Dual` and running dual×dual arithmetic against the zeros (autodiff gets the same via
    its `NumberDualMulExpr`). Bit-identical for finite operands, so no value test moves.
    The **vector-forward (`VectorDual`) path benefited most** — its scalar-times-pack
-   terms were multiplying through an N-wide array of zeros:
+   terms were multiplying through an N-wide array of zeros.
 
-   | Dense n | VForward before fusion | after fusion |
-   |---|---:|---:|
-   | 8  | 7,816 ns | 5,660 ns |
-   | 16 | 130,194 ns | 66,988 ns (≈1.9×) |
+3. **`Dual` as a lazy expression-template number** (`dual.hpp`): the arithmetic operators
+   and math functions return struct-based `Bin`/`Mono` expression nodes (stateless op-tag
+   functors carrying the exact eager formula) that materialize to `Dual<T>` only at the
+   consumption boundary — the same shape as autodiff's forward dual, so `Dual` is now
+   consistent with the rest of the (expression-template) library. Operands are held by
+   reference (lvalues) or moved (rvalues), so nothing is copied and a node may safely be
+   returned from an `auto` energy lambda. Results are bit-identical, and per-evaluation it
+   matches autodiff with a compile-time arity (table above). A first attempt using closures
+   (`reference_wrapper` capture) was 2× slower and was replaced by the struct nodes.
+   Laziness is suppressed for wide scalars like `VectorDual<N>`, which evaluate eagerly so
+   the SIMD lane loops stay vectorizable.
 
-   The `dual2nd` scalar path barely moved (at depth 2 the promoted zeros are only 4
-   doubles, which `-O3` already elided). A leaf `std::fma` in the multiply/divide
-   derivative was tried and reverted — it was a wash-to-negative (the
-   `is_constant_evaluated` guard inhibits vectorization and FMA doesn't shorten the
-   dependency chain here).
+4. **O(m²) scalar seeding** (`forward_driver.hpp`): `detail::hessian_scalar` seeds the dof
+   array once and, per `(i,j)` pair, touches only the (at most) two active dofs and resets
+   them — instead of rewriting all `n` dofs every pair. Correct (cross-checked bit-for-bit
+   against vector-forward) but a minor win on its own.
+
+5. **Reciprocal-form division** (`dual.hpp`): `dual_div` computes `inv = 1/denominator`
+   once and uses multiplies, instead of the textbook `(a'b − ab')/b²` (two divisions per
+   nesting level — at `dual2nd` each inner `Dual<double>` divide recurses into more).
+   Cut the `dual2nd` divide from 304 → 183 ns (now faster than autodiff's 217), which
+   brought the division-heavy dense scalar Hessian to parity with autodiff. `VectorDual`
+   already used this form; plain `Dual` now does too. Not bit-identical (it reassociates),
+   but within rounding — the `EXPECT_NEAR` and vector-forward cross-check tests cover it.
 
 ---
 
