@@ -1,6 +1,7 @@
 #pragma once
 #include "dual.hpp"
 #include "gradient.hpp"
+#include <algorithm>
 #include <array>
 #include <boost/mp11/list.hpp>
 
@@ -280,9 +281,8 @@ public:
   {
     using S = dual_scalar_t<value_type>;
     std::array<value_type, input_dim> seeds{};
-    for (std::size_t i = 0; i < input_dim; ++i) {
-      seeds[i] = value_type{values[i], S{}};
-    }
+    std::ranges::transform(values, seeds.begin(),
+                           [](const auto &v) { return value_type{v, S{}}; });
     update(symbols{}, seeds);
     return hessian<Mode>();
   }
@@ -305,10 +305,9 @@ public:
         [&](const auto &...exprs) { (exprs.collect(symbols{}, current), ...); },
         expressions);
     std::array<S, input_dim> values{};
-    for (std::size_t i = 0; i < input_dim; ++i) {
-      values[i] =
-          get_real_part<dual_depth_v<value_type>>(std::move(current[i]));
-    }
+    std::ranges::transform(current, values.begin(), [](auto &&cur) {
+      return get_real_part<dual_depth_v<value_type>>(std::move(cur));
+    });
     return equation_derivative_tensor_impl<Order>(std::move(values));
   }
 

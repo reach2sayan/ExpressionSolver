@@ -154,9 +154,8 @@ reverse_mode_hessian(Expr &expr, std::array<S, N> values) noexcept {
       H[i][j] = grads[i].template get<1>();
     }
   }
-  for (std::size_t i = 0; i < N; i++) {
-    seeds[i] = T{values[i], S{}};
-  }
+  std::ranges::transform(values, seeds.begin(),
+                         [](const S &v) { return T{v, S{}}; });
   expr.update(symbols{}, seeds);
   return H;
 }

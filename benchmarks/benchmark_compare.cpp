@@ -22,6 +22,7 @@
 #include "../include/gradient.hpp"
 #include "dual.hpp"
 #include "gradient.hpp"
+#include "seeded_energy.hpp"
 #include "values.hpp"
 #include "vforward_driver.hpp"
 
@@ -896,6 +897,24 @@ static void ours_forward_expr(benchmark::State &state, MakeExpr make) {
   }
 }
 
+// Public router: handing the raw expression *graph* to diff::hessian() must
+// auto-detect CExpression, bridge it internally, and pick the scalar driver —
+// no seeded_energy() at the call site.  Should track the explicit Ours_Forward
+// (scalar) numbers, not the slower Ours_VForward, proving the routing works
+// end-to-end from the client's point of view.
+template <std::size_t Nv, typename MakeExpr>
+static void ours_hessian_expr(benchmark::State &state, MakeExpr make) {
+  auto E = make();
+  auto x = vf_point(Nv);
+  const std::span<const double> xs{x.data(), x.size()};
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian(E, xs); // raw graph in, right driver out
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+
 static void BM_Ours_VForward_HessExpr4(benchmark::State &state) {
   ours_vforward_expr<4>(state, make_chain_expr4);
 }
@@ -915,5 +934,15 @@ static void BM_Ours_Forward_HessExpr8(benchmark::State &state) {
   ours_forward_expr<8>(state, make_chain_expr8);
 }
 BENCHMARK(BM_Ours_Forward_HessExpr8);
+
+// Public-router path (should match Ours_Forward above via the routing tag).
+static void BM_Ours_Hessian_HessExpr4(benchmark::State &state) {
+  ours_hessian_expr<4>(state, make_chain_expr4);
+}
+BENCHMARK(BM_Ours_Hessian_HessExpr4);
+static void BM_Ours_Hessian_HessExpr8(benchmark::State &state) {
+  ours_hessian_expr<8>(state, make_chain_expr8);
+}
+BENCHMARK(BM_Ours_Hessian_HessExpr8);
 
 BENCHMARK_MAIN();

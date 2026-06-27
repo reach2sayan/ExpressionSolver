@@ -1,8 +1,11 @@
 #pragma once
 
 #include "dual.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
+#include <ranges>
 #include <utility>
 
 namespace diff {
@@ -22,23 +25,17 @@ template <Numeric S, std::size_t N> struct TaylorDual {
 
   constexpr TaylorDual operator+(const TaylorDual &o) const noexcept {
     TaylorDual r;
-    for (std::size_t k = 0; k <= N; ++k) {
-      r.c[k] = c[k] + o.c[k];
-    }
+    std::ranges::transform(c, o.c, r.c.begin(), std::plus{});
     return r;
   }
   constexpr TaylorDual operator-(const TaylorDual &o) const noexcept {
     TaylorDual r;
-    for (std::size_t k = 0; k <= N; ++k) {
-      r.c[k] = c[k] - o.c[k];
-    }
+    std::ranges::transform(c, o.c, r.c.begin(), std::minus{});
     return r;
   }
   constexpr TaylorDual operator-() const noexcept {
     TaylorDual r;
-    for (std::size_t k = 0; k <= N; ++k) {
-      r.c[k] = -c[k];
-    }
+    std::ranges::transform(c, r.c.begin(), std::negate{});
     return r;
   }
 
@@ -229,9 +226,9 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     using std::acos;
     TaylorDual w = asin(u);
     w.c[0] = acos(u.c[0]);
-    for (std::size_t k = 1; k <= N; ++k) {
-      w.c[k] = -w.c[k];
-    }
+    // Negate the derivative coefficients (k >= 1); value coefficient stays.
+    std::ranges::transform(w.c | std::views::drop(1), w.c.begin() + 1,
+                           std::negate{});
     return w;
   }
 

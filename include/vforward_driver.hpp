@@ -1,16 +1,26 @@
 #pragma once
 
 #include "dual.hpp"
+#include "expressions.hpp"    // CExpression
 #include "forward_driver.hpp" // HessianResult + scalar hessian() fallback
+#include "seeded_energy.hpp"  // seeded_energy() bridge for expression graphs
 #include "vector_dual.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <ranges>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace diff {
+
+// An energy callable produced by seeded_energy() (a compile-time expression
+// graph bridged into the driver) advertises this tag.  hessian() routes such
+// callables to the scalar driver — see the note on SeededExprEnergy.
+template <typename F>
+concept seeded_expr_energy =
+    requires { requires std::remove_cvref_t<F>::kSeededExprEnergy == true; };
 
 namespace detail {
 
@@ -47,15 +57,16 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
   // outer-derivative *value* at k == active[i] toggles 0->1->0, so per sweep we
   // flip that one scalar instead of rewriting all n entries (was O(n*N)/sweep).
   std::vector<D> dof(n);
-  for (std::size_t k = 0; k < n; ++k) {
-    dof[k] = D{base[k], V{}};
-  }
+  std::ranges::transform(base, dof.begin(),
+                         [](const V &v) { return D{v, V{}}; });
   for (std::size_t i = 0; i < m; ++i) {
     const std::size_t ai = active[i];
-    dof[ai].template get<1>().value = double{1}; // outer-deriv seed e_i
+    auto &dof_ai = dof[ai].template get<1>();
 
+    dof_ai.value = double{1}; // outer-deriv seed e_i
     const D r = f(dof.data());
-    dof[ai].template get<1>().value = double{0}; // reset for next sweep
+    dof_ai.value = double{0}; // reset for next sweep
+
     const auto &[A, B] = r; // value & outer-derivative component (no copy)
     if (i == 0) {
       res.value = A.value;
@@ -127,10 +138,23 @@ HessianResult hessian_vforward(F &&f, std::span<const double> x) {
 template <typename F>
 HessianResult hessian(F &&f, std::span<const double> x,
                       std::span<const std::size_t> active) {
-  return hessian_vforward(static_cast<F &&>(f), x, active);
+  if constexpr (CExpression<F>) {
+    return detail::hessian_scalar(seeded_energy(static_cast<F &&>(f)), x,
+                                  active);
+  } else if constexpr (seeded_expr_energy<F>) {
+    return detail::hessian_scalar(static_cast<F &&>(f), x, active);
+  } else {
+    return hessian_vforward(static_cast<F &&>(f), x, active);
+  }
 }
 template <typename F> HessianResult hessian(F &&f, std::span<const double> x) {
-  return hessian_vforward(static_cast<F &&>(f), x);
+  if constexpr (CExpression<F>) {
+    return detail::hessian_scalar(seeded_energy(static_cast<F &&>(f)), x);
+  } else if constexpr (seeded_expr_energy<F>) {
+    return detail::hessian_scalar(static_cast<F &&>(f), x);
+  } else {
+    return hessian_vforward(static_cast<F &&>(f), x);
+  }
 }
 
 } // namespace diff

@@ -3,6 +3,7 @@
 #include "forward_driver.hpp"
 #include "gradient.hpp"
 #include "operations.hpp"
+#include "seeded_energy.hpp"
 #include "traits.hpp"
 #include "values.hpp"
 #include "vforward_driver.hpp"
@@ -2410,6 +2411,61 @@ TEST(VectorForwardHessian, MatchesScalarDriver) {
       }
     }
   }
+}
+
+// A compile-time expression *graph* can be handed straight to the public
+// hessian(): the router detects CExpression, auto-bridges it via seeded_energy
+// (no client wrapping), and routes to the scalar driver.  The result must be
+// bit-close to both explicit drivers on the same graph.
+TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  diff::Variable<D, FixedString{"x00"}> a{D{1.0}};
+  diff::Variable<D, FixedString{"x01"}> b{D{1.0}};
+  diff::Variable<D, FixedString{"x02"}> c{D{1.0}};
+  diff::Variable<D, FixedString{"x03"}> d{D{1.0}};
+  auto expr = a * log(a) + b * log(b) + c * log(c) + d * log(d) +
+              0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
+              0.52 * (c - d) * (c - d) + exp(a * d);
+
+  const std::array<double, 4> x{0.2, 0.4, 0.6, 0.8};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  // Client just calls hessian() with the raw graph — no seeded_energy in sight.
+  const auto Hrouted = diff::hessian(expr, xs);
+
+  // Explicit bridge for cross-checking against both numeric drivers.
+  auto f = diff::seeded_energy(expr);
+  static_assert(diff::seeded_expr_energy<decltype(f)>,
+                "seeded_energy() must advertise the routing tag");
+  static_assert(decltype(f)::arity == 4, "arity deduced from symbol set");
+  const auto Hscalar = diff::detail::hessian_scalar(f, xs);
+  const auto Hvf = diff::hessian_vforward(f, xs);
+
+  EXPECT_NEAR(Hrouted.value, Hscalar.value, 1e-12);
+  for (std::size_t i = 0; i < 4; ++i) {
+    EXPECT_NEAR(Hrouted.gradient[i], Hscalar.gradient[i], 1e-12) << "grad " << i;
+    for (std::size_t j = 0; j < 4; ++j) {
+      EXPECT_NEAR(Hrouted.h(i, j), Hscalar.h(i, j), 1e-12)
+          << "scalar H(" << i << "," << j << ")";
+      EXPECT_NEAR(Hrouted.h(i, j), Hvf.h(i, j), 1e-7)
+          << "vforward H(" << i << "," << j << ")";
+    }
+  }
+}
+
+// A plain arithmetic energy lambda carries no tag and is not a CExpression, so
+// it must keep routing to vector-forward (the small-n winner) — the expr-graph
+// path is auto-detected, never forced onto raw callables.
+TEST(SeededExprEnergy, RawLambdaStaysVectorForward) {
+  auto f = [](const auto *y) {
+    using std::log;
+    return y[0] * log(y[0]) + y[1] * log(y[1]);
+  };
+  static_assert(!diff::seeded_expr_energy<decltype(f)>,
+                "untagged lambda must not be treated as expr-template energy");
+  static_assert(!diff::CExpression<decltype(f)>,
+                "a lambda is not an expression graph");
 }
 
 TEST(VectorForwardHessian, IdealMixingClosedForm) {

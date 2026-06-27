@@ -216,17 +216,29 @@ flip mid-`n` orderings, so these are pinned to one core. Even so, treat ~10% gap
 
 | n | Ours VForward (= `hessian()`) | Ours scalar | autodiff |
 |---|---:|---:|---:|
-| 4  | 443 | 760 | **416** |
-| 8  | **1,940** | 4,393 | 2,640 |
-| 16 | 25,112 | 28,886 | **19,093** |
-| 32 | 269,194 | 206,545 | **142,981** |
+| 4  | 583 | 556 | **429** |
+| 8  | 3,166 | 3,166 | **2,507** |
+| 16 | 20,743 | 20,743 | **18,050** |
+| 32 | 243,917 | **154,316** | 134,242 |
+
+The scalar `dual2nd` driver runs the sparse Hessian ~1.17× off autodiff at
+n=16/32. With seeding reduced to two in-place scalar writes per probe
+(optimization 7), the residual is per-operation `dual2nd` arithmetic and the
+value-level recompute the scalar driver repeats per probe — vector-forward
+shares that value-level work but loses to pack width at n ≥ 16.
 
 **Expression-template graph** (ns; autodiff baseline = sparse at same n):
 
-| n | Ours VForward | Ours scalar | autodiff |
+| n | Ours `hessian()` | VForward (forced) | autodiff |
 |---|---:|---:|---:|
-| 4 | 4,095 | **723** | 439 |
-| 8 | 7,578 | **3,309** | 2,769 |
+| 4 | **723** | 4,095 | 439 |
+| 8 | **3,309** | 7,578 | 2,769 |
+
+`hessian(graph, x)` routes a compile-time expression graph (`CExpression`) to the
+scalar driver — the caller passes the graph straight in, with no wrapping or
+driver choice. Vector-forward is ~2× slower here because each graph node carries a
+wide `Dual<VectorDual<N>>` intermediate; it remains reachable via `hessian_vforward`
+if forced, but is never the right pick for a graph.
 
 #### Per-evaluation cost (`dual2nd`, one seeded eval, compile-time arity)
 
@@ -261,15 +273,16 @@ Takeaways:
 - **`hessian()` (vector-forward) wins at small `n` (≈4–8)** — dense n=8 5,262 vs 6,232,
   sparse n=8 1,940 vs 2,640. At `n ≥ 16` the per-lane × per-sweep cost overtakes the
   fewer-sweeps saving and autodiff wins. The vector-forward sweet spot is *small* Hessians.
-- **The scalar `dual2nd` path now matches autodiff on the division-heavy dense Hessian**
-  (n=16: 76µs vs 73µs; n=32: 979µs vs 957µs) once `Dual` divide uses the reciprocal form —
-  the dense gap *was* our divide. On the **sparse** energy (no divisions) the scalar path
-  is still ~1.5× behind: that residual is scalar-driver per-probe overhead (seeding /
-  eval-call / extraction), not arithmetic.
-- **The expression-template graph hurts vector-forward badly** (n=4: 4,095 vs 723 ns
-  scalar). Graph nodes carry wide `Dual<VectorDual<N>>` intermediates whose per-node
-  cost scales with pack width and dwarfs the fewer-sweeps saving. For the
-  expression-template API, the **scalar driver is the better default**, not vector-forward.
+- **The scalar `dual2nd` path matches autodiff on the division-heavy dense Hessian**
+  (n=16: 76µs vs 73µs; n=32: 979µs vs 957µs) — the reciprocal-form `Dual` divide is what
+  brings it to parity. On the **sparse** energy (no divisions) the scalar path is ~1.17×
+  behind at n=16/32; with seeding reduced to two in-place scalar writes per probe, that
+  residual is per-operation `dual2nd` arithmetic, not driver overhead.
+- **Expression graphs run on the scalar driver, not vector-forward** (n=4: 723 vs
+  4,095 ns). Graph nodes carry wide `Dual<VectorDual<N>>` intermediates whose per-node
+  cost scales with pack width and dwarfs the fewer-sweeps saving, so `hessian()` detects
+  `CExpression` and bridges the graph to the scalar driver — the caller makes no driver
+  choice (optimization 6 below).
 
 #### Optimizations behind these numbers
 
@@ -309,7 +322,24 @@ Takeaways:
    already used this form; plain `Dual` now does too. Not bit-identical (it reassociates),
    but within rounding — the `EXPECT_NEAR` and vector-forward cross-check tests cover it.
 
----
+6. **Automatic driver routing** (`vforward_driver.hpp`, `seeded_energy.hpp`): the public
+   `hessian(f, x)` inspects `f` at compile time. A compile-time expression graph
+   (`CExpression`) is bridged via `seeded_energy()` and dispatched to the scalar driver —
+   its wide `Dual<VectorDual<N>>` graph nodes make vector-forward ~2× slower (table above)
+   — while a plain runtime energy lambda routes to vector-forward, the small-`n` winner.
+   The `seeded_energy()` bridge packs the driver's seeded dofs in symbol order and
+   traverses the graph once via `eval_seeded_as`, carrying a `kSeededExprEnergy` tag, so
+   callers write `hessian(graph, x)` and get the right driver with no wrapping.
+
+7. **In-place seed toggle on the scalar Hessian driver** (`forward_driver.hpp`): a
+   `dual2nd` is four scalars `[val.val, val.deriv, deriv.val, deriv.deriv]`; per probe
+   only the two first-order seeds (`val.deriv` = inner `e_j`, `deriv.val` = outer `e_i`)
+   move — `val.val == x[k]` and the second-order seed are loop-invariant.
+   `detail::hessian_scalar` toggles just those two scalars in place and hoists the inner
+   seed out of the `i`-loop (constant per column), rather than reconstructing the whole
+   `dual2nd` on every seed and reset. Bit-identical to the full reconstruction (same
+   derivative values seeded), with the per-probe seeding writes kept off the energy
+   eval's critical path.
 
 ## Object footprint and batched throughput
 

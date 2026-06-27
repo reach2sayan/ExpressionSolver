@@ -20,9 +20,9 @@ inline std::vector<std::size_t> iota_indices(std::size_t n) {
 
 // Result of a second-order forward sweep over `active` variables.
 struct HessianResult {
-  double value{};                  // f(x)
-  std::vector<double> gradient;    // size = active.size()
-  std::vector<double> hessian;     // row-major, active.size() x active.size()
+  double value{};               // f(x)
+  std::vector<double> gradient; // size = active.size()
+  std::vector<double> hessian;  // row-major, active.size() x active.size()
 
   std::size_t n() const noexcept { return gradient.size(); }
   double &h(std::size_t i, std::size_t j) noexcept {
@@ -39,10 +39,6 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   const std::size_t n = x.size();
   const std::size_t m = active.size();
   std::vector<double> g(m, 0.0);
-
-  // Build the seed pack once (all derivative parts zero); across passes only the
-  // active[j] seed's derivative toggles 1->0, so flip that one entry per pass
-  // instead of rebuilding all n duals every pass.
   std::vector<dual> dof(n);
   std::ranges::transform(x, dof.begin(), [](double v) { return dual{v, 0.0}; });
 
@@ -70,9 +66,6 @@ namespace detail {
 // slot and active[j] in the inner derivative slot; evaluating f then yields, in
 // the result D = ((A0,A1),(B0,B1)):
 //   A0 = f(x),  B0 = df/dx_i,  A1 = df/dx_j,  B1 = d2f/dx_i dx_j.
-//
-// This is the fallback/reference path; the public hessian() in vforward_driver.hpp
-// dispatches to the O(m) vector-forward driver when m <= kVForwardN.
 template <typename F>
 HessianResult hessian_scalar(F &&f, std::span<const double> x,
                              std::span<const std::size_t> active) {
@@ -86,23 +79,26 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
   std::vector<dual2nd> dof(n);
   using Inner = Dual<double>;
 
-  // Seed once to the zero-derivative base; each (i,j) pair then touches only the
-  // (at most) two active dofs and resets them afterwards — O(m^2) seeding, not
-  // O(m^2 * n) (autodiff seeds the same way).  Non-active dofs stay at base.
-  for (std::size_t k = 0; k < n; ++k) {
-    dof[k] = dual2nd{Inner{x[k], 0.0}, Inner{0.0, 0.0}};
-  }
+  // Seed once to the zero-derivative base.  Of a dual2nd's four scalars
+  // [val.val, val.deriv, deriv.val, deriv.deriv] only the two first-order seed
+  // slots ever move per probe: val.deriv carries e_j (inner, d/dx_j) and
+  // deriv.val carries e_i (outer, d/dx_i).  val.val == x[k] and the second-order
+  // seed deriv.deriv == 0 are loop-invariant, so we toggle just the two
+  // derivative scalars in place rather than reconstructing the whole dual2nd on
+  // every seed and reset (the gradient() driver toggles the same way).
+  std::ranges::transform(x, dof.begin(), [](double v) {
+    return dual2nd{Inner{v, 0.0}, Inner{0.0, 0.0}};
+  });
 
   for (std::size_t j = 0; j < m; ++j) {
     const std::size_t aj = active[j];
+    // Inner seed e_j is constant across the whole i-loop: set it once.
+    dof[aj].template get<0>().template get<1>() = 1.0;
     for (std::size_t i = 0; i <= j; ++i) {
       const std::size_t ai = active[i];
 
-      // Seed: inner slot = e_j on aj, outer slot = e_i on ai (i==j coincides).
-      dof[aj] = dual2nd{Inner{x[aj], 1.0}, Inner{(ai == aj) ? 1.0 : 0.0, 0.0}};
-      if (ai != aj) {
-        dof[ai] = dual2nd{Inner{x[ai], 0.0}, Inner{1.0, 0.0}};
-      }
+      // Outer seed e_i on ai (when ai == aj this lands in aj's other slot).
+      dof[ai].template get<1>().template get<0>() = 1.0;
 
       const dual2nd r = f(dof.data());
       const auto &[A, B] = r;   // value-component, outer-derivative component
@@ -115,12 +111,11 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
       res.hessian[i * m + j] = b1;
       res.hessian[j * m + i] = b1;
 
-      // Reset the touched dofs back to base for the next pair.
-      dof[aj] = dual2nd{Inner{x[aj], 0.0}, Inner{0.0, 0.0}};
-      if (ai != aj) {
-        dof[ai] = dual2nd{Inner{x[ai], 0.0}, Inner{0.0, 0.0}};
-      }
+      // Reset only the outer seed; the inner seed persists for the next i.
+      dof[ai].template get<1>().template get<0>() = 0.0;
     }
+    // Reset the inner seed before moving to the next j.
+    dof[aj].template get<0>().template get<1>() = 0.0;
   }
   return res;
 }
