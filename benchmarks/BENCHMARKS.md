@@ -142,18 +142,58 @@ Plus `F1`/`F2`/`F4` from the scalar gradient suite above.
 | THess | **3.24 ns** | 14.5 ns | Ours 4.5× |
 | TDir | **4.65 ns** | 28.0 ns | Ours 6× |
 
-**Reverse mode:**
+**Reverse mode** (median of 9, single-core pinned).
 
-| Benchmark | Ours | autodiff | Speedup |
-|---|---:|---:|---:|
-| F1 | 8.93 ns | 202 ns | 23× |
-| F2 | 4.45 ns | 191 ns | 43× |
-| F4 | 7.85 ns | 327 ns | 42× |
-| T1 | 5.23 ns | 194 ns | 37× |
-| TMulti3 | 5.43 ns | 418 ns | 77× |
-| TDir | 9.12 ns | 89.6 ns | 10× |
+The reverse comparison is split into two honest framings so the speedup is
+decomposable rather than a single headline number. **All cells make the inputs
+opaque every iteration** (`benchmark::DoNotOptimize` + in-place leaf re-seed), so
+neither side can hoist the result out of the loop — an earlier version held our
+inputs fixed, which let the compiler hoist our allocation-free pure backward and
+**inflated** the old numbers (e.g. the previous "F1 8.93 ns" was partly hoisted;
+the honest figure below is ≈20 ns).
 
-Reverse mode dominates in every case. autodiff's `var` type uses a heap-allocated dynamic computation graph; this library's reverse pass is a single stack-based tree traversal with no allocation.
+- **Scratch** — build the graph *and* backward, every iteration. The realistic
+  "gradient of a freshly-formed expression" call. Ours rebuilds a stack aggregate
+  (free, fully inlined); autodiff rebuilds its heap `shared_ptr` tape (one
+  `make_shared` per operation).
+- **Reuse** — graph built once; only re-seed + backward is timed. Ours updates
+  leaves in place then backward; autodiff updates leaves, recomputes forward
+  values (`u.update()`), then `derivatives()` — no rebuild, no allocation.
+
+| Benchmark | Ours Scratch | Ours Reuse | AD Scratch | AD Reuse | Headline (Scr/Scr) | Structural (Reuse/Reuse) |
+|---|---:|---:|---:|---:|---:|---:|
+| F1      | 23.9 ns | 19.6 ns | 235 ns | 66.9 ns | 9.8×  | 3.4×  |
+| F2      | 11.1 ns | 11.1 ns | 231 ns | 79.3 ns | 21×   | 7.1×  |
+| F4      | 11.9 ns | 11.7 ns | 404 ns | 123 ns  | 34×   | 11×   |
+| T1      | 2.06 ns | 2.08 ns | 220 ns | 66.7 ns | 107×  | 32×   |
+| TMulti3 | 8.30 ns | 8.29 ns | 550 ns | 148 ns  | 66×   | 18×   |
+| TGrad2  | 22.6 ns | 22.5 ns | 192 ns | 76.9 ns | 8.5×  | 3.4×  |
+| TDir    | 16.1 ns | 16.0 ns | 113 ns | 49.4 ns | 7.0×  | 3.1×  |
+
+**Decomposition.** The headline factors cleanly: `headline ≈ tape-build × structural`
+(F4: 3.3 × 11 ≈ 34). Reading the two right-hand columns:
+
+- **autodiff's Scratch→Reuse drop (2.3–3.7×) is per-call tape construction** — a
+  `std::make_shared` heap node per `+`/`*`/`sin`/`exp`. This part is real but
+  *framing-dependent*: a caller who reuses the graph eliminates it.
+- **The Reuse-vs-Reuse residual (3–32×) is the genuine structural advantage** and
+  persists even when autodiff reuses its graph: our expression is a stack-resident
+  compile-time aggregate walked by fully-inlined static recursion; autodiff's is a
+  heap `shared_ptr` tape walked by `virtual propagate` per node (and it must run a
+  full `u.update()` forward sweep before each backward). No allocation, no vtable,
+  no pointer chasing on our side.
+- **Ours Scratch ≈ Ours Reuse** because building our "graph" is a compile-time
+  type — constructing it at runtime is free/inlined, so the from-scratch call costs
+  essentially the same as the graph-reused one. autodiff cannot make that claim.
+
+So even in the framing most favorable to autodiff (reuse the tape, time only the
+backward), this library is **3–32× faster**; the remaining headline factor is
+autodiff paying to rebuild its tape on every call.
+
+A namespace-scope cross-check in `benchmark_compare.cpp` runs at static-init and
+asserts our reverse gradient matches autodiff's at a sample point for F1/F2/F4
+(F4's symbols sort to `{w,x,y,z}` — the canonical-vs-source ordering trap the
+`make_values`/`named<>` binding guards).
 
 Forward mode is competitive. The gap on simple expressions (T1, TGrad2) comes from autodiff's leaner per-operation dual arithmetic for low-depth cases. The library wins on higher-order expressions (THess, TDir) where the static expression tree allows the compiler to specialise and inline more aggressively.
 

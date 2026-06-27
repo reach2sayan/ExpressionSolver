@@ -28,7 +28,13 @@
 
 #include <array>
 #include <benchmark/benchmark.h>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
 #include <numbers>
+#include <string_view>
+#include <tuple>
 
 using namespace diff;
 
@@ -48,10 +54,98 @@ run_our_forward(benchmark::State &state, Expr &expr,
   }
 }
 
-template <CExpression Expr>
-static void run_our_reverse(benchmark::State &state, const Expr &expr) {
+// ---------------------------------------------------------------------------
+// Reverse-mode helpers — two honest framings, both with inputs made opaque every
+// iteration (DoNotOptimize) so neither side can hoist the result out of the loop:
+//
+//   Scratch — build the graph + backward, every iteration. The realistic
+//             "gradient of a freshly-formed expression" call. Ours rebuilds a
+//             stack aggregate (free, fully inlined); autodiff rebuilds its heap
+//             shared_ptr tape (one make_shared per operation).
+//   Reuse   — graph built once; only re-seed + backward is timed. Ours updates
+//             leaves in place (Variable::update) then backward; autodiff updates
+//             leaves, recomputes forward values (u.update(), no alloc), then
+//             derivatives() (no alloc). Isolates the per-node backward cost.
+//
+// The autodiff Scratch-minus-Reuse delta is exactly the per-call tape-allocation
+// cost; the Ours-Reuse vs AD-Reuse gap is the structural (no-alloc, no-vtable,
+// inlined-recursion) residual.
+// ---------------------------------------------------------------------------
+
+// Ours, Scratch: `build` maps N doubles to an expression; rebuilt each iteration.
+template <std::size_t N, typename Builder>
+static void run_ours_reverse_scratch(benchmark::State &state,
+                                     std::array<double, N> x0, Builder build) {
+  auto xs = x0;
   for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto expr = std::apply(build, xs);
     auto g = reverse_mode_grad(expr);
+    benchmark::DoNotOptimize(g);
+    benchmark::ClobberMemory();
+  }
+}
+
+// Ours, Reuse: expr built once by the caller; leaves re-seeded in place.
+// `vals` MUST be in canonical (alphabetical) symbol order — build it at the call
+// site with make_values(named<...>(...)) so the order is explicit and checked.
+template <CExpression Expr, std::size_t N>
+static void run_ours_reverse_reuse(benchmark::State &state, Expr &expr,
+                                   std::array<double, N> vals) {
+  using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  auto v = vals;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(v);
+    expr.update(Syms{}, v);
+    auto g = reverse_mode_grad(expr);
+    benchmark::DoNotOptimize(g);
+    benchmark::ClobberMemory();
+  }
+}
+
+// autodiff, Scratch: leaves updated, then the var tape is rebuilt every iteration.
+template <std::size_t N, typename LeavesTuple, typename MakeU>
+static void run_ad_reverse_scratch(benchmark::State &state,
+                                   std::array<double, N> x0, LeavesTuple leaves,
+                                   MakeU make_u) {
+  auto xs = x0;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+      (std::get<I>(leaves).update(xs[I]), ...);
+    }(std::make_index_sequence<N>{});
+    autodiff::var u = make_u(leaves); // tape rebuilt here (heap nodes)
+    auto g = std::apply(
+        [&](auto &...ls) {
+          return autodiff::reverse::detail::derivatives(
+              u, autodiff::reverse::detail::wrt(ls...));
+        },
+        leaves);
+    benchmark::DoNotOptimize(g);
+    benchmark::ClobberMemory();
+  }
+}
+
+// autodiff, Reuse: var tape built once; only leaf-update + forward recompute +
+// backward is timed (no rebuild, no allocation).
+template <std::size_t N, typename LeavesTuple, typename MakeU>
+static void run_ad_reverse_reuse(benchmark::State &state,
+                                 std::array<double, N> x0, LeavesTuple leaves,
+                                 MakeU make_u) {
+  autodiff::var u = make_u(leaves); // built ONCE
+  auto xs = x0;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+      (std::get<I>(leaves).update(xs[I]), ...);
+    }(std::make_index_sequence<N>{});
+    u.update(); // recompute forward values through the reused graph (no alloc)
+    auto g = std::apply(
+        [&](auto &...ls) {
+          return autodiff::reverse::detail::derivatives(
+              u, autodiff::reverse::detail::wrt(ls...));
+        },
+        leaves);
     benchmark::DoNotOptimize(g);
     benchmark::ClobberMemory();
   }
@@ -69,14 +163,21 @@ static void BM_Ours_Forward_F1(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Forward_F1);
 
-static void BM_Ours_Reverse_F1(benchmark::State &state) {
-  double xv = 1.25;
-  benchmark::DoNotOptimize(xv);
-  auto x = PV(xv, "x");
-  auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
-  run_our_reverse(state, expr);
+static void BM_Ours_Reverse_F1_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<1>(state, {1.25}, [](double xv) {
+    auto x = PV(xv, "x");
+    return exp(x) * sin(x) + x * x * x + 2.0 * x;
+  });
 }
-BENCHMARK(BM_Ours_Reverse_F1);
+BENCHMARK(BM_Ours_Reverse_F1_Scratch);
+
+static void BM_Ours_Reverse_F1_Reuse(benchmark::State &state) {
+  auto x = PV(1.25, "x");
+  auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
+  run_ours_reverse_reuse(state, expr,
+                         make_values<decltype(expr)>(named<"x">(1.25)));
+}
+BENCHMARK(BM_Ours_Reverse_F1_Reuse);
 
 static void BM_AD_Forward_F1(benchmark::State &state) {
   using autodiff::dual;
@@ -94,19 +195,24 @@ static void BM_AD_Forward_F1(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_F1);
 
-static void BM_AD_Reverse_F1(benchmark::State &state) {
-  using autodiff::var;
-  using autodiff::reverse::detail::derivatives;
-  using autodiff::reverse::detail::wrt;
-  var x = 1.25;
-  for (auto _ : state) {
-    var u = exp(x) * sin(x) + x * x * x + 2.0 * x;
-    auto [dx] = derivatives(u, wrt(x));
-    benchmark::DoNotOptimize(dx);
-    benchmark::ClobberMemory();
-  }
+static auto make_u_F1 = [](auto &L) {
+  auto &x = std::get<0>(L);
+  return exp(x) * sin(x) + x * x * x + 2.0 * x;
+};
+// NOTE: autodiff's `var` copy ctor wraps the source in a *dependent* node (and
+// it has no move ctor), so a `var` stored in a tuple becomes un-updatable. The
+// leaves must be named locals, passed as a tuple of references via std::tie.
+static void BM_AD_Reverse_F1_Scratch(benchmark::State &state) {
+  autodiff::var x = 1.25;
+  run_ad_reverse_scratch<1>(state, {1.25}, std::tie(x), make_u_F1);
 }
-BENCHMARK(BM_AD_Reverse_F1);
+BENCHMARK(BM_AD_Reverse_F1_Scratch);
+
+static void BM_AD_Reverse_F1_Reuse(benchmark::State &state) {
+  autodiff::var x = 1.25;
+  run_ad_reverse_reuse<1>(state, {1.25}, std::tie(x), make_u_F1);
+}
+BENCHMARK(BM_AD_Reverse_F1_Reuse);
 
 // ===========================================================================
 // F2  f(x,y) = xy + sin(x) + y^2 + exp(x+y)   at (1.3, 0.7)
@@ -121,16 +227,24 @@ static void BM_Ours_Forward_F2(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Forward_F2);
 
-static void BM_Ours_Reverse_F2(benchmark::State &state) {
-  double xv = 1.3, yv = 0.7;
-  benchmark::DoNotOptimize(xv);
-  benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, "x");
-  auto y = PV(yv, "y");
-  auto expr = x * y + sin(x) + y * y + exp(x + y);
-  run_our_reverse(state, expr);
+static void BM_Ours_Reverse_F2_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<2>(state, {1.3, 0.7}, [](double xv, double yv) {
+    auto x = PV(xv, "x");
+    auto y = PV(yv, "y");
+    return x * y + sin(x) + y * y + exp(x + y);
+  });
 }
-BENCHMARK(BM_Ours_Reverse_F2);
+BENCHMARK(BM_Ours_Reverse_F2_Scratch);
+
+static void BM_Ours_Reverse_F2_Reuse(benchmark::State &state) {
+  auto x = PV(1.3, "x");
+  auto y = PV(0.7, "y");
+  auto expr = x * y + sin(x) + y * y + exp(x + y);
+  run_ours_reverse_reuse(
+      state, expr,
+      make_values<decltype(expr)>(named<"x">(1.3), named<"y">(0.7)));
+}
+BENCHMARK(BM_Ours_Reverse_F2_Reuse);
 
 static void BM_AD_Forward_F2(benchmark::State &state) {
   using autodiff::dual;
@@ -153,20 +267,22 @@ static void BM_AD_Forward_F2(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_F2);
 
-static void BM_AD_Reverse_F2(benchmark::State &state) {
-  using autodiff::var;
-  using autodiff::reverse::detail::derivatives;
-  using autodiff::reverse::detail::wrt;
-  var x = 1.3, y = 0.7;
-  for (auto _ : state) {
-    var u = x * y + sin(x) + y * y + exp(x + y);
-    auto [dx, dy] = derivatives(u, wrt(x, y));
-    benchmark::DoNotOptimize(dx);
-    benchmark::DoNotOptimize(dy);
-    benchmark::ClobberMemory();
-  }
+static auto make_u_F2 = [](auto &L) {
+  auto &x = std::get<0>(L);
+  auto &y = std::get<1>(L);
+  return x * y + sin(x) + y * y + exp(x + y);
+};
+static void BM_AD_Reverse_F2_Scratch(benchmark::State &state) {
+  autodiff::var x = 1.3, y = 0.7;
+  run_ad_reverse_scratch<2>(state, {1.3, 0.7}, std::tie(x, y), make_u_F2);
 }
-BENCHMARK(BM_AD_Reverse_F2);
+BENCHMARK(BM_AD_Reverse_F2_Scratch);
+
+static void BM_AD_Reverse_F2_Reuse(benchmark::State &state) {
+  autodiff::var x = 1.3, y = 0.7;
+  run_ad_reverse_reuse<2>(state, {1.3, 0.7}, std::tie(x, y), make_u_F2);
+}
+BENCHMARK(BM_AD_Reverse_F2_Reuse);
 
 // ===========================================================================
 // F4  f(x,y,z,w) = (x+y)(z-w) + exp(xz) + sin(yw) + xyzw
@@ -185,20 +301,34 @@ static void BM_Ours_Forward_F4(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Forward_F4);
 
-static void BM_Ours_Reverse_F4(benchmark::State &state) {
-  double xv = 1.0, yv = 0.5, zv = 1.7, wv = W0;
-  benchmark::DoNotOptimize(xv);
-  benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv);
-  benchmark::DoNotOptimize(wv);
-  auto x = PV(xv, "x");
-  auto y = PV(yv, "y");
-  auto z = PV(zv, "z");
+static void BM_Ours_Reverse_F4_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<4>(
+      state, {1.0, 0.5, 1.7, W0},
+      [](double xv, double yv, double zv, double wv) {
+        auto x = PV(xv, "x");
+        auto y = PV(yv, "y");
+        auto z = PV(zv, "z");
+        auto w = PV(wv, "w");
+        return (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
+      });
+}
+BENCHMARK(BM_Ours_Reverse_F4_Scratch);
+
+static void BM_Ours_Reverse_F4_Reuse(benchmark::State &state) {
+  double wv = W0; // W0 is `const double`; PV(decltype(x)) must be non-const
+  auto x = PV(1.0, "x");
+  auto y = PV(0.5, "y");
+  auto z = PV(1.7, "z");
   auto w = PV(wv, "w");
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
-  run_our_reverse(state, expr);
+  // Symbols sort to {w,x,y,z}; make_values binds by name, not position.
+  run_ours_reverse_reuse(state, expr,
+                         make_values<decltype(expr)>(named<"x">(1.0),
+                                                     named<"y">(0.5),
+                                                     named<"z">(1.7),
+                                                     named<"w">(W0)));
 }
-BENCHMARK(BM_Ours_Reverse_F4);
+BENCHMARK(BM_Ours_Reverse_F4_Reuse);
 
 static void BM_AD_Forward_F4(benchmark::State &state) {
   using autodiff::dual;
@@ -227,22 +357,26 @@ static void BM_AD_Forward_F4(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_F4);
 
-static void BM_AD_Reverse_F4(benchmark::State &state) {
-  using autodiff::var;
-  using autodiff::reverse::detail::derivatives;
-  using autodiff::reverse::detail::wrt;
-  var x = 1.0, y = 0.5, z = 1.7, w = W0;
-  for (auto _ : state) {
-    var u = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
-    auto [dx, dy, dz, dw] = derivatives(u, wrt(x, y, z, w));
-    benchmark::DoNotOptimize(dx);
-    benchmark::DoNotOptimize(dy);
-    benchmark::DoNotOptimize(dz);
-    benchmark::DoNotOptimize(dw);
-    benchmark::ClobberMemory();
-  }
+static auto make_u_F4 = [](auto &L) {
+  auto &x = std::get<0>(L);
+  auto &y = std::get<1>(L);
+  auto &z = std::get<2>(L);
+  auto &w = std::get<3>(L);
+  return (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
+};
+static void BM_AD_Reverse_F4_Scratch(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 0.5, z = 1.7, w = W0;
+  run_ad_reverse_scratch<4>(state, {1.0, 0.5, 1.7, W0}, std::tie(x, y, z, w),
+                            make_u_F4);
 }
-BENCHMARK(BM_AD_Reverse_F4);
+BENCHMARK(BM_AD_Reverse_F4_Scratch);
+
+static void BM_AD_Reverse_F4_Reuse(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 0.5, z = 1.7, w = W0;
+  run_ad_reverse_reuse<4>(state, {1.0, 0.5, 1.7, W0}, std::tie(x, y, z, w),
+                          make_u_F4);
+}
+BENCHMARK(BM_AD_Reverse_F4_Reuse);
 
 // ===========================================================================
 // Tutorial T1  f(x) = 1 + x + x² + 1/x + log(x)   at x = 2.0
@@ -256,21 +390,21 @@ static void BM_Ours_Forward_T1(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Forward_T1);
 
-static void BM_Ours_Reverse_T1(benchmark::State &state) {
-  double xv = 2.0;
-  benchmark::DoNotOptimize(xv);
-  auto x = PV(xv, "x");
-  auto expr = PC(1.0) + x + x * x + PC(1.0) / x + log(x);
-  using Syms = boost::mp11::mp_list<diff::symbol_type<diff::FixedString{"x"}>>;
-  for (auto _ : state) {
-    benchmark::DoNotOptimize(xv);
-    expr.update(Syms{}, std::array{xv});
-    auto g = reverse_mode_grad(expr);
-    benchmark::DoNotOptimize(g);
-    benchmark::ClobberMemory();
-  }
+static void BM_Ours_Reverse_T1_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<1>(state, {2.0}, [](double xv) {
+    auto x = PV(xv, "x");
+    return PC(1.0) + x + x * x + PC(1.0) / x + log(x);
+  });
 }
-BENCHMARK(BM_Ours_Reverse_T1);
+BENCHMARK(BM_Ours_Reverse_T1_Scratch);
+
+static void BM_Ours_Reverse_T1_Reuse(benchmark::State &state) {
+  auto x = PV(2.0, "x");
+  auto expr = PC(1.0) + x + x * x + PC(1.0) / x + log(x);
+  run_ours_reverse_reuse(state, expr,
+                         make_values<decltype(expr)>(named<"x">(2.0)));
+}
+BENCHMARK(BM_Ours_Reverse_T1_Reuse);
 
 static void BM_AD_Forward_T1(benchmark::State &state) {
   using autodiff::dual;
@@ -288,19 +422,21 @@ static void BM_AD_Forward_T1(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_T1);
 
-static void BM_AD_Reverse_T1(benchmark::State &state) {
-  using autodiff::var;
-  using autodiff::reverse::detail::derivatives;
-  using autodiff::reverse::detail::wrt;
-  var x = 2.0;
-  for (auto _ : state) {
-    var u = 1.0 + x + x * x + 1.0 / x + log(x);
-    auto [dx] = derivatives(u, wrt(x));
-    benchmark::DoNotOptimize(dx);
-    benchmark::ClobberMemory();
-  }
+static auto make_u_T1 = [](auto &L) {
+  auto &x = std::get<0>(L);
+  return 1.0 + x + x * x + 1.0 / x + log(x);
+};
+static void BM_AD_Reverse_T1_Scratch(benchmark::State &state) {
+  autodiff::var x = 2.0;
+  run_ad_reverse_scratch<1>(state, {2.0}, std::tie(x), make_u_T1);
 }
-BENCHMARK(BM_AD_Reverse_T1);
+BENCHMARK(BM_AD_Reverse_T1_Scratch);
+
+static void BM_AD_Reverse_T1_Reuse(benchmark::State &state) {
+  autodiff::var x = 2.0;
+  run_ad_reverse_reuse<1>(state, {2.0}, std::tie(x), make_u_T1);
+}
+BENCHMARK(BM_AD_Reverse_T1_Reuse);
 
 // ===========================================================================
 // Tutorial T_Multi3  f(x,y,z) = 1+x+y+z+xy+yz+xz+xyz+exp(x/y+y/z)
@@ -318,19 +454,29 @@ static void BM_Ours_Forward_TMulti3(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Forward_TMulti3);
 
-static void BM_Ours_Reverse_TMulti3(benchmark::State &state) {
-  double xv = 1.0, yv = 2.0, zv = 3.0;
-  benchmark::DoNotOptimize(xv);
-  benchmark::DoNotOptimize(yv);
-  benchmark::DoNotOptimize(zv);
-  auto x = PV(xv, "x");
-  auto y = PV(yv, "y");
-  auto z = PV(zv, "z");
+static void BM_Ours_Reverse_TMulti3_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<3>(
+      state, {1.0, 2.0, 3.0}, [](double xv, double yv, double zv) {
+        auto x = PV(xv, "x");
+        auto y = PV(yv, "y");
+        auto z = PV(zv, "z");
+        return PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
+               exp(x / y + y / z);
+      });
+}
+BENCHMARK(BM_Ours_Reverse_TMulti3_Scratch);
+
+static void BM_Ours_Reverse_TMulti3_Reuse(benchmark::State &state) {
+  auto x = PV(1.0, "x");
+  auto y = PV(2.0, "y");
+  auto z = PV(3.0, "z");
   auto expr = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
               exp(x / y + y / z);
-  run_our_reverse(state, expr);
+  run_ours_reverse_reuse(state, expr,
+                         make_values<decltype(expr)>(
+                             named<"x">(1.0), named<"y">(2.0), named<"z">(3.0)));
 }
-BENCHMARK(BM_Ours_Reverse_TMulti3);
+BENCHMARK(BM_Ours_Reverse_TMulti3_Reuse);
 
 static void BM_AD_Forward_TMulti3(benchmark::State &state) {
   using autodiff::dual;
@@ -357,22 +503,26 @@ static void BM_AD_Forward_TMulti3(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_TMulti3);
 
-static void BM_AD_Reverse_TMulti3(benchmark::State &state) {
-  using autodiff::var;
-  using autodiff::reverse::detail::derivatives;
-  using autodiff::reverse::detail::wrt;
-  var x = 1.0, y = 2.0, z = 3.0;
-  for (auto _ : state) {
-    var u = 1.0 + x + y + z + x * y + y * z + x * z + x * y * z +
-            exp(x / y + y / z);
-    auto [dx, dy, dz] = derivatives(u, wrt(x, y, z));
-    benchmark::DoNotOptimize(dx);
-    benchmark::DoNotOptimize(dy);
-    benchmark::DoNotOptimize(dz);
-    benchmark::ClobberMemory();
-  }
+static auto make_u_TMulti3 = [](auto &L) {
+  auto &x = std::get<0>(L);
+  auto &y = std::get<1>(L);
+  auto &z = std::get<2>(L);
+  return 1.0 + x + y + z + x * y + y * z + x * z + x * y * z +
+         exp(x / y + y / z);
+};
+static void BM_AD_Reverse_TMulti3_Scratch(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 2.0, z = 3.0;
+  run_ad_reverse_scratch<3>(state, {1.0, 2.0, 3.0}, std::tie(x, y, z),
+                            make_u_TMulti3);
 }
-BENCHMARK(BM_AD_Reverse_TMulti3);
+BENCHMARK(BM_AD_Reverse_TMulti3_Scratch);
+
+static void BM_AD_Reverse_TMulti3_Reuse(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 2.0, z = 3.0;
+  run_ad_reverse_reuse<3>(state, {1.0, 2.0, 3.0}, std::tie(x, y, z),
+                          make_u_TMulti3);
+}
+BENCHMARK(BM_AD_Reverse_TMulti3_Reuse);
 
 // ===========================================================================
 // Tutorial T_Grad2  f(x,y) = sin(x)*cos(y) + exp(x*y)   at (1.0, 0.5)
@@ -387,16 +537,24 @@ static void BM_Ours_Forward_TGrad2(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Forward_TGrad2);
 
-static void BM_Ours_Reverse_TGrad2(benchmark::State &state) {
-  double xv = 1.0, yv = 0.5;
-  benchmark::DoNotOptimize(xv);
-  benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, "x");
-  auto y = PV(yv, "y");
-  auto expr = sin(x) * cos(y) + exp(x * y);
-  run_our_reverse(state, expr);
+static void BM_Ours_Reverse_TGrad2_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<2>(state, {1.0, 0.5}, [](double xv, double yv) {
+    auto x = PV(xv, "x");
+    auto y = PV(yv, "y");
+    return sin(x) * cos(y) + exp(x * y);
+  });
 }
-BENCHMARK(BM_Ours_Reverse_TGrad2);
+BENCHMARK(BM_Ours_Reverse_TGrad2_Scratch);
+
+static void BM_Ours_Reverse_TGrad2_Reuse(benchmark::State &state) {
+  auto x = PV(1.0, "x");
+  auto y = PV(0.5, "y");
+  auto expr = sin(x) * cos(y) + exp(x * y);
+  run_ours_reverse_reuse(
+      state, expr,
+      make_values<decltype(expr)>(named<"x">(1.0), named<"y">(0.5)));
+}
+BENCHMARK(BM_Ours_Reverse_TGrad2_Reuse);
 
 static void BM_AD_Forward_TGrad2(benchmark::State &state) {
   using autodiff::dual;
@@ -417,20 +575,22 @@ static void BM_AD_Forward_TGrad2(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_TGrad2);
 
-static void BM_AD_Reverse_TGrad2(benchmark::State &state) {
-  using autodiff::var;
-  using autodiff::reverse::detail::derivatives;
-  using autodiff::reverse::detail::wrt;
-  var x = 1.0, y = 0.5;
-  for (auto _ : state) {
-    var u = sin(x) * cos(y) + exp(x * y);
-    auto [dx, dy] = derivatives(u, wrt(x, y));
-    benchmark::DoNotOptimize(dx);
-    benchmark::DoNotOptimize(dy);
-    benchmark::ClobberMemory();
-  }
+static auto make_u_TGrad2 = [](auto &L) {
+  auto &x = std::get<0>(L);
+  auto &y = std::get<1>(L);
+  return sin(x) * cos(y) + exp(x * y);
+};
+static void BM_AD_Reverse_TGrad2_Scratch(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 0.5;
+  run_ad_reverse_scratch<2>(state, {1.0, 0.5}, std::tie(x, y), make_u_TGrad2);
 }
-BENCHMARK(BM_AD_Reverse_TGrad2);
+BENCHMARK(BM_AD_Reverse_TGrad2_Scratch);
+
+static void BM_AD_Reverse_TGrad2_Reuse(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 0.5;
+  run_ad_reverse_reuse<2>(state, {1.0, 0.5}, std::tie(x, y), make_u_TGrad2);
+}
+BENCHMARK(BM_AD_Reverse_TGrad2_Reuse);
 
 // ===========================================================================
 // Tutorial T_4th  f(x) = sin(x) — 4th-order derivative at x = π/4
@@ -569,21 +729,26 @@ static void BM_Ours_Forward_TDir(benchmark::State &state) {
 }
 BENCHMARK(BM_Ours_Forward_TDir);
 
-static void BM_Ours_Reverse_TDir(benchmark::State &state) {
-  double xv = 1.0, yv = 0.5;
-  benchmark::DoNotOptimize(xv);
-  benchmark::DoNotOptimize(yv);
-  auto x = PV(xv, "x");
-  auto y = PV(yv, "y");
-  auto expr = exp(x) * sin(y);
-  for (auto _ : state) {
-    auto g = reverse_mode_grad(expr);
-    double dir = g[0] * DIR_UXY + g[1] * DIR_UXY;
-    benchmark::DoNotOptimize(dir);
-    benchmark::ClobberMemory();
-  }
+// Reverse mode computes the full gradient; the directional derivative is a
+// negligible dot product on top, so we time the gradient like the other cells.
+static void BM_Ours_Reverse_TDir_Scratch(benchmark::State &state) {
+  run_ours_reverse_scratch<2>(state, {1.0, 0.5}, [](double xv, double yv) {
+    auto x = PV(xv, "x");
+    auto y = PV(yv, "y");
+    return exp(x) * sin(y);
+  });
 }
-BENCHMARK(BM_Ours_Reverse_TDir);
+BENCHMARK(BM_Ours_Reverse_TDir_Scratch);
+
+static void BM_Ours_Reverse_TDir_Reuse(benchmark::State &state) {
+  auto x = PV(1.0, "x");
+  auto y = PV(0.5, "y");
+  auto expr = exp(x) * sin(y);
+  run_ours_reverse_reuse(
+      state, expr,
+      make_values<decltype(expr)>(named<"x">(1.0), named<"y">(0.5)));
+}
+BENCHMARK(BM_Ours_Reverse_TDir_Reuse);
 
 static void BM_AD_Forward_TDir(benchmark::State &state) {
   using autodiff::dual;
@@ -604,20 +769,22 @@ static void BM_AD_Forward_TDir(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_TDir);
 
-static void BM_AD_Reverse_TDir(benchmark::State &state) {
-  using autodiff::var;
-  using autodiff::reverse::detail::derivatives;
-  using autodiff::reverse::detail::wrt;
-  var x = 1.0, y = 0.5;
-  for (auto _ : state) {
-    var u = exp(x) * sin(y);
-    auto [dx, dy] = derivatives(u, wrt(x, y));
-    double dir = dx * DIR_UXY + dy * DIR_UXY;
-    benchmark::DoNotOptimize(dir);
-    benchmark::ClobberMemory();
-  }
+static auto make_u_TDir = [](auto &L) {
+  auto &x = std::get<0>(L);
+  auto &y = std::get<1>(L);
+  return exp(x) * sin(y);
+};
+static void BM_AD_Reverse_TDir_Scratch(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 0.5;
+  run_ad_reverse_scratch<2>(state, {1.0, 0.5}, std::tie(x, y), make_u_TDir);
 }
-BENCHMARK(BM_AD_Reverse_TDir);
+BENCHMARK(BM_AD_Reverse_TDir_Scratch);
+
+static void BM_AD_Reverse_TDir_Reuse(benchmark::State &state) {
+  autodiff::var x = 1.0, y = 0.5;
+  run_ad_reverse_reuse<2>(state, {1.0, 0.5}, std::tie(x, y), make_u_TDir);
+}
+BENCHMARK(BM_AD_Reverse_TDir_Reuse);
 
 // ===========================================================================
 // Vector-valued dense Hessian  f: R^n -> R, full n x n Hessian, swept over n.
@@ -944,5 +1111,83 @@ static void BM_Ours_Hessian_HessExpr8(benchmark::State &state) {
   ours_hessian_expr<8>(state, make_chain_expr8);
 }
 BENCHMARK(BM_Ours_Hessian_HessExpr8);
+
+// ---------------------------------------------------------------------------
+// One-time correctness cross-check (runs at static-init, before any benchmark).
+// Guards the canonical-vs-source symbol-order footgun (esp. F4, whose symbols
+// sort to {w,x,y,z}) and the Reuse/update path. assert() is a no-op under
+// NDEBUG, so this aborts manually to stay effective in Release builds.
+// ---------------------------------------------------------------------------
+namespace {
+
+bool reverse_close(double a, double b) {
+  const double d = std::fabs(a - b);
+  const double m = std::fmax(1.0, std::fmax(std::fabs(a), std::fabs(b)));
+  return d <= 1e-9 * m;
+}
+
+void reverse_check(const char *what, double ours, double ad) {
+  if (!reverse_close(ours, ad)) {
+    std::fprintf(stderr,
+                 "reverse cross-check FAILED: %s  ours=%.12g  autodiff=%.12g\n",
+                 what, ours, ad);
+    std::abort();
+  }
+}
+
+// Ours reverse partial w.r.t. a named symbol (handles canonical ordering).
+template <CExpression Expr>
+double ours_partial(const Expr &expr, std::string_view sym) {
+  const auto g = reverse_mode_grad(expr);
+  const auto order = symbol_order<std::remove_cvref_t<Expr>>();
+  for (std::size_t i = 0; i < order.size(); ++i)
+    if (order[i] == sym)
+      return g[i];
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
+[[maybe_unused]] const bool reverse_crosscheck_ran = [] {
+  namespace ad = autodiff::reverse::detail;
+  // F1: f(x) = exp(x)sin(x) + x^3 + 2x
+  {
+    auto x = PV(1.25, "x");
+    auto e = exp(x) * sin(x) + x * x * x + 2.0 * x;
+    autodiff::var X = 1.25;
+    autodiff::var u = exp(X) * sin(X) + X * X * X + 2.0 * X;
+    auto [dx] = ad::derivatives(u, ad::wrt(X));
+    reverse_check("F1 d/dx", ours_partial(e, "x"), dx);
+  }
+  // F2: f(x,y) = xy + sin(x) + y^2 + exp(x+y)
+  {
+    auto x = PV(1.3, "x");
+    auto y = PV(0.7, "y");
+    auto e = x * y + sin(x) + y * y + exp(x + y);
+    autodiff::var X = 1.3, Y = 0.7;
+    autodiff::var u = X * Y + sin(X) + Y * Y + exp(X + Y);
+    auto [dx, dy] = ad::derivatives(u, ad::wrt(X, Y));
+    reverse_check("F2 d/dx", ours_partial(e, "x"), dx);
+    reverse_check("F2 d/dy", ours_partial(e, "y"), dy);
+  }
+  // F4: symbols sort to {w,x,y,z} — the ordering trap.
+  {
+    double wv = W0;
+    auto x = PV(1.0, "x");
+    auto y = PV(0.5, "y");
+    auto z = PV(1.7, "z");
+    auto w = PV(wv, "w");
+    auto e = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
+    autodiff::var X = 1.0, Y = 0.5, Z = 1.7, Wv = W0;
+    autodiff::var u =
+        (X + Y) * (Z - Wv) + exp(X * Z) + sin(Y * Wv) + X * Y * Z * Wv;
+    auto [dx, dy, dz, dw] = ad::derivatives(u, ad::wrt(X, Y, Z, Wv));
+    reverse_check("F4 d/dx", ours_partial(e, "x"), dx);
+    reverse_check("F4 d/dy", ours_partial(e, "y"), dy);
+    reverse_check("F4 d/dz", ours_partial(e, "z"), dz);
+    reverse_check("F4 d/dw", ours_partial(e, "w"), dw);
+  }
+  return true;
+}();
+
+} // namespace
 
 BENCHMARK_MAIN();
