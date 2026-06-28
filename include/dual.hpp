@@ -2,6 +2,7 @@
 
 #include "expressions.hpp"
 #include <cmath>
+#include <numbers>
 #include <ostream>
 #include <tuple>
 #include <type_traits>
@@ -598,12 +599,71 @@ struct tanh_combine {
     return DT{tanh(v), d / (c * c)};
   }
 };
+struct log10_combine {
+  constexpr auto operator()(const auto &x) const noexcept {
+    using std::log10;
+    const auto &[v, d] = x;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    using T = std::remove_cvref_t<decltype(v)>;
+    const T ln10 = static_cast<T>(std::numbers::ln10);
+    return DT{log10(v), d / (v * ln10)};
+  }
+};
+struct cbrt_combine {
+  constexpr auto operator()(const auto &x) const noexcept {
+    using std::cbrt;
+    const auto &[v, d] = x;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    using T = std::remove_cvref_t<decltype(v)>;
+    const T c = cbrt(v);
+    return DT{c, d / (T{3} * c * c)};
+  }
+};
+struct asinh_combine {
+  constexpr auto operator()(const auto &x) const noexcept {
+    using std::asinh, std::sqrt;
+    const auto &[v, d] = x;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    using T = std::remove_cvref_t<decltype(v)>;
+    return DT{asinh(v), d / sqrt(v * v + T{1})};
+  }
+};
+struct acosh_combine {
+  constexpr auto operator()(const auto &x) const noexcept {
+    using std::acosh, std::sqrt;
+    const auto &[v, d] = x;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    using T = std::remove_cvref_t<decltype(v)>;
+    return DT{acosh(v), d / sqrt(v * v - T{1})};
+  }
+};
+struct atanh_combine {
+  constexpr auto operator()(const auto &x) const noexcept {
+    using std::atanh;
+    const auto &[v, d] = x;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    using T = std::remove_cvref_t<decltype(v)>;
+    return DT{atanh(v), d / (T{1} - v * v)};
+  }
+};
+struct erf_combine {
+  constexpr auto operator()(const auto &x) const noexcept {
+    using std::erf, std::exp;
+    const auto &[v, d] = x;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    using T = std::remove_cvref_t<decltype(v)>;
+    const T two_over_sqrt_pi = static_cast<T>(2.0 * std::numbers::inv_sqrtpi);
+    return DT{erf(v), d * two_over_sqrt_pi * exp(-(v * v))};
+  }
+};
 DIFF_LAZY_UNARY(sin)
 DIFF_LAZY_UNARY(cos)
 DIFF_LAZY_UNARY(exp)
 DIFF_LAZY_UNARY(tan)
 DIFF_LAZY_UNARY(log)
+DIFF_LAZY_UNARY(log10)
 DIFF_LAZY_UNARY(sqrt)
+DIFF_LAZY_UNARY(cbrt)
 DIFF_LAZY_UNARY(abs)
 DIFF_LAZY_UNARY(asin)
 DIFF_LAZY_UNARY(acos)
@@ -611,6 +671,10 @@ DIFF_LAZY_UNARY(atan)
 DIFF_LAZY_UNARY(sinh)
 DIFF_LAZY_UNARY(cosh)
 DIFF_LAZY_UNARY(tanh)
+DIFF_LAZY_UNARY(asinh)
+DIFF_LAZY_UNARY(acosh)
+DIFF_LAZY_UNARY(atanh)
+DIFF_LAZY_UNARY(erf)
 #undef DIFF_LAZY_UNARY
 
 // ---- comparisons (operate on materialized values) -------------------------
@@ -656,6 +720,29 @@ struct min_combine {
     return val(y) < val(x) ? DT{y} : DT{x};
   }
 };
+// atan2(y, x): the first operand is the numerator y, the second is x.
+//   d atan2 = (x*dy - y*dx) / (x² + y²).
+struct atan2_combine {
+  constexpr auto operator()(const auto &y, const auto &x) const noexcept {
+    using std::atan2;
+    const auto &[yv, yd] = y;
+    const auto &[xv, xd] = x;
+    using DT = std::remove_cvref_t<decltype(y)>;
+    const auto q = xv * xv + yv * yv;
+    return DT{atan2(yv, xv), (xv * yd - yv * xd) / q};
+  }
+};
+// hypot(x, y) = sqrt(x² + y²).  d hypot = (x*dx + y*dy) / hypot.
+struct hypot_combine {
+  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
+    using std::hypot;
+    const auto &[xv, xd] = x;
+    const auto &[yv, yd] = y;
+    using DT = std::remove_cvref_t<decltype(x)>;
+    const auto h = hypot(xv, yv);
+    return DT{h, (xv * xd + yv * yd) / h};
+  }
+};
 #define DIFF_LAZY_BINFN(NAME, COMB)                                            \
   template <typename A, typename B>                                            \
     requires(DualLike<A> && DualLike<B> &&                                     \
@@ -670,7 +757,26 @@ struct min_combine {
 DIFF_LAZY_BINFN(pow, pow_combine)
 DIFF_LAZY_BINFN(max, max_combine)
 DIFF_LAZY_BINFN(min, min_combine)
+DIFF_LAZY_BINFN(atan2, atan2_combine)
+DIFF_LAZY_BINFN(hypot, hypot_combine)
 #undef DIFF_LAZY_BINFN
+
+// 3-argument hypot(x, y, z) = sqrt(x² + y² + z²) (all-dual; scalar mixing for
+// the ternary form is not provided).  d hypot = (x*dx + y*dy + z*dz) / hypot.
+template <typename A, typename B, typename C>
+  requires(DualLike<A> && DualLike<B> && DualLike<C> &&
+           std::is_same_v<dual_value_t<A>, dual_value_t<B>> &&
+           std::is_same_v<dual_value_t<A>, dual_value_t<C>>)
+constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
+  using std::hypot;
+  using T = dual_value_t<A>;
+  const Dual<T> x = mat(a), y = mat(b), z = mat(c);
+  const auto &[xv, xd] = x;
+  const auto &[yv, yd] = y;
+  const auto &[zv, zd] = z;
+  const T h = hypot(xv, yv, zv);
+  return Dual<T>{h, (xv * xd + yv * yd + zv * zd) / h};
+}
 
 #define DIFF_PROMOTE_BINARY(NAME)                                              \
   template <typename A, typename U>                                            \
@@ -688,6 +794,8 @@ DIFF_LAZY_BINFN(min, min_combine)
 DIFF_PROMOTE_BINARY(pow)
 DIFF_PROMOTE_BINARY(max)
 DIFF_PROMOTE_BINARY(min)
+DIFF_PROMOTE_BINARY(atan2)
+DIFF_PROMOTE_BINARY(hypot)
 #undef DIFF_PROMOTE_BINARY
 
 template <typename T> constexpr bool isfinite(const Dual<T> &d) noexcept {

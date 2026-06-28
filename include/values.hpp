@@ -2,7 +2,7 @@
 #include "dual.hpp"
 #include "expressions.hpp"
 #include "operations.hpp"
-#include <boost/mp11/algorithm.hpp>
+#include "mpl.hpp"
 #include <concepts>
 #include <format>
 #include <string_view>
@@ -22,7 +22,7 @@ concept CompatibleValueTypes =
 
 template <CFixedString auto S, typename SymList>
 consteval std::size_t find_index_of_symbol() noexcept {
-  return boost::mp11::mp_find<SymList, symbol_type<S>>::value;
+  return diff::mpl::mp_find<S>(SymList{});
 }
 
 template <CExpression LHS, CExpression RHS>
@@ -140,6 +140,36 @@ template <CExpression Expr> constexpr auto tanh(const Expr &a) noexcept {
   return MonoExpression<TanhOp<value_type>, Expr>{a};
 }
 
+template <CExpression Expr> constexpr auto log10(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<Log10Op<value_type>, Expr>{a};
+}
+
+template <CExpression Expr> constexpr auto cbrt(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<CbrtOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr> constexpr auto asinh(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<AsinhOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr> constexpr auto acosh(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<AcoshOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr> constexpr auto atanh(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<AtanhOp<value_type>, Expr>{a};
+}
+
+template <CExpression Expr> constexpr auto erf(const Expr &a) noexcept {
+  using value_type = typename Expr::value_type;
+  return MonoExpression<ErfOp<value_type>, Expr>{a};
+}
+
 // Promote a bare scalar `s` into the expression's value_type as a
 // zero-derivative constant.  ConstantEmbedder recurses through every Dual<>
 // nesting level, so this is correct even when VT is a multi-level dual (e.g.
@@ -197,6 +227,32 @@ template <CExpression LHS, typename S>
 constexpr auto operator/(const LHS &a, S s) noexcept {
   return a / promote_scalar<typename LHS::value_type>(s);
 }
+
+// Function-style binary ops (pow, atan2, hypot, max, min): an all-expression
+// form plus scalar-promotion overloads so either operand may be a bare scalar.
+#define DIFF_EXPR_BINFN(NAME, OP)                                              \
+  template <CExpression LHS, CExpression RHS>                                  \
+    requires CompatibleValueTypes<LHS, RHS>                                    \
+  constexpr auto NAME(const LHS &a, const RHS &b) noexcept {                   \
+    using value_type = typename LHS::value_type;                              \
+    return Expression<OP<value_type>, LHS, RHS>{a, b};                        \
+  }                                                                            \
+  template <typename S, CExpression RHS>                                       \
+    requires std::is_arithmetic_v<S>                                          \
+  constexpr auto NAME(S s, const RHS &b) noexcept {                            \
+    return NAME(promote_scalar<typename RHS::value_type>(s), b);              \
+  }                                                                            \
+  template <CExpression LHS, typename S>                                       \
+    requires std::is_arithmetic_v<S>                                          \
+  constexpr auto NAME(const LHS &a, S s) noexcept {                            \
+    return NAME(a, promote_scalar<typename LHS::value_type>(s));              \
+  }
+DIFF_EXPR_BINFN(pow, PowOp)
+DIFF_EXPR_BINFN(atan2, Atan2Op)
+DIFF_EXPR_BINFN(hypot, HypotOp)
+DIFF_EXPR_BINFN(max, MaxOp)
+DIFF_EXPR_BINFN(min, MinOp)
+#undef DIFF_EXPR_BINFN
 
 template <Numeric T> class Constant {
   const T value;

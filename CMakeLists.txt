@@ -1,7 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-if (POLICY CMP0167)
-    cmake_policy(SET CMP0167 NEW)
-endif ()
 
 project(ExpressionDifferentiator VERSION 1.0 LANGUAGES CXX)
 
@@ -24,21 +21,7 @@ else ()
     endif ()
 endif ()
 
-find_package(Boost 1.74 CONFIG QUIET)
-
 include(FetchContent)
-if (NOT TARGET Boost::headers)
-    FetchContent_Declare(
-            boost_mp11
-            GIT_REPOSITORY https://github.com/boostorg/mp11.git
-            GIT_TAG c3eba6ac6be2e21af33a1b2ec97634cd01bcc447
-    )
-    FetchContent_MakeAvailable(boost_mp11)
-    add_library(boost_headers INTERFACE)
-    add_library(Boost::headers ALIAS boost_headers)
-    target_include_directories(boost_headers INTERFACE
-            ${boost_mp11_SOURCE_DIR}/include)
-endif ()
 
 FetchContent_Declare(
         googletest
@@ -79,6 +62,7 @@ endif ()
 add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/expressions.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/operations.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/mpl.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/traits.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/values.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/equation.hpp
@@ -90,9 +74,6 @@ add_library(diff INTERFACE
 # Namespaced alias so consumers can link a stable target name.
 add_library(ExpressionDifferentiator::diff ALIAS diff)
 target_include_directories(diff INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(diff INTERFACE Boost::headers)
-target_include_directories(diff SYSTEM INTERFACE
-        $<TARGET_PROPERTY:Boost::headers,INTERFACE_INCLUDE_DIRECTORIES>)
 
 # Only build the standalone executables when this is the top-level project.
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)

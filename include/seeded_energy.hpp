@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <type_traits>
 
-#include <boost/mp11/list.hpp> // mp_size
+#include "mpl.hpp" // mp_size
 
 namespace diff {
 
@@ -31,7 +31,7 @@ template <typename Expr> class SeededExprEnergy {
 
 public:
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  static constexpr std::size_t arity = mp::mp_size<symbols>::value;
+  static constexpr std::size_t arity = mp::mp_size(symbols{});
 
   // Marker the hessian() router dispatches on (see vforward_driver.hpp).
   static constexpr bool kSeededExprEnergy = true;

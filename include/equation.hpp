@@ -3,11 +3,11 @@
 #include "gradient.hpp"
 #include <algorithm>
 #include <array>
-#include <boost/mp11/list.hpp>
+#include "mpl.hpp"
 
 namespace diff {
 
-namespace mp = boost::mp11;
+namespace mp = diff::mpl;
 
 namespace detail {
 struct eval_func_t {
@@ -81,7 +81,7 @@ public:
                                  extract_symbols_from_expr_t<TRest>...>>;
 
   static constexpr std::size_t output_dim = 1 + sizeof...(TRest);
-  static constexpr std::size_t input_dim = mp::mp_size<symbols>::value;
+  static constexpr std::size_t input_dim = mp::mp_size(symbols{});
   static constexpr std::size_t number_of_derivatives = input_dim;
 
 private:

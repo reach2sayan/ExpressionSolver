@@ -1,13 +1,12 @@
 #pragma once
 #include "values.hpp"
 #include <array>
-#include <boost/mp11/algorithm.hpp>
-#include <boost/mp11/integral.hpp>
+#include "mpl.hpp"
 #include <type_traits>
 
 namespace diff {
 
-namespace mp = boost::mp11;
+namespace mp = diff::mpl;
 
 // Direct index_sequence fold — no Boost mp_for_each intermediate lambda.
 template <std::size_t N, class F> constexpr void static_for(F &&f) noexcept {

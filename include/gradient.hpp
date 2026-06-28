@@ -7,14 +7,14 @@
 #include "vector_dual.hpp"
 #include <algorithm>
 #include <array>
-#include <boost/mp11/list.hpp>
+#include "mpl.hpp"
 #include <span>
 #include <string_view>
 #include <utility>
 
 namespace diff {
 
-namespace mp = boost::mp11;
+namespace mp = diff::mpl;
 
 // ===========================================================================
 // Order-safe seeding for the symbolic value-array APIs.
@@ -45,7 +45,7 @@ template <FixedString Sym, typename V>
 template <CExpression Expr>
 [[nodiscard]] constexpr auto symbol_order() noexcept {
   using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  constexpr std::size_t N = mp::mp_size<SymList>::value;
+  constexpr std::size_t N = mp::mp_size(SymList{});
   std::array<std::string_view, N> out{};
   [&]<std::size_t... I>(std::index_sequence<I...>) {
     ((out[I] = mp::mp_at_c<SymList, I>::name), ...);
@@ -61,15 +61,15 @@ template <CExpression Expr,
               scalar_base_t<typename std::remove_cvref_t<Expr>::value_type>,
           FixedString... Syms, typename... Vs>
 [[nodiscard]] constexpr std::array<
-    Scalar, mp::mp_size<extract_symbols_from_expr_t<
-                std::remove_cvref_t<Expr>>>::value>
+    Scalar, mp::mp_size(extract_symbols_from_expr_t<
+                std::remove_cvref_t<Expr>>{})>
 make_values(NamedValue<Syms, Vs>... nv) noexcept {
   using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  constexpr std::size_t N = mp::mp_size<SymList>::value;
+  constexpr std::size_t N = mp::mp_size(SymList{});
   static_assert(sizeof...(Syms) == N,
                 "make_values: supply exactly one value per symbol");
   static_assert(
-      mp::mp_size<mp::mp_unique<mp::mp_list<symbol_type<Syms>...>>>::value ==
+      mp::mp_size(mp::mp_unique<mp::mp_list<symbol_type<Syms>...>>{}) ==
           sizeof...(Syms),
       "make_values: duplicate symbol");
   std::array<Scalar, N> out{};
@@ -113,7 +113,7 @@ template <CExpression Expr, typename T = typename Expr::value_type>
   requires(!is_dual_v<T>)
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) noexcept {
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  constexpr auto N = mp::mp_size<Syms>::value;
+  constexpr auto N = mp::mp_size(Syms{});
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
   return grads;
@@ -124,7 +124,7 @@ template <CExpression Expr, typename T = typename Expr::value_type>
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) noexcept {
   using scalar_t = dual_scalar_t<T>;
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  constexpr auto N = mp::mp_size<Syms>::value;
+  constexpr auto N = mp::mp_size(Syms{});
   std::array<T, N> grads{};
   expr.backward(Syms{}, T{1}, grads);
   std::array<scalar_t, N> result{};
@@ -136,8 +136,8 @@ template <CExpression Expr, typename T = typename Expr::value_type>
 template <CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires is_dual_v<T>
 [[nodiscard]] constexpr auto
 reverse_mode_hessian(Expr &expr, std::array<S, N> values) noexcept {
@@ -164,8 +164,8 @@ reverse_mode_hessian(Expr &expr, std::array<S, N> values) noexcept {
 template <CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires is_dual_v<T>
 [[nodiscard]] constexpr auto reverse_mode_hessian(Expr &expr) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
@@ -205,8 +205,8 @@ constexpr auto extract_nth(const T &x) noexcept {
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && N > 0)
 [[nodiscard]] auto derivative_tensor_impl(const Expr &expr,
                                           std::array<S, N> values) noexcept {
@@ -273,8 +273,8 @@ template <DiffMode Mode, CExpression Expr>
 template <DiffMode Mode, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse && is_dual_v<T>)
 [[nodiscard]] auto hessian(Expr &expr, std::array<S, N> values) noexcept {
   return detail::reverse_mode_hessian(expr, values);
@@ -292,8 +292,8 @@ template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
 template <DiffMode Mode, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse && is_dual_v<T>)
 [[nodiscard]] auto hessian(Expr &expr) noexcept {
   return detail::reverse_mode_hessian(expr);
@@ -302,8 +302,8 @@ template <DiffMode Mode, CExpression Expr,
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && N > 0)
 [[nodiscard]] auto derivative_tensor(const Expr &expr,
                                      std::array<S, N> values) noexcept {
@@ -322,8 +322,8 @@ template <std::size_t Order, CExpression Expr, FixedString... Syms,
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && N > 0)
 [[nodiscard]] auto derivative_tensor(const Expr &expr) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
@@ -340,8 +340,8 @@ namespace detail {
 
 template <Numeric T> consteval T compile_time_factorial(T Order) {
   T result = 1;
-  for (std::size_t i = 1; i <= Order; ++i) {
-    result *= static_cast<T>(i);
+  for (T i = 1; i <= Order; ++i) {
+    result *= i;
   }
   return result;
 }
@@ -359,8 +359,8 @@ static_assert(compile_time_factorial(3) == 6,
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
-          std::size_t NVars = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t NVars = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)
 [[nodiscard]] S univariate_derivative_impl(const Expr &expr, S x0) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
@@ -382,8 +382,8 @@ template <std::size_t Order, CExpression Expr,
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
-          std::size_t NVars = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t NVars = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)
 [[nodiscard]] S univariate_derivative(const Expr &expr, S x0) noexcept {
   return detail::univariate_derivative_impl<Order>(expr, x0);
@@ -392,8 +392,8 @@ template <std::size_t Order, CExpression Expr,
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
           typename S = scalar_base_t<T>,
-          std::size_t NVars = mp::mp_size<
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>>::value>
+          std::size_t NVars = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)
 [[nodiscard]] S univariate_derivative(const Expr &expr) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;

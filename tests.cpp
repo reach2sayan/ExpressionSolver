@@ -381,8 +381,8 @@ TEST(ConceptTest, AnOpSatisfied) {
 TEST(SymbolTest, SingleVariable) {
   using E = Variable<double, diff::FixedString{"x"}>;
   using Syms = extract_symbols_from_expr_t<E>;
-  static_assert(boost::mp11::mp_size<Syms>::value == 1);
-  static_assert(std::is_same_v<boost::mp11::mp_at_c<Syms, 0>,
+  static_assert(diff::mpl::mp_size(Syms{}) == 1);
+  static_assert(std::is_same_v<diff::mpl::mp_at_c<Syms, 0>,
                                diff::symbol_type<diff::FixedString{"x"}>>);
 }
 
@@ -390,11 +390,11 @@ TEST(SymbolTest, TwoVariables) {
   using E = decltype(std::declval<Variable<double, diff::FixedString{"x"}>>() *
                      std::declval<Variable<double, diff::FixedString{"y"}>>());
   using Syms = extract_symbols_from_expr_t<E>;
-  static_assert(boost::mp11::mp_size<Syms>::value == 2);
+  static_assert(diff::mpl::mp_size(Syms{}) == 2);
   // Symbols are sorted lexicographically: "x" < "y"
-  static_assert(std::is_same_v<boost::mp11::mp_at_c<Syms, 0>,
+  static_assert(std::is_same_v<diff::mpl::mp_at_c<Syms, 0>,
                                diff::symbol_type<diff::FixedString{"x"}>>);
-  static_assert(std::is_same_v<boost::mp11::mp_at_c<Syms, 1>,
+  static_assert(std::is_same_v<diff::mpl::mp_at_c<Syms, 1>,
                                diff::symbol_type<diff::FixedString{"y"}>>);
 }
 
@@ -403,7 +403,7 @@ TEST(SymbolTest, DuplicateSymbolsDeduplicated) {
   using E = decltype(std::declval<Variable<double, diff::FixedString{"x"}>>() *
                      std::declval<Variable<double, diff::FixedString{"x"}>>());
   using Syms = extract_symbols_from_expr_t<E>;
-  static_assert(boost::mp11::mp_size<Syms>::value == 1);
+  static_assert(diff::mpl::mp_size(Syms{}) == 1);
 }
 
 TEST(SymbolTest, ThreeVariables) {
@@ -412,7 +412,7 @@ TEST(SymbolTest, ThreeVariables) {
   auto z = PV(3.0, "z");
   auto expr = x + y + z;
   using Syms = extract_symbols_from_expr_t<decltype(expr)>;
-  static_assert(boost::mp11::mp_size<Syms>::value == 3);
+  static_assert(diff::mpl::mp_size(Syms{}) == 3);
 }
 
 // ===========================================================================
@@ -2484,4 +2484,233 @@ TEST(VectorForwardHessian, IdealMixingClosedForm) {
   EXPECT_NEAR(H.h(0, 0), R * T / 0.3, 1e-3);
   EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
   EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6);
+}
+
+// ===========================================================================
+// New math functions (parity with autodiff): log10, cbrt, asinh, acosh,
+// atanh, erf (unary) and pow, atan2, hypot, min, max (binary), exercised
+// across all three mechanisms — expression templates, lazy dual, Taylor.
+// ===========================================================================
+
+namespace {
+constexpr double kLn10 = std::numbers::ln10;
+constexpr double k2OverSqrtPi = 2.0 * std::numbers::inv_sqrtpi;
+} // namespace
+
+// ---- Expression templates: value + symbolic first derivative --------------
+TEST(NewMathFunctions, ExprUnaryValueAndDerivative) {
+  {
+    double x0 = 3.0;
+    auto x = PV(x0, "x");
+    EXPECT_DOUBLE_EQ(log10(x).eval(), std::log10(x0));
+    EXPECT_DOUBLE_EQ(log10(x).derivative().eval(), 1.0 / (x0 * kLn10));
+  }
+  {
+    double x0 = 2.0;
+    auto x = PV(x0, "x");
+    EXPECT_DOUBLE_EQ(cbrt(x).eval(), std::cbrt(x0));
+    EXPECT_DOUBLE_EQ(cbrt(x).derivative().eval(),
+                     1.0 / (3.0 * std::cbrt(x0) * std::cbrt(x0)));
+  }
+  {
+    double x0 = 0.7;
+    auto x = PV(x0, "x");
+    EXPECT_DOUBLE_EQ(asinh(x).eval(), std::asinh(x0));
+    EXPECT_DOUBLE_EQ(asinh(x).derivative().eval(),
+                     1.0 / std::sqrt(x0 * x0 + 1.0));
+  }
+  {
+    double x0 = 2.0;
+    auto x = PV(x0, "x");
+    EXPECT_DOUBLE_EQ(acosh(x).eval(), std::acosh(x0));
+    EXPECT_DOUBLE_EQ(acosh(x).derivative().eval(),
+                     1.0 / std::sqrt(x0 * x0 - 1.0));
+  }
+  {
+    double x0 = 0.3;
+    auto x = PV(x0, "x");
+    EXPECT_DOUBLE_EQ(atanh(x).eval(), std::atanh(x0));
+    EXPECT_DOUBLE_EQ(atanh(x).derivative().eval(), 1.0 / (1.0 - x0 * x0));
+  }
+  {
+    double x0 = 0.5;
+    auto x = PV(x0, "x");
+    EXPECT_DOUBLE_EQ(erf(x).eval(), std::erf(x0));
+    EXPECT_DOUBLE_EQ(erf(x).derivative().eval(),
+                     k2OverSqrtPi * std::exp(-x0 * x0));
+  }
+}
+
+TEST(NewMathFunctions, ExprBinaryValue) {
+  auto x = PV(3.0, "x");
+  auto y = PV(4.0, "y");
+  EXPECT_DOUBLE_EQ(hypot(x, y).eval(), 5.0);
+  EXPECT_DOUBLE_EQ(pow(x, y).eval(), std::pow(3.0, 4.0));
+  EXPECT_DOUBLE_EQ(atan2(y, x).eval(), std::atan2(4.0, 3.0));
+  EXPECT_DOUBLE_EQ(max(x, y).eval(), 4.0);
+  EXPECT_DOUBLE_EQ(min(x, y).eval(), 3.0);
+  // scalar-promotion overloads
+  EXPECT_DOUBLE_EQ(hypot(x, 4.0).eval(), 5.0);
+  EXPECT_DOUBLE_EQ(pow(x, 2.0).eval(), 9.0);
+  EXPECT_DOUBLE_EQ(pow(2.0, x).eval(), 8.0);
+}
+
+// ---- Reverse mode (partials per variable) ---------------------------------
+TEST(NewMathFunctions, ReverseUnary) {
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(log10(PV(3.0, "x")))[0],
+                   1.0 / (3.0 * kLn10));
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(cbrt(PV(2.0, "x")))[0],
+                   1.0 / (3.0 * std::cbrt(2.0) * std::cbrt(2.0)));
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(asinh(PV(0.7, "x")))[0],
+                   1.0 / std::sqrt(0.49 + 1.0));
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(acosh(PV(2.0, "x")))[0],
+                   1.0 / std::sqrt(4.0 - 1.0));
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(atanh(PV(0.3, "x")))[0],
+                   1.0 / (1.0 - 0.09));
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(erf(PV(0.5, "x")))[0],
+                   k2OverSqrtPi * std::exp(-0.25));
+}
+
+TEST(NewMathFunctions, ReverseBinaryPartials) {
+  {
+    auto x = PV(3.0, "x");
+    auto y = PV(4.0, "y");
+    auto g = reverse_mode_grad(hypot(x, y));
+    EXPECT_DOUBLE_EQ(g[0], 3.0 / 5.0);
+    EXPECT_DOUBLE_EQ(g[1], 4.0 / 5.0);
+  }
+  {
+    auto x = PV(2.0, "x");
+    auto y = PV(3.0, "y");
+    auto g = reverse_mode_grad(pow(x, y));
+    EXPECT_DOUBLE_EQ(g[0], 3.0 * std::pow(2.0, 2.0));      // y*x^(y-1)
+    EXPECT_DOUBLE_EQ(g[1], std::pow(2.0, 3.0) * std::log(2.0)); // x^y*ln x
+  }
+  {
+    // atan2(y, x): lhs is numerator y, rhs is x. The gradient is ordered by
+    // symbol (x at index 0, y at index 1).
+    auto y = PV(1.0, "y");
+    auto x = PV(2.0, "x");
+    auto g = reverse_mode_grad(atan2(y, x));
+    const double q = 1.0 + 4.0;
+    EXPECT_DOUBLE_EQ(g[0], -1.0 / q); // d/dx = -y/q
+    EXPECT_DOUBLE_EQ(g[1], 2.0 / q);  // d/dy =  x/q
+  }
+}
+
+TEST(NewMathFunctions, ReverseMaxMinSelectsBranch) {
+  auto x = PV(3.0, "x");
+  auto y = PV(4.0, "y");
+  auto gmax = reverse_mode_grad(max(x, y));
+  EXPECT_DOUBLE_EQ(gmax[0], 0.0);
+  EXPECT_DOUBLE_EQ(gmax[1], 1.0);
+  auto gmin = reverse_mode_grad(min(x, y));
+  EXPECT_DOUBLE_EQ(gmin[0], 1.0);
+  EXPECT_DOUBLE_EQ(gmin[1], 0.0);
+}
+
+// ---- Forward lazy-dual mode (Variable<Dual>) ------------------------------
+TEST(NewMathFunctions, ForwardDualUnary) {
+  double x0 = 0.5;
+  Variable<Dual<double>, FixedString{"x"}> x{Dual<double>{x0, 1.0}};
+  {
+    auto [f, df] = erf(x).eval();
+    EXPECT_DOUBLE_EQ(f, std::erf(x0));
+    EXPECT_DOUBLE_EQ(df, k2OverSqrtPi * std::exp(-x0 * x0));
+  }
+  {
+    auto [f, df] = atanh(x).eval();
+    EXPECT_DOUBLE_EQ(f, std::atanh(x0));
+    EXPECT_DOUBLE_EQ(df, 1.0 / (1.0 - x0 * x0));
+  }
+}
+
+TEST(NewMathFunctions, ForwardDualBinary) {
+  double x0 = 3.0;
+  Variable<Dual<double>, FixedString{"x"}> x{Dual<double>{x0, 1.0}};
+  {
+    auto [f, df] = hypot(x, 4.0).eval();
+    EXPECT_DOUBLE_EQ(f, 5.0);
+    EXPECT_DOUBLE_EQ(df, x0 / 5.0);
+  }
+  {
+    auto [f, df] = pow(x, 3.0).eval();
+    EXPECT_DOUBLE_EQ(f, 27.0);
+    EXPECT_DOUBLE_EQ(df, 3.0 * x0 * x0);
+  }
+}
+
+// ---- Lazy dual used directly (Dual<T>) ------------------------------------
+TEST(NewMathFunctions, DualDirect) {
+  Dual<double> x{0.7, 1.0};
+  Dual<double> r = asinh(x);
+  EXPECT_DOUBLE_EQ(r.get<0>(), std::asinh(0.7));
+  EXPECT_DOUBLE_EQ(r.get<1>(), 1.0 / std::sqrt(0.49 + 1.0));
+
+  // 3-argument hypot
+  Dual<double> a{1.0, 1.0}, b{2.0, 0.0}, c{2.0, 0.0};
+  Dual<double> h = hypot(a, b, c);
+  EXPECT_DOUBLE_EQ(h.get<0>(), 3.0);          // sqrt(1+4+4)
+  EXPECT_DOUBLE_EQ(h.get<1>(), 1.0 / 3.0);    // a/h
+}
+
+// ---- Taylor higher-order (value coeff drives expr + Taylor together) -------
+TEST(NewMathFunctions, TaylorFirstAndSecondDerivative) {
+  // First derivatives via order-1 univariate_derivative.
+  EXPECT_NEAR(univariate_derivative<1>(asinh(PV(0.7, "x"))),
+              1.0 / std::sqrt(0.49 + 1.0), 1e-12);
+  EXPECT_NEAR(univariate_derivative<1>(erf(PV(0.5, "x"))),
+              k2OverSqrtPi * std::exp(-0.25), 1e-12);
+  EXPECT_NEAR(univariate_derivative<1>(cbrt(PV(2.0, "x"))),
+              1.0 / (3.0 * std::cbrt(2.0) * std::cbrt(2.0)), 1e-12);
+
+  // Second derivatives vs analytic.
+  {
+    double x0 = 0.7; // asinh'' = -x/(1+x²)^{3/2}
+    EXPECT_NEAR(univariate_derivative<2>(asinh(PV(x0, "x"))),
+                -x0 / std::pow(1.0 + x0 * x0, 1.5), 1e-10);
+  }
+  {
+    double x0 = 0.5; // erf'' = -2x * 2/√π * e^{-x²}
+    EXPECT_NEAR(univariate_derivative<2>(erf(PV(x0, "x"))),
+                -2.0 * x0 * k2OverSqrtPi * std::exp(-x0 * x0), 1e-10);
+  }
+  {
+    double x0 = 0.3; // atanh'' = 2x/(1-x²)²
+    EXPECT_NEAR(univariate_derivative<2>(atanh(PV(x0, "x"))),
+                2.0 * x0 / std::pow(1.0 - x0 * x0, 2.0), 1e-10);
+  }
+  {
+    double x0 = 3.0; // log10'' = -1/(x² ln10)
+    EXPECT_NEAR(univariate_derivative<2>(log10(PV(x0, "x"))),
+                -1.0 / (x0 * x0 * kLn10), 1e-10);
+  }
+  {
+    double x0 = 2.0; // cbrt'' = -2/9 x^{-5/3}
+    EXPECT_NEAR(univariate_derivative<2>(cbrt(PV(x0, "x"))),
+                -2.0 / 9.0 * std::pow(x0, -5.0 / 3.0), 1e-10);
+  }
+  {
+    double x0 = 2.0; // acosh'' = -x/(x²-1)^{3/2}
+    EXPECT_NEAR(univariate_derivative<2>(acosh(PV(x0, "x"))),
+                -x0 / std::pow(x0 * x0 - 1.0, 1.5), 1e-10);
+  }
+}
+
+TEST(NewMathFunctions, TaylorBinaryUnivariate) {
+  // pow(x, 3): f'=3x², f''=6x
+  EXPECT_NEAR(univariate_derivative<1>(pow(PV(2.0, "x"), 3.0)), 12.0, 1e-10);
+  EXPECT_NEAR(univariate_derivative<2>(pow(PV(2.0, "x"), 3.0)), 12.0, 1e-10);
+  // hypot(x, 2): f = sqrt(x²+4); f' = x/sqrt(x²+4)
+  {
+    double x0 = 3.0, h = std::sqrt(x0 * x0 + 4.0);
+    EXPECT_NEAR(univariate_derivative<1>(hypot(PV(x0, "x"), 2.0)), x0 / h,
+                1e-10);
+  }
+  // atan2(x, 2): d/dx atan2(x,2) = 2/(4+x²)
+  {
+    double x0 = 2.0;
+    EXPECT_NEAR(univariate_derivative<1>(atan2(PV(x0, "x"), 2.0)),
+                2.0 / (4.0 + x0 * x0), 1e-10);
+  }
 }
