@@ -203,8 +203,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return sh / ch;
   }
 
-  // asin: sqrt(1-u²)*w' = 1  →  s[0]*k*w[k] = [k==1] - Σ_{j=1}^{k-1}
-  // s[j]*(k-j)*w[k-j]
+  // asin: sqrt(1-u²)·w' = u'  (general, composite-safe):
+  //   s[0]·k·w[k] = k·u[k] − Σ_{j=1}^{k-1} (k-j)·s[k-j]·w[k-j]
   [[nodiscard]] constexpr friend TaylorDual asin(const TaylorDual &u) noexcept {
     using std::asin;
     TaylorDual w;
@@ -213,7 +213,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     one.c[0] = S{1};
     const TaylorDual s = sqrt(one - u * u);
     for (std::size_t k = 1; k <= N; ++k) {
-      auto rhs = (k == 1) ? S{1} : S{};
+      auto rhs = static_cast<S>(k) * u.c[k];
       for (std::size_t j = 1; j < k; ++j) {
         rhs -= s.c[j] * static_cast<S>(k - j) * w.c[k - j];
       }
@@ -233,8 +233,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // atan: (1+u²)*w' = 1  →  p[0]*k*w[k] = [k==1] - Σ_{j=1}^{k-1}
-  // p[j]*(k-j)*w[k-j]
+  // atan: (1+u²)·w' = u'  (general, composite-safe):
+  //   p[0]·k·w[k] = k·u[k] − Σ_{j=1}^{k-1} (k-j)·p[k-j]·w[k-j]
   [[nodiscard]] friend TaylorDual atan(const TaylorDual &u) noexcept {
     using std::atan;
     TaylorDual w;
@@ -242,7 +242,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     TaylorDual p = u * u;
     p.c[0] += S{1};
     for (std::size_t k = 1; k <= N; ++k) {
-      auto rhs = (k == 1) ? S{1} : S{};
+      auto rhs = static_cast<S>(k) * u.c[k];
       for (std::size_t j = 1; j < k; ++j) {
         rhs -= p.c[j] * static_cast<S>(k - j) * w.c[k - j];
       }
@@ -295,7 +295,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // asinh: sqrt(1+u²)·w' = 1  (mirrors asin with s = sqrt(1 + u²)).
+  // asinh: sqrt(1+u²)·w' = u'  (mirrors asin with s = sqrt(1 + u²)).
   [[nodiscard]] friend TaylorDual asinh(const TaylorDual &u) noexcept {
     using std::asinh;
     TaylorDual w;
@@ -304,7 +304,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     one.c[0] = S{1};
     const TaylorDual s = sqrt(one + u * u);
     for (std::size_t k = 1; k <= N; ++k) {
-      auto rhs = (k == 1) ? S{1} : S{};
+      auto rhs = static_cast<S>(k) * u.c[k];
       for (std::size_t j = 1; j < k; ++j)
         rhs -= s.c[j] * static_cast<S>(k - j) * w.c[k - j];
       w.c[k] = rhs / (static_cast<S>(k) * s.c[0]);
@@ -312,7 +312,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // acosh: sqrt(u²-1)·w' = 1  (requires u[0] > 1).
+  // acosh: sqrt(u²-1)·w' = u'  (requires u[0] > 1).
   [[nodiscard]] friend TaylorDual acosh(const TaylorDual &u) noexcept {
     using std::acosh;
     TaylorDual w;
@@ -321,7 +321,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     one.c[0] = S{1};
     const TaylorDual s = sqrt(u * u - one);
     for (std::size_t k = 1; k <= N; ++k) {
-      auto rhs = (k == 1) ? S{1} : S{};
+      auto rhs = static_cast<S>(k) * u.c[k];
       for (std::size_t j = 1; j < k; ++j)
         rhs -= s.c[j] * static_cast<S>(k - j) * w.c[k - j];
       w.c[k] = rhs / (static_cast<S>(k) * s.c[0]);
@@ -329,7 +329,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // atanh: (1-u²)·w' = 1  (mirrors atan with p = 1 - u²).
+  // atanh: (1-u²)·w' = u'  (mirrors atan with p = 1 - u²).
   [[nodiscard]] friend TaylorDual atanh(const TaylorDual &u) noexcept {
     using std::atanh;
     TaylorDual w;
@@ -337,7 +337,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     TaylorDual p = -(u * u);
     p.c[0] += S{1};
     for (std::size_t k = 1; k <= N; ++k) {
-      auto rhs = (k == 1) ? S{1} : S{};
+      auto rhs = static_cast<S>(k) * u.c[k];
       for (std::size_t j = 1; j < k; ++j)
         rhs -= p.c[j] * static_cast<S>(k - j) * w.c[k - j];
       w.c[k] = rhs / (static_cast<S>(k) * p.c[0]);
@@ -362,22 +362,14 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // atan2(y, x): integrate w' = (x·y' - y·x') / (x² + y²) directly (the Taylor
-  // atan recurrence assumes a bare seed, so atan(y/x) would be wrong for a
-  // composite argument).  w[0] is the quadrant-correct branch.
+  // atan2(y, x) shares all derivative coefficients with atan(y/x) (they differ
+  // only by a piecewise constant); atan is composite-safe, so this is exact.
+  // Only the value coefficient differs (quadrant-correct branch).
   [[nodiscard]] friend TaylorDual atan2(const TaylorDual &y,
                                         const TaylorDual &x) noexcept {
     using std::atan2;
-    TaylorDual yp, xp; // formal derivative series: (u')[j] = (j+1)·u[j+1]
-    for (std::size_t j = 0; j < N; ++j) {
-      yp.c[j] = static_cast<S>(j + 1) * y.c[j + 1];
-      xp.c[j] = static_cast<S>(j + 1) * x.c[j + 1];
-    }
-    const TaylorDual wp = (x * yp - y * xp) / (x * x + y * y); // w'
-    TaylorDual w;
+    TaylorDual w = atan(y / x);
     w.c[0] = atan2(y.c[0], x.c[0]);
-    for (std::size_t k = 1; k <= N; ++k)
-      w.c[k] = wp.c[k - 1] / static_cast<S>(k);
     return w;
   }
 

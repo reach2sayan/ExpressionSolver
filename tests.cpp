@@ -2714,3 +2714,50 @@ TEST(NewMathFunctions, TaylorBinaryUnivariate) {
                 2.0 / (4.0 + x0 * x0), 1e-10);
   }
 }
+
+// Composite arguments: the asin/atan/asinh/acosh/atanh recurrences must use the
+// argument's actual derivative series (u'), not assume the bare seed (u'=1).
+TEST(NewMathFunctions, TaylorCompositeArguments) {
+  // atan(x²): f' = 2x/(1+x⁴); f'' = (2 - 6x⁴)/(1+x⁴)².
+  {
+    double x0 = 0.6, x4 = x0 * x0 * x0 * x0, d = 1.0 + x4;
+    auto x = PV(x0, "x");
+    EXPECT_NEAR(univariate_derivative<1>(atan(x * x)), 2.0 * x0 / d, 1e-10);
+    EXPECT_NEAR(univariate_derivative<2>(atan(x * x)), (2.0 - 6.0 * x4) / (d * d),
+                1e-10);
+  }
+  // asin(x/2): f' = a/√(1-a²x²), f'' = a³x(1-a²x²)^{-3/2}, a = 1/2.
+  {
+    double x0 = 1.0, a = 0.5, r = 1.0 - a * a * x0 * x0;
+    auto x = PV(x0, "x");
+    EXPECT_NEAR(univariate_derivative<1>(asin(0.5 * x)), a / std::sqrt(r),
+                1e-10);
+    EXPECT_NEAR(univariate_derivative<2>(asin(0.5 * x)),
+                a * a * a * x0 * std::pow(r, -1.5), 1e-10);
+  }
+  // asinh(2x): f'' = -a³x(1+a²x²)^{-3/2}, a = 2.
+  {
+    double x0 = 0.3, a = 2.0, r = 1.0 + a * a * x0 * x0;
+    auto x = PV(x0, "x");
+    EXPECT_NEAR(univariate_derivative<1>(asinh(2.0 * x)), a / std::sqrt(r),
+                1e-10);
+    EXPECT_NEAR(univariate_derivative<2>(asinh(2.0 * x)),
+                -a * a * a * x0 * std::pow(r, -1.5), 1e-10);
+  }
+  // Identity: atan2(sin x, cos x) == x on (-π, π) ⇒ f'=1, f''=0, f'''=0.
+  {
+    auto x = PV(0.7, "x");
+    EXPECT_NEAR(univariate_derivative<1>(atan2(sin(x), cos(x))), 1.0, 1e-10);
+    EXPECT_NEAR(univariate_derivative<2>(atan2(sin(x), cos(x))), 0.0, 1e-10);
+    EXPECT_NEAR(univariate_derivative<3>(atan2(sin(x), cos(x))), 0.0, 1e-10);
+  }
+  // pow(sin x, 2) = sin²x ⇒ f' = sin(2x), f'' = 2cos(2x) (powser composite).
+  {
+    double x0 = 0.5;
+    auto x = PV(x0, "x");
+    EXPECT_NEAR(univariate_derivative<1>(pow(sin(x), 2.0)), std::sin(2.0 * x0),
+                1e-10);
+    EXPECT_NEAR(univariate_derivative<2>(pow(sin(x), 2.0)),
+                2.0 * std::cos(2.0 * x0), 1e-10);
+  }
+}
