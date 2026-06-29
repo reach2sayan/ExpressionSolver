@@ -142,118 +142,10 @@ template <Numeric T> struct MaxOp;
 template <Numeric T> struct MinOp;
 
 namespace detail {
-struct sine_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::sin;
-    return sin(a);
-  }
-};
-struct cosine_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::cos;
-    return cos(a);
-  }
-};
-struct tan_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::tan;
-    return tan(a);
-  }
-};
-struct log_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::log;
-    return log(a);
-  }
-};
-struct sqrt_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::sqrt;
-    return sqrt(a);
-  }
-};
 struct abs_impl {
   template <Numeric T> constexpr T operator()(const T &a) const noexcept {
     using std::abs;
     return abs(a);
-  }
-};
-struct asin_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::asin;
-    return asin(a);
-  }
-};
-struct acos_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::acos;
-    return acos(a);
-  }
-};
-struct atan_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::atan;
-    return atan(a);
-  }
-};
-struct sinh_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::sinh;
-    return sinh(a);
-  }
-};
-struct cosh_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::cosh;
-    return cosh(a);
-  }
-};
-struct tanh_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::tanh;
-    return tanh(a);
-  }
-};
-struct exp_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::exp;
-    return exp(a);
-  }
-};
-struct log10_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::log10;
-    return log10(a);
-  }
-};
-struct cbrt_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::cbrt;
-    return cbrt(a);
-  }
-};
-struct asinh_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::asinh;
-    return asinh(a);
-  }
-};
-struct acosh_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::acosh;
-    return acosh(a);
-  }
-};
-struct atanh_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::atanh;
-    return atanh(a);
-  }
-};
-struct erf_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
-    using std::erf;
-    return erf(a);
   }
 };
 // Binary impls.  ADL resolves pow/atan2/hypot for diff::Dual (defined in
@@ -293,93 +185,65 @@ struct min_impl {
 };
 } // namespace detail
 
-template <Numeric T> struct SineOp : UnaryOp<T, detail::sine_impl, FixedString{"sin"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::cos;
-    return {adj * cos(cache[cb[0]])};
-  }
-};
+// Each unary math op is declared in one line, co-locating its value f(u) and its
+// local derivative f'(u) in a single descriptor functor detail::<Name>Fn:
+// operator() gives the value (so the functor doubles as the eval func), and
+// deriv() gives f'(u).  Both are dependent expressions: on an Expression operand
+// they build a tree (ADL selects the diff:: math builders); on a scalar they
+// compute numerically (using std:: math).  The op pulls deriv() for both the
+// symbolic derivative() (f'(lhs)·lhs') and the reverse-mode adjoints()
+// (adj·f'(value)), so every rule lives in exactly one place.  abs is kept
+// explicit (its slope sign(u) has a removable 0/0 at the origin).
+#define DIFF_UNARY_MATH_FNS                                                    \
+  using std::sin, std::cos, std::tan, std::exp, std::log, std::log10,         \
+      std::sqrt, std::cbrt, std::asin, std::acos, std::atan, std::sinh,        \
+      std::cosh, std::tanh, std::asinh, std::acosh, std::atanh, std::erf
+#define DIFF_UNARY_MATH_OP(NAME, LABEL, VAL, ...)                             \
+  namespace detail {                                                           \
+  template <Numeric T> struct NAME##Fn {                                       \
+    /* value: templated on its own type so a SineOp<T> still evaluates at a    \
+       deeper nested-dual type during forward AD.  deriv keeps the op's T for  \
+       its literals (it is only ever evaluated at the op's value_type). */     \
+    template <Numeric U> constexpr U operator()(const U &u) const noexcept {   \
+      DIFF_UNARY_MATH_FNS;                                                     \
+      return (VAL);                                                            \
+    }                                                                          \
+    static constexpr auto deriv(const auto &u) noexcept {                      \
+      DIFF_UNARY_MATH_FNS;                                                     \
+      return (__VA_ARGS__);                                                    \
+    }                                                                          \
+  };                                                                           \
+  }                                                                            \
+  template <Numeric T>                                                         \
+  struct NAME : UnaryOp<T, detail::NAME##Fn<T>, FixedString{LABEL}> {          \
+    [[nodiscard]] static constexpr auto                                        \
+    derivative(const CExpression auto &lhs) noexcept {                         \
+      return detail::NAME##Fn<T>::deriv(lhs) * lhs.derivative();               \
+    }                                                                          \
+    template <std::size_t Base, std::size_t... CB>                             \
+    static constexpr std::array<T, sizeof...(CB)>                             \
+    adjoints(T adj, const auto &cache) noexcept {                              \
+      constexpr std::size_t cb[]{CB...};                                       \
+      return {adj * detail::NAME##Fn<T>::deriv(cache[cb[0]])};                 \
+    }                                                                          \
+  };
 
-template <Numeric T> struct CosineOp : UnaryOp<T, detail::cosine_impl, FixedString{"cos"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::sin;
-    return {-adj * sin(cache[cb[0]])};
-  }
-};
+DIFF_UNARY_MATH_OP(SineOp, "sin", sin(u), cos(u))
+DIFF_UNARY_MATH_OP(CosineOp, "cos", cos(u), -sin(u))
 
-template <Numeric T>
-constexpr auto CosineOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return Negate<T>(sin(lhs)) * lhs.derivative();
-}
-
-template <Numeric T>
-constexpr auto SineOp<T>::derivative(const CExpression auto &expr) noexcept {
-  return cos(expr) * expr.derivative();
-}
-
-template <Numeric T> struct ExpOp : UnaryOp<T, detail::exp_impl, FixedString{"exp"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept {
-    return MonoExpression<ExpOp<T>, std::decay_t<decltype(lhs)>>{lhs} *
-           lhs.derivative();
-  }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    // exp'(u) == exp(u) == this node's own cached value (cache[Base]).
-    return {adj * cache[Base]};
-  }
-};
-
-template <Numeric T> struct TanOp : UnaryOp<T, detail::tan_impl, FixedString{"tan"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::cos;
-    const T c = cos(cache[cb[0]]);
-    return {adj / (c * c)};
-  }
-};
-
-template <Numeric T> struct LogOp : UnaryOp<T, detail::log_impl, FixedString{"log"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return {adj / cache[cb[0]]};
-  }
-};
-
-template <Numeric T> struct SqrtOp : UnaryOp<T, detail::sqrt_impl, FixedString{"sqrt"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::sqrt;
-    return {adj / (T{2} * sqrt(cache[cb[0]]))};
-  }
-};
+DIFF_UNARY_MATH_OP(ExpOp, "exp", exp(u), exp(u))
+DIFF_UNARY_MATH_OP(TanOp, "tan", tan(u), T{1} / (cos(u) * cos(u)))
+DIFF_UNARY_MATH_OP(LogOp, "log", log(u), T{1} / u)
+DIFF_UNARY_MATH_OP(SqrtOp, "sqrt", sqrt(u), T{1} / (T{2} * sqrt(u)))
 
 template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
+  // Explicit (not macro-generated): the slope is sign(u), with a removable 0/0
+  // at the origin that the generic factor form can't express.
   [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
+  derivative(const CExpression auto &lhs) noexcept {
+    auto abs_lhs = MonoExpression<AbsOp<T>, std::decay_t<decltype(lhs)>>{lhs};
+    return (lhs / abs_lhs) * lhs.derivative();
+  }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -390,157 +254,25 @@ template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"ab
   }
 };
 
-template <Numeric T> struct AsinOp : UnaryOp<T, detail::asin_impl, FixedString{"asin"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::sqrt;
-    const T v = cache[cb[0]];
-    return {adj / sqrt(T{1} - v * v)};
-  }
-};
+DIFF_UNARY_MATH_OP(AsinOp, "asin", asin(u), T{1} / sqrt(T{1} - u * u))
+DIFF_UNARY_MATH_OP(AcosOp, "acos", acos(u), T{-1} / sqrt(T{1} - u * u))
+DIFF_UNARY_MATH_OP(AtanOp, "atan", atan(u), T{1} / (T{1} + u * u))
 
-template <Numeric T> struct AcosOp : UnaryOp<T, detail::acos_impl, FixedString{"acos"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::sqrt;
-    const T v = cache[cb[0]];
-    return {-adj / sqrt(T{1} - v * v)};
-  }
-};
-
-template <Numeric T> struct AtanOp : UnaryOp<T, detail::atan_impl, FixedString{"atan"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    const T v = cache[cb[0]];
-    return {adj / (T{1} + v * v)};
-  }
-};
-
-template <Numeric T> struct SinhOp : UnaryOp<T, detail::sinh_impl, FixedString{"sinh"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::cosh;
-    return {adj * cosh(cache[cb[0]])};
-  }
-};
-
-template <Numeric T> struct CoshOp : UnaryOp<T, detail::cosh_impl, FixedString{"cosh"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::sinh;
-    return {adj * sinh(cache[cb[0]])};
-  }
-};
-
-template <Numeric T> struct TanhOp : UnaryOp<T, detail::tanh_impl, FixedString{"tanh"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::cosh;
-    const T c = cosh(cache[cb[0]]);
-    return {adj / (c * c)};
-  }
-};
-
-template <Numeric T> struct Log10Op : UnaryOp<T, detail::log10_impl, FixedString{"log10"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    const T ln10 = static_cast<T>(std::numbers::ln10);
-    return {adj / (cache[cb[0]] * ln10)};
-  }
-};
-
-template <Numeric T> struct CbrtOp : UnaryOp<T, detail::cbrt_impl, FixedString{"cbrt"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::cbrt;
-    const T c = cbrt(cache[cb[0]]);
-    return {adj / (T{3} * c * c)};
-  }
-};
-
-template <Numeric T> struct AsinhOp : UnaryOp<T, detail::asinh_impl, FixedString{"asinh"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::sqrt;
-    const T v = cache[cb[0]];
-    return {adj / sqrt(v * v + T{1})};
-  }
-};
-
-template <Numeric T> struct AcoshOp : UnaryOp<T, detail::acosh_impl, FixedString{"acosh"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::sqrt;
-    const T v = cache[cb[0]];
-    return {adj / sqrt(v * v - T{1})};
-  }
-};
-
-template <Numeric T> struct AtanhOp : UnaryOp<T, detail::atanh_impl, FixedString{"atanh"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    const T v = cache[cb[0]];
-    return {adj / (T{1} - v * v)};
-  }
-};
-
-template <Numeric T> struct ErfOp : UnaryOp<T, detail::erf_impl, FixedString{"erf"}> {
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    using std::exp;
-    const T v = cache[cb[0]];
-    const T two_over_sqrt_pi = static_cast<T>(2.0 * std::numbers::inv_sqrtpi);
-    return {adj * two_over_sqrt_pi * exp(-(v * v))};
-  }
-};
+DIFF_UNARY_MATH_OP(SinhOp, "sinh", sinh(u), cosh(u))
+DIFF_UNARY_MATH_OP(CoshOp, "cosh", cosh(u), sinh(u))
+DIFF_UNARY_MATH_OP(TanhOp, "tanh", tanh(u), T{1} / (cosh(u) * cosh(u)))
+DIFF_UNARY_MATH_OP(Log10Op, "log10", log10(u),
+                   T{1} / (u * static_cast<T>(std::numbers::ln10)))
+DIFF_UNARY_MATH_OP(CbrtOp, "cbrt", cbrt(u),
+                   T{1} / (T{3} * cbrt(u) * cbrt(u)))
+DIFF_UNARY_MATH_OP(AsinhOp, "asinh", asinh(u), T{1} / sqrt(u * u + T{1}))
+DIFF_UNARY_MATH_OP(AcoshOp, "acosh", acosh(u), T{1} / sqrt(u * u - T{1}))
+DIFF_UNARY_MATH_OP(AtanhOp, "atanh", atanh(u), T{1} / (T{1} - u * u))
+DIFF_UNARY_MATH_OP(ErfOp, "erf", erf(u),
+                   static_cast<T>(2.0 * std::numbers::inv_sqrtpi) *
+                       exp(-(u * u)))
+#undef DIFF_UNARY_MATH_OP
+#undef DIFF_UNARY_MATH_FNS
 
 // pow(a, b) = a^b.  d(a^b) = a^b * (b' ln a + b a'/a).
 template <Numeric T>
@@ -631,92 +363,7 @@ struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, true> {
   }
 };
 
-// --- out-of-line derivative definitions ---
-
-template <Numeric T>
-constexpr auto TanOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  auto c = cos(lhs);
-  return lhs.derivative() / (c * c);
-}
-
-template <Numeric T>
-constexpr auto LogOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / lhs;
-}
-
-template <Numeric T>
-constexpr auto SqrtOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / (sqrt(lhs) * T{2});
-}
-
-template <Numeric T>
-constexpr auto AbsOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  auto abs_lhs = MonoExpression<AbsOp<T>, std::decay_t<decltype(lhs)>>{lhs};
-  return (lhs / abs_lhs) * lhs.derivative();
-}
-
-template <Numeric T>
-constexpr auto AsinOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / sqrt(T{1} - lhs * lhs);
-}
-
-template <Numeric T>
-constexpr auto AcosOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  auto d = lhs.derivative() / sqrt(T{1} - lhs * lhs);
-  return MonoExpression<NegateOp<T>, decltype(d)>{std::move(d)};
-}
-
-template <Numeric T>
-constexpr auto AtanOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / (T{1} + lhs * lhs);
-}
-
-template <Numeric T>
-constexpr auto SinhOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return cosh(lhs) * lhs.derivative();
-}
-
-template <Numeric T>
-constexpr auto CoshOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return sinh(lhs) * lhs.derivative();
-}
-
-template <Numeric T>
-constexpr auto TanhOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  auto c = cosh(lhs);
-  return lhs.derivative() / (c * c);
-}
-
-template <Numeric T>
-constexpr auto Log10Op<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / (lhs * T{2.302585092994045901094});
-}
-
-template <Numeric T>
-constexpr auto CbrtOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  auto c = cbrt(lhs);
-  return lhs.derivative() / (c * c * T{3});
-}
-
-template <Numeric T>
-constexpr auto AsinhOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / sqrt(lhs * lhs + T{1});
-}
-
-template <Numeric T>
-constexpr auto AcoshOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / sqrt(lhs * lhs - T{1});
-}
-
-template <Numeric T>
-constexpr auto AtanhOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return lhs.derivative() / (T{1} - lhs * lhs);
-}
-
-template <Numeric T>
-constexpr auto ErfOp<T>::derivative(const CExpression auto &lhs) noexcept {
-  return exp(-(lhs * lhs)) * lhs.derivative() * T{1.1283791670955125738962};
-}
+// --- out-of-line derivative definitions (binary math ops) ---
 
 template <Numeric T>
 constexpr auto PowOp<T>::derivative(const CExpression auto &lhs,
@@ -736,11 +383,6 @@ template <Numeric T>
 constexpr auto HypotOp<T>::derivative(const CExpression auto &lhs,
                                       const CExpression auto &rhs) noexcept {
   return (lhs * lhs.derivative() + rhs * rhs.derivative()) / hypot(lhs, rhs);
-}
-
-template <Numeric T>
-[[nodiscard]] constexpr inline auto Negate(CExpression auto expr) noexcept {
-  return MonoExpression<NegateOp<T>, decltype(expr)>{std::move(expr)};
 }
 
 } // namespace diff

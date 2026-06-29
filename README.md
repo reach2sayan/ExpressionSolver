@@ -95,19 +95,6 @@ Binary math functions: `pow`, `atan2`, `hypot`, `max`, `min`
 | `nth_dual_t<S, N>` | N-th order nested dual; 2^N doubles, O(2^N) cost per operation |
 | `TaylorDual<S, N>` | N-th order univariate AD; N+1 coefficients, O(N²) cost per operation |
 
-### Variable storage hooks
-
-A `Variable<T, "x", Storage>` can hold its value in two ways depending on `Storage`:
-
-| Storage type | Owns value? | Description |
-|---|---|---|
-| `T` (default) | yes | Value stored directly in the variable |
-| `FuncHook<T, GetF, AccumDF, ZeroDF>` | no | Reads/writes through user-supplied callables; all types deduced via CTAD |
-| `VectorFuncHook<T, GetF, AccumDF, ZeroDF>` | no | Multi-slot callable hook; call `.element(i)` to get a per-index `FuncHook` |
-| any `CHook<H,T>` type | no | Custom hook — implement `get_f()`, `accum_df(adj)`, `zero_df()` |
-
-Hooked variables skip `update()` / `collect()` entirely — the expression tree reads and writes through the hook directly. `Variable::operator=` is a no-op for hook types without `set_f`.
-
 ### Higher-level wrappers
 
 | Type | Description |
@@ -279,60 +266,6 @@ auto ve = Equation(x * y, x * x);
 
 auto H = ve.derivative_tensor<2>();
 // H[k][i][j] = ∂²fₖ/∂xᵢ∂xⱼ
-```
-
-### FuncHook — callable value source
-
-Lets a variable read from any callable — a sensor, a computed value, an external system. All callable types are deduced at construction (CTAD); no `std::function` overhead.
-
-```cpp
-double sensor_val = 0.0, sensor_grad = 0.0;
-
-auto hook = FuncHook{
-    [&]{ return sensor_val; },              // get_f
-    [&](double adj){ sensor_grad += adj; }, // accum_df
-    [&]{ sensor_grad = 0.0; }              // zero_df
-};
-Variable<double, FixedString{"x"}, decltype(hook)> x{hook};
-auto expr = x * x;
-
-using Syms = extract_symbols_from_expr_t<decltype(expr)>;
-std::array<double, 1> grads{};
-
-sensor_val = 4.0;
-expr.eval();                                // returns 16.0
-
-// Reverse mode reads operand values from a preorder cache filled in one pass.
-node_cache_t<decltype(expr)> cache{};
-fill_cache(expr, cache);
-expr.backward(Syms{}, 1.0, grads, cache);   // sensor_grad == 8.0
-```
-
-### VectorFuncHook — multi-slot callable hook
-
-Like `FuncHook` but indexed; `element(i)` returns a `FuncHook` bound to slot `i`. Useful when a block of variables share the same get/accumulate logic over an array, matrix row, etc.
-
-```cpp
-std::array<double, 2> f{3.0, 4.0}, df{};
-
-auto vh = VectorFuncHook{
-    [&](std::size_t i){ return f[i]; },
-    [&](std::size_t i, double adj){ df[i] += adj; },
-    [&]{ df.fill(0.0); }
-};
-
-auto hx = vh.element(0);
-auto hy = vh.element(1);
-Variable<double, FixedString{"x"}, decltype(hx)> x{hx};
-Variable<double, FixedString{"y"}, decltype(hy)> y{hy};
-
-auto expr = x * y;
-using Syms = extract_symbols_from_expr_t<decltype(expr)>;
-std::array<double, 2> grads{};
-
-node_cache_t<decltype(expr)> cache{};
-fill_cache(expr, cache);
-expr.backward(Syms{}, 1.0, grads, cache);  // df[0] == 4.0, df[1] == 3.0
 ```
 
 ### Higher-order univariate derivative (TaylorDual)

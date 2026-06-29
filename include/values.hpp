@@ -3,9 +3,7 @@
 #include "expressions.hpp"
 #include "operations.hpp"
 #include "mpl.hpp"
-#include <concepts>
 #include <format>
-#include <string_view>
 
 namespace diff {
 
@@ -310,49 +308,6 @@ public:
   }
 };
 
-template <Numeric T, typename GetF, typename AccumDF, typename ZeroDF>
-struct FuncHook {
-  [[no_unique_address]] GetF get_f_fn;
-  [[no_unique_address]] AccumDF accum_df_fn;
-  [[no_unique_address]] ZeroDF zero_df_fn;
-
-  [[nodiscard]] constexpr T get_f() const noexcept { return get_f_fn(); }
-  constexpr void accum_df(T adj) const noexcept { accum_df_fn(adj); }
-  constexpr void zero_df() const noexcept { zero_df_fn(); }
-};
-
-template <typename GetF, typename AccumDF, typename ZeroDF>
-FuncHook(GetF, AccumDF, ZeroDF)
-    -> FuncHook<std::invoke_result_t<GetF>, GetF, AccumDF, ZeroDF>;
-
-// VectorFuncHook: indexed callable hook.
-// element(i) returns a FuncHook bound to slot i — all types deduced.
-template <Numeric T, typename GetF, typename AccumDF, typename ZeroDF>
-struct VectorFuncHook {
-  [[no_unique_address]] GetF get_f_fn;
-  [[no_unique_address]] AccumDF accum_df_fn;
-  [[no_unique_address]] ZeroDF zero_df_fn;
-
-  [[nodiscard]] constexpr T get_f(std::size_t i) const noexcept {
-    return get_f_fn(i);
-  }
-  constexpr void accum_df(std::size_t i, T adj) const noexcept {
-    accum_df_fn(i, adj);
-  }
-  constexpr void zero_df() const noexcept { zero_df_fn(); }
-
-  [[nodiscard]] constexpr auto element(std::size_t i) const noexcept {
-    return FuncHook{[gf = get_f_fn, i] { return gf(i); },
-                    [ad = accum_df_fn, i](T adj) { ad(i, adj); },
-                    [zd = zero_df_fn] { zd(); }};
-  }
-};
-
-template <typename GetF, typename AccumDF, typename ZeroDF>
-VectorFuncHook(GetF, AccumDF, ZeroDF)
-    -> VectorFuncHook<std::invoke_result_t<GetF, std::size_t>, GetF, AccumDF,
-                      ZeroDF>;
-
 template <Numeric T, CFixedString auto symbol, typename Storage>
 class Variable {
   Storage storage;
@@ -369,22 +324,14 @@ class Variable {
 
 public:
   static constexpr auto label = symbol;
-  [[nodiscard]] constexpr T eval() const noexcept {
-    if constexpr (CHook<Storage, T>)
-      return storage.get_f();
-    else
-      return storage;
-  }
+  [[nodiscard]] constexpr T eval() const noexcept { return storage; }
   using value_type = T;
   constexpr explicit Variable(Storage s) noexcept : storage(std::move(s)) {}
   constexpr operator T() const noexcept { return eval(); }
   [[nodiscard]] constexpr auto get() const noexcept { return eval(); }
   template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept {
-    if constexpr (CHook<Storage, T>) {
-      if constexpr (requires { storage.set_f(T{}); })
-        storage.set_f(static_cast<T>(std::forward<U>(v)));
-    } else if constexpr (std::is_same_v<Storage, std::reference_wrapper<
-                                                     std::decay_t<U>>>) {
+    if constexpr (std::is_same_v<Storage, std::reference_wrapper<
+                                              std::decay_t<U>>>) {
       storage.get() = std::forward<U>(v);
     } else if constexpr (!std::is_same_v<std::decay_t<U>, T> &&
                          std::is_constructible_v<T, U>) {
@@ -395,18 +342,14 @@ public:
     return *this;
   }
   constexpr void update(const auto &symbols, const auto &updates) noexcept {
-    if constexpr (!CHook<Storage, T>) {
-      using Syms = std::decay_t<decltype(symbols)>;
-      constexpr auto index = find_index_of_symbol<symbol, Syms>();
-      *this = updates[index];
-    }
+    using Syms = std::decay_t<decltype(symbols)>;
+    constexpr auto index = find_index_of_symbol<symbol, Syms>();
+    *this = updates[index];
   }
   constexpr void collect(const auto &symbols, auto &out) const noexcept {
-    if constexpr (!CHook<Storage, T>) {
-      using Syms = std::decay_t<decltype(symbols)>;
-      constexpr auto index = find_index_of_symbol<symbol, Syms>();
-      out[index] = storage;
-    }
+    using Syms = std::decay_t<decltype(symbols)>;
+    constexpr auto index = find_index_of_symbol<symbol, Syms>();
+    out[index] = storage;
   }
   [[nodiscard]] constexpr auto derivative() const noexcept {
     auto ret = T{};
@@ -415,13 +358,9 @@ public:
   template <std::size_t Base = 0>
   constexpr void backward(const auto &syms, T adj, auto &grads,
                           const auto &) const noexcept {
-    if constexpr (CHook<Storage, T>) {
-      storage.accum_df(adj);
-    } else {
-      using Syms = std::decay_t<decltype(syms)>;
-      constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-      grads[idx] += adj;
-    }
+    using Syms = std::decay_t<decltype(syms)>;
+    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+    grads[idx] += adj;
   }
 
   template <typename Syms, std::size_t N>

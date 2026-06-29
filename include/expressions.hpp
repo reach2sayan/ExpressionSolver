@@ -62,13 +62,6 @@ template <auto S> struct symbol_type {
   static constexpr std::string_view name = S.view();
 };
 
-template <typename H, typename T>
-concept CHook = requires(H h, T adj) {
-  { h.get_f() } -> std::convertible_to<T>;
-  h.accum_df(adj);
-  h.zero_df();
-};
-
 template <Numeric T, CFixedString auto, typename Storage = T> class Variable;
 
 template <Numeric T> struct is_expression_type<Constant<T>> : std::true_type {};
