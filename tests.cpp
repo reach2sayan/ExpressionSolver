@@ -2226,7 +2226,11 @@ TEST(FuncHookTest, ReverseGradientAccumulated) {
 
   using Syms = extract_symbols_from_expr_t<decltype(expr)>;
   std::array<double, 1> grads{};
-  expr.backward(Syms{}, 1.0, grads);
+  {
+    diff::node_cache_t<decltype(expr)> cache{};
+    diff::fill_cache(expr, cache);
+    expr.backward(Syms{}, 1.0, grads, cache);
+  }
   EXPECT_DOUBLE_EQ(grad_acc, 2.0 * source);
 }
 
@@ -2241,7 +2245,11 @@ TEST(FuncHookTest, ZeroAndReuse) {
 
   using Syms = extract_symbols_from_expr_t<decltype(expr)>;
   std::array<double, 1> grads{};
-  expr.backward(Syms{}, 1.0, grads);
+  {
+    diff::node_cache_t<decltype(expr)> cache{};
+    diff::fill_cache(expr, cache);
+    expr.backward(Syms{}, 1.0, grads, cache);
+  }
   EXPECT_DOUBLE_EQ(grad_acc, 8.0);
 
   hook.zero_df();
@@ -2249,7 +2257,11 @@ TEST(FuncHookTest, ZeroAndReuse) {
 
   source = 3.0;
   grads = {};
-  expr.backward(Syms{}, 1.0, grads);
+  {
+    diff::node_cache_t<decltype(expr)> cache{};
+    diff::fill_cache(expr, cache);
+    expr.backward(Syms{}, 1.0, grads, cache);
+  }
   EXPECT_DOUBLE_EQ(grad_acc, 6.0);
 }
 

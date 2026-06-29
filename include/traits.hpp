@@ -123,7 +123,8 @@ make_const_variable(const Expression<Op, LHS, RHS> &expr) noexcept
 template <CFixedString auto symbol, typename Op, typename LHS>
 constexpr auto make_const_variable(const MonoExpression<Op, LHS> &expr) noexcept
     -> MonoExpression<Op, replace_matching_variable_as_const_t<symbol, LHS>> {
-  return {make_const_variable<symbol>(expr.expressions())};
+  const auto &[child] = expr.expressions();
+  return {make_const_variable<symbol>(child)};
 }
 
 template <typename T, CFixedString auto C, typename S, std::size_t N>
@@ -203,8 +204,9 @@ template <CFixedString auto symbol, typename Op, typename LHS, typename RHS>
 constexpr auto
 make_all_constant_except(const Expression<Op, LHS, RHS> &expr) noexcept
     -> constify_unmatched_var_t<symbol, Expression<Op, LHS, RHS>> {
-  auto new_lhs = make_all_constant_except<symbol>(expr.expressions().first);
-  auto new_rhs = make_all_constant_except<symbol>(expr.expressions().second);
+  const auto &[lhs, rhs] = expr.expressions();
+  auto new_lhs = make_all_constant_except<symbol>(lhs);
+  auto new_rhs = make_all_constant_except<symbol>(rhs);
   return {new_lhs, new_rhs};
 }
 
@@ -212,7 +214,8 @@ template <CFixedString auto symbol, typename Op, typename Expr>
 constexpr auto
 make_all_constant_except(const MonoExpression<Op, Expr> &expr) noexcept
     -> constify_unmatched_var_t<symbol, MonoExpression<Op, Expr>> {
-  return make_all_constant_except<symbol>(expr.expressions());
+  const auto &[child] = expr.expressions();
+  return {make_all_constant_except<symbol>(child)};
 }
 
 template <typename A, typename B>

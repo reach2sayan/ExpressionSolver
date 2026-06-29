@@ -16,6 +16,38 @@ namespace diff {
 
 namespace mp = diff::mpl;
 
+template <typename Expr>
+using node_cache_t =
+    std::array<typename std::remove_cvref_t<Expr>::value_type,
+               node_count_v<std::remove_cvref_t<Expr>>>;
+
+template <std::size_t Base = 0, CExpression E, typename Cache>
+constexpr auto fill_cache(const E &node, Cache &cache) noexcept {
+  using VT = typename std::remove_cvref_t<E>::value_type;
+  if constexpr (is_binary_expression_v<std::remove_cvref_t<E>>) {
+    constexpr std::size_t LB = child_base_v<Base>;
+    constexpr std::size_t RB =
+        rhs_base_v<Base, typename std::remove_cvref_t<E>::lhs_type>;
+    const auto &[lhs, rhs] = node.expressions();
+    auto l = fill_cache<LB>(lhs, cache);
+    auto r = fill_cache<RB>(rhs, cache);
+    VT v = typename std::remove_cvref_t<E>::op_type::func_type{}(l, r);
+    cache[Base] = v;
+    return v;
+  } else if constexpr (is_mono_expression_v<std::remove_cvref_t<E>>) {
+    constexpr std::size_t CB = child_base_v<Base>;
+    const auto &[child] = node.expressions();
+    auto c = fill_cache<CB>(child, cache);
+    VT v = typename std::remove_cvref_t<E>::op_type::func_type{}(c);
+    cache[Base] = v;
+    return v;
+  } else { // leaf (Variable / Constant)
+    VT v = node.eval();
+    cache[Base] = v;
+    return v;
+  }
+}
+
 // ===========================================================================
 // Order-safe seeding for the symbolic value-array APIs.
 //
@@ -115,7 +147,9 @@ template <CExpression Expr, typename T = typename Expr::value_type>
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   constexpr auto N = mp::mp_size(Syms{});
   std::array<T, N> grads{};
-  expr.backward(Syms{}, T{1}, grads);
+  node_cache_t<Expr> cache{};
+  fill_cache(expr, cache);
+  expr.backward(Syms{}, T{1}, grads, cache);
   return grads;
 }
 
@@ -126,7 +160,9 @@ template <CExpression Expr, typename T = typename Expr::value_type>
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   constexpr auto N = mp::mp_size(Syms{});
   std::array<T, N> grads{};
-  expr.backward(Syms{}, T{1}, grads);
+  node_cache_t<Expr> cache{};
+  fill_cache(expr, cache);
+  expr.backward(Syms{}, T{1}, grads, cache);
   std::array<scalar_t, N> result{};
   std::ranges::transform(grads, result.begin(),
                          [](const T &g) { return g.template get<0>(); });
@@ -150,7 +186,9 @@ reverse_mode_hessian(Expr &expr, std::array<S, N> values) noexcept {
     }
     expr.update(symbols{}, seeds);
     std::array<T, N> grads{};
-    expr.backward(symbols{}, T{1}, grads);
+    node_cache_t<Expr> cache{};
+    fill_cache(expr, cache);
+    expr.backward(symbols{}, T{1}, grads, cache);
     for (std::size_t i = 0; i < N; i++) {
       H[i][j] = grads[i].template get<1>();
     }

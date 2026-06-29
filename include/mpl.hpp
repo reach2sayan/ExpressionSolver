@@ -28,7 +28,6 @@ auto at_c(mp_list<T...>)
 template <class L, std::size_t I>
 using mp_at_c = typename decltype(detail::at_c<I>(L{}))::type;
 
-// mp_size(list) -> element count.
 template <class... T> consteval std::size_t mp_size(mp_list<T...>) noexcept {
   return sizeof...(T);
 }
@@ -110,27 +109,21 @@ template <class L> consteval auto unique_selection() {
   constexpr std::size_t N = mp_size(L{});
   constexpr std::array<bool, N * N> same = same_matrix(L{});
 
-  // rep[i] = index of the first element having the same type as element i.
-  // Equal types share a rep, and a first occurrence is its own rep (rep[i]==i).
   std::array<std::size_t, N> rep{};
   for (std::size_t i = 0; i < N; ++i) {
     const bool *row = same.data() + i * N;
     rep[i] = static_cast<std::size_t>(std::find(row, row + N, true) - row);
   }
 
-  // Classic dedup: order so equal types are adjacent (ties broken by original
-  // index, so each group's first occurrence leads it), then std::unique keeps
-  // one index per group.  Survivors come out as the rep indices in ascending
-  // order, i.e. first-occurrence order.
   index_selection<N> sel{};
   std::iota(sel.indices.begin(), sel.indices.end(), std::size_t{0});
   std::sort(sel.indices.begin(), sel.indices.end(),
             [&](std::size_t a, std::size_t b) {
               return rep[a] != rep[b] ? rep[a] < rep[b] : a < b;
             });
-  const auto last =
-      std::unique(sel.indices.begin(), sel.indices.end(),
-                  [&](std::size_t a, std::size_t b) { return rep[a] == rep[b]; });
+  const auto last = std::unique(
+      sel.indices.begin(), sel.indices.end(),
+      [&](std::size_t a, std::size_t b) { return rep[a] == rep[b]; });
   sel.count = static_cast<std::size_t>(last - sel.indices.begin());
   return sel;
 }

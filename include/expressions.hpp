@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 namespace diff {
 
@@ -22,8 +23,20 @@ template <typename O>
 concept COperation =
     requires { typename O::value_type; } && Numeric<typename O::value_type>;
 
-template <COperation Op, typename LHS, typename RHS> class Expression;
-template <COperation Op, typename Exp> class MonoExpression;
+// is_expression_type is the single source of truth for "is this a node?", and
+// the CExpression concept reads it.  Both are declared up here (the per-type
+// specialisations come below, once the node types are declared) so that the
+// Expression node can constrain its children to themselves be expressions.
+template <typename T> struct is_expression_type : std::false_type {};
+template <typename T>
+concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
+
+template <COperation Op, CExpression... Children> class Expression;
+// A unary node is just a one-child Expression.  Kept as an alias so the rest of
+// the codebase (and the arity-specialised traits) can still spell "unary" while
+// there is a single node template underneath.
+template <COperation Op, CExpression Exp>
+using MonoExpression = Expression<Op, Exp>;
 template <Numeric T> class Constant;
 
 template <std::size_t N> struct FixedString {
@@ -64,20 +77,13 @@ concept CHook = requires(H h, T adj) {
 
 template <Numeric T, CFixedString auto, typename Storage = T> class Variable;
 
-template <typename T> struct is_expression_type : std::false_type {};
 template <Numeric T> struct is_expression_type<Constant<T>> : std::true_type {};
 
 template <Numeric T, CFixedString auto C, typename S>
 struct is_expression_type<Variable<T, C, S>> : std::true_type {};
 
-template <COperation Op, typename LHS, typename RHS>
-struct is_expression_type<Expression<Op, LHS, RHS>> : std::true_type {};
-
-template <COperation Op, typename Exp>
-struct is_expression_type<MonoExpression<Op, Exp>> : std::true_type {};
-
-template <typename T>
-concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
+template <COperation Op, CExpression... Children>
+struct is_expression_type<Expression<Op, Children...>> : std::true_type {};
 
 template <typename T> struct is_constant : std::false_type {};
 template <Numeric T> struct is_constant<Constant<T>> : std::true_type {};
@@ -102,10 +108,10 @@ template <COperation Op> struct BaseExpression {
 // ===========================================================================
 // ExpressionOps — shared CRTP base implementing every fan-out algorithm once.
 //
-// A unary MonoExpression and a binary Expression evaluate, differentiate, seed,
-// collect and back-propagate identically: unpack the children and hand them to
-// the operator.  The only thing that varies is the arity, which the derived
-// node exposes through `children()` as a tuple of references; std::apply then
+// Every node — unary, binary, n-ary — evaluates, differentiates, seeds,
+// collects and back-propagates identically: unpack the operands and hand them
+// to the operator.  The only thing that varies is the arity, which the derived
+// node exposes through `expressions()` as its operand tuple; std::apply then
 // adapts the call for free.  Add a new node arity and the algorithms come along
 // for free — there is nothing per-node to re-implement.
 // ===========================================================================
@@ -135,14 +141,14 @@ public:
 
   [[nodiscard]] constexpr auto eval() const noexcept {
     return std::apply([](const auto &...e) noexcept { return Op::eval(e...); },
-                      self().children());
+                      self().expressions());
   }
   constexpr operator value_type() const noexcept { return eval(); }
 
   [[nodiscard]] constexpr auto derivative() const noexcept {
     return std::apply(
         [](const auto &...e) noexcept { return Op::derivative(e...); },
-        self().children());
+        self().expressions());
   }
 
   template <typename Syms, std::size_t N>
@@ -153,7 +159,7 @@ public:
           return Op::eval(
               EvalResult<value_type>{e.template eval_seeded<Syms>(vals)}...);
         },
-        self().children());
+        self().expressions());
   }
 
   // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
@@ -165,89 +171,114 @@ public:
           return Op::eval(
               EvalResult<U>{e.template eval_seeded_as<U, Syms>(vals)}...);
         },
-        self().children());
+        self().expressions());
   }
 
   constexpr void update(const auto &symbols, const auto &updates) noexcept {
     std::apply([&](auto &...e) noexcept { (e.update(symbols, updates), ...); },
-               self().children());
+               self().expressions());
   }
 
   constexpr void collect(const auto &symbols, auto &out) const noexcept {
     std::apply(
         [&](const auto &...e) noexcept { (e.collect(symbols, out), ...); },
-        self().children());
+        self().expressions());
   }
 
-  constexpr void backward(const auto &syms, value_type adj,
-                          auto &grads) const noexcept {
+  // Reverse sweep.  `Base` is this node's preorder slot in the value cache;
+  // Op::backward derives its children's slots from it (see node_count_v /
+  // child_base_v / rhs_base_v below) and reads operand values from `cache`
+  // instead of recomputing them.
+  template <std::size_t Base = 0>
+  constexpr void backward(const auto &syms, value_type adj, auto &grads,
+                          const auto &cache) const noexcept {
     std::apply(
-        [&](const auto &...e) noexcept { Op::backward(e..., adj, syms, grads); },
-        self().children());
+        [&](const auto &...e) noexcept {
+          Op::template backward<Base>(e..., adj, syms, grads, cache);
+        },
+        self().expressions());
   }
 };
 
 // ===========================================================================
-// MonoExpression — unary node (one child).
+// Expression — n-ary expression node.
+//
+// A single variadic node covers every arity: a unary node is a one-child
+// Expression (spelled MonoExpression via the alias above), a binary node has
+// two children, and so on.  Operands live in one std::tuple; ExpressionOps
+// folds over it with std::apply, so eval/derivative/seed/collect/backward are
+// arity-agnostic.  There is no separate children() accessor any more — the
+// operand tuple is the storage, exposed directly through expressions().
 // ===========================================================================
-template <COperation Op, typename Exp>
-class MonoExpression : public ExpressionOps<MonoExpression<Op, Exp>, Op> {
-  Exp expression;
-  friend constexpr std::ostream &operator<<(std::ostream &out,
-                                            const MonoExpression &e) {
-    out << e.expression;
-    return out;
-  }
-
-  friend ExpressionOps<MonoExpression<Op, Exp>, Op>;
-  [[nodiscard]] constexpr auto children() const noexcept {
-    return std::tie(expression);
-  }
-  [[nodiscard]] constexpr auto children() noexcept {
-    return std::tie(expression);
-  }
-
-public:
-  using lhs_type = Exp;
-  constexpr MonoExpression(Exp expr) noexcept : expression{std::move(expr)} {}
-
-  [[nodiscard]] constexpr const auto &expressions() const noexcept {
-    return expression;
-  }
-};
-
-// ===========================================================================
-// Expression — binary expression node (two children).
-// ===========================================================================
-template <COperation Op, typename LHS, typename RHS>
-class Expression : public ExpressionOps<Expression<Op, LHS, RHS>, Op> {
-  std::pair<LHS, RHS> inner_expressions;
+template <COperation Op, CExpression... Children>
+class Expression : public ExpressionOps<Expression<Op, Children...>, Op> {
+  std::tuple<Children...> operands;
   friend std::ostream &operator<<(std::ostream &out, const Expression &e) {
-    out << '(';
-    std::apply([&out](const auto &...e) { Op::print(out, e...); },
-               e.inner_expressions);
-    out << ')';
+    if constexpr (sizeof...(Children) == 1) {
+      out << std::get<0>(e.operands);
+    } else {
+      out << '(';
+      std::apply([&out](const auto &...c) { Op::print(out, c...); }, e.operands);
+      out << ')';
+    }
     return out;
   }
 
-  friend ExpressionOps<Expression<Op, LHS, RHS>, Op>;
-  [[nodiscard]] constexpr auto children() const noexcept {
-    return std::tie(inner_expressions.first, inner_expressions.second);
-  }
-  [[nodiscard]] constexpr auto children() noexcept {
-    return std::tie(inner_expressions.first, inner_expressions.second);
-  }
+  friend ExpressionOps<Expression<Op, Children...>, Op>;
 
 public:
-  using lhs_type = LHS;
-  using rhs_type = RHS;
-  constexpr Expression(LHS lhs, RHS rhs) noexcept
-      : inner_expressions({std::move(lhs), std::move(rhs)}) {}
+  using children_t = std::tuple<Children...>;
+  // Back-compat aliases for the arity-specialised traits.  lhs_type is the
+  // first operand; rhs_type is the second when binary (and harmlessly the first
+  // for a unary node, where the binary traits never read it).
+  using lhs_type = std::tuple_element_t<0, children_t>;
+  using rhs_type =
+      std::tuple_element_t<(sizeof...(Children) > 1 ? 1 : 0), children_t>;
 
-  [[nodiscard]] constexpr const auto &expressions() const noexcept {
-    return inner_expressions;
+  constexpr Expression(Children... c) noexcept : operands{std::move(c)...} {}
+
+  [[nodiscard]] constexpr const children_t &expressions() const noexcept {
+    return operands;
   }
+  [[nodiscard]] constexpr children_t &expressions() noexcept { return operands; }
 };
+
+// ===========================================================================
+// Node counting + preorder cache offsets.
+//
+// Lives here (not traits.hpp) so operations.hpp can use it in Op::backward
+// without an include cycle (operations -> traits -> values -> operations).
+// Every node — internal or leaf — gets one cache slot.  A node at preorder
+// slot `Base` owns slot `Base`; a unary child starts at `Base + 1`; a binary
+// node's lhs subtree starts at `Base + 1` and its rhs subtree at
+// `Base + 1 + node_count_v<LHS>`.  The forward fill (fill_cache) and the
+// reverse sweep (Op::backward) MUST agree on these offsets — both go through
+// child_base_v / rhs_base_v.
+// ===========================================================================
+// One rule: a node's count is 1 + the sum over its children.  An internal node
+// exposes its operand types as children_t; leaves (Constant/Variable) don't, so
+// the `requires` falls through to 1.  The fold over the child type pack is the
+// reduce -- std::algorithm can't apply because the children are heterogeneous
+// types, not a homogeneous range.  Adding a new node arity needs no change here,
+// matching how the rest of the file folds over the operand tuple.
+template <typename T> consteval std::size_t node_count_fn() {
+  using U = std::remove_cvref_t<T>;
+  if constexpr (requires { typename U::children_t; }) {
+    return []<typename... C>(std::type_identity<std::tuple<C...>>) consteval {
+      return (1 + ... + node_count_fn<std::remove_cvref_t<C>>());
+    }(std::type_identity<typename U::children_t>{});
+  } else {
+    return 1;
+  }
+}
+
+template <typename T>
+inline constexpr std::size_t node_count_v = node_count_fn<std::remove_cvref_t<T>>();
+
+template <std::size_t Base>
+inline constexpr std::size_t child_base_v = Base + 1;
+template <std::size_t Base, typename LHS>
+inline constexpr std::size_t rhs_base_v = Base + 1 + node_count_v<LHS>;
 
 namespace detail {
 template <typename V, std::size_t I, typename = void>
@@ -264,24 +295,16 @@ struct expression_element<V, I,
 
 } // namespace diff
 
+// The {value, derivative} get<>() interface — tuple_size is 2 for any node,
+// independent of operand arity.
 namespace std {
-template <diff::COperation Op, typename LHS, typename RHS>
-struct tuple_size<diff::Expression<Op, LHS, RHS>>
+template <diff::COperation Op, diff::CExpression... Children>
+struct tuple_size<diff::Expression<Op, Children...>>
     : integral_constant<size_t, 2> {};
 
-template <size_t I, diff::COperation Op, typename LHS, typename RHS>
-struct tuple_element<I, diff::Expression<Op, LHS, RHS>> {
+template <size_t I, diff::COperation Op, diff::CExpression... Children>
+struct tuple_element<I, diff::Expression<Op, Children...>> {
   using type = typename diff::detail::expression_element<
-      typename diff::Expression<Op, LHS, RHS>::value_type, I>::type;
-};
-
-template <diff::COperation Op, typename Exp>
-struct tuple_size<diff::MonoExpression<Op, Exp>>
-    : integral_constant<size_t, 2> {};
-
-template <size_t I, diff::COperation Op, typename Exp>
-struct tuple_element<I, diff::MonoExpression<Op, Exp>> {
-  using type = typename diff::detail::expression_element<
-      typename diff::MonoExpression<Op, Exp>::value_type, I>::type;
+      typename diff::Expression<Op, Children...>::value_type, I>::type;
 };
 } // namespace std

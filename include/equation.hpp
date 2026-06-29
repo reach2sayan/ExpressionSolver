@@ -1,9 +1,9 @@
 #pragma once
 #include "dual.hpp"
 #include "gradient.hpp"
+#include "mpl.hpp"
 #include <algorithm>
 #include <array>
-#include "mpl.hpp"
 
 namespace diff {
 
@@ -115,7 +115,10 @@ private:
   {
     std::array<std::array<value_type, input_dim>, output_dim> J{};
     static_for<output_dim>([&]<std::size_t I>() {
-      std::get<I>(expressions).backward(symbols{}, value_type{1}, J[I]);
+      const auto &e = std::get<I>(expressions);
+      node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
+      fill_cache(e, cache);
+      e.backward(symbols{}, value_type{1}, J[I], cache);
     });
     return J;
   }
@@ -140,7 +143,10 @@ private:
       update(symbols{}, seeds);
       static_for<output_dim>([&]<std::size_t K>() {
         std::array<value_type, input_dim> grads{};
-        std::get<K>(expressions).backward(symbols{}, value_type{1}, grads);
+        const auto &e = std::get<K>(expressions);
+        node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
+        fill_cache(e, cache);
+        e.backward(symbols{}, value_type{1}, grads, cache);
         for (std::size_t i = 0; i < input_dim; ++i) {
           H[K][i][j] = grads[i].template get<1>();
         }

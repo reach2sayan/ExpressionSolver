@@ -277,7 +277,9 @@ public:
   }
   constexpr void update(const auto &, const auto &) const noexcept {}
   constexpr void collect(const auto &, auto &) const noexcept {}
-  constexpr void backward(const auto &, T, auto &) const noexcept {}
+  template <std::size_t Base = 0>
+  constexpr void backward(const auto &, T, auto &, const auto &) const noexcept {
+  }
 
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr T
@@ -410,7 +412,9 @@ public:
     auto ret = T{};
     return Constant{++ret};
   }
-  constexpr void backward(const auto &syms, T adj, auto &grads) const noexcept {
+  template <std::size_t Base = 0>
+  constexpr void backward(const auto &syms, T adj, auto &grads,
+                          const auto &) const noexcept {
     if constexpr (CHook<Storage, T>) {
       storage.accum_df(adj);
     } else {
