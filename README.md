@@ -22,8 +22,8 @@ A header-only C++20 library for symbolic expression trees, symbolic differentiat
 
 - C++20 compiler (GCC 13+ or Clang 17+ recommended)
 - CMake 3.20+
-- Eigen 3.4+
-- Boost headers with `boost::mp11`
+
+The core library is header-only with no third-party dependencies. The test and benchmark targets pull GoogleTest and Google Benchmark in automatically via CMake `FetchContent`.
 
 ## Build
 
@@ -33,7 +33,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-On Windows, the GitHub workflow builds with MSVC and vcpkg-provided Boost headers. The local CMake setup also falls back to fetching `boost/mp11` when `Boost::headers` is not already available.
+The GitHub workflow also builds with MSVC on Windows.
 
 ## Benchmarks
 
@@ -64,16 +64,27 @@ See [BENCHMARKS.md](benchmarks/BENCHMARKS.md) for the full suite description, sn
 
 ### Expression nodes
 
+A single variadic node represents every operator, of any arity. Operands are
+held in one `std::tuple`, and the shared algorithms (eval, derivative, seed,
+collect, reverse-mode backward) fold over that tuple — so a node's arity is the
+only thing that varies, and adding a new arity needs no per-node code.
+
 | Type | Description |
 |---|---|
-| `Expression<Op, LHS, RHS>` | Binary node |
-| `MonoExpression<Op, Expr>` | Unary node |
+| `Expression<Op, Children...>` | Operator node of any arity; operands stored in one tuple |
+| `MonoExpression<Op, Expr>` | Alias for the unary case — `Expression<Op, Expr>` |
+
+The operands of an `Expression` are themselves constrained to be expressions
+(`Constant`, `Variable`, or nested `Expression`), enforced by the `CExpression`
+concept.
 
 ### Supported operations
 
 Arithmetic: `+`, `-`, `*`, `/`, unary `-`
 
-Math functions: `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`
+Unary math functions: `sin`, `cos`, `tan`, `exp`, `log`, `log10`, `sqrt`, `cbrt`, `abs`, `asin`, `acos`, `atan`, `asinh`, `acosh`, `atanh`, `sinh`, `cosh`, `tanh`, `erf`
+
+Binary math functions: `pow`, `atan2`, `hypot`, `max`, `min`
 
 ### Dual numbers and higher-order types
 
@@ -290,7 +301,11 @@ std::array<double, 1> grads{};
 
 sensor_val = 4.0;
 expr.eval();                                // returns 16.0
-expr.backward(Syms{}, 1.0, grads);         // sensor_grad == 8.0
+
+// Reverse mode reads operand values from a preorder cache filled in one pass.
+node_cache_t<decltype(expr)> cache{};
+fill_cache(expr, cache);
+expr.backward(Syms{}, 1.0, grads, cache);   // sensor_grad == 8.0
 ```
 
 ### VectorFuncHook — multi-slot callable hook
@@ -314,7 +329,10 @@ Variable<double, FixedString{"y"}, decltype(hy)> y{hy};
 auto expr = x * y;
 using Syms = extract_symbols_from_expr_t<decltype(expr)>;
 std::array<double, 2> grads{};
-expr.backward(Syms{}, 1.0, grads);  // df[0] == 4.0, df[1] == 3.0
+
+node_cache_t<decltype(expr)> cache{};
+fill_cache(expr, cache);
+expr.backward(Syms{}, 1.0, grads, cache);  // df[0] == 4.0, df[1] == 3.0
 ```
 
 ### Higher-order univariate derivative (TaylorDual)

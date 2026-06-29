@@ -110,10 +110,18 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     endif ()
 
     if (MSVC)
-        target_compile_options(main PRIVATE /Wall)
-        target_compile_options(tests PRIVATE /Wall)
+        # /Wall enables off-by-default noise warnings. Expression/Equation types
+        # hold non-assignable members (const/reference data) by design, so the
+        # implicit special members are deleted. Silence that family:
+        #   C4625 copy ctor implicitly deleted
+        #   C4626 copy assignment implicitly deleted
+        #   C5026 move ctor implicitly deleted
+        #   C5027 move assignment implicitly deleted
+        set(DIFF_MSVC_WALL_NOISE /Wall /wd4625 /wd4626 /wd5026 /wd5027)
+        target_compile_options(main PRIVATE ${DIFF_MSVC_WALL_NOISE})
+        target_compile_options(tests PRIVATE ${DIFF_MSVC_WALL_NOISE})
         if (DIFF_BUILD_BENCHMARKS)
-            target_compile_options(benchmarks PRIVATE /Wall)
+            target_compile_options(benchmarks PRIVATE ${DIFF_MSVC_WALL_NOISE})
         endif ()
         set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
