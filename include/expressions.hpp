@@ -92,18 +92,6 @@ template <COperation Op> struct BaseExpression {
   using value_type = typename Op::value_type;
 };
 
-// ===========================================================================
-// Node counting + preorder cache offsets.
-//
-// Every node — internal or leaf — gets one cache slot.  A node at preorder slot
-// `Base` owns slot `Base`; its I-th child's subtree starts after this node and
-// every earlier sibling's subtree (child_base_at).  The forward fill
-// (fill_cache) and the reverse sweep (ExpressionOps::backward) both derive child
-// slots through child_base_at, so they always agree.
-//
-// node_count is one rule: 1 + the sum over the operand pack (children_t).  A
-// leaf has no children_t, so the `requires` falls through to 1.
-// ===========================================================================
 template <typename T> consteval std::size_t node_count_fn() {
   using U = std::remove_cvref_t<T>;
   if constexpr (requires { typename U::children_t; }) {
@@ -119,8 +107,7 @@ template <typename T>
 inline constexpr std::size_t node_count_v =
     node_count_fn<std::remove_cvref_t<T>>();
 
-// Preorder cache slot of the I-th child of a node at `Base`: skip this node (the
-// +1) and every earlier sibling's whole subtree.
+// Preorder cache slot of the I-th child of a node at `Base1
 template <std::size_t Base, typename Kids, std::size_t I>
 consteval std::size_t child_base_at() {
   std::size_t off = Base + 1;
@@ -200,18 +187,11 @@ public:
         self().expressions());
   }
 
-  // Reverse sweep.  `Base` is this node's preorder slot.  The op only supplies
-  // the per-child adjoint (incoming adj times the local partial, read from the
-  // value cache); the offset arithmetic and the recursion into each child are
-  // the same for every arity and live here, once.
   template <std::size_t Base = 0>
   constexpr void backward(const auto &syms, value_type adj, auto &grads,
                           const auto &cache) const noexcept {
     using Kids = typename Derived::children_t;
     [&]<std::size_t... I>(std::index_sequence<I...>) noexcept {
-      // Each child's adjoint is consumed exactly once, so move it into the
-      // recursive call (a no-op for the trivially-copyable scalar/dual value
-      // types, but correct intent and free if value_type ever grows heavier).
       auto child_adj =
           Op::template adjoints<Base, child_base_at<Base, Kids, I>()...>(adj,
                                                                          cache);

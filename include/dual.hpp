@@ -1,8 +1,8 @@
 #pragma once
 
 #include "expressions.hpp"
+#include "unary_math.hpp"
 #include <cmath>
-#include <numbers>
 #include <ostream>
 #include <tuple>
 #include <type_traits>
@@ -87,17 +87,11 @@ template <typename T> struct dual_value_type<Dual<T>> {
 template <typename X>
 using dual_value_t = typename dual_value_type<std::remove_cvref_t<X>>::type;
 
-// A Dual<T>.  Dual arithmetic is eager: each operator computes its value and
-// derivative immediately via the *_combine formulas below and returns a concrete
-// Dual<T> (no lazy expression-template nodes).
 template <typename X>
 concept DualLike = is_dual_v<std::remove_cvref_t<X>>;
 
 } // namespace diff
 
-// Tuple protocol for Dual, declared here (before the operators below) so
-// structured bindings `auto [v, d] = ...` resolve via get<> rather than falling
-// back to private-member decomposition during instantiation.
 namespace std {
 template <typename T>
 struct tuple_size<diff::Dual<T>> : integral_constant<std::size_t, 2> {};
@@ -144,9 +138,6 @@ constexpr nth_dual_t<T, N> embed_constant(T val) noexcept {
   }
 }
 
-// ConstantEmbedder<U>: creates a "zero-derivative" U from a base scalar.
-// Specialise for custom numeric types (e.g. TaylorDual) to extend
-// eval_seeded_as.
 template <typename U> struct ConstantEmbedder {
   static constexpr U embed(scalar_base_t<U> val) noexcept {
     return embed_constant<scalar_base_t<U>, dual_depth_v<U>>(val);
@@ -303,8 +294,8 @@ struct div_combine {
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
     return COMB{}(a, b);                                                       \
   }                                                                            \
-  template <typename A, typename C>                                           \
-    requires(DualLike<A> && ConstOperand<C, A>)                               \
+  template <typename A, typename C>                                            \
+    requires(DualLike<A> && ConstOperand<C, A>)                                \
   constexpr auto operator OP(A &&a, C &&s) noexcept {                          \
     return COMB{}(a, s);                                                       \
   }
@@ -316,23 +307,23 @@ DIFF_DUAL_BINOP(/, div_combine)
 
 // Scalar-on-the-left: + and * commute (pass the dual first); - and / use the
 // reversed (C, Dual) combine (pass the scalar first).
-template <typename C, typename A>
-  requires(DualLike<A> && ConstOperand<C, A>)
+template <typename C, DualLike A>
+  requires(ConstOperand<C, A>)
 constexpr auto operator+(C &&s, A &&a) noexcept {
   return add_combine{}(a, s);
 }
-template <typename C, typename A>
-  requires(DualLike<A> && ConstOperand<C, A>)
+template <typename C, DualLike A>
+  requires(ConstOperand<C, A>)
 constexpr auto operator*(C &&s, A &&a) noexcept {
   return mul_combine{}(a, s);
 }
-template <typename C, typename A>
-  requires(DualLike<A> && ConstOperand<C, A>)
+template <typename C, DualLike A>
+  requires(ConstOperand<C, A>)
 constexpr auto operator-(C &&s, A &&a) noexcept {
   return sub_combine{}(s, a);
 }
-template <typename C, typename A>
-  requires(DualLike<A> && ConstOperand<C, A>)
+template <typename C, DualLike A>
+  requires(ConstOperand<C, A>)
 constexpr auto operator/(C &&s, A &&a) noexcept {
   return div_combine{}(s, a);
 }
@@ -345,9 +336,8 @@ struct neg_combine {
     return DT{-v, -d};
   }
 };
-template <typename A>
-  requires DualLike<A>
-constexpr auto operator-(A &&a) noexcept {
+
+constexpr auto operator-(DualLike auto &&a) noexcept {
   return neg_combine{}(a);
 }
 
@@ -357,60 +347,33 @@ constexpr auto operator-(A &&a) noexcept {
   constexpr auto NAME(A &&a) noexcept {                                        \
     return NAME##_combine{}(a);                                                \
   }
-struct sin_combine {
+
+template <template <typename> class Fn> struct unary_dual_combine {
   constexpr auto operator()(const auto &x) const noexcept {
-    using std::sin, std::cos;
     const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return DT{sin(v), cos(v) * d};
-  }
-};
-struct cos_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::sin, std::cos;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return DT{cos(v), -sin(v) * d};
-  }
-};
-struct exp_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::exp;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
     using T = std::remove_cvref_t<decltype(v)>;
-    const T e = exp(v);
-    return DT{e, e * d};
-  }
-};
-struct tan_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::tan, std::cos;
-    const auto &[v, d] = x;
     using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    const T c = cos(v);
-    return DT{tan(v), d / (c * c)};
+    return DT{Fn<T>{}(v), Fn<T>::deriv(v) * d};
   }
 };
-struct log_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::log;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return DT{log(v), d / v};
-  }
-};
-struct sqrt_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::sqrt;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    const T s = sqrt(v);
-    return DT{s, d / (T{2} * s)};
-  }
-};
+using sin_combine = unary_dual_combine<detail::SineOpFn>;
+using cos_combine = unary_dual_combine<detail::CosineOpFn>;
+using exp_combine = unary_dual_combine<detail::ExpOpFn>;
+using tan_combine = unary_dual_combine<detail::TanOpFn>;
+using log_combine = unary_dual_combine<detail::LogOpFn>;
+using log10_combine = unary_dual_combine<detail::Log10OpFn>;
+using sqrt_combine = unary_dual_combine<detail::SqrtOpFn>;
+using cbrt_combine = unary_dual_combine<detail::CbrtOpFn>;
+using asin_combine = unary_dual_combine<detail::AsinOpFn>;
+using acos_combine = unary_dual_combine<detail::AcosOpFn>;
+using atan_combine = unary_dual_combine<detail::AtanOpFn>;
+using sinh_combine = unary_dual_combine<detail::SinhOpFn>;
+using cosh_combine = unary_dual_combine<detail::CoshOpFn>;
+using tanh_combine = unary_dual_combine<detail::TanhOpFn>;
+using asinh_combine = unary_dual_combine<detail::AsinhOpFn>;
+using acosh_combine = unary_dual_combine<detail::AcoshOpFn>;
+using atanh_combine = unary_dual_combine<detail::AtanhOpFn>;
+using erf_combine = unary_dual_combine<detail::ErfOpFn>;
 struct abs_combine {
   constexpr auto operator()(const auto &x) const noexcept {
     using std::abs;
@@ -419,116 +382,6 @@ struct abs_combine {
     using T = std::remove_cvref_t<decltype(v)>;
     const T sign = v > T{} ? T{1} : v < T{} ? T{-1} : T{};
     return DT{abs(v), sign * d};
-  }
-};
-struct asin_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::asin, std::sqrt;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    return DT{asin(v), d / sqrt(T{1} - v * v)};
-  }
-};
-struct acos_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::acos, std::sqrt;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    return DT{acos(v), -d / sqrt(T{1} - v * v)};
-  }
-};
-struct atan_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::atan;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    return DT{atan(v), d / (T{1} + v * v)};
-  }
-};
-struct sinh_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::sinh, std::cosh;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return DT{sinh(v), cosh(v) * d};
-  }
-};
-struct cosh_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::sinh, std::cosh;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return DT{cosh(v), sinh(v) * d};
-  }
-};
-struct tanh_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::tanh, std::cosh;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    const T c = cosh(v);
-    return DT{tanh(v), d / (c * c)};
-  }
-};
-struct log10_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::log10;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    const T ln10 = static_cast<T>(std::numbers::ln10);
-    return DT{log10(v), d / (v * ln10)};
-  }
-};
-struct cbrt_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::cbrt;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    const T c = cbrt(v);
-    return DT{c, d / (T{3} * c * c)};
-  }
-};
-struct asinh_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::asinh, std::sqrt;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    return DT{asinh(v), d / sqrt(v * v + T{1})};
-  }
-};
-struct acosh_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::acosh, std::sqrt;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    return DT{acosh(v), d / sqrt(v * v - T{1})};
-  }
-};
-struct atanh_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::atanh;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    return DT{atanh(v), d / (T{1} - v * v)};
-  }
-};
-struct erf_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    using std::erf, std::exp;
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    const T two_over_sqrt_pi = static_cast<T>(2.0 * std::numbers::inv_sqrtpi);
-    return DT{erf(v), d * two_over_sqrt_pi * exp(-(v * v))};
   }
 };
 DIFF_DUAL_UNARY(sin)

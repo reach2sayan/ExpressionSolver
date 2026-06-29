@@ -1,10 +1,10 @@
 #pragma once
 
 #include "expressions.hpp"
+#include "unary_math.hpp"
 #include <array>
 #include <cmath>
 #include <functional>
-#include <numbers>
 #include <utility>
 
 namespace diff {
@@ -64,12 +64,12 @@ struct BinaryOp : Op<T, OpType::Binary> {
   eval(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
     using LT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
     using RT = typename std::remove_cvref_t<decltype(rhs)>::value_type;
-    // Returns a lazy node; materializes at the consumption boundary.
     return std::invoke(func{}, static_cast<LT>(lhs), static_cast<RT>(rhs));
   }
 };
 
-template <typename T> struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+"}> {
+template <typename T>
+struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -99,7 +99,8 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"}> {
   }
 };
 
-template <Numeric T> struct NegateOp : UnaryOp<T, std::negate<void>, FixedString{"-"}> {
+template <Numeric T>
+struct NegateOp : UnaryOp<T, std::negate<void>, FixedString{"-"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept {
     auto d = lhs.derivative();
@@ -112,7 +113,8 @@ template <Numeric T> struct NegateOp : UnaryOp<T, std::negate<void>, FixedString
   }
 };
 
-template <Numeric T> struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"}> {
+template <Numeric T>
+struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -185,35 +187,10 @@ struct min_impl {
 };
 } // namespace detail
 
-// Each unary math op is declared in one line, co-locating its value f(u) and its
-// local derivative f'(u) in a single descriptor functor detail::<Name>Fn:
-// operator() gives the value (so the functor doubles as the eval func), and
-// deriv() gives f'(u).  Both are dependent expressions: on an Expression operand
-// they build a tree (ADL selects the diff:: math builders); on a scalar they
-// compute numerically (using std:: math).  The op pulls deriv() for both the
-// symbolic derivative() (f'(lhs)·lhs') and the reverse-mode adjoints()
-// (adj·f'(value)), so every rule lives in exactly one place.  abs is kept
-// explicit (its slope sign(u) has a removable 0/0 at the origin).
-#define DIFF_UNARY_MATH_FNS                                                    \
-  using std::sin, std::cos, std::tan, std::exp, std::log, std::log10,         \
-      std::sqrt, std::cbrt, std::asin, std::acos, std::atan, std::sinh,        \
-      std::cosh, std::tanh, std::asinh, std::acosh, std::atanh, std::erf
-#define DIFF_UNARY_MATH_OP(NAME, LABEL, VAL, ...)                             \
-  namespace detail {                                                           \
-  template <Numeric T> struct NAME##Fn {                                       \
-    /* value: templated on its own type so a SineOp<T> still evaluates at a    \
-       deeper nested-dual type during forward AD.  deriv keeps the op's T for  \
-       its literals (it is only ever evaluated at the op's value_type). */     \
-    template <Numeric U> constexpr U operator()(const U &u) const noexcept {   \
-      DIFF_UNARY_MATH_FNS;                                                     \
-      return (VAL);                                                            \
-    }                                                                          \
-    static constexpr auto deriv(const auto &u) noexcept {                      \
-      DIFF_UNARY_MATH_FNS;                                                     \
-      return (__VA_ARGS__);                                                    \
-    }                                                                          \
-  };                                                                           \
-  }                                                                            \
+// Each unary math op pulls its value + derivative from the shared descriptor
+// detail::<Name>Fn (unary_math.hpp).  derivative() builds f'(lhs)·lhs'; adjoints
+// pushes adj·f'(value).  The same descriptor drives dual.hpp's forward combine.
+#define DIFF_UNARY_MATH_OP(NAME, LABEL)                                        \
   template <Numeric T>                                                         \
   struct NAME : UnaryOp<T, detail::NAME##Fn<T>, FixedString{LABEL}> {          \
     [[nodiscard]] static constexpr auto                                        \
@@ -228,17 +205,16 @@ struct min_impl {
     }                                                                          \
   };
 
-DIFF_UNARY_MATH_OP(SineOp, "sin", sin(u), cos(u))
-DIFF_UNARY_MATH_OP(CosineOp, "cos", cos(u), -sin(u))
+DIFF_UNARY_MATH_OP(SineOp, "sin")
+DIFF_UNARY_MATH_OP(CosineOp, "cos")
 
-DIFF_UNARY_MATH_OP(ExpOp, "exp", exp(u), exp(u))
-DIFF_UNARY_MATH_OP(TanOp, "tan", tan(u), T{1} / (cos(u) * cos(u)))
-DIFF_UNARY_MATH_OP(LogOp, "log", log(u), T{1} / u)
-DIFF_UNARY_MATH_OP(SqrtOp, "sqrt", sqrt(u), T{1} / (T{2} * sqrt(u)))
+DIFF_UNARY_MATH_OP(ExpOp, "exp")
+DIFF_UNARY_MATH_OP(TanOp, "tan")
+DIFF_UNARY_MATH_OP(LogOp, "log")
+DIFF_UNARY_MATH_OP(SqrtOp, "sqrt")
 
-template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
-  // Explicit (not macro-generated): the slope is sign(u), with a removable 0/0
-  // at the origin that the generic factor form can't express.
+template <Numeric T>
+struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept {
     auto abs_lhs = MonoExpression<AbsOp<T>, std::decay_t<decltype(lhs)>>{lhs};
@@ -254,25 +230,20 @@ template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"ab
   }
 };
 
-DIFF_UNARY_MATH_OP(AsinOp, "asin", asin(u), T{1} / sqrt(T{1} - u * u))
-DIFF_UNARY_MATH_OP(AcosOp, "acos", acos(u), T{-1} / sqrt(T{1} - u * u))
-DIFF_UNARY_MATH_OP(AtanOp, "atan", atan(u), T{1} / (T{1} + u * u))
+DIFF_UNARY_MATH_OP(AsinOp, "asin")
+DIFF_UNARY_MATH_OP(AcosOp, "acos")
+DIFF_UNARY_MATH_OP(AtanOp, "atan")
 
-DIFF_UNARY_MATH_OP(SinhOp, "sinh", sinh(u), cosh(u))
-DIFF_UNARY_MATH_OP(CoshOp, "cosh", cosh(u), sinh(u))
-DIFF_UNARY_MATH_OP(TanhOp, "tanh", tanh(u), T{1} / (cosh(u) * cosh(u)))
-DIFF_UNARY_MATH_OP(Log10Op, "log10", log10(u),
-                   T{1} / (u * static_cast<T>(std::numbers::ln10)))
-DIFF_UNARY_MATH_OP(CbrtOp, "cbrt", cbrt(u),
-                   T{1} / (T{3} * cbrt(u) * cbrt(u)))
-DIFF_UNARY_MATH_OP(AsinhOp, "asinh", asinh(u), T{1} / sqrt(u * u + T{1}))
-DIFF_UNARY_MATH_OP(AcoshOp, "acosh", acosh(u), T{1} / sqrt(u * u - T{1}))
-DIFF_UNARY_MATH_OP(AtanhOp, "atanh", atanh(u), T{1} / (T{1} - u * u))
-DIFF_UNARY_MATH_OP(ErfOp, "erf", erf(u),
-                   static_cast<T>(2.0 * std::numbers::inv_sqrtpi) *
-                       exp(-(u * u)))
+DIFF_UNARY_MATH_OP(SinhOp, "sinh")
+DIFF_UNARY_MATH_OP(CoshOp, "cosh")
+DIFF_UNARY_MATH_OP(TanhOp, "tanh")
+DIFF_UNARY_MATH_OP(Log10Op, "log10")
+DIFF_UNARY_MATH_OP(CbrtOp, "cbrt")
+DIFF_UNARY_MATH_OP(AsinhOp, "asinh")
+DIFF_UNARY_MATH_OP(AcoshOp, "acosh")
+DIFF_UNARY_MATH_OP(AtanhOp, "atanh")
+DIFF_UNARY_MATH_OP(ErfOp, "erf")
 #undef DIFF_UNARY_MATH_OP
-#undef DIFF_UNARY_MATH_FNS
 
 // pow(a, b) = a^b.  d(a^b) = a^b * (b' ln a + b a'/a).
 template <Numeric T>
@@ -324,32 +295,29 @@ struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, true> {
   }
 };
 
-// max / min: a non-smooth selection — the (sub)gradient follows the selected
-// operand.  derivative() is well-formed only when both operands' derivative
-// trees share a type (e.g. variables/constants); reverse mode always works.
 template <Numeric T>
 struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, true> {
   [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
+  derivative(const CExpression auto &lhs,
+             const CExpression auto &rhs) noexcept {
     return static_cast<T>(lhs) < static_cast<T>(rhs) ? rhs.derivative()
                                                      : lhs.derivative();
   }
-  // Subgradient: the full adjoint flows to the selected operand and zero to the
-  // other, which the generic reverse sweep still visits with a zero adjoint.
+
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
     constexpr std::size_t cb[]{CB...};
-    if (cache[cb[0]] < cache[cb[1]])
-      return {T{}, adj};
-    return {adj, T{}};
+    using ret_t = std::array<T, sizeof...(CB)>;
+    return (cache[cb[0]] < cache[cb[1]]) ? ret_t{T{}, adj} : ret_t{adj, T{}};
   }
 };
 
 template <Numeric T>
 struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, true> {
   [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
+  derivative(const CExpression auto &lhs,
+             const CExpression auto &rhs) noexcept {
     return static_cast<T>(rhs) < static_cast<T>(lhs) ? rhs.derivative()
                                                      : lhs.derivative();
   }
