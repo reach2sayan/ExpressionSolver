@@ -30,16 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install compilers and Boost (Ubuntu)
+      - name: Install compilers (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang gcc libboost-dev
-
-      - name: Install Boost headers via vcpkg (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: vcpkg install boost-headers:x64-windows boost-mp11
+          sudo apt-get install -y clang gcc
 
       - name: Set build directory
         id: strings
@@ -63,7 +58,6 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -S "${{ github.workspace }}"
 
       - name: Build

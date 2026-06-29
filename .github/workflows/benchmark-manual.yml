@@ -25,16 +25,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Clang and Boost (Ubuntu)
+      - name: Install Clang (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang libboost-dev linux-tools-common linux-tools-generic
-
-      - name: Install Boost headers via vcpkg (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: vcpkg install boost-headers:x64-windows boost-mp11
+          sudo apt-get install -y clang linux-tools-common linux-tools-generic
 
       - name: Set build directory
         id: strings
@@ -60,7 +55,6 @@ jobs:
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DDIFF_BUILD_BENCHMARKS=ON
-          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -S "${{ github.workspace }}"
 
       - name: Build benchmarks
