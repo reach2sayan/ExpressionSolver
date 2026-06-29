@@ -69,7 +69,7 @@ template <FixedString Sym, typename V>
 
 // The canonical (alphabetical-by-name) order of an expression's free symbols.
 template <CExpression Expr>
-[[nodiscard]] constexpr auto symbol_order() noexcept {
+[[nodiscard]] consteval auto symbol_order() noexcept {
   using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   constexpr std::size_t N = mp::mp_size(SymList{});
   std::array<std::string_view, N> out{};
@@ -405,7 +405,7 @@ template <std::size_t Order, CExpression Expr,
   TD result =
       expr.template eval_seeded_as<TD, symbols>(std::array<TD, 1>{seed});
 
-  S factorial = compile_time_factorial(Order);
+  constexpr S factorial = compile_time_factorial(Order);
   return result.c[Order] * factorial;
 }
 

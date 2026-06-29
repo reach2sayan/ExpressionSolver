@@ -1,6 +1,5 @@
 #pragma once
 #include "values.hpp"
-#include <array>
 #include "mpl.hpp"
 #include <type_traits>
 
@@ -77,7 +76,7 @@ constexpr auto make_const_variable(const Variable<T, symbol, S> &var) noexcept {
 template <CFixedString auto symbol, typename T, CFixedString auto othersymbol,
           typename S>
   requires(symbol != othersymbol)
-consteval auto
+constexpr auto
 make_const_variable(const Variable<T, othersymbol, S> &var) noexcept
     -> Variable<T, othersymbol, S> {
   return var;
@@ -98,26 +97,6 @@ constexpr auto make_const_variable(const Expression<Op, C...> &expr) noexcept
             make_const_variable<symbol>(child)...};
       },
       expr.expressions());
-}
-
-template <typename T, CFixedString auto C, typename S, std::size_t N>
-consteval void make_labels_array(const Variable<T, C, S> &,
-                                 std::array<std::string_view, N> &out,
-                                 std::size_t &index) {
-  out[index++] = C.view();
-}
-
-template <typename T, std::size_t N>
-consteval void make_labels_array(const Constant<T> &,
-                                 std::array<std::string_view, N> &,
-                                 std::size_t &) {}
-
-template <typename Op, typename... C, std::size_t N>
-consteval void make_labels_array(const Expression<Op, C...> &expr,
-                                 std::array<std::string_view, N> &out,
-                                 std::size_t &index) {
-  std::apply([&](const auto &...e) { (make_labels_array(e, out, index), ...); },
-             expr.expressions());
 }
 
 template <CFixedString auto symbol, typename Expr>
@@ -183,10 +162,6 @@ using unique_tuple_t = mp::mp_unique<sort_tuple_t<List>>;
 
 template <typename... Lists>
 using tuple_union_t = unique_tuple_t<mp::mp_append<Lists...>>;
-
-// ===========================================================================
-// Extract the set of Variable symbols from an expression type.
-// ===========================================================================
 
 template <typename T> consteval auto extract_symbols_impl() {
   if constexpr (is_variable_v<T>) {

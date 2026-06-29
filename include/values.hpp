@@ -253,7 +253,7 @@ DIFF_EXPR_BINFN(min, MinOp)
 #undef DIFF_EXPR_BINFN
 
 template <Numeric T> class Constant {
-  const T value;
+  T value;
   friend std::ostream &operator<<(std::ostream &out, const Constant<T> &c) {
     if constexpr (PRINT_CONSTANT_VALUE) {
       out << std::format("{}", c.value);
