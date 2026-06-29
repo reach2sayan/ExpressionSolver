@@ -1,6 +1,7 @@
 #pragma once
 
 #include "expressions.hpp"
+#include <array>
 #include <cmath>
 #include <functional>
 #include <numbers>
@@ -74,16 +75,10 @@ template <typename T> struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+
              const CExpression auto &rhs) noexcept {
     return lhs.derivative() + rhs.derivative();
   }
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
-    lhs.template backward<LB>(syms, adj, grads, cache);
-    rhs.template backward<RB>(syms, adj, grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &) noexcept {
+    return {adj, adj};
   }
 };
 
@@ -96,16 +91,11 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"}> {
     auto rmul = lhs * rhs.derivative();
     return std::move(lmul) + std::move(rmul);
   }
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
-    lhs.template backward<LB>(syms, adj * cache[RB], grads, cache);
-    rhs.template backward<RB>(syms, adj * cache[LB], grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    return {adj * cache[cb[1]], adj * cache[cb[0]]};
   }
 };
 
@@ -115,11 +105,10 @@ template <Numeric T> struct NegateOp : UnaryOp<T, std::negate<void>, FixedString
     auto d = lhs.derivative();
     return MonoExpression<NegateOp<T>, decltype(d)>{std::move(d)};
   }
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    expr.template backward<child_base_v<Base>>(syms, -adj, grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &) noexcept {
+    return {-adj};
   }
 };
 
@@ -133,17 +122,12 @@ template <Numeric T> struct DivideOp : BinaryOp<T, std::divides<void>, FixedStri
     auto denominator = rhs * rhs;
     return std::move(numerator) / std::move(denominator);
   }
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
-    const T b = cache[RB];
-    lhs.template backward<LB>(syms, adj / b, grads, cache);
-    rhs.template backward<RB>(syms, -adj * cache[LB] / (b * b), grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    const T b = cache[cb[1]];
+    return {adj / b, -adj * cache[cb[0]] / (b * b)};
   }
 };
 
@@ -312,26 +296,24 @@ struct min_impl {
 template <Numeric T> struct SineOp : UnaryOp<T, detail::sine_impl, FixedString{"sin"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::cos;
-    expr.template backward<CB>(syms, adj * cos(cache[CB]), grads, cache);
+    return {adj * cos(cache[cb[0]])};
   }
 };
 
 template <Numeric T> struct CosineOp : UnaryOp<T, detail::cosine_impl, FixedString{"cos"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::sin;
-    expr.template backward<CB>(syms, -adj * sin(cache[CB]), grads, cache);
+    return {-adj * sin(cache[cb[0]])};
   }
 };
 
@@ -351,232 +333,212 @@ template <Numeric T> struct ExpOp : UnaryOp<T, detail::exp_impl, FixedString{"ex
     return MonoExpression<ExpOp<T>, std::decay_t<decltype(lhs)>>{lhs} *
            lhs.derivative();
   }
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
     // exp'(u) == exp(u) == this node's own cached value (cache[Base]).
-    expr.template backward<child_base_v<Base>>(syms, adj * cache[Base], grads,
-                                               cache);
+    return {adj * cache[Base]};
   }
 };
 
 template <Numeric T> struct TanOp : UnaryOp<T, detail::tan_impl, FixedString{"tan"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::cos;
-    const T c = cos(cache[CB]);
-    expr.template backward<CB>(syms, adj / (c * c), grads, cache);
+    const T c = cos(cache[cb[0]]);
+    return {adj / (c * c)};
   }
 };
 
 template <Numeric T> struct LogOp : UnaryOp<T, detail::log_impl, FixedString{"log"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
-    expr.template backward<CB>(syms, adj / cache[CB], grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    return {adj / cache[cb[0]]};
   }
 };
 
 template <Numeric T> struct SqrtOp : UnaryOp<T, detail::sqrt_impl, FixedString{"sqrt"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::sqrt;
-    expr.template backward<CB>(syms, adj / (T{2} * sqrt(cache[CB])), grads,
-                               cache);
+    return {adj / (T{2} * sqrt(cache[cb[0]]))};
   }
 };
 
 template <Numeric T> struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
-    const T v = cache[CB];
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    const T v = cache[cb[0]];
     const T sign = v > T{} ? T{1} : v < T{} ? T{-1} : T{};
-    expr.template backward<CB>(syms, adj * sign, grads, cache);
+    return {adj * sign};
   }
 };
 
 template <Numeric T> struct AsinOp : UnaryOp<T, detail::asin_impl, FixedString{"asin"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::sqrt;
-    const T v = cache[CB];
-    expr.template backward<CB>(syms, adj / sqrt(T{1} - v * v), grads, cache);
+    const T v = cache[cb[0]];
+    return {adj / sqrt(T{1} - v * v)};
   }
 };
 
 template <Numeric T> struct AcosOp : UnaryOp<T, detail::acos_impl, FixedString{"acos"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::sqrt;
-    const T v = cache[CB];
-    expr.template backward<CB>(syms, -adj / sqrt(T{1} - v * v), grads, cache);
+    const T v = cache[cb[0]];
+    return {-adj / sqrt(T{1} - v * v)};
   }
 };
 
 template <Numeric T> struct AtanOp : UnaryOp<T, detail::atan_impl, FixedString{"atan"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
-    const T v = cache[CB];
-    expr.template backward<CB>(syms, adj / (T{1} + v * v), grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    const T v = cache[cb[0]];
+    return {adj / (T{1} + v * v)};
   }
 };
 
 template <Numeric T> struct SinhOp : UnaryOp<T, detail::sinh_impl, FixedString{"sinh"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::cosh;
-    expr.template backward<CB>(syms, adj * cosh(cache[CB]), grads, cache);
+    return {adj * cosh(cache[cb[0]])};
   }
 };
 
 template <Numeric T> struct CoshOp : UnaryOp<T, detail::cosh_impl, FixedString{"cosh"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::sinh;
-    expr.template backward<CB>(syms, adj * sinh(cache[CB]), grads, cache);
+    return {adj * sinh(cache[cb[0]])};
   }
 };
 
 template <Numeric T> struct TanhOp : UnaryOp<T, detail::tanh_impl, FixedString{"tanh"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::cosh;
-    const T c = cosh(cache[CB]);
-    expr.template backward<CB>(syms, adj / (c * c), grads, cache);
+    const T c = cosh(cache[cb[0]]);
+    return {adj / (c * c)};
   }
 };
 
 template <Numeric T> struct Log10Op : UnaryOp<T, detail::log10_impl, FixedString{"log10"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     const T ln10 = static_cast<T>(std::numbers::ln10);
-    expr.template backward<CB>(syms, adj / (cache[CB] * ln10), grads, cache);
+    return {adj / (cache[cb[0]] * ln10)};
   }
 };
 
 template <Numeric T> struct CbrtOp : UnaryOp<T, detail::cbrt_impl, FixedString{"cbrt"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::cbrt;
-    const T c = cbrt(cache[CB]);
-    expr.template backward<CB>(syms, adj / (T{3} * c * c), grads, cache);
+    const T c = cbrt(cache[cb[0]]);
+    return {adj / (T{3} * c * c)};
   }
 };
 
 template <Numeric T> struct AsinhOp : UnaryOp<T, detail::asinh_impl, FixedString{"asinh"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::sqrt;
-    const T v = cache[CB];
-    expr.template backward<CB>(syms, adj / sqrt(v * v + T{1}), grads, cache);
+    const T v = cache[cb[0]];
+    return {adj / sqrt(v * v + T{1})};
   }
 };
 
 template <Numeric T> struct AcoshOp : UnaryOp<T, detail::acosh_impl, FixedString{"acosh"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::sqrt;
-    const T v = cache[CB];
-    expr.template backward<CB>(syms, adj / sqrt(v * v - T{1}), grads, cache);
+    const T v = cache[cb[0]];
+    return {adj / sqrt(v * v - T{1})};
   }
 };
 
 template <Numeric T> struct AtanhOp : UnaryOp<T, detail::atanh_impl, FixedString{"atanh"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
-    const T v = cache[CB];
-    expr.template backward<CB>(syms, adj / (T{1} - v * v), grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    const T v = cache[cb[0]];
+    return {adj / (T{1} - v * v)};
   }
 };
 
 template <Numeric T> struct ErfOp : UnaryOp<T, detail::erf_impl, FixedString{"erf"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &expr, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t CB = child_base_v<Base>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::exp;
-    const T v = cache[CB];
+    const T v = cache[cb[0]];
     const T two_over_sqrt_pi = static_cast<T>(2.0 * std::numbers::inv_sqrtpi);
-    expr.template backward<CB>(syms, adj * two_over_sqrt_pi * exp(-(v * v)),
-                               grads, cache);
+    return {adj * two_over_sqrt_pi * exp(-(v * v))};
   }
 };
 
@@ -585,20 +547,15 @@ template <Numeric T>
 struct PowOp : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, true> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::pow, std::log;
-    const T a = cache[LB];
-    const T b = cache[RB];
+    const T a = cache[cb[0]];
+    const T b = cache[cb[1]];
     const T p = pow(a, b);
-    lhs.template backward<LB>(syms, adj * b * pow(a, b - T{1}), grads, cache);
-    rhs.template backward<RB>(syms, adj * p * log(a), grads, cache);
+    return {adj * b * pow(a, b - T{1}), adj * p * log(a)};
   }
 };
 
@@ -607,19 +564,14 @@ template <Numeric T>
 struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}, true> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
-    const T y = cache[LB];
-    const T x = cache[RB];
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    const T y = cache[cb[0]];
+    const T x = cache[cb[1]];
     const T q = x * x + y * y;
-    lhs.template backward<LB>(syms, adj * x / q, grads, cache);
-    rhs.template backward<RB>(syms, -adj * y / q, grads, cache);
+    return {adj * x / q, -adj * y / q};
   }
 };
 
@@ -628,20 +580,15 @@ template <Numeric T>
 struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, true> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
     using std::hypot;
-    const T x = cache[LB];
-    const T y = cache[RB];
+    const T x = cache[cb[0]];
+    const T y = cache[cb[1]];
     const T h = hypot(x, y);
-    lhs.template backward<LB>(syms, adj * x / h, grads, cache);
-    rhs.template backward<RB>(syms, adj * y / h, grads, cache);
+    return {adj * x / h, adj * y / h};
   }
 };
 
@@ -655,18 +602,15 @@ struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, true> {
     return static_cast<T>(lhs) < static_cast<T>(rhs) ? rhs.derivative()
                                                      : lhs.derivative();
   }
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
-    if (cache[LB] < cache[RB])
-      rhs.template backward<RB>(syms, adj, grads, cache);
-    else
-      lhs.template backward<LB>(syms, adj, grads, cache);
+  // Subgradient: the full adjoint flows to the selected operand and zero to the
+  // other, which the generic reverse sweep still visits with a zero adjoint.
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    if (cache[cb[0]] < cache[cb[1]])
+      return {T{}, adj};
+    return {adj, T{}};
   }
 };
 
@@ -677,18 +621,13 @@ struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, true> {
     return static_cast<T>(rhs) < static_cast<T>(lhs) ? rhs.derivative()
                                                      : lhs.derivative();
   }
-  template <std::size_t Base>
-  static constexpr void backward(const CExpression auto &lhs,
-                                 const CExpression auto &rhs, T adj,
-                                 const auto &syms, auto &grads,
-                                 const auto &cache) noexcept {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, std::remove_cvref_t<decltype(lhs)>>;
-    if (cache[RB] < cache[LB])
-      rhs.template backward<RB>(syms, adj, grads, cache);
-    else
-      lhs.template backward<LB>(syms, adj, grads, cache);
+  template <std::size_t Base, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    if (cache[cb[1]] < cache[cb[0]])
+      return {T{}, adj};
+    return {adj, T{}};
   }
 };
 

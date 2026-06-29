@@ -50,7 +50,6 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   return g;
 }
 
-// Convenience: differentiate every variable.
 template <typename F>
 std::vector<double> gradient(F &&f, std::span<const double> x) {
   const auto all = detail::iota_indices(x.size());
@@ -82,10 +81,11 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
   // Seed once to the zero-derivative base.  Of a dual2nd's four scalars
   // [val.val, val.deriv, deriv.val, deriv.deriv] only the two first-order seed
   // slots ever move per probe: val.deriv carries e_j (inner, d/dx_j) and
-  // deriv.val carries e_i (outer, d/dx_i).  val.val == x[k] and the second-order
-  // seed deriv.deriv == 0 are loop-invariant, so we toggle just the two
-  // derivative scalars in place rather than reconstructing the whole dual2nd on
-  // every seed and reset (the gradient() driver toggles the same way).
+  // deriv.val carries e_i (outer, d/dx_i).  val.val == x[k] and the
+  // second-order seed deriv.deriv == 0 are loop-invariant, so we toggle just
+  // the two derivative scalars in place rather than reconstructing the whole
+  // dual2nd on every seed and reset (the gradient() driver toggles the same
+  // way).
   std::ranges::transform(x, dof.begin(), [](double v) {
     return dual2nd{Inner{v, 0.0}, Inner{0.0, 0.0}};
   });

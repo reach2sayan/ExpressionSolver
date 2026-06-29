@@ -23,18 +23,12 @@ template <typename O>
 concept COperation =
     requires { typename O::value_type; } && Numeric<typename O::value_type>;
 
-// is_expression_type is the single source of truth for "is this a node?", and
-// the CExpression concept reads it.  Both are declared up here (the per-type
-// specialisations come below, once the node types are declared) so that the
-// Expression node can constrain its children to themselves be expressions.
 template <typename T> struct is_expression_type : std::false_type {};
 template <typename T>
 concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
 
 template <COperation Op, CExpression... Children> class Expression;
-// A unary node is just a one-child Expression.  Kept as an alias so the rest of
-// the codebase (and the arity-specialised traits) can still spell "unary" while
-// there is a single node template underneath.
+
 template <COperation Op, CExpression Exp>
 using MonoExpression = Expression<Op, Exp>;
 template <Numeric T> class Constant;
@@ -106,15 +100,43 @@ template <COperation Op> struct BaseExpression {
 };
 
 // ===========================================================================
-// ExpressionOps — shared CRTP base implementing every fan-out algorithm once.
+// Node counting + preorder cache offsets.
 //
-// Every node — unary, binary, n-ary — evaluates, differentiates, seeds,
-// collects and back-propagates identically: unpack the operands and hand them
-// to the operator.  The only thing that varies is the arity, which the derived
-// node exposes through `expressions()` as its operand tuple; std::apply then
-// adapts the call for free.  Add a new node arity and the algorithms come along
-// for free — there is nothing per-node to re-implement.
+// Every node — internal or leaf — gets one cache slot.  A node at preorder slot
+// `Base` owns slot `Base`; its I-th child's subtree starts after this node and
+// every earlier sibling's subtree (child_base_at).  The forward fill
+// (fill_cache) and the reverse sweep (ExpressionOps::backward) both derive child
+// slots through child_base_at, so they always agree.
+//
+// node_count is one rule: 1 + the sum over the operand pack (children_t).  A
+// leaf has no children_t, so the `requires` falls through to 1.
 // ===========================================================================
+template <typename T> consteval std::size_t node_count_fn() {
+  using U = std::remove_cvref_t<T>;
+  if constexpr (requires { typename U::children_t; }) {
+    return []<typename... C>(std::type_identity<std::tuple<C...>>) consteval {
+      return (1 + ... + node_count_fn<std::remove_cvref_t<C>>());
+    }(std::type_identity<typename U::children_t>{});
+  } else {
+    return 1; // constant / variable
+  }
+}
+
+template <typename T>
+inline constexpr std::size_t node_count_v =
+    node_count_fn<std::remove_cvref_t<T>>();
+
+// Preorder cache slot of the I-th child of a node at `Base`: skip this node (the
+// +1) and every earlier sibling's whole subtree.
+template <std::size_t Base, typename Kids, std::size_t I>
+consteval std::size_t child_base_at() {
+  std::size_t off = Base + 1;
+  [&]<std::size_t... K>(std::index_sequence<K...>) {
+    ((off += node_count_v<std::tuple_element_t<K, Kids>>), ...);
+  }(std::make_index_sequence<I>{});
+  return off;
+}
+
 template <typename Derived, COperation Op>
 class ExpressionOps : public BaseExpression<Op> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
@@ -185,31 +207,29 @@ public:
         self().expressions());
   }
 
-  // Reverse sweep.  `Base` is this node's preorder slot in the value cache;
-  // Op::backward derives its children's slots from it (see node_count_v /
-  // child_base_v / rhs_base_v below) and reads operand values from `cache`
-  // instead of recomputing them.
+  // Reverse sweep.  `Base` is this node's preorder slot.  The op only supplies
+  // the per-child adjoint (incoming adj times the local partial, read from the
+  // value cache); the offset arithmetic and the recursion into each child are
+  // the same for every arity and live here, once.
   template <std::size_t Base = 0>
   constexpr void backward(const auto &syms, value_type adj, auto &grads,
                           const auto &cache) const noexcept {
-    std::apply(
-        [&](const auto &...e) noexcept {
-          Op::template backward<Base>(e..., adj, syms, grads, cache);
-        },
-        self().expressions());
+    using Kids = typename Derived::children_t;
+    [&]<std::size_t... I>(std::index_sequence<I...>) noexcept {
+      // Each child's adjoint is consumed exactly once, so move it into the
+      // recursive call (a no-op for the trivially-copyable scalar/dual value
+      // types, but correct intent and free if value_type ever grows heavier).
+      auto child_adj =
+          Op::template adjoints<Base, child_base_at<Base, Kids, I>()...>(adj,
+                                                                         cache);
+      (std::get<I>(self().expressions())
+           .template backward<child_base_at<Base, Kids, I>()>(
+               syms, std::move(child_adj[I]), grads, cache),
+       ...);
+    }(std::make_index_sequence<std::tuple_size_v<Kids>>{});
   }
 };
 
-// ===========================================================================
-// Expression — n-ary expression node.
-//
-// A single variadic node covers every arity: a unary node is a one-child
-// Expression (spelled MonoExpression via the alias above), a binary node has
-// two children, and so on.  Operands live in one std::tuple; ExpressionOps
-// folds over it with std::apply, so eval/derivative/seed/collect/backward are
-// arity-agnostic.  There is no separate children() accessor any more — the
-// operand tuple is the storage, exposed directly through expressions().
-// ===========================================================================
 template <COperation Op, CExpression... Children>
 class Expression : public ExpressionOps<Expression<Op, Children...>, Op> {
   std::tuple<Children...> operands;
@@ -218,7 +238,8 @@ class Expression : public ExpressionOps<Expression<Op, Children...>, Op> {
       out << std::get<0>(e.operands);
     } else {
       out << '(';
-      std::apply([&out](const auto &...c) { Op::print(out, c...); }, e.operands);
+      std::apply([&out](const auto &...c) { Op::print(out, c...); },
+                 e.operands);
       out << ')';
     }
     return out;
@@ -228,57 +249,15 @@ class Expression : public ExpressionOps<Expression<Op, Children...>, Op> {
 
 public:
   using children_t = std::tuple<Children...>;
-  // Back-compat aliases for the arity-specialised traits.  lhs_type is the
-  // first operand; rhs_type is the second when binary (and harmlessly the first
-  // for a unary node, where the binary traits never read it).
-  using lhs_type = std::tuple_element_t<0, children_t>;
-  using rhs_type =
-      std::tuple_element_t<(sizeof...(Children) > 1 ? 1 : 0), children_t>;
 
   constexpr Expression(Children... c) noexcept : operands{std::move(c)...} {}
-
   [[nodiscard]] constexpr const children_t &expressions() const noexcept {
     return operands;
   }
-  [[nodiscard]] constexpr children_t &expressions() noexcept { return operands; }
-};
-
-// ===========================================================================
-// Node counting + preorder cache offsets.
-//
-// Lives here (not traits.hpp) so operations.hpp can use it in Op::backward
-// without an include cycle (operations -> traits -> values -> operations).
-// Every node — internal or leaf — gets one cache slot.  A node at preorder
-// slot `Base` owns slot `Base`; a unary child starts at `Base + 1`; a binary
-// node's lhs subtree starts at `Base + 1` and its rhs subtree at
-// `Base + 1 + node_count_v<LHS>`.  The forward fill (fill_cache) and the
-// reverse sweep (Op::backward) MUST agree on these offsets — both go through
-// child_base_v / rhs_base_v.
-// ===========================================================================
-// One rule: a node's count is 1 + the sum over its children.  An internal node
-// exposes its operand types as children_t; leaves (Constant/Variable) don't, so
-// the `requires` falls through to 1.  The fold over the child type pack is the
-// reduce -- std::algorithm can't apply because the children are heterogeneous
-// types, not a homogeneous range.  Adding a new node arity needs no change here,
-// matching how the rest of the file folds over the operand tuple.
-template <typename T> consteval std::size_t node_count_fn() {
-  using U = std::remove_cvref_t<T>;
-  if constexpr (requires { typename U::children_t; }) {
-    return []<typename... C>(std::type_identity<std::tuple<C...>>) consteval {
-      return (1 + ... + node_count_fn<std::remove_cvref_t<C>>());
-    }(std::type_identity<typename U::children_t>{});
-  } else {
-    return 1;
+  [[nodiscard]] constexpr children_t &expressions() noexcept {
+    return operands;
   }
-}
-
-template <typename T>
-inline constexpr std::size_t node_count_v = node_count_fn<std::remove_cvref_t<T>>();
-
-template <std::size_t Base>
-inline constexpr std::size_t child_base_v = Base + 1;
-template <std::size_t Base, typename LHS>
-inline constexpr std::size_t rhs_base_v = Base + 1 + node_count_v<LHS>;
+};
 
 namespace detail {
 template <typename V, std::size_t I, typename = void>
@@ -295,8 +274,6 @@ struct expression_element<V, I,
 
 } // namespace diff
 
-// The {value, derivative} get<>() interface — tuple_size is 2 for any node,
-// independent of operand arity.
 namespace std {
 template <diff::COperation Op, diff::CExpression... Children>
 struct tuple_size<diff::Expression<Op, Children...>>

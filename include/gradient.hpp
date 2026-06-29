@@ -23,22 +23,16 @@ using node_cache_t =
 
 template <std::size_t Base = 0, CExpression E, typename Cache>
 constexpr auto fill_cache(const E &node, Cache &cache) noexcept {
-  using VT = typename std::remove_cvref_t<E>::value_type;
-  if constexpr (is_binary_expression_v<std::remove_cvref_t<E>>) {
-    constexpr std::size_t LB = child_base_v<Base>;
-    constexpr std::size_t RB =
-        rhs_base_v<Base, typename std::remove_cvref_t<E>::lhs_type>;
-    const auto &[lhs, rhs] = node.expressions();
-    auto l = fill_cache<LB>(lhs, cache);
-    auto r = fill_cache<RB>(rhs, cache);
-    VT v = typename std::remove_cvref_t<E>::op_type::func_type{}(l, r);
-    cache[Base] = v;
-    return v;
-  } else if constexpr (is_mono_expression_v<std::remove_cvref_t<E>>) {
-    constexpr std::size_t CB = child_base_v<Base>;
-    const auto &[child] = node.expressions();
-    auto c = fill_cache<CB>(child, cache);
-    VT v = typename std::remove_cvref_t<E>::op_type::func_type{}(c);
+  using U = std::remove_cvref_t<E>;
+  using VT = typename U::value_type;
+  if constexpr (is_expression_node_v<U>) {
+    using Kids = typename U::children_t;
+    // Fill each child subtree into its slot, then combine the child values with
+    // this node's operator into this node's slot.
+    VT v = [&]<std::size_t... I>(std::index_sequence<I...>) {
+      return typename U::op_type::func_type{}(fill_cache<child_base_at<Base, Kids, I>()>(
+          std::get<I>(node.expressions()), cache)...);
+    }(std::make_index_sequence<std::tuple_size_v<Kids>>{});
     cache[Base] = v;
     return v;
   } else { // leaf (Variable / Constant)

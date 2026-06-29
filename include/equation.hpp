@@ -56,8 +56,6 @@ template <typename T>
 concept CEquation = CExpression<T> and std::constructible_from<T>;
 template <CExpression... Ts> class Equation;
 
-// Build a std::tuple of Jacobian rows — one row (std::tuple of derivatives)
-// per expression in the std::tuple es.
 template <typename... Syms, typename... Exprs>
 constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
                              mp::mp_list<Syms...> = {}) noexcept {
