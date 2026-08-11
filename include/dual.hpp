@@ -19,8 +19,7 @@ public:
   constexpr Dual() noexcept = default;
   constexpr explicit Dual(T v, T d = T{}) noexcept : val(v), deriv(d) {}
 
-  template <typename U>
-    requires std::is_arithmetic_v<U>
+  template <CArithmetic U>
   constexpr Dual(U s) noexcept : val(T(s)), deriv(T{}) {}
   template <typename O> constexpr Dual &operator+=(const O &o) noexcept {
     return *this = *this + o;
@@ -63,21 +62,17 @@ public:
   }
 };
 
-namespace {
-template <typename T> T dual_scalar_impl(T &&);
-template <typename T> T dual_scalar_impl(Dual<T> &&);
-template <typename T> consteval bool is_dual_impl(std::type_identity<T>) {
-  return false;
-}
-template <typename T> consteval bool is_dual_impl(std::type_identity<Dual<T>>) {
-  return true;
-}
-} // anonymous namespace
+template <typename T> inline constexpr bool is_dual_v = false;
+template <typename T> inline constexpr bool is_dual_v<Dual<T>> = true;
 
-template <typename T>
-inline constexpr bool is_dual_v = is_dual_impl(std::type_identity<T>{});
-template <typename T>
-using dual_scalar_t = decltype(dual_scalar_impl(std::declval<T>()));
+// dual_scalar_t<X>: peel one Dual<> layer if there is one, else X unchanged.
+template <typename T> struct dual_scalar_type {
+  using type = T;
+};
+template <typename T> struct dual_scalar_type<Dual<T>> {
+  using type = T;
+};
+template <typename T> using dual_scalar_t = typename dual_scalar_type<T>::type;
 
 // dual_value_t<X>: the component type T of a Dual<T>.
 template <typename X> struct dual_value_type;
@@ -89,6 +84,12 @@ using dual_value_t = typename dual_value_type<std::remove_cvref_t<X>>::type;
 
 template <typename X>
 concept DualLike = is_dual_v<std::remove_cvref_t<X>>;
+
+// Two duals over the same component type — the pairing every binary dual
+// operator and math function accepts.
+template <typename A, typename B>
+concept DualCompatible = DualLike<A> && DualLike<B> &&
+                         std::same_as<dual_value_t<A>, dual_value_t<B>>;
 
 } // namespace diff
 
@@ -161,15 +162,10 @@ using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 // X is a dual or a plain arithmetic scalar — the set of operands these
 // helpers accept.
 template <typename X>
-concept DualOrArithmetic = is_dual_v<std::remove_cvref_t<X>> ||
-                           std::is_arithmetic_v<std::remove_cvref_t<X>>;
+concept DualOrArithmetic = DualLike<X> || CArithmetic<X>;
 
 // val(): recursively peel every Dual<> layer to the underlying base scalar.
-template <typename T>
-  requires std::is_arithmetic_v<T>
-constexpr T val(T x) noexcept {
-  return x;
-}
+template <CArithmetic T> constexpr T val(T x) noexcept { return x; }
 template <typename T> constexpr auto val(const Dual<T> &d) noexcept {
   return val(d.template get<0>());
 }
@@ -185,9 +181,16 @@ template <typename D, typename U> constexpr D as_constant(U s) noexcept {
 }
 } // namespace detail
 
+// C is a zero-derivative operand for the dual A: either a bare arithmetic
+// scalar or A's own component type.
 template <typename C, typename A>
-concept ConstOperand = std::is_arithmetic_v<std::remove_cvref_t<C>> ||
-                       std::is_same_v<std::remove_cvref_t<C>, dual_value_t<A>>;
+concept ConstOperand =
+    CArithmetic<C> || std::same_as<std::remove_cvref_t<C>, dual_value_t<A>>;
+
+// C is anything *other* than Dual<T> — selects the (Dual, scalar) formulas
+// below without competing with their (Dual, Dual) siblings.
+template <typename C, typename T>
+concept ScalarOperand = !std::same_as<std::remove_cvref_t<C>, Dual<T>>;
 
 template <typename T>
 constexpr Dual<T> dual_add(const Dual<T> &a, const Dual<T> &b) noexcept {
@@ -196,8 +199,7 @@ constexpr Dual<T> dual_add(const Dual<T> &a, const Dual<T> &b) noexcept {
   return Dual<T>{av + bv, ad + bd};
 }
 
-template <typename T, typename C>
-  requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
+template <typename T, ScalarOperand<T> C>
 constexpr Dual<T> dual_add(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av + s, ad};
@@ -208,14 +210,12 @@ constexpr Dual<T> dual_sub(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[bv, bd] = b;
   return Dual<T>{av - bv, ad - bd};
 }
-template <typename T, typename C>
-  requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
+template <typename T, ScalarOperand<T> C>
 constexpr Dual<T> dual_sub(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av - s, ad};
 }
-template <typename T, typename C>
-  requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
+template <typename T, ScalarOperand<T> C>
 constexpr Dual<T> dual_sub(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s - a == -(a - s);
   return Dual<T>{-(av - s), -ad};
@@ -226,8 +226,7 @@ constexpr Dual<T> dual_mul(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[bv, bd] = b;
   return Dual<T>{av * bv, ad * bv + av * bd};
 }
-template <typename T, typename C>
-  requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
+template <typename T, ScalarOperand<T> C>
 constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
   return Dual<T>{av * s, ad * s};
@@ -245,15 +244,13 @@ constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
   const T q = av * inv; // value = a / b
   return Dual<T>{q, (ad - q * bd) * inv};
 }
-template <typename T, typename C>
-  requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
+template <typename T, ScalarOperand<T> C>
 constexpr Dual<T> dual_div(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // s is a zero-derivative constant
   const T inv = T{1} / T(s);
   return Dual<T>{av * inv, ad * inv};
 }
-template <typename T, typename C>
-  requires(!std::is_same_v<std::remove_cvref_t<C>, Dual<T>>)
+template <typename T, ScalarOperand<T> C>
 constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (VectorDual-safe)
   const T inv = T{1} / av;
@@ -289,13 +286,11 @@ struct div_combine {
 // Each operator computes value+derivative immediately via the *_combine formula
 // and returns a concrete Dual<T>.
 #define DIFF_DUAL_BINOP(OP, COMB)                                              \
-  template <DualLike A, DualLike B>                                            \
-    requires(std::is_same_v<dual_value_t<A>, dual_value_t<B>>)                 \
+  template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
     return COMB{}(a, b);                                                       \
   }                                                                            \
-  template <typename A, typename C>                                            \
-    requires(DualLike<A> && ConstOperand<C, A>)                                \
+  template <DualLike A, ConstOperand<A> C>                                     \
   constexpr auto operator OP(A &&a, C &&s) noexcept {                          \
     return COMB{}(a, s);                                                       \
   }
@@ -307,23 +302,19 @@ DIFF_DUAL_BINOP(/, div_combine)
 
 // Scalar-on-the-left: + and * commute (pass the dual first); - and / use the
 // reversed (C, Dual) combine (pass the scalar first).
-template <typename C, DualLike A>
-  requires(ConstOperand<C, A>)
+template <DualLike A, ConstOperand<A> C>
 constexpr auto operator+(C &&s, A &&a) noexcept {
   return add_combine{}(a, s);
 }
-template <typename C, DualLike A>
-  requires(ConstOperand<C, A>)
+template <DualLike A, ConstOperand<A> C>
 constexpr auto operator*(C &&s, A &&a) noexcept {
   return mul_combine{}(a, s);
 }
-template <typename C, DualLike A>
-  requires(ConstOperand<C, A>)
+template <DualLike A, ConstOperand<A> C>
 constexpr auto operator-(C &&s, A &&a) noexcept {
   return sub_combine{}(s, a);
 }
-template <typename C, DualLike A>
-  requires(ConstOperand<C, A>)
+template <DualLike A, ConstOperand<A> C>
 constexpr auto operator/(C &&s, A &&a) noexcept {
   return div_combine{}(s, a);
 }
@@ -342,9 +333,7 @@ constexpr auto operator-(DualLike auto &&a) noexcept {
 }
 
 #define DIFF_DUAL_UNARY(NAME)                                                  \
-  template <typename A>                                                        \
-    requires DualLike<A>                                                       \
-  constexpr auto NAME(A &&a) noexcept {                                        \
+  template <DualLike A> constexpr auto NAME(A &&a) noexcept {                  \
     return NAME##_combine{}(a);                                                \
   }
 
@@ -408,17 +397,13 @@ DIFF_DUAL_UNARY(erf)
 // ---- comparisons (operate on materialized values) -------------------------
 template <typename A, typename B>
 concept DualComparable =
-    (DualLike<A> || std::is_arithmetic_v<std::remove_cvref_t<A>>) &&
-    (DualLike<B> || std::is_arithmetic_v<std::remove_cvref_t<B>>) &&
-    (DualLike<A> || DualLike<B>);
+    DualOrArithmetic<A> && DualOrArithmetic<B> && (DualLike<A> || DualLike<B>);
 
-template <typename A, typename B>
-  requires DualComparable<A, B>
+template <typename A, DualComparable<A> B>
 constexpr auto operator<=>(const A &a, const B &b) noexcept {
   return val(a) <=> val(b);
 }
-template <typename A, typename B>
-  requires DualComparable<A, B>
+template <typename A, DualComparable<A> B>
 constexpr bool operator==(const A &a, const B &b) noexcept {
   return val(a) == val(b);
 }
@@ -472,9 +457,7 @@ struct hypot_combine {
   }
 };
 #define DIFF_DUAL_BINFN(NAME, COMB)                                            \
-  template <typename A, typename B>                                            \
-    requires(DualLike<A> && DualLike<B> &&                                     \
-             std::is_same_v<dual_value_t<A>, dual_value_t<B>>)                 \
+  template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto NAME(A &&a, B &&b) noexcept {                                 \
     return COMB{}(a, b);                                                       \
   }
@@ -487,10 +470,7 @@ DIFF_DUAL_BINFN(hypot, hypot_combine)
 
 // 3-argument hypot(x, y, z) = sqrt(x² + y² + z²) (all-dual; scalar mixing for
 // the ternary form is not provided).  d hypot = (x*dx + y*dy + z*dz) / hypot.
-template <typename A, typename B, typename C>
-  requires(DualLike<A> && DualLike<B> && DualLike<C> &&
-           std::is_same_v<dual_value_t<A>, dual_value_t<B>> &&
-           std::is_same_v<dual_value_t<A>, dual_value_t<C>>)
+template <DualLike A, DualCompatible<A> B, DualCompatible<A> C>
 constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
   using std::hypot;
   using T = dual_value_t<A>;
@@ -503,14 +483,12 @@ constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
 }
 
 #define DIFF_PROMOTE_BINARY(NAME)                                              \
-  template <typename A, typename U>                                            \
-    requires(DualLike<A> && std::is_arithmetic_v<U>)                           \
+  template <DualLike A, CArithmetic U>                                         \
   constexpr auto NAME(A &&a, U s) noexcept {                                   \
     using T = dual_value_t<A>;                                                 \
     return NAME(static_cast<A &&>(a), detail::as_constant<Dual<T>>(s));        \
   }                                                                            \
-  template <typename A, typename U>                                            \
-    requires(DualLike<A> && std::is_arithmetic_v<U>)                           \
+  template <DualLike A, CArithmetic U>                                         \
   constexpr auto NAME(U s, A &&a) noexcept {                                   \
     using T = dual_value_t<A>;                                                 \
     return NAME(detail::as_constant<Dual<T>>(s), static_cast<A &&>(a));        \

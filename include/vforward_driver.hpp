@@ -19,8 +19,8 @@ namespace diff {
 // graph bridged into the driver) advertises this tag.  hessian() routes such
 // callables to the scalar driver — see the note on SeededExprEnergy.
 template <typename F>
-concept seeded_expr_energy =
-    requires { requires std::remove_cvref_t<F>::kSeededExprEnergy == true; };
+concept CSeededExprEnergy =
+    requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };
 
 namespace detail {
 
@@ -141,7 +141,7 @@ HessianResult hessian(F &&f, std::span<const double> x,
   if constexpr (CExpression<F>) {
     return detail::hessian_scalar(seeded_energy(static_cast<F &&>(f)), x,
                                   active);
-  } else if constexpr (seeded_expr_energy<F>) {
+  } else if constexpr (CSeededExprEnergy<F>) {
     return detail::hessian_scalar(static_cast<F &&>(f), x, active);
   } else {
     return hessian_vforward(static_cast<F &&>(f), x, active);
@@ -150,7 +150,7 @@ HessianResult hessian(F &&f, std::span<const double> x,
 template <typename F> HessianResult hessian(F &&f, std::span<const double> x) {
   if constexpr (CExpression<F>) {
     return detail::hessian_scalar(seeded_energy(static_cast<F &&>(f)), x);
-  } else if constexpr (seeded_expr_energy<F>) {
+  } else if constexpr (CSeededExprEnergy<F>) {
     return detail::hessian_scalar(static_cast<F &&>(f), x);
   } else {
     return hessian_vforward(static_cast<F &&>(f), x);

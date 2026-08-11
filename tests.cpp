@@ -2369,7 +2369,7 @@ TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
 
   // Explicit bridge for cross-checking against both numeric drivers.
   auto f = diff::seeded_energy(expr);
-  static_assert(diff::seeded_expr_energy<decltype(f)>,
+  static_assert(diff::CSeededExprEnergy<decltype(f)>,
                 "seeded_energy() must advertise the routing tag");
   static_assert(decltype(f)::arity == 4, "arity deduced from symbol set");
   const auto Hscalar = diff::detail::hessian_scalar(f, xs);
@@ -2395,7 +2395,7 @@ TEST(SeededExprEnergy, RawLambdaStaysVectorForward) {
     using std::log;
     return y[0] * log(y[0]) + y[1] * log(y[1]);
   };
-  static_assert(!diff::seeded_expr_energy<decltype(f)>,
+  static_assert(!diff::CSeededExprEnergy<decltype(f)>,
                 "untagged lambda must not be treated as expr-template energy");
   static_assert(!diff::CExpression<decltype(f)>,
                 "a lambda is not an expression graph");
@@ -2694,3 +2694,153 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
                 2.0 * std::cos(2.0 * x0), 1e-10);
   }
 }
+
+// ===========================================================================
+// Fused forward tangent sweep (eval_with_tangent / Op::forward)
+//
+// eval_with_tangent<"s"> walks the *existing* expression tree once, carrying a
+// {value, tangent} pair upward — no symbolic derivative tree (derivative()) and
+// no value_type substitution (the Dual<T> path).  Every test below cross-checks
+// it against one of those two independent implementations, so a mistranscribed
+// forward rule in operations.hpp cannot pass silently.
+// ===========================================================================
+
+// Single-variable expression: value must match eval(), tangent must match the
+// reverse-mode gradient computed by the separate backward()/adjoints() sweep.
+// The two agree algebraically but not bit-for-bit — e.g. the quotient rule
+// evaluates (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse — so the
+// tangent is compared to a tolerance a few ULP wide rather than exactly.
+#define EXPECT_TANGENT_MATCHES_REVERSE(expr_)                                  \
+  do {                                                                         \
+    const auto e_ = (expr_);                                                   \
+    const auto t_ = e_.template eval_with_tangent<"x">();                      \
+    EXPECT_DOUBLE_EQ(t_.value, e_.eval());                                     \
+    EXPECT_NEAR(t_.deriv, reverse_mode_grad(e_)[0], 1e-12);                    \
+  } while (0)
+
+TEST(ForwardTangentSweep, LeafSeeding) {
+  auto x = PV(2.0, "x");
+  auto y = PV(3.0, "y");
+
+  // The seeded variable carries tangent 1 ...
+  const auto tx = x.eval_with_tangent<"x">();
+  EXPECT_DOUBLE_EQ(tx.value, 2.0);
+  EXPECT_DOUBLE_EQ(tx.deriv, 1.0);
+
+  // ... every other variable carries 0, including one whose name differs only
+  // in length (FixedString comparison across sizes).
+  const auto ty = y.eval_with_tangent<"x">();
+  EXPECT_DOUBLE_EQ(ty.value, 3.0);
+  EXPECT_DOUBLE_EQ(ty.deriv, 0.0);
+  EXPECT_DOUBLE_EQ(x.eval_with_tangent<"xx">().deriv, 0.0);
+
+  // Constants are always zero-tangent.
+  const auto tc = PC(5.0).eval_with_tangent<"x">();
+  EXPECT_DOUBLE_EQ(tc.value, 5.0);
+  EXPECT_DOUBLE_EQ(tc.deriv, 0.0);
+}
+
+TEST(ForwardTangentSweep, ArithmeticRules) {
+  double x0 = 1.7;
+  auto x = PV(x0, "x");
+
+  EXPECT_TANGENT_MATCHES_REVERSE(x + x * x);         // sum + product
+  EXPECT_TANGENT_MATCHES_REVERSE(x - 3.0 * x * x);   // negate (a - b => a + -b)
+  EXPECT_TANGENT_MATCHES_REVERSE((x + 1.0) / x);     // quotient
+  EXPECT_TANGENT_MATCHES_REVERSE(-(x / (x * x + 2.0)));
+
+  // Cross-check the same sweep against the symbolic derivative tree, which is a
+  // third independent path (derivative() is a total derivative, so this is only
+  // meaningful for a single-variable expression).
+  const auto e = (x * x + 1.0) / (x + 2.0);
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"x">().deriv, e.derivative().eval());
+}
+
+TEST(ForwardTangentSweep, UnaryMathRules) {
+  // One probe per op in the DIFF_UNARY_MATH_OP macro, plus AbsOp's hand-written
+  // forward().  Arguments stay inside each function's domain.
+  EXPECT_TANGENT_MATCHES_REVERSE(sin(PV(0.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(cos(PV(0.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(tan(PV(0.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(exp(PV(0.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(log(PV(1.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(log10(PV(1.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(sqrt(PV(1.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(cbrt(PV(1.6, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(asin(PV(0.4, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(acos(PV(0.4, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(atan(PV(0.4, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(sinh(PV(0.4, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(cosh(PV(0.4, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(tanh(PV(0.4, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(asinh(PV(0.7, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(acosh(PV(2.0, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(atanh(PV(0.3, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(erf(PV(0.5, "x")));
+
+  // abs() on both sides of the kink: sign(u)·u'.
+  EXPECT_DOUBLE_EQ(abs(PV(2.0, "x")).eval_with_tangent<"x">().deriv, 1.0);
+  EXPECT_DOUBLE_EQ(abs(PV(-2.0, "x")).eval_with_tangent<"x">().deriv, -1.0);
+
+  // Composite argument: the chain rule must fire at every level.
+  EXPECT_TANGENT_MATCHES_REVERSE(log(sin(PV(0.9, "x")) + 2.0));
+}
+
+TEST(ForwardTangentSweep, BinaryMathRules) {
+  double x0 = 3.0, y0 = 4.0;
+  auto x = PV(x0, "x");
+  auto y = PV(y0, "y");
+
+  // Symbols sort alphabetically, so gradient slot 0 is x and slot 1 is y.
+  const auto check = [](const auto &e, double dx, double dy) {
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">().value, e.eval());
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">().deriv, dx);
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"y">().deriv, dy);
+  };
+
+  // hypot: d/dx = x/h, d/dy = y/h.
+  check(hypot(x, y), x0 / 5.0, y0 / 5.0);
+  // pow(x, y): d/dx = y·x^(y-1), d/dy = x^y·ln x.
+  check(pow(x, y), y0 * std::pow(x0, y0 - 1.0), std::pow(x0, y0) * std::log(x0));
+  // atan2(y, x) — first operand is the numerator.
+  const double q = x0 * x0 + y0 * y0;
+  check(atan2(y, x), -y0 / q, x0 / q);
+  // max/min pass the selected branch's tangent through untouched.
+  check(max(x, y), 0.0, 1.0);
+  check(min(x, y), 1.0, 0.0);
+}
+
+TEST(ForwardTangentSweep, MultiVariableMatchesReverseMode) {
+  auto x = PV(0.8, "x");
+  auto y = PV(1.3, "y");
+
+  // Deep composite: shared subexpressions, nested transcendentals, a quotient
+  // and a binary math op, so most forward rules participate in one tree.
+  const auto e = sin(x * y) * exp(x + y) + log(y * y + 1.0) / (x + 2.0) -
+                 hypot(x, y) * tanh(x);
+
+  const auto g = reverse_mode_grad(e);
+  const auto tx = e.eval_with_tangent<"x">();
+  const auto ty = e.eval_with_tangent<"y">();
+
+  EXPECT_DOUBLE_EQ(tx.value, e.eval());
+  EXPECT_DOUBLE_EQ(ty.value, e.eval());
+  EXPECT_NEAR(tx.deriv, g[0], 1e-12);
+  EXPECT_NEAR(ty.deriv, g[1], 1e-12);
+
+  // A symbol not present in the tree differentiates to zero everywhere.
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"z">().deriv, 0.0);
+}
+
+TEST(ForwardTangentSweep, IsConstexpr) {
+  // The sweep runs entirely at compile time (no std:: transcendentals here, so
+  // this holds on every toolchain).
+  constexpr auto x = PV(2.0, "x");
+  constexpr auto e = x * x + 3.0 * x;
+  constexpr auto t = e.eval_with_tangent<"x">();
+  static_assert(t.value == 10.0, "x² + 3x at x = 2");
+  static_assert(t.deriv == 7.0, "2x + 3 at x = 2");
+  EXPECT_DOUBLE_EQ(t.deriv, 7.0);
+}
+
+#undef EXPECT_TANGENT_MATCHES_REVERSE

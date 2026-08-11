@@ -17,21 +17,21 @@ namespace diff {
 namespace mp = diff::mpl;
 
 template <typename Expr>
-using node_cache_t =
-    std::array<typename std::remove_cvref_t<Expr>::value_type,
-               node_count_v<std::remove_cvref_t<Expr>>>;
+using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
+                                node_count_v<std::remove_cvref_t<Expr>>>;
 
 template <std::size_t Base = 0, CExpression E, typename Cache>
 constexpr auto fill_cache(const E &node, Cache &cache) noexcept {
   using U = std::remove_cvref_t<E>;
   using VT = typename U::value_type;
-  if constexpr (is_expression_node_v<U>) {
+  if constexpr (CExpressionNode<U>) {
     using Kids = typename U::children_t;
     // Fill each child subtree into its slot, then combine the child values with
     // this node's operator into this node's slot.
     VT v = [&]<std::size_t... I>(std::index_sequence<I...>) {
-      return typename U::op_type::func_type{}(fill_cache<child_base_at<Base, Kids, I>()>(
-          std::get<I>(node.expressions()), cache)...);
+      return typename U::op_type::func_type{}(
+          fill_cache<child_base_at<Base, Kids, I>()>(
+              std::get<I>(node.expressions()), cache)...);
     }(std::make_index_sequence<std::tuple_size_v<Kids>>{});
     cache[Base] = v;
     return v;
@@ -87,8 +87,8 @@ template <CExpression Expr,
               scalar_base_t<typename std::remove_cvref_t<Expr>::value_type>,
           FixedString... Syms, typename... Vs>
 [[nodiscard]] constexpr std::array<
-    Scalar, mp::mp_size(extract_symbols_from_expr_t<
-                std::remove_cvref_t<Expr>>{})>
+    Scalar,
+    mp::mp_size(extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
 make_values(NamedValue<Syms, Vs>... nv) noexcept {
   using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   constexpr std::size_t N = mp::mp_size(SymList{});
@@ -136,7 +136,7 @@ enum class DiffMode { Symbolic, Forward, Reverse };
 namespace detail {
 
 template <CExpression Expr, typename T = typename Expr::value_type>
-  requires(!is_dual_v<T>)
+  requires(!DualLike<T>)
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) noexcept {
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   constexpr auto N = mp::mp_size(Syms{});
@@ -148,7 +148,7 @@ template <CExpression Expr, typename T = typename Expr::value_type>
 }
 
 template <CExpression Expr, typename T = typename Expr::value_type>
-  requires is_dual_v<T>
+  requires DualLike<T>
 [[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) noexcept {
   using scalar_t = dual_scalar_t<T>;
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
@@ -168,7 +168,7 @@ template <CExpression Expr,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires is_dual_v<T>
+  requires DualLike<T>
 [[nodiscard]] constexpr auto
 reverse_mode_hessian(Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
@@ -198,7 +198,7 @@ template <CExpression Expr,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires is_dual_v<T>
+  requires DualLike<T>
 [[nodiscard]] constexpr auto reverse_mode_hessian(Expr &expr) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   std::array<T, N> current{};
@@ -248,16 +248,16 @@ template <std::size_t Order, CExpression Expr,
   nd_array_t<S, N, Order> result{};
 
   // First-order gradient fast path (N >= 3): one vector-forward pass instead of
-  // N scalar Dual passes.  Seeding identity tangents into a VectorDual<N> carries
-  // every partial as a lane, so the value-level work — transcendentals and shared
-  // subexpressions — is computed once rather than recomputed per variable. The
-  // scalar passes evaluate e.g. sin(x)/exp(x*y) once *per variable*; this shares
-  // them, a win that grows with N (TMulti3 N=3 reaches parity with autodiff, F4
-  // N=4 overtakes it ~2x).  N <= 2 keeps the leaner scalar path: at N=2 the single
-  // shared evaluation barely offsets the VectorDual lane overhead (and N==1 is one
-  // plain Dual pass).  VectorDual lanes are double, so this is gated to
-  // double-scalar expressions.
-  if constexpr (Order == 1 && N >= 3 && std::is_same_v<S, double>) {
+  // N scalar Dual passes.  Seeding identity tangents into a VectorDual<N>
+  // carries every partial as a lane, so the value-level work — transcendentals
+  // and shared subexpressions — is computed once rather than recomputed per
+  // variable. The scalar passes evaluate e.g. sin(x)/exp(x*y) once *per
+  // variable*; this shares them, a win that grows with N (TMulti3 N=3 reaches
+  // parity with autodiff, F4 N=4 overtakes it ~2x).  N <= 2 keeps the leaner
+  // scalar path: at N=2 the single shared evaluation barely offsets the
+  // VectorDual lane overhead (and N==1 is one plain Dual pass).  VectorDual
+  // lanes are double, so this is gated to double-scalar expressions.
+  if constexpr (Order == 1 && N >= 3 && std::same_as<S, double>) {
     using V = VectorDual<N>;
     std::array<V, N> seeds{};
     for (std::size_t k = 0; k < N; ++k) {
@@ -307,7 +307,7 @@ template <DiffMode Mode, CExpression Expr,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires(Mode == DiffMode::Reverse && is_dual_v<T>)
+  requires(Mode == DiffMode::Reverse && DualLike<T>)
 [[nodiscard]] auto hessian(Expr &expr, std::array<S, N> values) noexcept {
   return detail::reverse_mode_hessian(expr, values);
 }
@@ -315,7 +315,7 @@ template <DiffMode Mode, CExpression Expr,
 // Order-safe named form: values bind by symbol name (see make_values).
 template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
           typename T = typename std::remove_cvref_t<Expr>::value_type>
-  requires(Mode == DiffMode::Reverse && is_dual_v<T>)
+  requires(Mode == DiffMode::Reverse && DualLike<T>)
 [[nodiscard]] auto hessian(Expr &expr, NamedValue<Syms, Vs>... nv) noexcept {
   return detail::reverse_mode_hessian(
       expr, make_values<Expr, dual_scalar_t<T>>(nv...));
@@ -326,7 +326,7 @@ template <DiffMode Mode, CExpression Expr,
           typename S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires(Mode == DiffMode::Reverse && is_dual_v<T>)
+  requires(Mode == DiffMode::Reverse && DualLike<T>)
 [[nodiscard]] auto hessian(Expr &expr) noexcept {
   return detail::reverse_mode_hessian(expr);
 }

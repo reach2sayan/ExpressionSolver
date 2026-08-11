@@ -13,14 +13,13 @@ enum class OpType : short {
   Unary = 0,
   Binary = 1,
 };
-using ExpressionType = OpType;
 
 template <typename F, typename T>
-concept cunary_op = std::regular_invocable<F, const T &> &&
-                    std::convertible_to<std::invoke_result_t<F, const T &>, T>;
+concept CUnaryOp = std::regular_invocable<F, const T &> &&
+                   std::convertible_to<std::invoke_result_t<F, const T &>, T>;
 
 template <typename F, typename T>
-concept cbinary_op =
+concept CBinaryOp =
     std::regular_invocable<F, const T &, const T &> &&
     std::convertible_to<std::invoke_result_t<F, const T &, const T &>, T>;
 
@@ -29,8 +28,7 @@ template <typename T, OpType type> struct Op {
   static constexpr OpType op_type = type;
 };
 
-template <typename T, typename func, CFixedString auto symbol>
-  requires cunary_op<func, T>
+template <Numeric T, CUnaryOp<T> func, CFixedString auto symbol>
 struct UnaryOp : Op<T, OpType::Unary> {
   using value_type = Op<T, OpType::Unary>::value_type;
   using func_type = func;
@@ -45,9 +43,8 @@ struct UnaryOp : Op<T, OpType::Unary> {
   }
 };
 
-template <typename T, typename func, CFixedString auto symbol,
+template <Numeric T, CBinaryOp<T> func, CFixedString auto symbol,
           bool prefix = false>
-  requires cbinary_op<func, T>
 struct BinaryOp : Op<T, OpType::Binary> {
   using value_type = Op<T, OpType::Binary>::value_type;
   using func_type = func;
@@ -68,12 +65,17 @@ struct BinaryOp : Op<T, OpType::Binary> {
   }
 };
 
-template <typename T>
+template <Numeric T>
 struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+"}> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
     return lhs.derivative() + rhs.derivative();
+  }
+  // Forward sweep: combine child {value, tangent} pairs by the sum rule.
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    return Tangent<T>{a.value + b.value, a.deriv + b.deriv};
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
@@ -91,6 +93,11 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"}> {
     auto rmul = lhs * rhs.derivative();
     return std::move(lmul) + std::move(rmul);
   }
+  // Forward sweep: product rule on child {value, tangent} pairs.
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    return Tangent<T>{a.value * b.value, a.deriv * b.value + a.value * b.deriv};
+  }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -105,6 +112,10 @@ struct NegateOp : UnaryOp<T, std::negate<void>, FixedString{"-"}> {
   derivative(const CExpression auto &lhs) noexcept {
     auto d = lhs.derivative();
     return MonoExpression<NegateOp<T>, decltype(d)>{std::move(d)};
+  }
+  // Forward sweep: negate both value and tangent.
+  [[nodiscard]] static constexpr auto forward(const auto &a) noexcept {
+    return Tangent<T>{-a.value, -a.deriv};
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
@@ -123,6 +134,13 @@ struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"}> {
     auto numerator = std::move(num_l) - std::move(num_r);
     auto denominator = rhs * rhs;
     return std::move(numerator) / std::move(denominator);
+  }
+  // Forward sweep: quotient rule on child {value, tangent} pairs.
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    return Tangent<T>{a.value / b.value,
+                      (a.deriv * b.value - a.value * b.deriv) /
+                          (b.value * b.value)};
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
@@ -188,8 +206,9 @@ struct min_impl {
 } // namespace detail
 
 // Each unary math op pulls its value + derivative from the shared descriptor
-// detail::<Name>Fn (unary_math.hpp).  derivative() builds f'(lhs)·lhs'; adjoints
-// pushes adj·f'(value).  The same descriptor drives dual.hpp's forward combine.
+// detail::<Name>Fn (unary_math.hpp).  derivative() builds f'(lhs)·lhs';
+// adjoints pushes adj·f'(value).  The same descriptor drives dual.hpp's forward
+// combine.
 #define DIFF_UNARY_MATH_OP(NAME, LABEL)                                        \
   template <Numeric T>                                                         \
   struct NAME : UnaryOp<T, detail::NAME##Fn<T>, FixedString{LABEL}> {          \
@@ -197,8 +216,12 @@ struct min_impl {
     derivative(const CExpression auto &lhs) noexcept {                         \
       return detail::NAME##Fn<T>::deriv(lhs) * lhs.derivative();               \
     }                                                                          \
+    [[nodiscard]] static constexpr auto forward(const auto &a) noexcept {      \
+      return Tangent<T>{detail::NAME##Fn<T>{}(a.value),                        \
+                        detail::NAME##Fn<T>::deriv(a.value) * a.deriv};        \
+    }                                                                          \
     template <std::size_t Base, std::size_t... CB>                             \
-    static constexpr std::array<T, sizeof...(CB)>                             \
+    static constexpr std::array<T, sizeof...(CB)>                              \
     adjoints(T adj, const auto &cache) noexcept {                              \
       constexpr std::size_t cb[]{CB...};                                       \
       return {adj * detail::NAME##Fn<T>::deriv(cache[cb[0]])};                 \
@@ -219,6 +242,12 @@ struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
   derivative(const CExpression auto &lhs) noexcept {
     auto abs_lhs = MonoExpression<AbsOp<T>, std::decay_t<decltype(lhs)>>{lhs};
     return (lhs / abs_lhs) * lhs.derivative();
+  }
+  // Forward sweep: |u| has derivative sign(u)·u'.
+  [[nodiscard]] static constexpr auto forward(const auto &a) noexcept {
+    using std::abs;
+    const T sign = a.value > T{} ? T{1} : a.value < T{} ? T{-1} : T{};
+    return Tangent<T>{abs(a.value), sign * a.deriv};
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
@@ -250,6 +279,14 @@ template <Numeric T>
 struct PowOp : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, true> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
+  // Forward sweep: d(a^b) = a^b·(b'·ln a + b·a'/a).
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    using std::pow, std::log;
+    const T p = pow(a.value, b.value);
+    return Tangent<T>{
+        p, p * (b.deriv * log(a.value) + b.value * a.deriv / a.value)};
+  }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -267,6 +304,14 @@ template <Numeric T>
 struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}, true> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
+  // Forward sweep: atan2(y, x), d = (x·y' - y·x') / (x² + y²).
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    using std::atan2;
+    const T y = a.value, x = b.value;
+    return Tangent<T>{atan2(y, x),
+                      (x * a.deriv - y * b.deriv) / (x * x + y * y)};
+  }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -283,6 +328,13 @@ template <Numeric T>
 struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, true> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
+  // Forward sweep: hypot(x, y), d = (x·x' + y·y') / hypot.
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    using std::hypot;
+    const T h = hypot(a.value, b.value);
+    return Tangent<T>{h, (a.value * a.deriv + b.value * b.deriv) / h};
+  }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -303,7 +355,12 @@ struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, true> {
     return static_cast<T>(lhs) < static_cast<T>(rhs) ? rhs.derivative()
                                                      : lhs.derivative();
   }
-
+  // Forward sweep: pass through the selected branch's {value, tangent}.
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    return a.value < b.value ? Tangent<T>{b.value, b.deriv}
+                             : Tangent<T>{a.value, a.deriv};
+  }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -320,6 +377,12 @@ struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, true> {
              const CExpression auto &rhs) noexcept {
     return static_cast<T>(rhs) < static_cast<T>(lhs) ? rhs.derivative()
                                                      : lhs.derivative();
+  }
+  // Forward sweep: pass through the selected branch's {value, tangent}.
+  [[nodiscard]] static constexpr auto forward(const auto &a,
+                                              const auto &b) noexcept {
+    return b.value < a.value ? Tangent<T>{b.value, b.deriv}
+                             : Tangent<T>{a.value, a.deriv};
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>

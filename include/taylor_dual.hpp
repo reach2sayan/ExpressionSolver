@@ -395,10 +395,6 @@ template <Numeric S, std::size_t N> struct TaylorDual {
 
 // TaylorDual satisfies Numeric — verified by static_assert in gradient.hpp.
 
-template <typename T> inline constexpr bool is_taylor_dual_v = false;
-template <typename S, std::size_t N>
-inline constexpr bool is_taylor_dual_v<TaylorDual<S, N>> = true;
-
 template <typename T, std::size_t N>
 auto scalar_base_impl(std::type_identity<TaylorDual<T, N>>) -> T;
 

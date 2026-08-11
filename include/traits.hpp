@@ -14,50 +14,45 @@ template <std::size_t N, class F> constexpr void static_for(F &&f) noexcept {
   }(std::make_index_sequence<N>{});
 }
 
-template <typename T> constexpr static bool is_const = false;
-template <typename T> constexpr static bool is_const<Constant<T>> = true;
-
 template <typename T> inline constexpr bool is_variable_v = false;
 template <typename T, CFixedString auto C, typename S>
 inline constexpr bool is_variable_v<Variable<T, C, S>> = true;
 
-// True for any internal node (an Expression of any arity), false for leaves.
-template <typename T> inline constexpr bool is_expression_node_v = false;
-template <typename Op, typename... C>
-inline constexpr bool is_expression_node_v<Expression<Op, C...>> = true;
+template <typename T>
+concept CVariable = is_variable_v<std::remove_cvref_t<T>>;
 
 template <typename T> consteval auto make_all_constant_impl() {
-  if constexpr (is_variable_v<T>) {
+  if constexpr (CVariable<T>) {
     return std::type_identity<Constant<typename T::value_type>>{};
-  } else if constexpr (is_expression_node_v<T>) {
-    return []<typename Op, typename... C>(std::type_identity<Expression<Op, C...>>) {
-      return std::type_identity<
-          Expression<Op, typename decltype(make_all_constant_impl<C>())::type...>>{};
+  } else if constexpr (CExpressionNode<T>) {
+    return []<typename Op, typename... C>(
+               std::type_identity<Expression<Op, C...>>) {
+      return std::type_identity<Expression<
+          Op, typename decltype(make_all_constant_impl<C>())::type...>>{};
     }(std::type_identity<T>{});
   } else {
     return std::type_identity<T>{};
   }
 }
 
-template <typename T>
-using make_all_constant_t =
-    typename decltype(make_all_constant_impl<T>())::type;
-
 template <typename TExpression>
-using as_const_expression = make_all_constant_t<TExpression>;
+using as_const_expression =
+    typename decltype(make_all_constant_impl<TExpression>())::type;
 
 template <CFixedString auto symbol, typename T>
 consteval auto replace_matching_var_impl() {
-  if constexpr (is_variable_v<T>) {
+  if constexpr (CVariable<T>) {
     if constexpr (T::label == symbol) {
       return std::type_identity<Constant<typename T::value_type>>{};
     } else {
       return std::type_identity<T>{};
     }
-  } else if constexpr (is_expression_node_v<T>) {
-    return []<typename Op, typename... C>(std::type_identity<Expression<Op, C...>>) {
-      return std::type_identity<Expression<
-          Op, typename decltype(replace_matching_var_impl<symbol, C>())::type...>>{};
+  } else if constexpr (CExpressionNode<T>) {
+    return []<typename Op, typename... C>(
+               std::type_identity<Expression<Op, C...>>) {
+      return std::type_identity<
+          Expression<Op, typename decltype(replace_matching_var_impl<
+                                           symbol, C>())::type...>>{};
     }(std::type_identity<T>{});
   } else {
     return std::type_identity<T>{};
@@ -101,18 +96,20 @@ constexpr auto make_const_variable(const Expression<Op, C...> &expr) noexcept
 
 template <CFixedString auto symbol, typename Expr>
 consteval auto constify_unmatched_var_impl() {
-  if constexpr (is_constant_v<Expr>) {
+  if constexpr (CConstant<Expr>) {
     return std::type_identity<Expr>{};
-  } else if constexpr (is_variable_v<Expr>) {
+  } else if constexpr (CVariable<Expr>) {
     if constexpr (Expr::label == symbol) {
       return std::type_identity<Expr>{};
     } else {
       return std::type_identity<Constant<typename Expr::value_type>>{};
     }
-  } else if constexpr (is_expression_node_v<Expr>) { // already nested correctly
-    return []<typename Op, typename... C>(std::type_identity<Expression<Op, C...>>) {
-      return std::type_identity<Expression<
-          Op, typename decltype(constify_unmatched_var_impl<symbol, C>())::type...>>{};
+  } else if constexpr (CExpressionNode<Expr>) { // already nested correctly
+    return []<typename Op, typename... C>(
+               std::type_identity<Expression<Op, C...>>) {
+      return std::type_identity<
+          Expression<Op, typename decltype(constify_unmatched_var_impl<
+                                           symbol, C>())::type...>>{};
     }(std::type_identity<Expr>{});
   }
 }
@@ -130,9 +127,8 @@ make_all_constant_except(const Variable<T, symbol, S> &v) noexcept {
 template <CFixedString auto symbol, typename T, CFixedString auto othersymbol,
           typename S>
   requires(symbol != othersymbol)
-constexpr auto
-make_all_constant_except(const Variable<T, othersymbol, S> &var) noexcept
-    -> Constant<T> {
+constexpr auto make_all_constant_except(
+    const Variable<T, othersymbol, S> &var) noexcept -> Constant<T> {
   return Constant<T>{static_cast<T>(var)};
 }
 
@@ -164,12 +160,13 @@ template <typename... Lists>
 using tuple_union_t = unique_tuple_t<mp::mp_append<Lists...>>;
 
 template <typename T> consteval auto extract_symbols_impl() {
-  if constexpr (is_variable_v<T>) {
+  if constexpr (CVariable<T>) {
     return std::type_identity<mp::mp_list<symbol_type<T::label>>>{};
-  } else if constexpr (is_expression_node_v<T>) {
-    return []<typename Op, typename... C>(std::type_identity<Expression<Op, C...>>) {
-      return std::type_identity<
-          tuple_union_t<typename decltype(extract_symbols_impl<C>())::type...>>{};
+  } else if constexpr (CExpressionNode<T>) {
+    return []<typename Op, typename... C>(
+               std::type_identity<Expression<Op, C...>>) {
+      return std::type_identity<tuple_union_t<
+          typename decltype(extract_symbols_impl<C>())::type...>>{};
     }(std::type_identity<T>{});
   } else {
     return std::type_identity<mp::mp_list<>>{};

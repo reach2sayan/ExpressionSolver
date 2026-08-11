@@ -9,15 +9,33 @@
 
 namespace diff {
 
+// A built-in arithmetic scalar (cv/ref stripped): the scalar half of every
+// mixed scalar/expression and scalar/dual operation.  The standard library has
+// no `arithmetic` concept, so this is the one gap we fill ourselves — and only
+// by composing the two std concepts that partition it.
 template <typename T>
-concept Numeric = std::is_arithmetic_v<T> || requires(T a, T b) {
-  T{};
+concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
+                      std::floating_point<std::remove_cvref_t<T>>;
+
+// Closed under the four arithmetic operators and negation (Dual, TaylorDual,
+// VectorDual, ...).  Arithmetic scalars qualify outright.
+template <typename T>
+concept CFieldLike = std::default_initializable<T> && requires(T a, T b) {
   { a + b } -> std::convertible_to<T>;
   { a - b } -> std::convertible_to<T>;
   { a * b } -> std::convertible_to<T>;
   { a / b } -> std::convertible_to<T>;
   { -a } -> std::convertible_to<T>;
 };
+
+template <typename T>
+concept Numeric = CArithmetic<T> || CFieldLike<T>;
+
+// Decomposable into {value, derivative} via std::tuple_size / get<I> — the
+// protocol Dual, Constant, Variable and Expression all opt into.
+template <typename T>
+concept CTupleLike =
+    requires { std::tuple_size<std::remove_cvref_t<T>>::value; };
 
 template <typename O>
 concept COperation =
@@ -75,14 +93,28 @@ struct is_expression_type<Expression<Op, Children...>> : std::true_type {};
 template <typename T> struct is_constant : std::false_type {};
 template <Numeric T> struct is_constant<Constant<T>> : std::true_type {};
 template <typename T>
-inline constexpr bool is_constant_v =
-    is_constant<std::remove_cvref_t<T>>::value;
+concept CConstant = is_constant<std::remove_cvref_t<T>>::value;
+
+// An internal node: Expression<Op, Children...> is the only node that carries
+// children, so `children_t` is exactly the branch/leaf discriminator.
+template <typename T>
+concept CExpressionNode =
+    requires { typename std::remove_cvref_t<T>::children_t; };
 
 template <Numeric T> struct EvalResult {
   using value_type = T;
   T value;
   [[nodiscard]] constexpr T eval() const noexcept { return value; }
   constexpr operator T() const noexcept { return value; }
+};
+
+// Result of a fused forward-mode sweep (eval_with_tangent): the node's value
+// and its tangent w.r.t. the seed variable, accumulated together in one tree
+// walk. Plain aggregate so `auto [v, dv] = expr.eval_with_tangent<"x">();`
+// works.
+template <Numeric T> struct Tangent {
+  T value;
+  T deriv;
 };
 
 template <Numeric T>
@@ -94,7 +126,7 @@ template <COperation Op> struct BaseExpression {
 
 template <typename T> consteval std::size_t node_count_fn() {
   using U = std::remove_cvref_t<T>;
-  if constexpr (requires { typename U::children_t; }) {
+  if constexpr (CExpressionNode<U>) {
     return []<typename... C>(std::type_identity<std::tuple<C...>>) consteval {
       return (1 + ... + node_count_fn<std::remove_cvref_t<C>>());
     }(std::type_identity<typename U::children_t>{});
@@ -132,7 +164,7 @@ public:
 
   template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
     static_assert(I < 2);
-    if constexpr (requires { std::tuple_size<value_type>::value; }) {
+    if constexpr (CTupleLike<value_type>) {
       return eval().template get<I>();
     } else if constexpr (I == 0) {
       return eval();
@@ -150,6 +182,21 @@ public:
   [[nodiscard]] constexpr auto derivative() const noexcept {
     return std::apply(
         [](const auto &...e) noexcept { return Op::derivative(e...); },
+        self().expressions());
+  }
+
+  // Fused forward-mode sweep: one recursion that carries {value, tangent}
+  // upward through the tree, seeded on the variable named `Seed`.  Unlike
+  // derivative() (which builds a separate derivative tree) and unlike the
+  // Dual<T> path (which substitutes value_type), this walks the existing tree
+  // structurally and hands each Op the already-computed child Tangents via
+  // Op::forward.
+  template <FixedString Seed>
+  [[nodiscard]] constexpr auto eval_with_tangent() const noexcept {
+    return std::apply(
+        [](const auto &...e) noexcept {
+          return Op::forward(e.template eval_with_tangent<Seed>()...);
+        },
         self().expressions());
   }
 

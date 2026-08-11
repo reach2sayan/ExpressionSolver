@@ -1,6 +1,5 @@
 #pragma once
 
-#include "dual.hpp"        // Dual (for the dual_vforward alias)
 #include "expressions.hpp" // Numeric
 
 #include <array>
@@ -42,8 +41,8 @@ template <std::size_t N> struct VectorDual {
   // Non-explicit to mirror Dual's implicit double->dual lift, which the
   // promotion helpers in dual.hpp rely on via functional/static casts.
   constexpr VectorDual(double v) noexcept : value(v) {}
-  template <typename U>
-    requires(std::is_arithmetic_v<U> && !std::is_same_v<U, double>)
+  template <CArithmetic U>
+    requires(!std::same_as<U, double>)
   constexpr VectorDual(U s) noexcept : value(static_cast<double>(s)) {}
 
   constexpr VectorDual operator-() const noexcept {
@@ -197,6 +196,5 @@ static_assert(Numeric<VectorDual<8>>);
 #endif
 inline constexpr std::size_t kVForwardN = DIFF_VFORWARD_CAPACITY;
 static_assert(kVForwardN > 0, "DIFF_VFORWARD_CAPACITY must be positive");
-using dual_vforward = Dual<VectorDual<kVForwardN>>;
 
 } // namespace diff

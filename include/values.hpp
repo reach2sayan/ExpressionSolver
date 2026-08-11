@@ -12,11 +12,17 @@ constexpr bool PRINT_VARIABLE_LABEL = true;
 constexpr bool PRINT_CONSTANT_VALUE = true;
 constexpr bool PRINT_CONSTANT_LABEL = false;
 
+// Both sides carry the same value_type.
+template <typename LHS, typename RHS>
+concept CSameValueType =
+    std::same_as<typename LHS::value_type, typename RHS::value_type>;
+
+// ... or at least one side's value_type converts to the other's.
 template <typename LHS, typename RHS>
 concept CompatibleValueTypes =
-    std::is_same_v<typename LHS::value_type, typename RHS::value_type> ||
-    std::is_convertible_v<typename LHS::value_type, typename RHS::value_type> ||
-    std::is_convertible_v<typename RHS::value_type, typename LHS::value_type>;
+    CSameValueType<LHS, RHS> ||
+    std::convertible_to<typename LHS::value_type, typename RHS::value_type> ||
+    std::convertible_to<typename RHS::value_type, typename LHS::value_type>;
 
 template <CFixedString auto S, typename SymList>
 consteval std::size_t find_index_of_symbol() noexcept {
@@ -27,7 +33,7 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator+(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+  if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() + b.get()};
   } else {
     return Expression<SumOp<value_type>, LHS, RHS>{a, b};
@@ -38,7 +44,7 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator*(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+  if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() * b.get()};
   } else {
     return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
@@ -49,7 +55,7 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator-(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+  if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() - b.get()};
   } else {
     auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
@@ -61,7 +67,7 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (is_constant_v<LHS> && is_constant_v<RHS>) {
+  if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() / b.get()};
   } else {
     return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
@@ -178,50 +184,42 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
       ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
 }
 
-template <typename S, CExpression RHS>
-  requires std::is_arithmetic_v<S>
+template <CArithmetic S, CExpression RHS>
 constexpr auto operator+(S s, const RHS &b) noexcept {
   return promote_scalar<typename RHS::value_type>(s) + b;
 }
 
-template <typename S, CExpression RHS>
-  requires std::is_arithmetic_v<S>
+template <CArithmetic S, CExpression RHS>
 constexpr auto operator*(S s, const RHS &b) noexcept {
   return promote_scalar<typename RHS::value_type>(s) * b;
 }
 
-template <typename S, CExpression RHS>
-  requires std::is_arithmetic_v<S>
+template <CArithmetic S, CExpression RHS>
 constexpr auto operator-(S s, const RHS &b) noexcept {
   return promote_scalar<typename RHS::value_type>(s) - b;
 }
 
-template <typename S, CExpression RHS>
-  requires std::is_arithmetic_v<S>
+template <CArithmetic S, CExpression RHS>
 constexpr auto operator/(S s, const RHS &b) noexcept {
   return promote_scalar<typename RHS::value_type>(s) / b;
 }
 
-template <CExpression LHS, typename S>
-  requires std::is_arithmetic_v<S>
+template <CExpression LHS, CArithmetic S>
 constexpr auto operator+(const LHS &a, S s) noexcept {
   return a + promote_scalar<typename LHS::value_type>(s);
 }
 
-template <CExpression LHS, typename S>
-  requires std::is_arithmetic_v<S>
+template <CExpression LHS, CArithmetic S>
 constexpr auto operator*(const LHS &a, S s) noexcept {
   return a * promote_scalar<typename LHS::value_type>(s);
 }
 
-template <CExpression LHS, typename S>
-  requires std::is_arithmetic_v<S>
+template <CExpression LHS, CArithmetic S>
 constexpr auto operator-(const LHS &a, S s) noexcept {
   return a - promote_scalar<typename LHS::value_type>(s);
 }
 
-template <CExpression LHS, typename S>
-  requires std::is_arithmetic_v<S>
+template <CExpression LHS, CArithmetic S>
 constexpr auto operator/(const LHS &a, S s) noexcept {
   return a / promote_scalar<typename LHS::value_type>(s);
 }
@@ -232,18 +230,16 @@ constexpr auto operator/(const LHS &a, S s) noexcept {
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
   constexpr auto NAME(const LHS &a, const RHS &b) noexcept {                   \
-    using value_type = typename LHS::value_type;                              \
-    return Expression<OP<value_type>, LHS, RHS>{a, b};                        \
+    using value_type = typename LHS::value_type;                               \
+    return Expression<OP<value_type>, LHS, RHS>{a, b};                         \
   }                                                                            \
-  template <typename S, CExpression RHS>                                       \
-    requires std::is_arithmetic_v<S>                                          \
+  template <CArithmetic S, CExpression RHS>                                    \
   constexpr auto NAME(S s, const RHS &b) noexcept {                            \
-    return NAME(promote_scalar<typename RHS::value_type>(s), b);              \
+    return NAME(promote_scalar<typename RHS::value_type>(s), b);               \
   }                                                                            \
-  template <CExpression LHS, typename S>                                       \
-    requires std::is_arithmetic_v<S>                                          \
+  template <CExpression LHS, CArithmetic S>                                    \
   constexpr auto NAME(const LHS &a, S s) noexcept {                            \
-    return NAME(a, promote_scalar<typename LHS::value_type>(s));              \
+    return NAME(a, promote_scalar<typename LHS::value_type>(s));               \
   }
 DIFF_EXPR_BINFN(pow, PowOp)
 DIFF_EXPR_BINFN(atan2, Atan2Op)
@@ -273,11 +269,16 @@ public:
   [[nodiscard]] constexpr auto derivative() const noexcept {
     return Constant{T{}};
   }
+  // Forward sweep leaf: a constant contributes value with zero tangent.
+  template <FixedString Seed>
+  [[nodiscard]] constexpr auto eval_with_tangent() const noexcept {
+    return Tangent<T>{value, T{}};
+  }
   constexpr void update(const auto &, const auto &) const noexcept {}
   constexpr void collect(const auto &, auto &) const noexcept {}
   template <std::size_t Base = 0>
-  constexpr void backward(const auto &, T, auto &, const auto &) const noexcept {
-  }
+  constexpr void backward(const auto &, T, auto &,
+                          const auto &) const noexcept {}
 
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr T
@@ -298,7 +299,7 @@ public:
 
   template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
     static_assert(I < 2);
-    if constexpr (requires { std::tuple_size<T>::value; }) {
+    if constexpr (CTupleLike<T>) {
       return eval().template get<I>();
     } else if constexpr (I == 0) {
       return eval();
@@ -330,11 +331,11 @@ public:
   constexpr operator T() const noexcept { return eval(); }
   [[nodiscard]] constexpr auto get() const noexcept { return eval(); }
   template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept {
-    if constexpr (std::is_same_v<Storage, std::reference_wrapper<
-                                              std::decay_t<U>>>) {
+    if constexpr (std::same_as<Storage,
+                               std::reference_wrapper<std::decay_t<U>>>) {
       storage.get() = std::forward<U>(v);
-    } else if constexpr (!std::is_same_v<std::decay_t<U>, T> &&
-                         std::is_constructible_v<T, U>) {
+    } else if constexpr (!std::same_as<std::decay_t<U>, T> &&
+                         std::constructible_from<T, U>) {
       storage = T{std::forward<U>(v)};
     } else {
       storage = std::forward<U>(v);
@@ -354,6 +355,11 @@ public:
   [[nodiscard]] constexpr auto derivative() const noexcept {
     auto ret = T{};
     return Constant{++ret};
+  }
+  // Forward sweep leaf: tangent is 1 if this is the seeded variable, else 0.
+  template <FixedString Seed>
+  [[nodiscard]] constexpr auto eval_with_tangent() const noexcept {
+    return Tangent<T>{eval(), symbol == Seed ? T{1} : T{}};
   }
   template <std::size_t Base = 0>
   constexpr void backward(const auto &syms, T adj, auto &grads,
@@ -379,7 +385,7 @@ public:
 
   template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
     static_assert(I < 2);
-    if constexpr (requires { std::tuple_size<T>::value; }) {
+    if constexpr (CTupleLike<T>) {
       return eval().template get<I>();
     } else if constexpr (I == 0) {
       return eval();

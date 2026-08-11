@@ -52,8 +52,6 @@ constexpr auto make_derivatives(mp::mp_list<Syms...>,
       make_all_constant_except<Syms::value>(expr).derivative()...);
 }
 
-template <typename T>
-concept CEquation = CExpression<T> and std::constructible_from<T>;
 template <CExpression... Ts> class Equation;
 
 template <typename... Syms, typename... Exprs>
@@ -68,9 +66,7 @@ constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
 }
 
 template <CExpression TFirst, CExpression... TRest>
-  requires(
-      (std::same_as<typename TFirst::value_type, typename TRest::value_type> &&
-       ...))
+  requires((CSameValueType<TFirst, TRest> && ...))
 class Equation<TFirst, TRest...> {
 public:
   using value_type = typename TFirst::value_type;
@@ -122,7 +118,7 @@ private:
   }
 
   [[nodiscard]] constexpr auto hessian_forward_over_reverse() noexcept
-    requires(is_dual_v<value_type> && input_dim > 0)
+    requires(DualLike<value_type> && input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
     std::array<std::array<std::array<S, input_dim>, input_dim>, output_dim> H{};
@@ -271,8 +267,7 @@ public:
 
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto hessian() noexcept
-    requires(Mode == DiffMode::Reverse && is_dual_v<value_type> &&
-             input_dim > 0)
+    requires(Mode == DiffMode::Reverse && DualLike<value_type> && input_dim > 0)
   {
     return hessian_forward_over_reverse();
   }
@@ -280,8 +275,7 @@ public:
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto
   hessian(std::array<dual_scalar_t<value_type>, input_dim> values) noexcept
-    requires(Mode == DiffMode::Reverse && is_dual_v<value_type> &&
-             input_dim > 0)
+    requires(Mode == DiffMode::Reverse && DualLike<value_type> && input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
     std::array<value_type, input_dim> seeds{};
@@ -342,6 +336,5 @@ constexpr auto make_equation(auto &&...args) noexcept {
   return diff::Equation(std::forward<decltype(args)>(args)...);
 }
 
-#define reverse_mode_hess hessian<diff::DiffMode::Reverse>
 #define reverse_mode_jac jacobian<diff::DiffMode::Reverse>
 #define symbolic_mode_jac jacobian<diff::DiffMode::Symbolic>
