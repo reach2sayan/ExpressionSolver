@@ -33,7 +33,11 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator+(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (CConstant<LHS> && CConstant<RHS>) {
+  if constexpr (CLit<LHS> && CLit<RHS>) {
+    return Lit<value_type, static_cast<value_type>(
+                               std::remove_cvref_t<LHS>::value +
+                               std::remove_cvref_t<RHS>::value)>{};
+  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() + b.get()};
   } else {
     return Expression<SumOp<value_type>, LHS, RHS>{a, b};
@@ -44,7 +48,11 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator*(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (CConstant<LHS> && CConstant<RHS>) {
+  if constexpr (CLit<LHS> && CLit<RHS>) {
+    return Lit<value_type, static_cast<value_type>(
+                               std::remove_cvref_t<LHS>::value *
+                               std::remove_cvref_t<RHS>::value)>{};
+  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() * b.get()};
   } else {
     return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
@@ -55,7 +63,11 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator-(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (CConstant<LHS> && CConstant<RHS>) {
+  if constexpr (CLit<LHS> && CLit<RHS>) {
+    return Lit<value_type, static_cast<value_type>(
+                               std::remove_cvref_t<LHS>::value -
+                               std::remove_cvref_t<RHS>::value)>{};
+  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() - b.get()};
   } else {
     auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
@@ -67,7 +79,11 @@ template <CExpression LHS, CExpression RHS>
   requires CompatibleValueTypes<LHS, RHS>
 constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
   using value_type = typename LHS::value_type;
-  if constexpr (CConstant<LHS> && CConstant<RHS>) {
+  if constexpr (CLit<LHS> && CLit<RHS>) {
+    return Lit<value_type, static_cast<value_type>(
+                               std::remove_cvref_t<LHS>::value /
+                               std::remove_cvref_t<RHS>::value)>{};
+  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
     return Constant<value_type>{a.get() / b.get()};
   } else {
     return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
@@ -76,7 +92,12 @@ constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
 
 template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
-  return MonoExpression<NegateOp<value_type>, Expr>{a};
+  if constexpr (CLit<Expr>) {
+    return Lit<value_type,
+               static_cast<value_type>(-std::remove_cvref_t<Expr>::value)>{};
+  } else {
+    return MonoExpression<NegateOp<value_type>, Expr>{a};
+  }
 }
 
 template <CExpression Expr> constexpr auto sin(const Expr &a) noexcept {
@@ -248,6 +269,65 @@ DIFF_EXPR_BINFN(max, MaxOp)
 DIFF_EXPR_BINFN(min, MinOp)
 #undef DIFF_EXPR_BINFN
 
+// A literal carried in the type.  Empty, so it costs nothing per node — this
+// is what derivative() manufactures.  The value is still fully inspectable:
+// Lit<double,3.0>::value, lit.eval(), and printing all work; it simply isn't
+// stored per object.  Same idea as std::integral_constant.
+template <Numeric T, T V> struct Lit {
+  using value_type = T;
+  static constexpr T value = V;
+
+  friend std::ostream &operator<<(std::ostream &out, const Lit &) {
+    if constexpr (PRINT_CONSTANT_VALUE) {
+      out << std::format("{}", V);
+    }
+    if constexpr (PRINT_CONSTANT_LABEL) {
+      out << "_c";
+    }
+    return out;
+  }
+
+  [[nodiscard]] constexpr T eval() const noexcept { return V; }
+  constexpr operator T() const noexcept { return V; }
+  [[nodiscard]] constexpr T get() const noexcept { return V; }
+  [[nodiscard]] constexpr auto derivative() const noexcept {
+    return Lit<T, T{0}>{};
+  }
+
+  template <FixedString, typename, std::size_t N>
+  [[nodiscard]] constexpr auto
+  eval_with_tangent(const std::array<T, N> &) const noexcept {
+    return Tangent<T>{V, T{}};
+  }
+
+  template <std::size_t Base = 0>
+  constexpr void backward(const auto &, T, auto &, const auto &) const noexcept {
+  }
+
+  template <typename Syms, std::size_t N>
+  [[nodiscard]] constexpr T
+  eval_seeded(const std::array<T, N> &) const noexcept {
+    return V;
+  }
+
+  template <typename U, typename Syms, std::size_t N>
+  [[nodiscard]] constexpr U
+  eval_seeded_as(const std::array<U, N> &) const noexcept {
+    using S = scalar_base_t<U>;
+    return ConstantEmbedder<U>::embed(
+        static_cast<S>(get_real_part<dual_depth_v<T>>(V)));
+  }
+
+  template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
+    static_assert(I < 2);
+    if constexpr (I == 0) {
+      return V;
+    } else {
+      return T{0};
+    }
+  }
+};
+
 template <Numeric T> class Constant {
   T value;
   friend std::ostream &operator<<(std::ostream &out, const Constant<T> &c) {
@@ -267,15 +347,14 @@ public:
   [[nodiscard]] constexpr auto get() const noexcept { return value; }
   constexpr operator T() const noexcept { return value; }
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    return Constant{T{}};
+    return Lit<T, T{0}>{};
   }
   // Forward sweep leaf: a constant contributes value with zero tangent.
-  template <FixedString Seed>
-  [[nodiscard]] constexpr auto eval_with_tangent() const noexcept {
+  template <FixedString, typename, std::size_t N>
+  [[nodiscard]] constexpr auto
+  eval_with_tangent(const std::array<T, N> &) const noexcept {
     return Tangent<T>{value, T{}};
   }
-  constexpr void update(const auto &, const auto &) const noexcept {}
-  constexpr void collect(const auto &, auto &) const noexcept {}
   template <std::size_t Base = 0>
   constexpr void backward(const auto &, T, auto &,
                           const auto &) const noexcept {}
@@ -309,14 +388,20 @@ public:
   }
 };
 
-template <Numeric T, CFixedString auto symbol, typename Storage>
+// A symbol.  Carries NO value: the point is supplied at the root instead (see
+// bound.hpp), so an expression mentioning `x` sixteen times costs one slot
+// rather than sixteen.  This is what makes the whole expression tree an empty
+// type.
+//
+// `Frozen` marks a variable that has been held constant for the purpose of
+// partial differentiation: it still reads its value from the seed array like
+// any other symbol, but its derivative is zero.  Freezing is therefore a pure
+// *type* transform — it needs no value, which is exactly why the symbolic
+// Jacobian can be built from stateless leaves.
+template <Numeric T, CFixedString auto symbol, bool Frozen>
 class Variable {
-  Storage storage;
   friend std::ostream &operator<<(std::ostream &out,
-                                  const Variable<T, symbol, Storage> &c) {
-    if constexpr (PRINT_VARIABLE_VALUE) {
-      out << std::format("{}_", c.eval());
-    }
+                                  const Variable<T, symbol, Frozen> &) {
     if constexpr (PRINT_VARIABLE_LABEL) {
       out << symbol.view();
     }
@@ -325,54 +410,41 @@ class Variable {
 
 public:
   static constexpr auto label = symbol;
-  [[nodiscard]] constexpr T eval() const noexcept { return storage; }
+  static constexpr bool frozen = Frozen;
   using value_type = T;
-  constexpr explicit Variable(Storage s) noexcept : storage(std::move(s)) {}
-  constexpr operator T() const noexcept { return eval(); }
-  [[nodiscard]] constexpr auto get() const noexcept { return eval(); }
-  template <typename U> constexpr decltype(auto) operator=(U &&v) noexcept {
-    if constexpr (std::same_as<Storage,
-                               std::reference_wrapper<std::decay_t<U>>>) {
-      storage.get() = std::forward<U>(v);
-    } else if constexpr (!std::same_as<std::decay_t<U>, T> &&
-                         std::constructible_from<T, U>) {
-      storage = T{std::forward<U>(v)};
-    } else {
-      storage = std::forward<U>(v);
-    }
-    return *this;
-  }
-  constexpr void update(const auto &symbols, const auto &updates) noexcept {
-    using Syms = std::decay_t<decltype(symbols)>;
-    constexpr auto index = find_index_of_symbol<symbol, Syms>();
-    *this = updates[index];
-  }
-  constexpr void collect(const auto &symbols, auto &out) const noexcept {
-    using Syms = std::decay_t<decltype(symbols)>;
-    constexpr auto index = find_index_of_symbol<symbol, Syms>();
-    out[index] = storage;
-  }
+
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    auto ret = T{};
-    return Constant{++ret};
+    if constexpr (Frozen) {
+      return Lit<T, T{0}>{};
+    } else {
+      return Lit<T, T{1}>{};
+    }
   }
+
   // Forward sweep leaf: tangent is 1 if this is the seeded variable, else 0.
-  template <FixedString Seed>
-  [[nodiscard]] constexpr auto eval_with_tangent() const noexcept {
-    return Tangent<T>{eval(), symbol == Seed ? T{1} : T{}};
+  template <FixedString Seed, typename Syms, std::size_t N>
+  [[nodiscard]] constexpr auto
+  eval_with_tangent(const std::array<T, N> &vals) const noexcept {
+    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+    return Tangent<T>{vals[idx],
+                      (!Frozen && symbol == Seed) ? T{1} : T{}};
   }
+
   template <std::size_t Base = 0>
   constexpr void backward(const auto &syms, T adj, auto &grads,
                           const auto &) const noexcept {
-    using Syms = std::decay_t<decltype(syms)>;
-    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-    grads[idx] += adj;
+    if constexpr (!Frozen) {
+      using Syms = std::decay_t<decltype(syms)>;
+      constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+      grads[idx] += adj;
+    }
   }
 
   template <typename Syms, std::size_t N>
   [[nodiscard]] constexpr T
   eval_seeded(const std::array<T, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+    static_assert(idx < N, "eval: no value supplied for this symbol");
     return vals[idx];
   }
 
@@ -380,18 +452,8 @@ public:
   [[nodiscard]] constexpr U
   eval_seeded_as(const std::array<U, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+    static_assert(idx < N, "eval: no value supplied for this symbol");
     return vals[idx];
-  }
-
-  template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
-    static_assert(I < 2);
-    if constexpr (CTupleLike<T>) {
-      return eval().template get<I>();
-    } else if constexpr (I == 0) {
-      return eval();
-    } else {
-      return static_cast<T>(derivative());
-    }
   }
 };
 
@@ -404,15 +466,19 @@ public:
     return diff::Constant<type>{static_cast<type>(val)};                       \
   }
 
+// A variable is a pure symbol, so the literal's value is unused; only its type
+// selects the variable's value_type.
 #define DEFINE_VAR_UDL(type, suffix, label)                                    \
-  consteval auto operator"" _##suffix(unsigned long long val) {                \
-    return diff::Variable<type, diff::FixedString{label}>{                     \
-        static_cast<type>(val)};                                               \
+  consteval auto operator"" _##suffix(unsigned long long) {                    \
+    return diff::Variable<type, diff::FixedString{label}>{};                   \
   }                                                                            \
-  consteval auto operator"" _##suffix(long double val) {                       \
-    return diff::Variable<type, diff::FixedString{label}>{                     \
-        static_cast<type>(val)};                                               \
+  consteval auto operator"" _##suffix(long double) {                           \
+    return diff::Variable<type, diff::FixedString{label}>{};                   \
   }
+
+// var<"x"> — name a symbol.
+template <FixedString S, Numeric T = double>
+inline constexpr Variable<T, S> var{};
 
 } // namespace diff
 
@@ -430,18 +496,28 @@ struct tuple_element<I, diff::Constant<T>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
 
-template <diff::Numeric T, diff::CFixedString auto C, typename S>
-struct tuple_size<diff::Variable<T, C, S>> : integral_constant<std::size_t, 2> {
+template <diff::Numeric T, diff::CFixedString auto C, bool F>
+struct tuple_size<diff::Variable<T, C, F>> : integral_constant<std::size_t, 2> {
 };
 
-template <std::size_t I, diff::Numeric T, diff::CFixedString auto C, typename S>
-struct tuple_element<I, diff::Variable<T, C, S>> {
+template <std::size_t I, diff::Numeric T, diff::CFixedString auto C, bool F>
+struct tuple_element<I, diff::Variable<T, C, F>> {
+  using type = typename diff::detail::expression_element<T, I>::type;
+};
+
+template <diff::Numeric T, T V>
+struct tuple_size<diff::Lit<T, V>> : integral_constant<std::size_t, 2> {};
+
+template <std::size_t I, diff::Numeric T, T V>
+struct tuple_element<I, diff::Lit<T, V>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
 } // namespace std
 
+// Name a symbol whose value_type is decltype(x); `x` itself is unused, since
+// the point is supplied at the root by bind(expr, ...) / eval(expr, ...).
 #define PDV(x, label)                                                          \
-  diff::Variable<diff::Dual<decltype(x)>, diff::FixedString{label}>(           \
-      diff::Dual<decltype(x)>{x, 0})
-#define PV(x, label) diff::Variable<decltype(x), diff::FixedString{label}>(x)
+  diff::Variable<diff::Dual<decltype(x)>, diff::FixedString{label}> {}
+#define PV(x, label)                                                           \
+  diff::Variable<decltype(x), diff::FixedString{label}> {}
 #define PC(x) diff::Constant(x)

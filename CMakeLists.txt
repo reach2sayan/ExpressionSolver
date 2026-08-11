@@ -69,6 +69,13 @@ add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dual.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/forward_driver.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/gradient.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/bound.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/seeded_energy.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/taylor_dual.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/unary_math.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/vector_dual.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/vforward_driver.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/version.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/expression_differentiator.hpp
 )
 # Namespaced alias so consumers can link a stable target name.

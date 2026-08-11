@@ -17,15 +17,13 @@ struct eval_func_t {
             exprs)...};
   }
 };
-template <class Syms, class Updates> struct update_func_t {
-  const Syms &syms;
-  const Updates &updates;
-  constexpr auto operator()(auto &...ds) const noexcept {
-    (ds.update(syms, updates), ...);
-  }
-};
-
 inline constexpr eval_func_t eval_func{};
+
+// Evaluate a tuple of expressions at one point, in canonical symbol order.
+template <typename Syms, typename Vals, typename... Es>
+constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
+  return std::array{es.template eval_seeded<Syms>(vals)...};
+}
 } // namespace detail
 
 template <typename... Ts>
@@ -94,62 +92,64 @@ private:
     return out;
   }
 
-  [[nodiscard]] constexpr auto jacobian_symbolic() const noexcept
+  using point_t = std::array<value_type, input_dim>;
+
+  [[nodiscard]] constexpr auto
+  jacobian_symbolic(const point_t &vals) const noexcept
     requires(input_dim > 0)
   {
     std::array<std::array<value_type, input_dim>, output_dim> J{};
     static_for<output_dim>([&]<std::size_t I>() {
-      J[I] = std::apply(detail::eval_func, std::get<I>(jacobian_data));
+      J[I] = std::apply(
+          [&](const auto &...ds) {
+            return detail::eval_all<symbols>(vals, ds...);
+          },
+          std::get<I>(jacobian_data));
     });
     return J;
   }
 
-  [[nodiscard]] constexpr auto jacobian_reverse_mode() const noexcept
+  [[nodiscard]] constexpr auto
+  jacobian_reverse_mode(const point_t &vals) const noexcept
     requires(input_dim > 0)
   {
     std::array<std::array<value_type, input_dim>, output_dim> J{};
     static_for<output_dim>([&]<std::size_t I>() {
       const auto &e = std::get<I>(expressions);
       node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
-      fill_cache(e, cache);
+      fill_cache<0, symbols>(e, vals, cache);
       e.backward(symbols{}, value_type{1}, J[I], cache);
     });
     return J;
   }
 
-  [[nodiscard]] constexpr auto hessian_forward_over_reverse() noexcept
+  [[nodiscard]] constexpr auto hessian_forward_over_reverse(
+      const std::array<dual_scalar_t<value_type>, input_dim> &values)
+      const noexcept
     requires(DualLike<value_type> && input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
     std::array<std::array<std::array<S, input_dim>, input_dim>, output_dim> H{};
 
-    std::array<value_type, input_dim> current{};
-    std::apply(
-        [&](const auto &...exprs) { (exprs.collect(symbols{}, current), ...); },
-        expressions);
-
-    std::array<value_type, input_dim> seeds{};
+    point_t seeds{};
     for (std::size_t j = 0; j < input_dim; ++j) {
-      for (std::size_t i = 0; i < input_dim; ++i) {
-        seeds[i] =
-            value_type{current[i].template get<0>(), i == j ? S{1} : S{}};
-      }
-      update(symbols{}, seeds);
+      // Seed column j; one reverse sweep per output yields that column.
+      std::ranges::transform(
+          std::views::iota(std::size_t{0}, input_dim), seeds.begin(),
+          [&](std::size_t i) {
+            return value_type{values[i], i == j ? S{1} : S{}};
+          });
       static_for<output_dim>([&]<std::size_t K>() {
-        std::array<value_type, input_dim> grads{};
+        point_t grads{};
         const auto &e = std::get<K>(expressions);
         node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
-        fill_cache(e, cache);
+        fill_cache<0, symbols>(e, seeds, cache);
         e.backward(symbols{}, value_type{1}, grads, cache);
         for (std::size_t i = 0; i < input_dim; ++i) {
           H[K][i][j] = grads[i].template get<1>();
         }
       });
     }
-    for (std::size_t i = 0; i < input_dim; ++i) {
-      seeds[i] = value_type{current[i].template get<0>(), S{}};
-    }
-    update(symbols{}, seeds);
     return H;
   }
 
@@ -194,27 +194,27 @@ public:
       : expressions{std::move(first), std::move(rest)...},
         jacobian_data{make_jac_rows(expressions, symbols{})} {}
 
-  [[nodiscard]] constexpr auto evaluate() const noexcept {
+  [[nodiscard]] constexpr auto evaluate(const point_t &vals) const noexcept {
     if constexpr (output_dim == 1) {
-      return std::get<0>(expressions).eval();
+      return std::get<0>(expressions).template eval_seeded<symbols>(vals);
     } else {
-      return std::apply(detail::eval_func, expressions);
+      return std::apply(
+          [&](const auto &...es) {
+            return detail::eval_all<symbols>(vals, es...);
+          },
+          expressions);
     }
   }
 
-  constexpr operator value_type() const noexcept
-    requires(output_dim == 1)
-  {
-    return std::get<0>(expressions).eval();
-  }
-
-  [[nodiscard]] constexpr auto eval_derivatives() const noexcept
+  [[nodiscard]] constexpr auto
+  eval_derivatives(const point_t &vals) const noexcept
     requires(output_dim == 1)
   {
     const auto &row = std::get<0>(jacobian_data);
     std::array<value_type, input_dim> result{};
-    static_for<input_dim>(
-        [&]<std::size_t I>() { result[I] = std::get<I>(row).eval(); });
+    static_for<input_dim>([&]<std::size_t I>() {
+      result[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
+    });
     return result;
   }
 
@@ -243,46 +243,26 @@ public:
   }
 
   template <DiffMode Mode>
-  [[nodiscard]] constexpr auto jacobian() const noexcept
+  [[nodiscard]] constexpr auto jacobian(const point_t &values) const noexcept
     requires(Mode == DiffMode::Symbolic && input_dim > 0)
   {
-    return jacobian_symbolic();
+    return jacobian_symbolic(values);
   }
 
   template <DiffMode Mode>
-  [[nodiscard]] constexpr auto jacobian() const noexcept
+  [[nodiscard]] constexpr auto jacobian(const point_t &values) const noexcept
     requires(Mode == DiffMode::Reverse && input_dim > 0)
   {
-    return jacobian_reverse_mode();
+    return jacobian_reverse_mode(values);
   }
 
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto
-  jacobian(std::array<value_type, input_dim> values) noexcept
-    requires(Mode == DiffMode::Reverse && input_dim > 0)
-  {
-    update(symbols{}, values);
-    return jacobian<Mode>();
-  }
-
-  template <DiffMode Mode>
-  [[nodiscard]] constexpr auto hessian() noexcept
+  hessian(const std::array<dual_scalar_t<value_type>, input_dim> &values)
+      const noexcept
     requires(Mode == DiffMode::Reverse && DualLike<value_type> && input_dim > 0)
   {
-    return hessian_forward_over_reverse();
-  }
-
-  template <DiffMode Mode>
-  [[nodiscard]] constexpr auto
-  hessian(std::array<dual_scalar_t<value_type>, input_dim> values) noexcept
-    requires(Mode == DiffMode::Reverse && DualLike<value_type> && input_dim > 0)
-  {
-    using S = dual_scalar_t<value_type>;
-    std::array<value_type, input_dim> seeds{};
-    std::ranges::transform(values, seeds.begin(),
-                           [](const auto &v) { return value_type{v, S{}}; });
-    update(symbols{}, seeds);
-    return hessian<Mode>();
+    return hessian_forward_over_reverse(values);
   }
 
   template <std::size_t Order>
@@ -293,37 +273,11 @@ public:
     return equation_derivative_tensor_impl<Order>(std::move(values));
   }
 
-  template <std::size_t Order>
-  [[nodiscard]] constexpr auto derivative_tensor() const noexcept
-    requires(input_dim > 0 && Order > 0)
-  {
-    using S = scalar_base_t<value_type>;
-    std::array<value_type, input_dim> current{};
-    std::apply(
-        [&](const auto &...exprs) { (exprs.collect(symbols{}, current), ...); },
-        expressions);
-    std::array<S, input_dim> values{};
-    std::ranges::transform(current, values.begin(), [](auto &&cur) {
-      return get_real_part<dual_depth_v<value_type>>(std::move(cur));
-    });
-    return equation_derivative_tensor_impl<Order>(std::move(values));
-  }
-
-  // Update compile-time variables in all expressions and Jacobian rows.
-  constexpr void update(const symbols &syms, const auto &updates) noexcept {
-    auto update_func = detail::update_func_t{syms, updates};
-    auto apply_to_tuple_func = [&](auto &...jac_rows) noexcept {
-      (std::apply(update_func, jac_rows), ...);
-    };
-    std::apply(update_func, expressions);
-    std::apply(apply_to_tuple_func, jacobian_data);
-  }
-
-  // Iterate over each sub-expression, passing it by non-const reference to f.
-  // Allows external code to call update(external_syms, x) on each expression
-  // independently
-  template <typename F> constexpr void for_each_expr(F &&f) noexcept {
-    std::apply([&](auto &...exprs) noexcept { (f(exprs), ...); }, expressions);
+  // Iterate over each sub-expression, passing it by reference to f.
+  template <std::invocable<const TFirst &> F>
+  constexpr void for_each_expr(F &&f) const noexcept {
+    std::apply([&](const auto &...exprs) noexcept { (f(exprs), ...); },
+               expressions);
   }
 };
 

@@ -5,6 +5,7 @@
 #ifndef EXPRESSIONDIFFERENTIATOR_EXPRESSION_DIFFERENTIATOR_HPP
 #define EXPRESSIONDIFFERENTIATOR_EXPRESSION_DIFFERENTIATOR_HPP
 
+#include "include/bound.hpp"
 #include "include/dual.hpp"
 #include "include/equation.hpp"
 #include "include/expressions.hpp"

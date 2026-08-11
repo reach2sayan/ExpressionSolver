@@ -20,8 +20,13 @@ template <typename Expr>
 using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
                                 node_count_v<std::remove_cvref_t<Expr>>>;
 
-template <std::size_t Base = 0, CExpression E, typename Cache>
-constexpr auto fill_cache(const E &node, Cache &cache) noexcept {
+// Leaves hold no value, so the point is threaded through the sweep: a leaf
+// reads its slot out of `vals` (in canonical symbol order) instead of out of
+// itself.
+template <std::size_t Base = 0, typename Syms, CExpression E, typename Vals,
+          typename Cache>
+constexpr auto fill_cache(const E &node, const Vals &vals,
+                          Cache &cache) noexcept {
   using U = std::remove_cvref_t<E>;
   using VT = typename U::value_type;
   if constexpr (CExpressionNode<U>) {
@@ -30,13 +35,13 @@ constexpr auto fill_cache(const E &node, Cache &cache) noexcept {
     // this node's operator into this node's slot.
     VT v = [&]<std::size_t... I>(std::index_sequence<I...>) {
       return typename U::op_type::func_type{}(
-          fill_cache<child_base_at<Base, Kids, I>()>(
-              std::get<I>(node.expressions()), cache)...);
+          fill_cache<child_base_at<Base, Kids, I>(), Syms>(
+              std::get<I>(node.expressions()), vals, cache)...);
     }(std::make_index_sequence<std::tuple_size_v<Kids>>{});
     cache[Base] = v;
     return v;
-  } else { // leaf (Variable / Constant)
-    VT v = node.eval();
+  } else { // leaf (Variable / Constant / Lit)
+    VT v = node.template eval_seeded<Syms>(vals);
     cache[Base] = v;
     return v;
   }
@@ -135,27 +140,33 @@ constexpr auto &nd_index(auto &arr, std::span<const std::size_t> idx) noexcept {
 enum class DiffMode { Symbolic, Forward, Reverse };
 namespace detail {
 
-template <CExpression Expr, typename T = typename Expr::value_type>
+template <CExpression Expr, typename T = typename Expr::value_type,
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(!DualLike<T>)
-[[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) noexcept {
+[[nodiscard]] constexpr auto
+reverse_mode_gradient(const Expr &expr,
+                      const std::array<T, N> &vals) noexcept {
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  constexpr auto N = mp::mp_size(Syms{});
   std::array<T, N> grads{};
   node_cache_t<Expr> cache{};
-  fill_cache(expr, cache);
+  fill_cache<0, Syms>(expr, vals, cache);
   expr.backward(Syms{}, T{1}, grads, cache);
   return grads;
 }
 
-template <CExpression Expr, typename T = typename Expr::value_type>
+template <CExpression Expr, typename T = typename Expr::value_type,
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires DualLike<T>
-[[nodiscard]] constexpr auto reverse_mode_gradient(const Expr &expr) noexcept {
+[[nodiscard]] constexpr auto
+reverse_mode_gradient(const Expr &expr,
+                      const std::array<T, N> &vals) noexcept {
   using scalar_t = dual_scalar_t<T>;
   using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  constexpr auto N = mp::mp_size(Syms{});
   std::array<T, N> grads{};
   node_cache_t<Expr> cache{};
-  fill_cache(expr, cache);
+  fill_cache<0, Syms>(expr, vals, cache);
   expr.backward(Syms{}, T{1}, grads, cache);
   std::array<scalar_t, N> result{};
   std::ranges::transform(grads, result.begin(),
@@ -170,43 +181,25 @@ template <CExpression Expr,
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires DualLike<T>
 [[nodiscard]] constexpr auto
-reverse_mode_hessian(Expr &expr, std::array<S, N> values) noexcept {
+reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   std::array<std::array<S, N>, N> H{};
   std::array<T, N> seeds{};
   for (std::size_t j = 0; j < N; j++) {
-    for (std::size_t i = 0; i < N; i++) {
-      seeds[i] = T{values[i], i == j ? S{1} : S{}};
-    }
-    expr.update(symbols{}, seeds);
+    // Seed column j, then one reverse sweep gives that column of the Hessian.
+    std::ranges::transform(std::views::iota(std::size_t{0}, N), seeds.begin(),
+                           [&](std::size_t i) {
+                             return T{values[i], i == j ? S{1} : S{}};
+                           });
     std::array<T, N> grads{};
     node_cache_t<Expr> cache{};
-    fill_cache(expr, cache);
+    fill_cache<0, symbols>(expr, seeds, cache);
     expr.backward(symbols{}, T{1}, grads, cache);
     for (std::size_t i = 0; i < N; i++) {
       H[i][j] = grads[i].template get<1>();
     }
   }
-  std::ranges::transform(values, seeds.begin(),
-                         [](const S &v) { return T{v, S{}}; });
-  expr.update(symbols{}, seeds);
   return H;
-}
-
-template <CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires DualLike<T>
-[[nodiscard]] constexpr auto reverse_mode_hessian(Expr &expr) noexcept {
-  using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  std::array<T, N> current{};
-  expr.collect(symbols{}, current);
-  std::array<S, N> values{};
-  std::ranges::transform(current, values.begin(),
-                         [](const T &c) { return c.template get<0>(); });
-  return reverse_mode_hessian(expr, values);
 }
 
 template <typename S, std::size_t Depth>
@@ -296,10 +289,23 @@ template <std::size_t Order, CExpression Expr,
 
 } // namespace detail
 
-template <DiffMode Mode, CExpression Expr>
+template <DiffMode Mode, CExpression Expr,
+          typename T = typename std::remove_cvref_t<Expr>::value_type,
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse)
-[[nodiscard]] constexpr auto gradient(const Expr &expr) noexcept {
-  return detail::reverse_mode_gradient(expr);
+[[nodiscard]] constexpr auto gradient(const Expr &expr,
+                                      const std::array<T, N> &values) noexcept {
+  return detail::reverse_mode_gradient(expr, values);
+}
+
+// Order-safe named form: values bind by symbol name (see make_values).
+template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
+          typename T = typename std::remove_cvref_t<Expr>::value_type>
+  requires(Mode == DiffMode::Reverse)
+[[nodiscard]] constexpr auto gradient(const Expr &expr,
+                                      NamedValue<Syms, Vs>... nv) noexcept {
+  return detail::reverse_mode_gradient(expr, make_values<Expr, T>(nv...));
 }
 
 template <DiffMode Mode, CExpression Expr,
@@ -321,15 +327,6 @@ template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
       expr, make_values<Expr, dual_scalar_t<T>>(nv...));
 }
 
-template <DiffMode Mode, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires(Mode == DiffMode::Reverse && DualLike<T>)
-[[nodiscard]] auto hessian(Expr &expr) noexcept {
-  return detail::reverse_mode_hessian(expr);
-}
 
 template <std::size_t Order, CExpression Expr,
           typename T = typename std::remove_cvref_t<Expr>::value_type,
@@ -351,22 +348,6 @@ template <std::size_t Order, CExpression Expr, FixedString... Syms,
   return detail::derivative_tensor_impl<Order>(expr, make_values<Expr>(nv...));
 }
 
-template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires(Order > 0 && N > 0)
-[[nodiscard]] auto derivative_tensor(const Expr &expr) noexcept {
-  using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  std::array<T, N> current{};
-  expr.collect(symbols{}, current);
-  std::array<S, N> values{};
-  std::ranges::transform(current, values.begin(), [](const T &c) {
-    return get_real_part<dual_depth_v<T>>(c);
-  });
-  return detail::derivative_tensor_impl<Order>(expr, values);
-}
 
 namespace detail {
 
@@ -418,20 +399,6 @@ template <std::size_t Order, CExpression Expr,
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)
 [[nodiscard]] S univariate_derivative(const Expr &expr, S x0) noexcept {
-  return detail::univariate_derivative_impl<Order>(expr, x0);
-}
-
-template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
-          std::size_t NVars = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires(Order > 0 && NVars == 1)
-[[nodiscard]] S univariate_derivative(const Expr &expr) noexcept {
-  using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  std::array<T, 1> current{};
-  expr.collect(symbols{}, current);
-  auto x0 = get_real_part<dual_depth_v<T>>(current[0]);
   return detail::univariate_derivative_impl<Order>(expr, x0);
 }
 

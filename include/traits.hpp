@@ -15,15 +15,25 @@ template <std::size_t N, class F> constexpr void static_for(F &&f) noexcept {
 }
 
 template <typename T> inline constexpr bool is_variable_v = false;
-template <typename T, CFixedString auto C, typename S>
-inline constexpr bool is_variable_v<Variable<T, C, S>> = true;
+template <typename T, CFixedString auto C, bool F>
+inline constexpr bool is_variable_v<Variable<T, C, F>> = true;
 
 template <typename T>
 concept CVariable = is_variable_v<std::remove_cvref_t<T>>;
 
+// Freezing a symbol: same leaf, same value lookup, zero derivative.  Leaves
+// carry no value, so this is a pure type transform — which is precisely what
+// lets the symbolic Jacobian be built out of empty types.
+template <typename T> struct frozen_variable;
+template <typename T, CFixedString auto C, bool F>
+struct frozen_variable<Variable<T, C, F>> {
+  using type = Variable<T, C, true>;
+};
+template <typename T> using frozen_variable_t = typename frozen_variable<T>::type;
+
 template <typename T> consteval auto make_all_constant_impl() {
   if constexpr (CVariable<T>) {
-    return std::type_identity<Constant<typename T::value_type>>{};
+    return std::type_identity<frozen_variable_t<T>>{};
   } else if constexpr (CExpressionNode<T>) {
     return []<typename Op, typename... C>(
                std::type_identity<Expression<Op, C...>>) {
@@ -43,7 +53,7 @@ template <CFixedString auto symbol, typename T>
 consteval auto replace_matching_var_impl() {
   if constexpr (CVariable<T>) {
     if constexpr (T::label == symbol) {
-      return std::type_identity<Constant<typename T::value_type>>{};
+      return std::type_identity<frozen_variable_t<T>>{};
     } else {
       return std::type_identity<T>{};
     }
@@ -63,23 +73,28 @@ template <CFixedString auto symbol, typename T>
 using replace_matching_variable_as_const_t =
     typename decltype(replace_matching_var_impl<symbol, T>())::type;
 
-template <CFixedString auto symbol, typename T, typename S>
-constexpr auto make_const_variable(const Variable<T, symbol, S> &var) noexcept {
-  return Constant<T>{static_cast<T>(var)};
+template <CFixedString auto symbol, typename T, bool F>
+constexpr auto make_const_variable(const Variable<T, symbol, F> &) noexcept {
+  return Variable<T, symbol, true>{};
 }
 
 template <CFixedString auto symbol, typename T, CFixedString auto othersymbol,
-          typename S>
+          bool F>
   requires(symbol != othersymbol)
 constexpr auto
-make_const_variable(const Variable<T, othersymbol, S> &var) noexcept
-    -> Variable<T, othersymbol, S> {
+make_const_variable(const Variable<T, othersymbol, F> &var) noexcept
+    -> Variable<T, othersymbol, F> {
   return var;
 }
 
 template <CFixedString auto symbol, typename T>
 constexpr auto make_const_variable(const Constant<T> &c) noexcept {
   return c;
+}
+
+template <CFixedString auto symbol, typename T, T V>
+constexpr auto make_const_variable(const Lit<T, V> &l) noexcept {
+  return l;
 }
 
 template <CFixedString auto symbol, typename Op, typename... C>
@@ -102,7 +117,7 @@ consteval auto constify_unmatched_var_impl() {
     if constexpr (Expr::label == symbol) {
       return std::type_identity<Expr>{};
     } else {
-      return std::type_identity<Constant<typename Expr::value_type>>{};
+      return std::type_identity<frozen_variable_t<Expr>>{};
     }
   } else if constexpr (CExpressionNode<Expr>) { // already nested correctly
     return []<typename Op, typename... C>(
@@ -118,23 +133,28 @@ template <CFixedString auto symbol, typename Expr>
 using constify_unmatched_var_t =
     typename decltype(constify_unmatched_var_impl<symbol, Expr>())::type;
 
-template <CFixedString auto symbol, typename T, typename S>
+template <CFixedString auto symbol, typename T, bool F>
 constexpr auto
-make_all_constant_except(const Variable<T, symbol, S> &v) noexcept {
+make_all_constant_except(const Variable<T, symbol, F> &v) noexcept {
   return v;
 }
 
 template <CFixedString auto symbol, typename T, CFixedString auto othersymbol,
-          typename S>
+          bool F>
   requires(symbol != othersymbol)
 constexpr auto make_all_constant_except(
-    const Variable<T, othersymbol, S> &var) noexcept -> Constant<T> {
-  return Constant<T>{static_cast<T>(var)};
+    const Variable<T, othersymbol, F> &) noexcept -> Variable<T, othersymbol, true> {
+  return {};
 }
 
 template <CFixedString auto symbol, typename T>
 constexpr auto make_all_constant_except(const Constant<T> &c) noexcept {
   return c;
+}
+
+template <CFixedString auto symbol, typename T, T V>
+constexpr auto make_all_constant_except(const Lit<T, V> &l) noexcept {
+  return l;
 }
 
 template <CFixedString auto symbol, typename Op, typename... C>
