@@ -241,8 +241,13 @@ template <CExpression Expr, typename... Args>
   using Syms = expr_symbols_t<Expr>;
   constexpr std::size_t N = expr_arity_v<Expr>;
 
-  if constexpr (sizeof...(Args) == 1 &&
-                (CValueMap<Args> && ...)) { // eval(map)
+  if constexpr (sizeof...(Args) == 0) { // constant-folded: no free symbols
+    static_assert(N == 0,
+                  "eval: this expression has free symbols, so it needs a point "
+                  "(see symbol_order<Expr>())");
+    return e.template eval_seeded<Syms>(std::array<VT, 0>{});
+  } else if constexpr (sizeof...(Args) == 1 &&
+                       (CValueMap<Args> && ...)) { // eval(map)
     return bind(e, args...).eval();
   } else if constexpr ((CNamedValue<Args> && ...)) { // eval(named<"x">(..), ..)
     return bind(e, args...).eval();
@@ -272,6 +277,19 @@ template <CExpression Expr, typename... Args>
     const std::array<VT, N> vals{static_cast<VT>(args)...};
     return e.template eval_seeded<Syms>(vals);
   }
+}
+
+template <auto Seed, CExpression Expr, typename... Args>
+[[nodiscard]] constexpr auto tangent_dispatch(const Expr &e,
+                                              const Args &...args) {
+  using VT = typename std::remove_cvref_t<Expr>::value_type;
+  using Syms = expr_symbols_t<Expr>;
+  constexpr std::size_t N = expr_arity_v<Expr>;
+  static_assert(sizeof...(Args) == N,
+                "eval_with_tangent: supply exactly one value per symbol, in "
+                "canonical order (see symbol_order<Expr>())");
+  const std::array<VT, N> vals{static_cast<VT>(args)...};
+  return e.template tangent_seeded<Seed, Syms>(vals);
 }
 
 } // namespace detail

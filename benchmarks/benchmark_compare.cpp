@@ -1,3 +1,4 @@
+#include "bound.hpp"
 // Apples-to-apples comparison: this library vs. autodiff v1.1.2.
 //
 // Three scalar functions of increasing arity:
@@ -80,7 +81,10 @@ static void run_ours_reverse_scratch(benchmark::State &state,
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
     auto expr = std::apply(build, xs);
-    auto g = reverse_mode_grad(expr);
+    using T = typename std::remove_cvref_t<decltype(expr)>::value_type;
+    std::array<T, N> pt{};
+    std::ranges::transform(xs, pt.begin(), [](double v) { return T{v}; });
+    auto g = reverse_mode_grad(expr, pt);
     benchmark::DoNotOptimize(g);
     benchmark::ClobberMemory();
   }
@@ -92,12 +96,13 @@ static void run_ours_reverse_scratch(benchmark::State &state,
 template <CExpression Expr, std::size_t N>
 static void run_ours_reverse_reuse(benchmark::State &state, Expr &expr,
                                    std::array<double, N> vals) {
-  using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using T = typename std::remove_cvref_t<Expr>::value_type;
   auto v = vals;
   for (auto _ : state) {
     benchmark::DoNotOptimize(v);
-    expr.update(Syms{}, v);
-    auto g = reverse_mode_grad(expr);
+    std::array<T, N> pt{};
+    std::ranges::transform(v, pt.begin(), [](double s) { return T{s}; });
+    auto g = reverse_mode_grad(expr, pt);
     benchmark::DoNotOptimize(g);
     benchmark::ClobberMemory();
   }
@@ -157,7 +162,7 @@ static void run_ad_reverse_reuse(benchmark::State &state,
 
 static void BM_Ours_Forward_F1(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{1.25}};
+  Variable<D, FixedString{"x"}> x;
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
   run_our_forward(state, expr, std::array{1.25});
 }
@@ -220,8 +225,8 @@ BENCHMARK(BM_AD_Reverse_F1_Reuse);
 
 static void BM_Ours_Forward_F2(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{1.3}};
-  Variable<D, diff::FixedString{"y"}> y{D{0.7}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = x * y + sin(x) + y * y + exp(x + y);
   run_our_forward(state, expr, std::array{1.3, 0.7});
 }
@@ -292,10 +297,10 @@ static const double W0 = std::numbers::pi_v<double> / 6.0;
 
 static void BM_Ours_Forward_F4(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{1.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{0.5}};
-  Variable<D, diff::FixedString{"z"}> z{D{1.7}};
-  Variable<D, diff::FixedString{"w"}> w{D{W0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
+  Variable<D, FixedString{"z"}> z;
+  Variable<D, FixedString{"w"}> w;
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
   run_our_forward(state, expr, std::array{1.0, 0.5, 1.7, W0});
 }
@@ -384,7 +389,7 @@ BENCHMARK(BM_AD_Reverse_F4_Reuse);
 
 static void BM_Ours_Forward_T1(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
+  Variable<D, FixedString{"x"}> x;
   auto expr = 1.0 + x + x * x + 1.0 / x + log(x);
   run_our_forward(state, expr, std::array{2.0});
 }
@@ -445,9 +450,9 @@ BENCHMARK(BM_AD_Reverse_T1_Reuse);
 
 static void BM_Ours_Forward_TMulti3(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{1.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{2.0}};
-  Variable<D, diff::FixedString{"z"}> z{D{3.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
+  Variable<D, FixedString{"z"}> z;
   auto expr =
       1.0 + x + y + z + x * y + y * z + x * z + x * y * z + exp(x / y + y / z);
   run_our_forward(state, expr, std::array{1.0, 2.0, 3.0});
@@ -530,8 +535,8 @@ BENCHMARK(BM_AD_Reverse_TMulti3_Reuse);
 
 static void BM_Ours_Forward_TGrad2(benchmark::State &state) {
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{1.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{0.5}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = sin(x) * cos(y) + exp(x * y);
   run_our_forward(state, expr, std::array{1.0, 0.5});
 }
@@ -668,8 +673,8 @@ static void BM_Ours_Reverse_THess(benchmark::State &state) {
   double xv = 2.0, yv = 3.0;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  Variable<D, diff::FixedString{"x"}> x{D{xv}};
-  Variable<D, diff::FixedString{"y"}> y{D{yv}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = x * x + x * y + y * y;
   for (auto _ : state) {
     auto vals = std::array{xv, yv};
@@ -717,11 +722,11 @@ static void BM_Ours_Forward_TDir(benchmark::State &state) {
   double xv = 1.0, yv = 0.5;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  Variable<D, diff::FixedString{"x"}> x{D{xv, DIR_UXY}};
-  Variable<D, diff::FixedString{"y"}> y{D{yv, DIR_UXY}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = exp(x) * sin(y);
   for (auto _ : state) {
-    auto val = expr.eval();
+    auto val = expr.eval(D{xv, DIR_UXY}, D{yv, DIR_UXY});
     double dir = val.template get<1>();
     benchmark::DoNotOptimize(dir);
     benchmark::ClobberMemory();
@@ -994,10 +999,10 @@ BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
 static auto make_chain_expr4() {
   using D = diff::Dual<double>;
   using diff::FixedString;
-  diff::Variable<D, FixedString{"x00"}> a{D{1.0}};
-  diff::Variable<D, FixedString{"x01"}> b{D{1.0}};
-  diff::Variable<D, FixedString{"x02"}> c{D{1.0}};
-  diff::Variable<D, FixedString{"x03"}> d{D{1.0}};
+  diff::Variable<D, FixedString{"x00"}> a;
+  diff::Variable<D, FixedString{"x01"}> b;
+  diff::Variable<D, FixedString{"x02"}> c;
+  diff::Variable<D, FixedString{"x03"}> d;
   return a * log(a) + b * log(b) + c * log(c) + d * log(d) +
          0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
          0.52 * (c - d) * (c - d) + exp(a * d);
@@ -1006,14 +1011,14 @@ static auto make_chain_expr4() {
 static auto make_chain_expr8() {
   using D = diff::Dual<double>;
   using diff::FixedString;
-  diff::Variable<D, FixedString{"x00"}> a{D{1.0}};
-  diff::Variable<D, FixedString{"x01"}> b{D{1.0}};
-  diff::Variable<D, FixedString{"x02"}> c{D{1.0}};
-  diff::Variable<D, FixedString{"x03"}> d{D{1.0}};
-  diff::Variable<D, FixedString{"x04"}> e{D{1.0}};
-  diff::Variable<D, FixedString{"x05"}> g{D{1.0}};
-  diff::Variable<D, FixedString{"x06"}> h{D{1.0}};
-  diff::Variable<D, FixedString{"x07"}> i{D{1.0}};
+  diff::Variable<D, FixedString{"x00"}> a;
+  diff::Variable<D, FixedString{"x01"}> b;
+  diff::Variable<D, FixedString{"x02"}> c;
+  diff::Variable<D, FixedString{"x03"}> d;
+  diff::Variable<D, FixedString{"x04"}> e;
+  diff::Variable<D, FixedString{"x05"}> g;
+  diff::Variable<D, FixedString{"x06"}> h;
+  diff::Variable<D, FixedString{"x07"}> i;
   return a * log(a) + b * log(b) + c * log(c) + d * log(d) + e * log(e) +
          g * log(g) + h * log(h) + i * log(i) + 0.50 * (a - b) * (a - b) +
          0.51 * (b - c) * (b - c) + 0.52 * (c - d) * (c - d) +
@@ -1262,9 +1267,13 @@ void reverse_check(const char *what, double ours, double ad) {
 }
 
 // Ours reverse partial w.r.t. a named symbol (handles canonical ordering).
-template <CExpression Expr>
-double ours_partial(const Expr &expr, std::string_view sym) {
-  const auto g = reverse_mode_grad(expr);
+template <CExpression Expr, std::size_t N>
+double ours_partial(const Expr &expr, std::string_view sym,
+                    const std::array<double, N> &pt) {
+  using T = typename std::remove_cvref_t<Expr>::value_type;
+  std::array<T, N> seed{};
+  std::ranges::transform(pt, seed.begin(), [](double v) { return T{v}; });
+  const auto g = reverse_mode_grad(expr, seed);
   const auto order = symbol_order<std::remove_cvref_t<Expr>>();
   for (std::size_t i = 0; i < order.size(); ++i)
     if (order[i] == sym)
@@ -1281,7 +1290,7 @@ double ours_partial(const Expr &expr, std::string_view sym) {
     autodiff::var X = 1.25;
     autodiff::var u = exp(X) * sin(X) + X * X * X + 2.0 * X;
     auto [dx] = ad::derivatives(u, ad::wrt(X));
-    reverse_check("F1 d/dx", ours_partial(e, "x"), dx);
+    reverse_check("F1 d/dx", ours_partial(e, "x", std::array{1.25}), dx);
   }
   // F2: f(x,y) = xy + sin(x) + y^2 + exp(x+y)
   {
@@ -1291,8 +1300,9 @@ double ours_partial(const Expr &expr, std::string_view sym) {
     autodiff::var X = 1.3, Y = 0.7;
     autodiff::var u = X * Y + sin(X) + Y * Y + exp(X + Y);
     auto [dx, dy] = ad::derivatives(u, ad::wrt(X, Y));
-    reverse_check("F2 d/dx", ours_partial(e, "x"), dx);
-    reverse_check("F2 d/dy", ours_partial(e, "y"), dy);
+    const std::array f2pt{1.3, 0.7}; // canonical {x,y}
+    reverse_check("F2 d/dx", ours_partial(e, "x", f2pt), dx);
+    reverse_check("F2 d/dy", ours_partial(e, "y", f2pt), dy);
   }
   // F4: symbols sort to {w,x,y,z} — the ordering trap.
   {
@@ -1306,10 +1316,11 @@ double ours_partial(const Expr &expr, std::string_view sym) {
     autodiff::var u =
         (X + Y) * (Z - Wv) + exp(X * Z) + sin(Y * Wv) + X * Y * Z * Wv;
     auto [dx, dy, dz, dw] = ad::derivatives(u, ad::wrt(X, Y, Z, Wv));
-    reverse_check("F4 d/dx", ours_partial(e, "x"), dx);
-    reverse_check("F4 d/dy", ours_partial(e, "y"), dy);
-    reverse_check("F4 d/dz", ours_partial(e, "z"), dz);
-    reverse_check("F4 d/dw", ours_partial(e, "w"), dw);
+    const std::array f4pt{wv, 1.0, 0.5, 1.7}; // canonical {w,x,y,z}
+    reverse_check("F4 d/dx", ours_partial(e, "x", f4pt), dx);
+    reverse_check("F4 d/dy", ours_partial(e, "y", f4pt), dy);
+    reverse_check("F4 d/dz", ours_partial(e, "z", f4pt), dz);
+    reverse_check("F4 d/dw", ours_partial(e, "w", f4pt), dw);
   }
   // G4: reverse gradient over a compile-time expression graph vs autodiff var.
   {
@@ -1318,10 +1329,11 @@ double ours_partial(const Expr &expr, std::string_view sym) {
     auto leaves = std::tie(a, b, c, d);
     autodiff::var u = make_u_grad4(leaves);
     auto [da, db, dc, dd] = ad::derivatives(u, ad::wrt(a, b, c, d));
-    reverse_check("G4 d/dx00", ours_partial(e, "x00"), da);
-    reverse_check("G4 d/dx01", ours_partial(e, "x01"), db);
-    reverse_check("G4 d/dx02", ours_partial(e, "x02"), dc);
-    reverse_check("G4 d/dx03", ours_partial(e, "x03"), dd);
+    const std::array g4pt{GP4[0], GP4[1], GP4[2], GP4[3]}; // canonical x00..x03
+    reverse_check("G4 d/dx00", ours_partial(e, "x00", g4pt), da);
+    reverse_check("G4 d/dx01", ours_partial(e, "x01", g4pt), db);
+    reverse_check("G4 d/dx02", ours_partial(e, "x02", g4pt), dc);
+    reverse_check("G4 d/dx03", ours_partial(e, "x03", g4pt), dd);
   }
   return true;
 }();

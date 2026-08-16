@@ -1,3 +1,4 @@
+#include "bound.hpp"
 #include "dual.hpp"
 #include "equation.hpp"
 #include "gradient.hpp"
@@ -11,21 +12,23 @@
 
 using namespace diff;
 
-template <typename Eq>
-static void run_symbolic(benchmark::State &state, Eq &eq) {
+template <typename Eq, typename Pt>
+static void run_symbolic(benchmark::State &state, Eq &eq, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
-    auto gradients = eq.eval_derivatives();
+    benchmark::DoNotOptimize(pt);
+    auto gradients = eq.eval_derivatives(pt);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
   }
 }
 
-template <CExpression Expr>
-static void run_reverse(benchmark::State &state, Expr &expr) {
+template <CExpression Expr, typename Pt>
+static void run_reverse(benchmark::State &state, Expr &expr, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
-    auto gradients = gradient<DiffMode::Reverse>(expr);
+    benchmark::DoNotOptimize(pt);
+    auto gradients = gradient<DiffMode::Reverse>(expr, pt);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
   }
@@ -44,31 +47,34 @@ run_forward(benchmark::State &state, Expr &expr,
   }
 }
 
-template <typename VE>
-static void run_symbolic_jacobian(benchmark::State &state, VE &ve) {
+template <typename VE, typename Pt>
+static void run_symbolic_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
-    auto J = ve.template symbolic_mode_jac();
+    benchmark::DoNotOptimize(pt);
+    auto J = ve.template symbolic_mode_jac(pt);
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
   }
 }
 
-template <typename VE>
-static void run_reverse_jacobian(benchmark::State &state, VE &ve) {
+template <typename VE, typename Pt>
+static void run_reverse_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
-    auto J = ve.template reverse_mode_jac();
+    benchmark::DoNotOptimize(pt);
+    auto J = ve.template reverse_mode_jac(pt);
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
   }
 }
 
-template <typename VE>
-static void run_forward_jacobian(benchmark::State &state, VE &ve) {
+template <typename VE, typename Pt>
+static void run_forward_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
-    auto J = ve.template derivative_tensor<1>();
+    benchmark::DoNotOptimize(pt);
+    auto J = ve.template derivative_tensor<1>(pt);
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
   }
@@ -79,14 +85,14 @@ static void BM_Symbolic_F1_Univariate(benchmark::State &state) {
   benchmark::DoNotOptimize(xv);
   auto x = PV(xv, "x");
   auto eq = Equation(exp(x) * sin(x) + x * x * x + 2.0 * x);
-  run_symbolic(state, eq);
+  run_symbolic(state, eq, std::array{xv});
 }
 BENCHMARK(BM_Symbolic_F1_Univariate);
 
 static void BM_Forward_F1_Univariate(benchmark::State &state) {
   double xv = 1.25;
   benchmark::DoNotOptimize(xv);
-  Variable<double, diff::FixedString{"x"}> x{xv};
+  Variable<double, FixedString{"x"}> x;
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
   run_forward(state, expr, std::array{xv});
 }
@@ -97,7 +103,7 @@ static void BM_Reverse_F1_Univariate(benchmark::State &state) {
   benchmark::DoNotOptimize(xv);
   auto x = PV(xv, "x");
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
-  run_reverse(state, expr);
+  run_reverse(state, expr, std::array{xv});
 }
 BENCHMARK(BM_Reverse_F1_Univariate);
 
@@ -108,7 +114,7 @@ static void BM_Symbolic_F2_Bivariate(benchmark::State &state) {
   auto x = PV(xv, "x");
   auto y = PV(yv, "y");
   auto eq = Equation(x * y + sin(x) + y * y + exp(x + y));
-  run_symbolic(state, eq);
+  run_symbolic(state, eq, std::array{xv, yv});
 }
 BENCHMARK(BM_Symbolic_F2_Bivariate);
 
@@ -116,8 +122,8 @@ static void BM_Forward_F2_Bivariate(benchmark::State &state) {
   double xv = 1.3, yv = 0.7;
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto expr = x * y + sin(x) + y * y + exp(x + y);
   run_forward(state, expr, std::array{xv, yv});
 }
@@ -130,7 +136,7 @@ static void BM_Reverse_F2_Bivariate(benchmark::State &state) {
   auto x = PV(xv, "x");
   auto y = PV(yv, "y");
   auto expr = x * y + sin(x) + y * y + exp(x + y);
-  run_reverse(state, expr);
+  run_reverse(state, expr, std::array{xv, yv});
 }
 BENCHMARK(BM_Reverse_F2_Bivariate);
 
@@ -143,7 +149,7 @@ static void BM_Symbolic_F3_Trivariate(benchmark::State &state) {
   auto y = PV(yv, "y");
   auto z = PV(zv, "z");
   auto eq = Equation(exp(x * y) + sin(z) * x + y * z + x * x * z);
-  run_symbolic(state, eq);
+  run_symbolic(state, eq, std::array{xv, yv, zv});
 }
 BENCHMARK(BM_Symbolic_F3_Trivariate);
 
@@ -152,9 +158,9 @@ static void BM_Forward_F3_Trivariate(benchmark::State &state) {
   benchmark::DoNotOptimize(xv);
   benchmark::DoNotOptimize(yv);
   benchmark::DoNotOptimize(zv);
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
-  Variable<double, diff::FixedString{"z"}> z{zv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
+  Variable<double, FixedString{"z"}> z;
   auto expr = exp(x * y) + sin(z) * x + y * z + x * x * z;
   run_forward(state, expr, std::array{xv, yv, zv});
 }
@@ -169,7 +175,7 @@ static void BM_Reverse_F3_Trivariate(benchmark::State &state) {
   auto y = PV(yv, "y");
   auto z = PV(zv, "z");
   auto expr = exp(x * y) + sin(z) * x + y * z + x * x * z;
-  run_reverse(state, expr);
+  run_reverse(state, expr, std::array{xv, yv, zv});
 }
 BENCHMARK(BM_Reverse_F3_Trivariate);
 
@@ -185,7 +191,7 @@ static void BM_Symbolic_F4_FourVariables(benchmark::State &state) {
   auto w = PV(wv, "w");
   auto eq =
       Equation((x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w);
-  run_symbolic(state, eq);
+  run_symbolic(state, eq, std::array{wv, xv, yv, zv});
 }
 BENCHMARK(BM_Symbolic_F4_FourVariables);
 
@@ -195,10 +201,10 @@ static void BM_Forward_F4_FourVariables(benchmark::State &state) {
   benchmark::DoNotOptimize(yv);
   benchmark::DoNotOptimize(zv);
   benchmark::DoNotOptimize(wv);
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
-  Variable<double, diff::FixedString{"z"}> z{zv};
-  Variable<double, diff::FixedString{"w"}> w{wv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
+  Variable<double, FixedString{"z"}> z;
+  Variable<double, FixedString{"w"}> w;
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
   run_forward(state, expr, std::array{xv, yv, zv, wv});
 }
@@ -215,7 +221,7 @@ static void BM_Reverse_F4_FourVariables(benchmark::State &state) {
   auto z = PV(zv, "z");
   auto w = PV(wv, "w");
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
-  run_reverse(state, expr);
+  run_reverse(state, expr, std::array{wv, xv, yv, zv});
 }
 BENCHMARK(BM_Reverse_F4_FourVariables);
 
@@ -231,7 +237,7 @@ static void BM_Symbolic_Vector_F4(benchmark::State &state) {
   auto w = PV(wv, "w");
   auto ve =
       Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
-  run_symbolic_jacobian(state, ve);
+  run_symbolic_jacobian(state, ve, std::array{wv, xv, yv, zv});
 }
 BENCHMARK(BM_Symbolic_Vector_F4);
 
@@ -241,13 +247,13 @@ static void BM_Forward_Vector_F4(benchmark::State &state) {
   benchmark::DoNotOptimize(yv);
   benchmark::DoNotOptimize(zv);
   benchmark::DoNotOptimize(wv);
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
-  Variable<double, diff::FixedString{"z"}> z{zv};
-  Variable<double, diff::FixedString{"w"}> w{wv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
+  Variable<double, FixedString{"z"}> z;
+  Variable<double, FixedString{"w"}> w;
   auto ve =
       Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
-  run_forward_jacobian(state, ve);
+  run_forward_jacobian(state, ve, std::array{wv, xv, yv, zv});
 }
 BENCHMARK(BM_Forward_Vector_F4);
 
@@ -263,7 +269,7 @@ static void BM_Reverse_Vector_F4(benchmark::State &state) {
   auto w = PV(wv, "w");
   auto ve =
       Equation((x + y) * (z - w) + exp(x * z), sin(y * w) + x * y * z * w);
-  run_reverse_jacobian(state, ve);
+  run_reverse_jacobian(state, ve, std::array{wv, xv, yv, zv});
 }
 BENCHMARK(BM_Reverse_Vector_F4);
 
@@ -278,9 +284,9 @@ static void BM_Footprint_F4(benchmark::State &state) {
 
   using D = Dual<double>;
   auto xf = PDV(1.0, "x");
-  Variable<D, diff::FixedString{"y"}> yf{D{0.5}};
-  Variable<D, diff::FixedString{"z"}> zf{D{1.7}};
-  Variable<D, diff::FixedString{"w"}> wf{D{M_PI / 6.0}};
+  Variable<D, FixedString{"y"}> yf;
+  Variable<D, FixedString{"z"}> zf;
+  Variable<D, FixedString{"w"}> wf;
   auto fwd_expr =
       (xf + yf) * (zf - wf) + exp(xf * zf) + sin(yf * wf) + xf * yf * zf * wf;
 
@@ -298,28 +304,25 @@ BENCHMARK(BM_Footprint_F4);
 static void BM_Symbolic_Batched_F4(benchmark::State &state) {
   const auto count = static_cast<std::size_t>(state.range(0));
 
-  auto x0 = PV(1.0, "x");
-  auto y0 = PV(0.5, "y");
-  auto z0 = PV(1.7, "z");
-  auto w0 = PV(M_PI / 6.0, "w");
-  auto expr0 =
-      (x0 + y0) * (z0 - w0) + exp(x0 * z0) + sin(y0 * w0) + x0 * y0 * z0 * w0;
-  using equation_type = Equation<decltype(expr0)>;
-  std::vector<equation_type> equations;
-  equations.reserve(count);
-  for (std::size_t i = 0; i < count; ++i) {
-    auto x = PV(1.0 + 0.001 * i, "x");
-    auto y = PV(0.5 + 0.001 * i, "y");
-    auto z = PV(1.7 + 0.001 * i, "z");
-    auto w = PV(M_PI / 6.0 + 0.001 * i, "w");
-    auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
-    equations.emplace_back(expr);
-  }
+  // The expression carries no values, so a batch is one expression and N
+  // points rather than N copies of the tree.
+  constexpr auto x = var<"x">;
+  constexpr auto y = var<"y">;
+  constexpr auto z = var<"z">;
+  constexpr auto w = var<"w">;
+  auto eq = Equation((x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w);
+
+  using point_type = std::array<double, 4>; // canonical order: w, x, y, z
+  std::vector<point_type> points;
+  points.reserve(count);
+  for (std::size_t i = 0; i < count; ++i)
+    points.push_back({M_PI / 6.0 + 0.001 * i, 1.0 + 0.001 * i,
+                      0.5 + 0.001 * i, 1.7 + 0.001 * i});
 
   for (auto _ : state) {
     double sink = 0.0;
-    for (auto &eq : equations) {
-      auto grads = eq.eval_derivatives();
+    for (const auto &pt : points) {
+      auto grads = eq.eval_derivatives(pt);
       sink += grads[0];
     }
     benchmark::DoNotOptimize(sink);
@@ -328,37 +331,32 @@ static void BM_Symbolic_Batched_F4(benchmark::State &state) {
 
   state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(count));
   state.SetBytesProcessed(state.iterations() *
-                          static_cast<int64_t>(count * sizeof(equation_type)));
-  state.counters["object_bytes"] = static_cast<double>(sizeof(equation_type));
+                          static_cast<int64_t>(count * sizeof(point_type)));
+  state.counters["object_bytes"] = static_cast<double>(sizeof(point_type));
+  state.counters["equation_bytes"] = static_cast<double>(sizeof(eq));
 }
 BENCHMARK(BM_Symbolic_Batched_F4)->Arg(256)->Arg(1024)->Arg(4096);
 
 static void BM_Reverse_Batched_F4(benchmark::State &state) {
   const auto count = static_cast<std::size_t>(state.range(0));
 
-  auto x0 = PV(1.0, "x");
-  auto y0 = PV(0.5, "y");
-  auto z0 = PV(1.7, "z");
-  auto w0 = PV(M_PI / 6.0, "w");
-  auto expr0 =
-      (x0 + y0) * (z0 - w0) + exp(x0 * z0) + sin(y0 * w0) + x0 * y0 * z0 * w0;
-  using expr_type = decltype(expr0);
+  constexpr auto x = var<"x">;
+  constexpr auto y = var<"y">;
+  constexpr auto z = var<"z">;
+  constexpr auto w = var<"w">;
+  auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
 
-  std::vector<expr_type> expressions;
-  expressions.reserve(count);
-  for (std::size_t i = 0; i < count; ++i) {
-    auto x = PV(1.0 + 0.001 * i, "x");
-    auto y = PV(0.5 + 0.001 * i, "y");
-    auto z = PV(1.7 + 0.001 * i, "z");
-    auto w = PV(M_PI / 6.0 + 0.001 * i, "w");
-    expressions.emplace_back((x + y) * (z - w) + exp(x * z) + sin(y * w) +
-                             x * y * z * w);
-  }
+  using point_type = std::array<double, 4>; // canonical order: w, x, y, z
+  std::vector<point_type> points;
+  points.reserve(count);
+  for (std::size_t i = 0; i < count; ++i)
+    points.push_back({M_PI / 6.0 + 0.001 * i, 1.0 + 0.001 * i,
+                      0.5 + 0.001 * i, 1.7 + 0.001 * i});
 
   for (auto _ : state) {
     double sink = 0.0;
-    for (const auto &expr : expressions) {
-      auto grads = gradient<DiffMode::Reverse>(expr);
+    for (const auto &pt : points) {
+      auto grads = gradient<DiffMode::Reverse>(expr, pt);
       sink += grads[0];
     }
     benchmark::DoNotOptimize(sink);
@@ -367,18 +365,19 @@ static void BM_Reverse_Batched_F4(benchmark::State &state) {
 
   state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(count));
   state.SetBytesProcessed(state.iterations() *
-                          static_cast<int64_t>(count * sizeof(expr_type)));
-  state.counters["object_bytes"] = static_cast<double>(sizeof(expr_type));
+                          static_cast<int64_t>(count * sizeof(point_type)));
+  state.counters["object_bytes"] = static_cast<double>(sizeof(point_type));
+  state.counters["expr_bytes"] = static_cast<double>(sizeof(expr));
 }
 BENCHMARK(BM_Reverse_Batched_F4)->Arg(256)->Arg(1024)->Arg(4096);
 
 static void BM_Forward_Batched_F4(benchmark::State &state) {
   const auto count = static_cast<std::size_t>(state.range(0));
 
-  Variable<double, diff::FixedString{"x"}> x0{1.0};
-  Variable<double, diff::FixedString{"y"}> y0{0.5};
-  Variable<double, diff::FixedString{"z"}> z0{1.7};
-  Variable<double, diff::FixedString{"w"}> w0{M_PI / 6.0};
+  Variable<double, FixedString{"x"}> x0;
+  Variable<double, FixedString{"y"}> y0;
+  Variable<double, FixedString{"z"}> z0;
+  Variable<double, FixedString{"w"}> w0;
   auto expr0 =
       (x0 + y0) * (z0 - w0) + exp(x0 * z0) + sin(y0 * w0) + x0 * y0 * z0 * w0;
   using expr_type = decltype(expr0);
@@ -389,10 +388,10 @@ static void BM_Forward_Batched_F4(benchmark::State &state) {
   points.reserve(count);
 
   for (std::size_t i = 0; i < count; ++i) {
-    Variable<double, diff::FixedString{"x"}> x{1.0 + 0.001 * i};
-    Variable<double, diff::FixedString{"y"}> y{0.5 + 0.001 * i};
-    Variable<double, diff::FixedString{"z"}> z{1.7 + 0.001 * i};
-    Variable<double, diff::FixedString{"w"}> w{M_PI / 6.0 + 0.001 * i};
+    Variable<double, FixedString{"x"}> x;
+    Variable<double, FixedString{"y"}> y;
+    Variable<double, FixedString{"z"}> z;
+    Variable<double, FixedString{"w"}> w;
     expressions.emplace_back((x + y) * (z - w) + exp(x * z) + sin(y * w) +
                              x * y * z * w);
     points.push_back({1.0 + 0.001 * i, 0.5 + 0.001 * i, 1.7 + 0.001 * i,
@@ -425,7 +424,7 @@ static void BM_Reverse_Dual_F1_Univariate(benchmark::State &state) {
   benchmark::DoNotOptimize(xv);
   auto x = PDV(xv, "x");
   auto expr = exp(x) * sin(x) + x * x * x + 2.0 * x;
-  run_reverse(state, expr);
+  run_reverse(state, expr, std::array{Dual<double>{xv, 0.0}});
 }
 BENCHMARK(BM_Reverse_Dual_F1_Univariate);
 
@@ -436,7 +435,7 @@ static void BM_Reverse_Dual_F2_Bivariate(benchmark::State &state) {
   auto x = PDV(xv, "x");
   auto y = PDV(yv, "y");
   auto expr = x * y + sin(x) + y * y + exp(x + y);
-  run_reverse(state, expr);
+  run_reverse(state, expr, std::array{Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0}});
 }
 BENCHMARK(BM_Reverse_Dual_F2_Bivariate);
 
@@ -451,36 +450,31 @@ static void BM_Reverse_Dual_F4_FourVariables(benchmark::State &state) {
   auto z = PDV(zv, "z");
   auto w = PDV(wv, "w");
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
-  run_reverse(state, expr);
+  run_reverse(state, expr, std::array{Dual<double>{wv, 0.0}, Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0}, Dual<double>{zv, 0.0}});
 }
 BENCHMARK(BM_Reverse_Dual_F4_FourVariables);
 
 static void BM_Reverse_Dual_Batched_F4(benchmark::State &state) {
   const auto count = static_cast<std::size_t>(state.range(0));
+  using D = Dual<double>;
 
-  auto x0 = PDV(1.0, "x");
-  auto y0 = PDV(0.5, "y");
-  auto z0 = PDV(1.7, "z");
-  auto w0 = PDV(M_PI / 6.0, "w");
-  auto expr0 =
-      (x0 + y0) * (z0 - w0) + exp(x0 * z0) + sin(y0 * w0) + x0 * y0 * z0 * w0;
-  using expr_type = decltype(expr0);
+  constexpr auto x = var<"x", D>;
+  constexpr auto y = var<"y", D>;
+  constexpr auto z = var<"z", D>;
+  constexpr auto w = var<"w", D>;
+  auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
 
-  std::vector<expr_type> expressions;
-  expressions.reserve(count);
-  for (std::size_t i = 0; i < count; ++i) {
-    auto x = PDV(1.0 + 0.001 * i, "x");
-    auto y = PDV(0.5 + 0.001 * i, "y");
-    auto z = PDV(1.7 + 0.001 * i, "z");
-    auto w = PDV(M_PI / 6.0 + 0.001 * i, "w");
-    expressions.emplace_back((x + y) * (z - w) + exp(x * z) + sin(y * w) +
-                             x * y * z * w);
-  }
+  using point_type = std::array<D, 4>; // canonical order: w, x, y, z
+  std::vector<point_type> points;
+  points.reserve(count);
+  for (std::size_t i = 0; i < count; ++i)
+    points.push_back({D{M_PI / 6.0 + 0.001 * i}, D{1.0 + 0.001 * i},
+                      D{0.5 + 0.001 * i}, D{1.7 + 0.001 * i}});
 
   for (auto _ : state) {
     double sink = 0.0;
-    for (const auto &expr : expressions) {
-      auto grads = reverse_mode_grad(expr);
+    for (const auto &pt : points) {
+      auto grads = reverse_mode_grad(expr, pt);
       sink += grads[0];
     }
     benchmark::DoNotOptimize(sink);
@@ -489,8 +483,9 @@ static void BM_Reverse_Dual_Batched_F4(benchmark::State &state) {
 
   state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(count));
   state.SetBytesProcessed(state.iterations() *
-                          static_cast<int64_t>(count * sizeof(expr_type)));
-  state.counters["object_bytes"] = static_cast<double>(sizeof(expr_type));
+                          static_cast<int64_t>(count * sizeof(point_type)));
+  state.counters["object_bytes"] = static_cast<double>(sizeof(point_type));
+  state.counters["expr_bytes"] = static_cast<double>(sizeof(expr));
 }
 BENCHMARK(BM_Reverse_Dual_Batched_F4)->Arg(256)->Arg(1024)->Arg(4096);
 

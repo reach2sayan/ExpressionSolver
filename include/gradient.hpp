@@ -302,10 +302,26 @@ template <DiffMode Mode, CExpression Expr,
 // Order-safe named form: values bind by symbol name (see make_values).
 template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
           typename T = typename std::remove_cvref_t<Expr>::value_type>
-  requires(Mode == DiffMode::Reverse)
+  requires(Mode == DiffMode::Reverse && sizeof...(Syms) > 0)
 [[nodiscard]] constexpr auto gradient(const Expr &expr,
                                       NamedValue<Syms, Vs>... nv) noexcept {
   return detail::reverse_mode_gradient(expr, make_values<Expr, T>(nv...));
+}
+
+// Positional scalars, in canonical symbol order.
+template <DiffMode Mode, CExpression Expr, typename... Args,
+          typename T = typename std::remove_cvref_t<Expr>::value_type,
+          std::size_t N = mp::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+  requires(Mode == DiffMode::Reverse && sizeof...(Args) > 0 &&
+           (std::convertible_to<Args, T> && ...))
+[[nodiscard]] constexpr auto gradient(const Expr &expr,
+                                      const Args &...xs) noexcept {
+  static_assert(sizeof...(Args) == N,
+                "gradient: supply exactly one value per symbol, in canonical "
+                "order (see symbol_order<Expr>())");
+  return detail::reverse_mode_gradient(expr, std::array<T, N>{
+                                                 static_cast<T>(xs)...});
 }
 
 template <DiffMode Mode, CExpression Expr,

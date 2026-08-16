@@ -1,3 +1,4 @@
+#include "bound.hpp"
 #include "dual.hpp"
 #include "equation.hpp"
 #include "forward_driver.hpp"
@@ -24,73 +25,73 @@ using namespace diff;
 TEST(MathFunctionTest, TanEvalAndDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(tan(x).eval(), std::tan(x0));
-  ASSERT_DOUBLE_EQ(tan(x).derivative().eval(),
+  ASSERT_DOUBLE_EQ(tan(x).eval(x0), std::tan(x0));
+  ASSERT_DOUBLE_EQ(tan(x).derivative().eval(x0),
                    1.0 / (std::cos(x0) * std::cos(x0)));
 }
 
 TEST(MathFunctionTest, LogEvalAndDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(log(x).eval(), std::log(x0));
-  ASSERT_DOUBLE_EQ(log(x).derivative().eval(), 1.0 / x0);
+  ASSERT_DOUBLE_EQ(log(x).eval(x0), std::log(x0));
+  ASSERT_DOUBLE_EQ(log(x).derivative().eval(x0), 1.0 / x0);
 }
 
 TEST(MathFunctionTest, SqrtEvalAndDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(sqrt(x).eval(), std::sqrt(x0));
-  ASSERT_DOUBLE_EQ(sqrt(x).derivative().eval(), 0.5 / std::sqrt(x0));
+  ASSERT_DOUBLE_EQ(sqrt(x).eval(x0), std::sqrt(x0));
+  ASSERT_DOUBLE_EQ(sqrt(x).derivative().eval(x0), 0.5 / std::sqrt(x0));
 }
 
 TEST(MathFunctionTest, AsinDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(asin(x).eval(), std::asin(x0));
-  ASSERT_DOUBLE_EQ(asin(x).derivative().eval(), 1.0 / std::sqrt(1.0 - x0 * x0));
+  ASSERT_DOUBLE_EQ(asin(x).eval(x0), std::asin(x0));
+  ASSERT_DOUBLE_EQ(asin(x).derivative().eval(x0), 1.0 / std::sqrt(1.0 - x0 * x0));
 }
 
 TEST(MathFunctionTest, AcosDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(acos(x).eval(), std::acos(x0));
-  ASSERT_DOUBLE_EQ(acos(x).derivative().eval(),
+  ASSERT_DOUBLE_EQ(acos(x).eval(x0), std::acos(x0));
+  ASSERT_DOUBLE_EQ(acos(x).derivative().eval(x0),
                    -1.0 / std::sqrt(1.0 - x0 * x0));
 }
 
 TEST(MathFunctionTest, AtanDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(atan(x).eval(), std::atan(x0));
-  ASSERT_DOUBLE_EQ(atan(x).derivative().eval(), 1.0 / (1.0 + x0 * x0));
+  ASSERT_DOUBLE_EQ(atan(x).eval(x0), std::atan(x0));
+  ASSERT_DOUBLE_EQ(atan(x).derivative().eval(x0), 1.0 / (1.0 + x0 * x0));
 }
 
 TEST(MathFunctionTest, SinhDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(sinh(x).eval(), std::sinh(x0));
-  ASSERT_DOUBLE_EQ(sinh(x).derivative().eval(), std::cosh(x0));
+  ASSERT_DOUBLE_EQ(sinh(x).eval(x0), std::sinh(x0));
+  ASSERT_DOUBLE_EQ(sinh(x).derivative().eval(x0), std::cosh(x0));
 }
 
 TEST(MathFunctionTest, CoshDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(cosh(x).eval(), std::cosh(x0));
-  ASSERT_DOUBLE_EQ(cosh(x).derivative().eval(), std::sinh(x0));
+  ASSERT_DOUBLE_EQ(cosh(x).eval(x0), std::cosh(x0));
+  ASSERT_DOUBLE_EQ(cosh(x).derivative().eval(x0), std::sinh(x0));
 }
 
 TEST(MathFunctionTest, TanhDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  ASSERT_DOUBLE_EQ(tanh(x).eval(), std::tanh(x0));
+  ASSERT_DOUBLE_EQ(tanh(x).eval(x0), std::tanh(x0));
   double c = std::cosh(x0);
-  ASSERT_DOUBLE_EQ(tanh(x).derivative().eval(), 1.0 / (c * c));
+  ASSERT_DOUBLE_EQ(tanh(x).derivative().eval(x0), 1.0 / (c * c));
 }
 
 TEST(MathFunctionTest, AbsEval) {
-  ASSERT_DOUBLE_EQ(abs(PV(3.0, "x")).eval(), 3.0);
-  ASSERT_DOUBLE_EQ(abs(PV(-3.0, "x")).eval(), 3.0);
-  ASSERT_DOUBLE_EQ(abs(PV(0.0, "x")).eval(), 0.0);
+  ASSERT_DOUBLE_EQ(abs(PV(3.0, "x")).eval(3.0), 3.0);
+  ASSERT_DOUBLE_EQ(abs(PV(-3.0, "x")).eval(-3.0), 3.0);
+  ASSERT_DOUBLE_EQ(abs(PV(0.0, "x")).eval(0.0), 0.0);
 }
 
 // Chain rule with new ops
@@ -99,7 +100,7 @@ TEST(MathFunctionTest, ChainRuleTan) {
   double x0 = 0.4;
   auto x = PV(x0, "x");
   auto expr = tan(PC(2.0) * x);
-  ASSERT_DOUBLE_EQ(expr.derivative().eval(),
+  ASSERT_DOUBLE_EQ(expr.derivative().eval(x0),
                    2.0 / (std::cos(2.0 * x0) * std::cos(2.0 * x0)));
 }
 
@@ -108,7 +109,7 @@ TEST(MathFunctionTest, ChainRuleLog) {
   double x0 = 0.8;
   auto x = PV(x0, "x");
   auto expr = log(x * x);
-  ASSERT_DOUBLE_EQ(expr.derivative().eval(), 2.0 / x0);
+  ASSERT_DOUBLE_EQ(expr.derivative().eval(x0), 2.0 / x0);
 }
 
 TEST(MathFunctionTest, ChainRuleSqrt) {
@@ -117,7 +118,7 @@ TEST(MathFunctionTest, ChainRuleSqrt) {
   auto x = PV(x0, "x");
   auto expr = sqrt(sin(x));
   double expected = std::cos(x0) / (2.0 * std::sqrt(std::sin(x0)));
-  ASSERT_NEAR(expr.derivative().eval(), expected, 1e-12);
+  ASSERT_NEAR(expr.derivative().eval(x0), expected, 1e-12);
 }
 
 // Mathematical identities — value must be constant, derivative must be zero
@@ -126,8 +127,8 @@ TEST(MathFunctionTest, PythagoreanIdentity) {
   for (double v : {0.0, 0.5, 1.0, 2.0}) {
     auto x = PV(v, "x");
     auto expr = sin(x) * sin(x) + cos(x) * cos(x);
-    ASSERT_NEAR(expr.eval(), 1.0, 1e-12);
-    ASSERT_NEAR(expr.derivative().eval(), 0.0, 1e-12);
+    ASSERT_NEAR(expr.eval(v), 1.0, 1e-12);
+    ASSERT_NEAR(expr.derivative().eval(v), 0.0, 1e-12);
   }
 }
 
@@ -136,8 +137,8 @@ TEST(MathFunctionTest, HyperbolicIdentity) {
   for (double v : {0.0, 0.5, 1.0, 2.0}) {
     auto x = PV(v, "x");
     auto expr = cosh(x) * cosh(x) - sinh(x) * sinh(x);
-    ASSERT_NEAR(expr.eval(), 1.0, 1e-12);
-    ASSERT_NEAR(expr.derivative().eval(), 0.0, 1e-12);
+    ASSERT_NEAR(expr.eval(v), 1.0, 1e-12);
+    ASSERT_NEAR(expr.derivative().eval(v), 0.0, 1e-12);
   }
 }
 
@@ -146,8 +147,8 @@ TEST(MathFunctionTest, ExpLogIdentity) {
   for (double v : {0.3, 0.5, 1.0, 2.0}) {
     auto x = PV(v, "x");
     auto expr = exp(log(x));
-    ASSERT_NEAR(expr.eval(), v, 1e-12);
-    ASSERT_NEAR(expr.derivative().eval(), 1.0, 1e-12);
+    ASSERT_NEAR(expr.eval(v), v, 1e-12);
+    ASSERT_NEAR(expr.derivative().eval(v), 1.0, 1e-12);
   }
 }
 
@@ -156,8 +157,8 @@ TEST(MathFunctionTest, QuotientSelfIsConstant) {
   for (double v : {1.0, 2.0, 5.0}) {
     auto x = PV(v, "x");
     auto expr = x / x;
-    ASSERT_NEAR(expr.eval(), 1.0, 1e-12);
-    ASSERT_NEAR(expr.derivative().eval(), 0.0, 1e-12);
+    ASSERT_NEAR(expr.eval(v), 1.0, 1e-12);
+    ASSERT_NEAR(expr.derivative().eval(v), 0.0, 1e-12);
   }
 }
 
@@ -166,8 +167,8 @@ TEST(MathFunctionTest, TanEqualsRatio) {
   double x0 = 0.7;
   auto x1 = PV(x0, "x");
   auto x2 = PV(x0, "x");
-  ASSERT_NEAR(tan(x1).derivative().eval(),
-              (sin(x2) / cos(x2)).derivative().eval(), 1e-12);
+  ASSERT_NEAR(tan(x1).derivative().eval(x0),
+              (sin(x2) / cos(x2)).derivative().eval(x0), 1e-12);
 }
 
 // ===========================================================================
@@ -176,78 +177,78 @@ TEST(MathFunctionTest, TanEqualsRatio) {
 
 TEST(ReverseModeAD, TanDerivative) {
   auto x = PV(0.5, "x");
-  auto g = reverse_mode_grad(tan(x));
+  auto g = reverse_mode_grad(tan(x), 0.5);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / (std::cos(0.5) * std::cos(0.5)));
 }
 
 TEST(ReverseModeAD, LogDerivative) {
   auto x = PV(0.5, "x");
-  auto g = reverse_mode_grad(log(x));
+  auto g = reverse_mode_grad(log(x), 0.5);
   ASSERT_DOUBLE_EQ(g[0], 2.0);
 }
 
 TEST(ReverseModeAD, SqrtDerivative) {
   auto x = PV(4.0, "x");
-  auto g = reverse_mode_grad(sqrt(x));
+  auto g = reverse_mode_grad(sqrt(x), 4.0);
   ASSERT_DOUBLE_EQ(g[0], 0.25); // 0.5/sqrt(4) = 0.25
 }
 
 TEST(ReverseModeAD, AsinDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  auto g = reverse_mode_grad(asin(x));
+  auto g = reverse_mode_grad(asin(x), x0);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / std::sqrt(1.0 - x0 * x0));
 }
 
 TEST(ReverseModeAD, AcosDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  auto g = reverse_mode_grad(acos(x));
+  auto g = reverse_mode_grad(acos(x), x0);
   ASSERT_DOUBLE_EQ(g[0], -1.0 / std::sqrt(1.0 - x0 * x0));
 }
 
 TEST(ReverseModeAD, AtanDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  auto g = reverse_mode_grad(atan(x));
+  auto g = reverse_mode_grad(atan(x), x0);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / (1.0 + x0 * x0));
 }
 
 TEST(ReverseModeAD, SinhDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  auto g = reverse_mode_grad(sinh(x));
+  auto g = reverse_mode_grad(sinh(x), x0);
   ASSERT_DOUBLE_EQ(g[0], std::cosh(x0));
 }
 
 TEST(ReverseModeAD, CoshDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  auto g = reverse_mode_grad(cosh(x));
+  auto g = reverse_mode_grad(cosh(x), x0);
   ASSERT_DOUBLE_EQ(g[0], std::sinh(x0));
 }
 
 TEST(ReverseModeAD, TanhDerivative) {
   double x0 = 0.5;
   auto x = PV(x0, "x");
-  auto g = reverse_mode_grad(tanh(x));
+  auto g = reverse_mode_grad(tanh(x), x0);
   double c = std::cosh(x0);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / (c * c));
 }
 
 TEST(ReverseModeAD, AbsDerivativePositive) {
   auto x = PV(1.0, "x");
-  ASSERT_DOUBLE_EQ(reverse_mode_grad(abs(x))[0], 1.0);
+  ASSERT_DOUBLE_EQ(reverse_mode_grad(abs(x), 1.0)[0], 1.0);
 }
 
 TEST(ReverseModeAD, AbsDerivativeNegative) {
   auto x = PV(-1.0, "x");
-  ASSERT_DOUBLE_EQ(reverse_mode_grad(abs(x))[0], -1.0);
+  ASSERT_DOUBLE_EQ(reverse_mode_grad(abs(x), -1.0)[0], -1.0);
 }
 
 TEST(ReverseModeAD, AbsDerivativeAtZero) {
   auto x = PV(0.0, "x");
-  ASSERT_DOUBLE_EQ(reverse_mode_grad(abs(x))[0], 0.0);
+  ASSERT_DOUBLE_EQ(reverse_mode_grad(abs(x), 0.0)[0], 0.0);
 }
 
 // ===========================================================================
@@ -256,87 +257,87 @@ TEST(ReverseModeAD, AbsDerivativeAtZero) {
 
 TEST(ForwardModeAD, TanDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = tan(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = tan(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, std::tan(x0));
   ASSERT_DOUBLE_EQ(df, 1.0 / (std::cos(x0) * std::cos(x0)));
 }
 
 TEST(ForwardModeAD, LogDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = log(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = log(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, std::log(x0));
   ASSERT_DOUBLE_EQ(df, 1.0 / x0);
 }
 
 TEST(ForwardModeAD, SqrtDerivative) {
   double x0 = 4.0;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = sqrt(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = sqrt(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, 2.0);
   ASSERT_DOUBLE_EQ(df, 0.25);
 }
 
 TEST(ForwardModeAD, AsinDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = asin(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = asin(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, std::asin(x0));
   ASSERT_DOUBLE_EQ(df, 1.0 / std::sqrt(1.0 - x0 * x0));
 }
 
 TEST(ForwardModeAD, AcosDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = acos(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = acos(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, std::acos(x0));
   ASSERT_DOUBLE_EQ(df, -1.0 / std::sqrt(1.0 - x0 * x0));
 }
 
 TEST(ForwardModeAD, AtanDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = atan(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = atan(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, std::atan(x0));
   ASSERT_DOUBLE_EQ(df, 1.0 / (1.0 + x0 * x0));
 }
 
 TEST(ForwardModeAD, SinhDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = sinh(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = sinh(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, std::sinh(x0));
   ASSERT_DOUBLE_EQ(df, std::cosh(x0));
 }
 
 TEST(ForwardModeAD, CoshDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = cosh(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = cosh(x).eval(Dual<double>{x0, 1.0});
   ASSERT_DOUBLE_EQ(f, std::cosh(x0));
   ASSERT_DOUBLE_EQ(df, std::sinh(x0));
 }
 
 TEST(ForwardModeAD, TanhDerivative) {
   double x0 = 0.5;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = tanh(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = tanh(x).eval(Dual<double>{x0, 1.0});
   double c = std::cosh(x0);
   ASSERT_DOUBLE_EQ(f, std::tanh(x0));
   ASSERT_DOUBLE_EQ(df, 1.0 / (c * c));
 }
 
 TEST(ForwardModeAD, AbsDerivativePositive) {
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{2.0, 1.0}};
-  auto [f, df] = abs(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = abs(x).eval(Dual<double>{2.0, 1.0});
   ASSERT_DOUBLE_EQ(f, 2.0);
   ASSERT_DOUBLE_EQ(df, 1.0);
 }
 
 TEST(ForwardModeAD, AbsDerivativeNegative) {
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{-2.0, 1.0}};
-  auto [f, df] = abs(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = abs(x).eval(Dual<double>{-2.0, 1.0});
   ASSERT_DOUBLE_EQ(f, 2.0);
   ASSERT_DOUBLE_EQ(df, -1.0);
 }
@@ -425,21 +426,26 @@ TEST(ExpressionTest, StaticTests) {
           as_const_expression<
               Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>,
                          Constant<int>>>,
-          Expression<MultiplyOp<int>, Constant<int>, Constant<int>>>);
+          Expression<MultiplyOp<int>,
+                     Variable<int, diff::FixedString{"x"}, true>,
+                     Constant<int>>>);
 
   static_assert(
       std::is_same_v<
           as_const_expression<
               Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>,
                          Variable<int, diff::FixedString{"y"}>>>,
-          Expression<MultiplyOp<int>, Constant<int>, Constant<int>>>);
+          Expression<MultiplyOp<int>,
+                     Variable<int, diff::FixedString{"x"}, true>,
+                     Variable<int, diff::FixedString{"y"}, true>>>);
 
   auto x = 4_vi;
   auto y = 2_vi;
   auto c = 2_ci;
   auto res = x * y + c;
   auto res2 = make_const_variable<diff::FixedString{"c"}>(res);
-  ASSERT_EQ(res2, res);
+  // Freezing changes only the derivative, so the value is unchanged.
+  ASSERT_EQ(res2.eval(4), res.eval(4));
 }
 
 TEST(ExpressionTest, SumTest) {
@@ -454,8 +460,8 @@ TEST(ExpressionTest, MultiplyTest) {
   auto c = 3_ci;
   auto sum_exp = a * b * c;
   auto d = sum_exp.derivative();
-  ASSERT_EQ(sum_exp, 6);
-  ASSERT_EQ(d, 3);
+  ASSERT_EQ(sum_exp.eval(2), 6);
+  ASSERT_EQ(d.eval(2), 3);
 }
 
 TEST(ExpressionTest, SubtractTest) {
@@ -463,8 +469,8 @@ TEST(ExpressionTest, SubtractTest) {
   auto b = 2_vi;
   auto minus = a - b;
   auto d = minus.derivative();
-  ASSERT_EQ(minus, -1);
-  ASSERT_EQ(d, -1);
+  ASSERT_EQ(minus.eval(2), -1);
+  ASSERT_EQ(d.eval(), -1); // derivative of a constant-only tree
 }
 
 TEST(ExpressionTest, DivideTest) {
@@ -472,29 +478,30 @@ TEST(ExpressionTest, DivideTest) {
   auto b = 2.0_cd;
   auto divide = a / b;
   auto d = divide.derivative();
-  ASSERT_EQ(divide, 2.0);
-  ASSERT_EQ(d, 0.5);
+  ASSERT_EQ(divide.eval(4.0), 2.0);
+  ASSERT_EQ(d.eval(4.0), 0.5);
 }
 
 TEST(ExpressionTest, ExpTest) {
   constexpr auto exp_exp = exp(2.0_cd);
-  ASSERT_EQ(exp_exp, std::exp(2.0));
+  ASSERT_EQ(exp_exp.eval(), std::exp(2.0));
 }
 
 TEST(ExpressionTest, ExpSum) {
   constexpr auto target = exp(1_cd + 2_cd);
-  ASSERT_EQ(target, std::exp(3.0));
+  ASSERT_EQ(target.eval(), std::exp(3.0));
 }
 
 TEST(ExpressionTest, ExpDerivative) {
   for (std::size_t i = 1; i < 1000; ++i) {
-    auto target = exp(Variable<double, diff::FixedString{"x"}>{i * 1.0});
-    ASSERT_EQ(target.derivative(), target);
+    Variable<double, diff::FixedString{"x"}> xv;
+    auto target = exp(xv);
+    ASSERT_EQ(target.derivative().eval(i * 1.0), target.eval(i * 1.0));
   }
 }
 
 TEST(ExpressionTest, Combination) {
-  double target = exp(1_cd + 2_cd + 3_cd) + 1_cd;
+  double target = (exp(1_cd + 2_cd + 3_cd) + 1_cd).eval();
   ASSERT_EQ(target, std::exp(6.0) + 1.0);
 }
 
@@ -505,17 +512,17 @@ TEST(ExpressionTest, ConstantDerivative) {
 }
 
 TEST(ExpressionTest, VariableDerivative) {
-  auto x = Variable<int, diff::FixedString{"x"}>{5};
-  ASSERT_EQ(x.derivative(), 1);
-  ASSERT_EQ(x, 5);
+  Variable<int, diff::FixedString{"x"}> x;
+  ASSERT_EQ(x.derivative().eval(), 1);
+  ASSERT_EQ(x.eval(5), 5);
 }
 
 TEST(ExpressionTest, DerivativeTest) {
   auto x = 4_vi;
   auto expr = x * 2_ci;
   auto derv = expr.derivative();
-  ASSERT_EQ(expr, 8);
-  ASSERT_EQ(derv, 2);
+  ASSERT_EQ(expr.eval(4), 8);
+  ASSERT_EQ(derv.eval(4), 2);
 }
 
 // ===========================================================================
@@ -526,38 +533,38 @@ TEST(DerivativeRuleTest, SumRule) {
   // d/dx [f + g] = f' + g'  =>  d/dx [3x + 5] = 3
   auto x = PV(7, "x");
   auto expr = 3_ci * x + 5_ci;
-  ASSERT_EQ(expr.derivative(), 3);
+  ASSERT_EQ(expr.derivative().eval(7), 3);
 }
 
 TEST(DerivativeRuleTest, ProductRule) {
   // d/dx [x * x] = 2x  at x=4 => 8
-  auto x = Variable<int, diff::FixedString{"x"}>{4};
+  Variable<int, diff::FixedString{"x"}> x;
   auto expr = x * x;
-  ASSERT_EQ(expr.derivative(), 8);
+  ASSERT_EQ(expr.derivative().eval(4), 8);
 }
 
 TEST(DerivativeRuleTest, QuotientRule) {
   // d/dx [x / c] = 1/c  at x=6, c=3 => 1/3
-  auto x = Variable<double, diff::FixedString{"x"}>{6.0};
+  Variable<double, diff::FixedString{"x"}> x;
   auto c = Constant<double>{3.0};
   auto expr = x / c;
-  ASSERT_DOUBLE_EQ(expr.derivative(), 1.0 / 3.0);
+  ASSERT_DOUBLE_EQ(expr.derivative().eval(6.0), 1.0 / 3.0);
 }
 
 TEST(DerivativeRuleTest, ChainRule_ExpOfLinear) {
   // d/dx [e^(2x)] = 2*e^(2x)  at x=1
-  auto x = Variable<double, diff::FixedString{"x"}>{1.0};
+  Variable<double, diff::FixedString{"x"}> x;
   auto inner = PC(2.0) * x;
   auto expr = exp(inner);
-  ASSERT_DOUBLE_EQ(expr.derivative().eval(), 2.0 * std::exp(2.0));
+  ASSERT_DOUBLE_EQ(expr.derivative().eval(1.0), 2.0 * std::exp(2.0));
 }
 
 TEST(DerivativeRuleTest, ChainRule_SinOfLinear) {
   // d/dx [sin(3x)] = 3*cos(3x)  at x=0
-  auto x = Variable<double, diff::FixedString{"x"}>{0.0};
+  Variable<double, diff::FixedString{"x"}> x;
   auto inner = PC(3.0) * x;
   auto expr = sin(inner);
-  ASSERT_DOUBLE_EQ(expr.derivative().eval(), 3.0 * std::cos(0.0));
+  ASSERT_DOUBLE_EQ(expr.derivative().eval(0.0), 3.0 * std::cos(0.0));
 }
 
 // ===========================================================================
@@ -566,19 +573,20 @@ TEST(DerivativeRuleTest, ChainRule_SinOfLinear) {
 
 TEST(VariableTest, GetValue) {
   auto a = 2_vi;
-  ASSERT_EQ(a, 2);
+  ASSERT_EQ(a.eval(2), 2);
 }
 
 TEST(VariableTest, Assign) {
-  Variable<int, diff::FixedString{"a"}> a{4};
-  a = 2;
-  ASSERT_EQ(a, 2);
+  // A variable holds no value, so "assignment" is supplying a point.
+  Variable<int, FixedString{"a"}> a;
+  ASSERT_EQ(a.eval(2), 2);
+  ASSERT_EQ(a.eval(5), 5);
 }
 
 TEST(VariableTest, UdlCompAndAssign) {
-  Variable<int, diff::FixedString{"a"}> a{4};
+  Variable<int, FixedString{"a"}> a;
   auto b = 4_vi;
-  ASSERT_EQ(a, b);
+  ASSERT_EQ(a.eval(4), b.eval(4));
 }
 
 // ===========================================================================
@@ -587,28 +595,28 @@ TEST(VariableTest, UdlCompAndAssign) {
 
 TEST(TrigTest, SinTest) {
   auto b = sin(PC(0.5));
-  ASSERT_EQ(b, std::sin(0.5));
+  ASSERT_EQ(b.eval(), std::sin(0.5)); // no symbols
 }
 
 TEST(TrigTest, CosTest) {
   auto b = cos(PV(0.45, "x"));
-  ASSERT_EQ(b, std::cos(0.45));
-  ASSERT_DOUBLE_EQ(b.derivative().eval(), -std::sin(0.45));
+  ASSERT_DOUBLE_EQ(b.eval(0.45), std::cos(0.45));
+  ASSERT_DOUBLE_EQ(b.derivative().eval(0.45), -std::sin(0.45));
 }
 
 TEST(TrigTest, SinDerivative) {
   auto x = PV(0.7, "x");
   auto s = sin(x);
-  ASSERT_DOUBLE_EQ(s.derivative().eval(), std::cos(0.7));
+  ASSERT_DOUBLE_EQ(s.derivative().eval(0.7), std::cos(0.7));
 }
 
 TEST(TrigTest, SinCosIdentity) {
   // sin^2(x) + cos^2(x) == 1
   for (double v : {0.0, 0.5, 1.0, std::numbers::pi / 4}) {
-    auto x = Variable<double, diff::FixedString{"x"}>{v};
+    Variable<double, diff::FixedString{"x"}> x;
     auto s = sin(x);
     auto c = cos(x);
-    double lhs = static_cast<double>(s * s) + static_cast<double>(c * c);
+    double lhs = (s * s).eval(v) + (c * c).eval(v);
     ASSERT_NEAR(lhs, 1.0, 1e-12);
   }
 }
@@ -616,16 +624,16 @@ TEST(TrigTest, SinCosIdentity) {
 TEST(TrigTest, CosDerivativeIsNegSin) {
   // d/dx cos(x) = -sin(x)  at several points
   for (double v : {0.0, 0.3, 1.0, 2.0}) {
-    auto x = Variable<double, diff::FixedString{"x"}>{v};
-    ASSERT_DOUBLE_EQ(cos(x).derivative().eval(), -std::sin(v));
+    Variable<double, diff::FixedString{"x"}> x;
+    ASSERT_DOUBLE_EQ(cos(x).derivative().eval(v), -std::sin(v));
   }
 }
 
 TEST(TrigTest, ExpDerivativeIsItself) {
   // d/dx e^x = e^x
   for (double v : {-1.0, 0.0, 0.5, 1.5}) {
-    auto x = Variable<double, diff::FixedString{"x"}>{v};
-    ASSERT_DOUBLE_EQ(exp(x).derivative().eval(), std::exp(v));
+    Variable<double, diff::FixedString{"x"}> x;
+    ASSERT_DOUBLE_EQ(exp(x).derivative().eval(v), std::exp(v));
   }
 }
 
@@ -637,7 +645,7 @@ TEST(EquationTest, SingleVariable) {
   auto x = PV(4, "x");
   auto expr = x * 2_ci;
   auto eq = Equation(expr);
-  ASSERT_EQ(eq[IDX(1)], 2);
+  ASSERT_EQ(eq[IDX(1)].eval(4), 2);
 }
 
 TEST(EquationTest, TwoVariables) {
@@ -645,8 +653,8 @@ TEST(EquationTest, TwoVariables) {
   auto y = PV(2, "y");
   auto expr = x * y;
   auto eq = Equation(expr);
-  ASSERT_EQ(eq[IDX(1)], 2); // df/dx = y = 2
-  ASSERT_EQ(eq[IDX(2)], 4); // df/dy = x = 4
+  ASSERT_EQ(eq[IDX(1)].eval(4, 2), 2); // df/dx = y = 2
+  ASSERT_EQ(eq[IDX(2)].eval(4, 2), 4); // df/dy = x = 4
 }
 
 TEST(EquationTest, LinearCombination) {
@@ -654,8 +662,8 @@ TEST(EquationTest, LinearCombination) {
   auto y = PV(2, "y");
   auto expr = PC(1) * x + PC(2) * y;
   auto eq = Equation(expr);
-  ASSERT_EQ(eq[IDX(1)], 1);
-  ASSERT_EQ(eq[IDX(2)], 2);
+  ASSERT_EQ(eq[IDX(1)].eval(4, 2), 1);
+  ASSERT_EQ(eq[IDX(2)].eval(4, 2), 2);
 }
 
 TEST(EquationTest, DifferenceOfSquares) {
@@ -663,8 +671,8 @@ TEST(EquationTest, DifferenceOfSquares) {
   constexpr auto y = PV(2, "y");
   constexpr auto expr = (x + y) * (x - y);
   auto eq = Equation(expr);
-  auto [d1, d2] = eq.eval_derivatives();
-  ASSERT_EQ(expr, 12); // (4+2)*(4-2) = 12
+  auto [d1, d2] = eq.eval_derivatives(std::array{4, 2});
+  ASSERT_EQ(expr.eval(4, 2), 12); // (4+2)*(4-2) = 12
   ASSERT_EQ(d1, 8);    // 2x = 8
   ASSERT_EQ(d2, -4);   // -2y = -4
 }
@@ -673,8 +681,8 @@ TEST(EquationTest, ExpEquation) {
   auto x = PV(1.0, "x");
   auto expr = exp(x);
   auto eq = Equation(expr);
-  ASSERT_DOUBLE_EQ(eq.evaluate(), std::exp(1.0));
-  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(), std::exp(1.0)); // d(e^x)/dx = e^x
+  ASSERT_DOUBLE_EQ(eq.evaluate(std::array{1.0}), std::exp(1.0));
+  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(1.0), std::exp(1.0)); // d(e^x)/dx = e^x
 }
 
 TEST(EquationTest, TrigEquation) {
@@ -682,7 +690,7 @@ TEST(EquationTest, TrigEquation) {
   auto expr = sin(x) * cos(x);
   auto eq = Equation(expr);
   // d/dx [sin(x)cos(x)] = cos^2(x) - sin^2(x) = cos(2x)
-  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(), std::cos(2 * 0.5));
+  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(0.5), std::cos(2 * 0.5));
 }
 
 TEST(EquationTest, IdxEquivalence) {
@@ -690,8 +698,8 @@ TEST(EquationTest, IdxEquivalence) {
   auto x = PV(3, "x");
   auto y = PV(5, "y");
   auto eq = Equation(x * y);
-  ASSERT_EQ(eq[idx<1>()], eq[IDX(1)]);
-  ASSERT_EQ(eq[idx<2>()], eq[IDX(2)]);
+  ASSERT_EQ(eq[idx<1>()].eval(3, 5), eq[IDX(1)].eval(3, 5));
+  ASSERT_EQ(eq[idx<2>()].eval(3, 5), eq[IDX(2)].eval(3, 5));
 }
 
 TEST(EquationTest, ThreeVariablePartials) {
@@ -702,7 +710,7 @@ TEST(EquationTest, ThreeVariablePartials) {
   auto z = PV(4, "z");
   auto expr = x * y + y * z;
   auto eq = Equation(expr);
-  auto [dx, dy, dz] = eq.eval_derivatives();
+  auto [dx, dy, dz] = eq.eval_derivatives(std::array{2, 3, 4});
   ASSERT_EQ(dx, 3);
   ASSERT_EQ(dy, 6);
   ASSERT_EQ(dz, 3);
@@ -712,17 +720,16 @@ TEST(EquationTest, UpdateAndReevaluate) {
   // f(x) = x^2,  df/dx = 2x.
   // Both copies of x in the derivative are live variables, so update
   // propagates.
-  auto x = Variable<int, diff::FixedString{"x"}>{3};
+  Variable<int, diff::FixedString{"x"}> x;
   auto expr = x * x;
   auto eq = Equation(expr);
 
-  ASSERT_EQ(eq.evaluate(), 9);
-  ASSERT_EQ(eq[IDX(1)].eval(), 6); // 2*3 = 6
+  ASSERT_EQ(eq.evaluate(std::array{3}), 9);
+  ASSERT_EQ(eq[IDX(1)].eval(3), 6); // 2*3 = 6
 
-  using Syms = Equation<decltype(expr)>::symbols;
-  eq.update(Syms{}, std::array{5});
-  ASSERT_EQ(eq.evaluate(), 25);
-  ASSERT_EQ(eq[IDX(1)].eval(), 10); // 2*5 = 10
+  // Re-evaluating at another point is just another point.
+  ASSERT_EQ(eq.evaluate(std::array{5}), 25);
+  ASSERT_EQ(eq[IDX(1)].eval(5), 10); // 2*5 = 10
 }
 
 TEST(EquationTest, MixedTrigExpEquation) {
@@ -732,7 +739,7 @@ TEST(EquationTest, MixedTrigExpEquation) {
   auto expr = exp(x) * sin(x);
   auto eq = Equation(expr);
   double expected = std::exp(1.0) * (std::sin(1.0) + std::cos(1.0));
-  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(), expected);
+  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(1.0), expected);
 }
 
 TEST(EquationTest, NumberOfDerivatives) {
@@ -760,7 +767,7 @@ TEST(EquationTest, Eval) {
   auto x = PV(3, "x");
   auto y = PV(4, "y");
   auto ve = Equation(x + y, x * y);
-  auto v = ve.evaluate();
+  auto v = ve.evaluate(std::array{3, 4});
   ASSERT_EQ(v[0], 7);
   ASSERT_EQ(v[1], 12);
 }
@@ -772,7 +779,7 @@ TEST(EquationTest, JacobianLinear) {
   auto x = PV(3, "x");
   auto y = PV(4, "y");
   auto ve = Equation(x + y, x * y);
-  auto J = ve.symbolic_mode_jac();
+  auto J = ve.symbolic_mode_jac(std::array{3, 4});
   ASSERT_EQ(J[0][0], 1); // ∂(x+y)/∂x
   ASSERT_EQ(J[0][1], 1); // ∂(x+y)/∂y
   ASSERT_EQ(J[1][0], 4); // ∂(x*y)/∂x = y = 4
@@ -786,7 +793,7 @@ TEST(EquationTest, JacobianWithTrig) {
   auto x = PV(2.0, "x");
   auto y = PV(3.0, "y");
   auto ve = Equation(x * y, sin(x) + y * y);
-  auto J = ve.symbolic_mode_jac();
+  auto J = ve.symbolic_mode_jac(std::array{2.0, 3.0});
   ASSERT_DOUBLE_EQ(J[0][0], 3.0);           // ∂(x*y)/∂x = y
   ASSERT_DOUBLE_EQ(J[0][1], 2.0);           // ∂(x*y)/∂y = x
   ASSERT_DOUBLE_EQ(J[1][0], std::cos(2.0)); // ∂(sin(x)+y²)/∂x
@@ -799,7 +806,7 @@ TEST(EquationTest, SingleComponentIsGradient) {
   auto x = PV(2.0, "x");
   auto y = PV(3.0, "y");
   auto eq = Equation(x * y);
-  auto g = eq.eval_derivatives();
+  auto g = eq.eval_derivatives(std::array{2.0, 3.0});
   ASSERT_DOUBLE_EQ(g[0], 3.0); // ∂(x*y)/∂x = y
   ASSERT_DOUBLE_EQ(g[1], 2.0); // ∂(x*y)/∂y = x
 }
@@ -811,7 +818,7 @@ TEST(EquationTest, SymbolUnionAcrossComponents) {
   auto y = PV(3.0, "y");
   auto ve = Equation(x * x, y * y); // (x², y²)
   static_assert(decltype(ve)::input_dim == 2);
-  auto J = ve.symbolic_mode_jac();
+  auto J = ve.symbolic_mode_jac(std::array{4.0, 3.0});
   ASSERT_DOUBLE_EQ(J[0][0], 8.0); // ∂(x²)/∂x = 2x = 8
   ASSERT_DOUBLE_EQ(J[0][1], 0.0); // ∂(x²)/∂y = 0
   ASSERT_DOUBLE_EQ(J[1][0], 0.0); // ∂(y²)/∂x = 0
@@ -825,7 +832,7 @@ TEST(EquationTest, ThreeOutputs) {
   auto ve = Equation(x * x, x * y, y * y);
   static_assert(decltype(ve)::output_dim == 3);
   static_assert(decltype(ve)::input_dim == 2);
-  auto J = ve.symbolic_mode_jac();
+  auto J = ve.symbolic_mode_jac(std::array{2.0, 5.0});
   ASSERT_DOUBLE_EQ(J[0][0], 4.0);  // 2x
   ASSERT_DOUBLE_EQ(J[0][1], 0.0);  // 0
   ASSERT_DOUBLE_EQ(J[1][0], 5.0);  // y
@@ -840,8 +847,8 @@ TEST(EquationTest, ReverseJacobianAgreesWithSymbolic) {
   auto z = PV(4.0, "z");
   auto ve = Equation(x * y, sin(x) + y * z, exp(z));
 
-  auto J_sym = ve.symbolic_mode_jac();
-  auto J_rev = ve.reverse_mode_jac();
+  auto J_sym = ve.symbolic_mode_jac(std::array{2.0, 3.0, 4.0});
+  auto J_rev = ve.reverse_mode_jac(std::array{2.0, 3.0, 4.0});
 
   for (std::size_t i = 0; i < decltype(ve)::output_dim; ++i)
     for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
@@ -857,8 +864,8 @@ TEST(EquationTest, ParallelReverseJacobian_FourOutputs) {
   static_assert(decltype(ve)::output_dim == 4);
   static_assert(decltype(ve)::input_dim == 3);
 
-  auto J_sym = ve.symbolic_mode_jac();
-  auto J_rev = ve.reverse_mode_jac();
+  auto J_sym = ve.symbolic_mode_jac(std::array{1.0, 2.0, 3.0});
+  auto J_rev = ve.reverse_mode_jac(std::array{1.0, 2.0, 3.0});
 
   for (std::size_t i = 0; i < decltype(ve)::output_dim; ++i)
     for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
@@ -875,8 +882,8 @@ TEST(EquationTest, ParallelReverseJacobian_FiveOutputsTrigExp) {
   static_assert(decltype(ve)::output_dim == 5);
   static_assert(decltype(ve)::input_dim == 3);
 
-  auto J_sym = ve.symbolic_mode_jac();
-  auto J_rev = ve.reverse_mode_jac();
+  auto J_sym = ve.symbolic_mode_jac(std::array{0.5, 1.0, 1.5});
+  auto J_rev = ve.reverse_mode_jac(std::array{0.5, 1.0, 1.5});
 
   for (std::size_t i = 0; i < decltype(ve)::output_dim; ++i)
     for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
@@ -890,8 +897,8 @@ TEST(EquationTest, ReverseJacobianSingleOutputMatchesGradient) {
   // Use a 2-component Equation so the vector specialization is selected.
   auto ve = Equation(expr, exp(x) * sin(y));
 
-  auto J_rev = ve.reverse_mode_jac();
-  auto g = reverse_mode_grad(expr);
+  auto J_rev = ve.reverse_mode_jac(std::array{2.0, 5.0});
+  auto g = reverse_mode_grad(expr, 2.0, 5.0);
 
   for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
     ASSERT_DOUBLE_EQ(J_rev[0][j], g[j]);
@@ -903,14 +910,16 @@ TEST(EquationTest, ReverseJacobianSingleOutputMatchesGradient) {
 
 TEST(ForwardModeAD, ExpressionStructuredBinding) {
   // Non-Dual: auto [f, df] = expr gives {eval(), derivative().eval()}
+  // A bare expression carries no point, so value and derivative are taken
+  // explicitly rather than by structured binding.
   auto x = PV(3.0, "x");
-  auto [f, df] = x * x; // f=9, df=2*3=6
-  EXPECT_DOUBLE_EQ(f, 9.0);
-  EXPECT_DOUBLE_EQ(df, 6.0);
+  const auto e = x * x;
+  EXPECT_DOUBLE_EQ(e.eval(3.0), 9.0);
+  EXPECT_DOUBLE_EQ(e.derivative().eval(3.0), 6.0);
 
-  auto [g, dg] = sin(PV(0.0, "x")); // g=sin(0)=0, dg=cos(0)*1=1
-  EXPECT_DOUBLE_EQ(g, 0.0);
-  EXPECT_DOUBLE_EQ(dg, 1.0);
+  const auto s = sin(PV(0.0, "x"));
+  EXPECT_DOUBLE_EQ(s.eval(0.0), 0.0);
+  EXPECT_DOUBLE_EQ(s.derivative().eval(0.0), 1.0);
 }
 
 TEST(ForwardModeAD, DualNumericConcept) {
@@ -982,22 +991,21 @@ TEST(ForwardModeAD, ScalarPromotionDeepDual) {
   // single static_cast required two chained explicit-ctor conversions and was
   // a hard compile error here.
   using DD = Dual<Dual<double>>;
-  Variable<DD, diff::FixedString{"x"}> x{
-      DD{Dual<double>{2.0, 0.0}, Dual<double>{0.0, 0.0}}};
+  Variable<DD, diff::FixedString{"x"}> x;
   auto expr = x + 2.0;
-  DD result = expr.eval();
+  DD result = expr.eval(DD{Dual<double>{2.0, 0.0}, Dual<double>{0.0, 0.0}});
   EXPECT_DOUBLE_EQ(get_real_part<2>(result), 4.0); // peel both Dual<> layers
 
   // Plain (non-dual) expression still behaves as before.
   auto y = PV(3.0, "y");
-  EXPECT_DOUBLE_EQ((y + 2.0).eval(), 5.0);
+  EXPECT_DOUBLE_EQ((y + 2.0).eval(3.0), 5.0);
 }
 
 TEST(ForwardModeAD, PolynomialDerivative) {
   // f(x) = x^2 + x,  f'(x) = 2x + 1
   // At x=3: f=12, f'=7
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{3.0, 1.0}};
-  auto [f, df] = (x * x + x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = (x * x + x).eval(Dual<double>{3.0, 1.0});
   EXPECT_DOUBLE_EQ(f, 12.0);
   EXPECT_DOUBLE_EQ(df, 7.0);
 }
@@ -1005,9 +1013,9 @@ TEST(ForwardModeAD, PolynomialDerivative) {
 TEST(ForwardModeAD, PartialDerivativeX) {
   // f(x,y) = x*y,  df/dx = y
   // At (3,4): f=12, df/dx=4
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{3.0, 1.0}};
-  Variable<Dual<double>, diff::FixedString{"y"}> y{Dual<double>{4.0, 0.0}};
-  auto [f, df] = (x * y).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  Variable<Dual<double>, FixedString{"y"}> y;
+  auto [f, df] = (x * y).eval(Dual<double>{3.0, 1.0}, Dual<double>{4.0, 0.0});
   EXPECT_DOUBLE_EQ(f, 12.0);
   EXPECT_DOUBLE_EQ(df, 4.0);
 }
@@ -1015,9 +1023,9 @@ TEST(ForwardModeAD, PartialDerivativeX) {
 TEST(ForwardModeAD, PartialDerivativeY) {
   // f(x,y) = x*y,  df/dy = x
   // At (3,4): f=12, df/dy=3
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{3.0, 0.0}};
-  Variable<Dual<double>, diff::FixedString{"y"}> y{Dual<double>{4.0, 1.0}};
-  auto [f, df] = (x * y).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  Variable<Dual<double>, FixedString{"y"}> y;
+  auto [f, df] = (x * y).eval(Dual<double>{3.0, 0.0}, Dual<double>{4.0, 1.0});
   EXPECT_DOUBLE_EQ(f, 12.0);
   EXPECT_DOUBLE_EQ(df, 3.0);
 }
@@ -1025,8 +1033,8 @@ TEST(ForwardModeAD, PartialDerivativeY) {
 TEST(ForwardModeAD, SinDerivative) {
   // f(x) = sin(x),  f'(x) = cos(x)
   double x0 = std::numbers::pi / 4.0;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = sin(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = sin(x).eval(Dual<double>{x0, 1.0});
   EXPECT_DOUBLE_EQ(f, std::sin(x0));
   EXPECT_DOUBLE_EQ(df, std::cos(x0));
 }
@@ -1034,8 +1042,8 @@ TEST(ForwardModeAD, SinDerivative) {
 TEST(ForwardModeAD, CosDerivative) {
   // f(x) = cos(x),  f'(x) = -sin(x)
   double x0 = std::numbers::pi / 3.0;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = cos(x).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = cos(x).eval(Dual<double>{x0, 1.0});
   EXPECT_DOUBLE_EQ(f, std::cos(x0));
   EXPECT_DOUBLE_EQ(df, -std::sin(x0));
 }
@@ -1043,20 +1051,17 @@ TEST(ForwardModeAD, CosDerivative) {
 TEST(ForwardModeAD, ExpDerivative) {
   // f(x) = exp(x),  f'(x) = exp(x)
   double x0 = 2.0;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = exp(x).eval();
-  auto [f2, df2] = exp(x);
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = exp(x).eval(Dual<double>{x0, 1.0});
   EXPECT_DOUBLE_EQ(f, std::exp(x0));
   EXPECT_DOUBLE_EQ(df, std::exp(x0));
-  EXPECT_DOUBLE_EQ(f, f2);
-  EXPECT_DOUBLE_EQ(df, df2);
 }
 
 TEST(ForwardModeAD, ChainRule) {
   // f(x) = sin(x^2),  f'(x) = 2x*cos(x^2)
   double x0 = 1.0;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
-  auto [f, df] = sin(x * x);
+  Variable<Dual<double>, FixedString{"x"}> x;
+  auto [f, df] = sin(x * x).eval(Dual<double>{x0, 1.0});
   EXPECT_DOUBLE_EQ(f, std::sin(x0 * x0));
   EXPECT_DOUBLE_EQ(df, 2.0 * x0 * std::cos(x0 * x0));
 }
@@ -1064,12 +1069,12 @@ TEST(ForwardModeAD, ChainRule) {
 TEST(ForwardModeAD, Equivalence) {
   // f(x) = sin(x^2),  f'(x) = 2x*cos(x^2)
   double x0 = 1.0;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
+  Variable<Dual<double>, FixedString{"x"}> x;
   auto xv = PV(x0, "x");
   auto l = sin(xv * xv);
-  auto [f, df] = sin(x * x);
-  auto f2 = l.eval();
-  auto df2 = l.derivative().eval();
+  auto [f, df] = sin(x * x).eval(Dual<double>{x0, 1.0});
+  auto f2 = l.eval(x0);
+  auto df2 = l.derivative().eval(x0);
   EXPECT_DOUBLE_EQ(f, std::sin(x0 * x0));
   EXPECT_DOUBLE_EQ(df, 2.0 * x0 * std::cos(x0 * x0));
   EXPECT_DOUBLE_EQ(df, df2);
@@ -1085,15 +1090,15 @@ TEST(ReverseModeAD, SingleVariableLinear) {
   // f(x) = 3*x  at x=5,  df/dx = 3
   auto x = PV(5.0, "x");
   auto expr = PC(3.0) * x;
-  auto g = reverse_mode_grad(expr);
+  auto g = reverse_mode_grad(expr, 5.0);
   EXPECT_DOUBLE_EQ(g[0], 3.0);
 }
 
 TEST(ReverseModeAD, ProductRule) {
   // f(x) = x*x  at x=4,  df/dx = 2x = 8
-  auto x = Variable<double, diff::FixedString{"x"}>{4.0};
+  Variable<double, diff::FixedString{"x"}> x;
   auto expr = x * x;
-  auto g = reverse_mode_grad(expr);
+  auto g = reverse_mode_grad(expr, std::array{4.0});
   EXPECT_DOUBLE_EQ(g[0], 8.0);
 }
 
@@ -1102,7 +1107,7 @@ TEST(ReverseModeAD, TwoVariables) {
   auto x = PV(3.0, "x");
   auto y = PV(4.0, "y");
   auto expr = x * y;
-  auto g = reverse_mode_grad(expr);
+  auto g = reverse_mode_grad(expr, 3.0, 4.0);
   static_assert(g.size() == 2);
   EXPECT_DOUBLE_EQ(g[0], 4.0); // df/dx = y
   EXPECT_DOUBLE_EQ(g[1], 3.0); // df/dy = x
@@ -1112,7 +1117,7 @@ TEST(ReverseModeAD, Sum) {
   // f(x,y) = x + y,  df/dx=1, df/dy=1
   auto x = PV(2.0, "x");
   auto y = PV(5.0, "y");
-  auto g = reverse_mode_grad(x + y);
+  auto g = reverse_mode_grad(x + y, 2.0, 5.0);
   EXPECT_DOUBLE_EQ(g[0], 1.0);
   EXPECT_DOUBLE_EQ(g[1], 1.0);
 }
@@ -1121,7 +1126,7 @@ TEST(ReverseModeAD, LinearCombination) {
   // f(x,y) = 2*x + 3*y,  df/dx=2, df/dy=3
   auto x = PV(1.0, "x");
   auto y = PV(1.0, "y");
-  auto g = reverse_mode_grad(PC(2.0) * x + PC(3.0) * y);
+  auto g = reverse_mode_grad(PC(2.0) * x + PC(3.0) * y, 1.0, 1.0);
   EXPECT_DOUBLE_EQ(g[0], 2.0);
   EXPECT_DOUBLE_EQ(g[1], 3.0);
 }
@@ -1130,7 +1135,7 @@ TEST(ReverseModeAD, Divide) {
   // f(x) = x/c at x=6, c=3,  df/dx = 1/c = 1/3
   auto x = PV(6.0, "x");
   auto c = PC(3.0);
-  auto g = reverse_mode_grad(x / c);
+  auto g = reverse_mode_grad(x / c, 6.0);
   EXPECT_DOUBLE_EQ(g[0], 1.0 / 3.0);
 }
 
@@ -1138,7 +1143,7 @@ TEST(ReverseModeAD, NegateViaSubtract) {
   // f(x,y) = x - y,  df/dx=1, df/dy=-1
   auto x = PV(5.0, "x");
   auto y = PV(2.0, "y");
-  auto g = reverse_mode_grad(x - y);
+  auto g = reverse_mode_grad(x - y, 5.0, 2.0);
   EXPECT_DOUBLE_EQ(g[0], 1.0);
   EXPECT_DOUBLE_EQ(g[1], -1.0);
 }
@@ -1146,21 +1151,21 @@ TEST(ReverseModeAD, NegateViaSubtract) {
 TEST(ReverseModeAD, SinDerivative) {
   // f(x) = sin(x),  df/dx = cos(x)  at x=1
   auto x = PV(1.0, "x");
-  auto g = reverse_mode_grad(sin(x));
+  auto g = reverse_mode_grad(sin(x), 1.0);
   EXPECT_DOUBLE_EQ(g[0], std::cos(1.0));
 }
 
 TEST(ReverseModeAD, CosDerivative) {
   // f(x) = cos(x),  df/dx = -sin(x)  at x=1
   auto x = PV(1.0, "x");
-  auto g = reverse_mode_grad(cos(x));
+  auto g = reverse_mode_grad(cos(x), 1.0);
   EXPECT_DOUBLE_EQ(g[0], -std::sin(1.0));
 }
 
 TEST(ReverseModeAD, ExpDerivative) {
   // f(x) = exp(x),  df/dx = exp(x)  at x=2
   auto x = PV(2.0, "x");
-  auto g = reverse_mode_grad(exp(x));
+  auto g = reverse_mode_grad(exp(x), 2.0);
   EXPECT_DOUBLE_EQ(g[0], std::exp(2.0));
 }
 
@@ -1170,7 +1175,7 @@ TEST(ReverseModeAD, ChainRuleSinOfProduct) {
   // df/dy = cos(x*y)*x = cos(6)*2
   auto x = PV(2.0, "x");
   auto y = PV(3.0, "y");
-  auto g = reverse_mode_grad(sin(x * y));
+  auto g = reverse_mode_grad(sin(x * y), 2.0, 3.0);
   EXPECT_DOUBLE_EQ(g[0], std::cos(6.0) * 3.0);
   EXPECT_DOUBLE_EQ(g[1], std::cos(6.0) * 2.0);
 }
@@ -1181,7 +1186,7 @@ TEST(ReverseModeAD, ThreeVariables) {
   auto x = PV(2.0, "x");
   auto y = PV(3.0, "y");
   auto z = PV(4.0, "z");
-  auto g = reverse_mode_grad(x * y + y * z);
+  auto g = reverse_mode_grad(x * y + y * z, 2.0, 3.0, 4.0);
   EXPECT_DOUBLE_EQ(g[0], 3.0);
   EXPECT_DOUBLE_EQ(g[1], 6.0);
   EXPECT_DOUBLE_EQ(g[2], 3.0);
@@ -1193,10 +1198,10 @@ TEST(ReverseModeAD, ThreeVariables) {
 
 TEST(EquationForward, TwoVariables) {
   // f(x,y) = (x*y, x+y) at (3,4) — J = [[4,3],[1,1]]
-  Variable<double, diff::FixedString{"x"}> x{3.0};
-  Variable<double, diff::FixedString{"y"}> y{4.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(x * y, x + y);
-  auto J = ve.derivative_tensor<1>();
+  auto J = ve.derivative_tensor<1>(std::array{3.0, 4.0});
   EXPECT_DOUBLE_EQ(J[0][0], 4.0); // ∂(x*y)/∂x = y = 4
   EXPECT_DOUBLE_EQ(J[0][1], 3.0); // ∂(x*y)/∂y = x = 3
   EXPECT_DOUBLE_EQ(J[1][0], 1.0); // ∂(x+y)/∂x
@@ -1210,12 +1215,12 @@ TEST(EquationForward, AgreesWithSymbolic) {
   auto xs = PV(xv, "x");
   auto ys = PV(yv, "y");
   auto ve_sym = Equation(xs * xs, xs * ys, ys * ys);
-  auto J_sym = ve_sym.symbolic_mode_jac();
+  auto J_sym = ve_sym.symbolic_mode_jac(std::array{xv, yv});
 
-  Variable<double, diff::FixedString{"x"}> xd{xv};
-  Variable<double, diff::FixedString{"y"}> yd{yv};
+  Variable<double, FixedString{"x"}> xd;
+  Variable<double, FixedString{"y"}> yd;
   auto ve_fwd = Equation(xd * xd, xd * yd, yd * yd);
-  auto J_fwd = ve_fwd.derivative_tensor<1>();
+  auto J_fwd = ve_fwd.derivative_tensor<1>(std::array{xv, yv});
 
   for (std::size_t i = 0; i < 3; ++i)
     for (std::size_t j = 0; j < 2; ++j)
@@ -1224,10 +1229,10 @@ TEST(EquationForward, AgreesWithSymbolic) {
 
 TEST(EquationForward, TrigJacobian) {
   // f(x,y) = (x*y, sin(x) + y*y) at (2,3) — J = [[3,2],[cos(2),6]]
-  Variable<double, diff::FixedString{"x"}> x{2.0};
-  Variable<double, diff::FixedString{"y"}> y{3.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(x * y, sin(x) + y * y);
-  auto J = ve.derivative_tensor<1>();
+  auto J = ve.derivative_tensor<1>(std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(J[0][0], 3.0);
   EXPECT_DOUBLE_EQ(J[0][1], 2.0);
   EXPECT_NEAR(J[1][0], std::cos(2.0), 1e-12);
@@ -1235,43 +1240,31 @@ TEST(EquationForward, TrigJacobian) {
 }
 
 TEST(EquationForward, AgreesWithReverse) {
-  Variable<double, diff::FixedString{"x"}> x{2.0};
-  Variable<double, diff::FixedString{"y"}> y{3.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve_fwd = Equation(x * y, sin(x) + y * y);
-  auto J_fwd = ve_fwd.derivative_tensor<1>();
+  auto J_fwd = ve_fwd.derivative_tensor<1>(std::array{2.0, 3.0});
 
   auto xs = PV(2.0, "x");
   auto ys = PV(3.0, "y");
   auto ve_rev = Equation(xs * ys, sin(xs) + ys * ys);
-  auto J_rev = ve_rev.reverse_mode_jac();
+  auto J_rev = ve_rev.reverse_mode_jac(std::array{2.0, 3.0});
 
   for (std::size_t i = 0; i < 2; ++i)
     for (std::size_t j = 0; j < 2; ++j)
       EXPECT_NEAR(J_rev[i][j], J_fwd[i][j], 1e-12);
 }
 
-TEST(EquationForward, StateRestoredAfterCall) {
-  // After eval_jacobian_forward the expressions should evaluate at the
-  // original point (dual parts zeroed out).
-  auto x = PDV(3.0, "x");
-  auto y = PDV(4.0, "y");
-  auto k = PDV(4.0, "y");
-  k = 7.0;
-  auto ve = make_equation(x * y, x + y);
-  auto [v0, v1] = ve.evaluate();
-  auto [v01, v02] = v0;
-  EXPECT_DOUBLE_EQ(v01, 12.0);                 // x*y = 12
-  EXPECT_DOUBLE_EQ(v02, 0.0);                  // dual part zeroed
-  EXPECT_DOUBLE_EQ(v1.template get<0>(), 7.0); // x+y = 7
-}
+// (removed) EquationForward.StateRestoredAfterCall — leaves hold no state, so
+// there is nothing to restore after a call.
 
 TEST(ReverseModeAD, ScalarLiteralCoercion) {
-  // reverse_mode_grad(3*x*y + y*z) with plain integer/double literals
+  // reverse_mode_grad(3*x*y + y*z, Dual<double>{2.0, 0.0}, Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0}) with plain integer/double literals
   auto x = PDV(2.0, "x");
   auto y = PDV(3.0, "y");
   auto z = PDV(4.0, "z");
   auto expe = 3.0 * x * y + y * z;
-  auto g = reverse_mode_grad(expe);
+  auto g = reverse_mode_grad(expe, Dual<double>{2.0, 0.0}, Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 9.0);  // df/dx = 3*y = 9
   EXPECT_DOUBLE_EQ(g[1], 10.0); // df/dy = 3*x + z = 10
   EXPECT_DOUBLE_EQ(g[2], 3.0);  // df/dz = y = 3
@@ -1280,7 +1273,7 @@ TEST(ReverseModeAD, ScalarLiteralCoercion) {
 TEST(ReverseModeAD, ScalarOnRight) {
   // expr * scalar and expr + scalar
   auto x = PV(5.0, "x");
-  auto g = reverse_mode_grad(x * 4.0 + 1.0);
+  auto g = reverse_mode_grad(x * 4.0 + 1.0, 5.0);
   EXPECT_DOUBLE_EQ(g[0], 4.0); // df/dx = 4
 }
 
@@ -1290,7 +1283,7 @@ TEST(ReverseModeAD, AgreesWithForwardMode) {
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   auto x = PV(xv, "x");
   auto y = PV(yv, "y");
-  auto g = reverse_mode_grad(exp(x) * sin(y));
+  auto g = reverse_mode_grad(exp(x) * sin(y), xv, yv);
   EXPECT_DOUBLE_EQ(g[0], std::exp(xv) * std::sin(yv));
   EXPECT_DOUBLE_EQ(g[1], std::exp(xv) * std::cos(yv));
 }
@@ -1329,12 +1322,8 @@ TEST(DualCompoundAssign, DivEq) {
   EXPECT_DOUBLE_EQ(a.template get<1>(), 1.0);
 }
 
-TEST(DualCompoundAssign, ScalarAssign) {
-  auto k = PDV(4.0, "x");
-  k = 7.0;
-  EXPECT_DOUBLE_EQ(static_cast<Dual<double>>(k).template get<0>(), 7.0);
-  EXPECT_DOUBLE_EQ(static_cast<Dual<double>>(k).template get<1>(), 0.0);
-}
+// (removed) DualCompoundAssign.ScalarAssign — a variable is a symbol and has
+// no value to assign; the point is supplied at eval time instead.
 
 // ===========================================================================
 // reverse_mode_gradient on Dual-valued (PDV) expressions
@@ -1343,7 +1332,7 @@ TEST(DualCompoundAssign, ScalarAssign) {
 TEST(ReverseModeAD_Dual, SingleVariable) {
   // f(x) = 3*x  at x=5,  df/dx = 3
   auto x = PDV(5.0, "x");
-  auto g = reverse_mode_grad(3.0 * x);
+  auto g = reverse_mode_grad(3.0 * x, Dual<double>{5.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 3.0);
 }
 
@@ -1351,7 +1340,7 @@ TEST(ReverseModeAD_Dual, TwoVariables) {
   // f(x,y) = x*y  at (3,4),  df/dx=4, df/dy=3
   auto x = PDV(3.0, "x");
   auto y = PDV(4.0, "y");
-  auto g = reverse_mode_grad(x * y);
+  auto g = reverse_mode_grad(x * y, Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 4.0);
   EXPECT_DOUBLE_EQ(g[1], 3.0);
 }
@@ -1362,7 +1351,7 @@ TEST(ReverseModeAD_Dual, ThreeVariables) {
   auto x = PDV(2.0, "x");
   auto y = PDV(3.0, "y");
   auto z = PDV(4.0, "z");
-  auto g = reverse_mode_grad(3.0 * x * y + y * z);
+  auto g = reverse_mode_grad(3.0 * x * y + y * z, Dual<double>{2.0, 0.0}, Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 9.0);
   EXPECT_DOUBLE_EQ(g[1], 10.0);
   EXPECT_DOUBLE_EQ(g[2], 3.0);
@@ -1373,7 +1362,7 @@ TEST(ReverseModeAD_Dual, TrigExp) {
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   auto x = PDV(xv, "x");
   auto y = PDV(yv, "y");
-  auto g = reverse_mode_grad(exp(x) * sin(y));
+  auto g = reverse_mode_grad(exp(x) * sin(y), Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0});
   EXPECT_DOUBLE_EQ(g[0], std::exp(xv) * std::sin(yv));
   EXPECT_DOUBLE_EQ(g[1], std::exp(xv) * std::cos(yv));
 }
@@ -1385,8 +1374,8 @@ TEST(ReverseModeAD_Dual, AgreesWithPVResult) {
   auto yp = PV(yv, "y");
   auto xd = PDV(xv, "x");
   auto yd = PDV(yv, "y");
-  auto gp = reverse_mode_grad(xp * yp + sin(xp) + yp * yp + exp(xp + yp));
-  auto gd = reverse_mode_grad(xd * yd + sin(xd) + yd * yd + exp(xd + yd));
+  auto gp = reverse_mode_grad(xp * yp + sin(xp) + yp * yp + exp(xp + yp), xv, yv);
+  auto gd = reverse_mode_grad(xd * yd + sin(xd) + yd * yd + exp(xd + yd), Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0});
   EXPECT_DOUBLE_EQ(gd[0], gp[0]);
   EXPECT_DOUBLE_EQ(gd[1], gp[1]);
 }
@@ -1398,11 +1387,12 @@ TEST(ReverseModeAD_Dual, AgreesWithPVResult) {
 TEST(HessianTest, ForwardOverReverse_FunctionValues) {
   // f(x,y) = (x*y, x*x)  at (2, 3)  =>  f0=6, f1=4
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{3.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
-  (void)ve.reverse_mode_hess();
-  auto f = ve.evaluate();
+  const std::array<D, 2> pt{D{2.0}, D{3.0}};
+  (void)ve.template hessian<DiffMode::Reverse>(std::array{2.0, 3.0});
+  auto f = ve.evaluate(pt);
   EXPECT_DOUBLE_EQ(f[0].template get<0>(), 6.0);
   EXPECT_DOUBLE_EQ(f[1].template get<0>(), 4.0);
 }
@@ -1411,10 +1401,10 @@ TEST(HessianTest, ForwardOverReverse_XY) {
   // H[f0] where f0(x,y) = x*y:
   // ∂²/∂x² = 0, ∂²/∂x∂y = 1, ∂²/∂y∂x = 1, ∂²/∂y² = 0
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{3.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
-  auto H = ve.reverse_mode_hess();
+  auto H = ve.reverse_mode_hess(std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][0][0], 0.0); // ∂²(x*y)/∂x²
   EXPECT_DOUBLE_EQ(H[0][0][1], 1.0); // ∂²(x*y)/∂x∂y
   EXPECT_DOUBLE_EQ(H[0][1][0], 1.0); // ∂²(x*y)/∂y∂x
@@ -1425,10 +1415,10 @@ TEST(HessianTest, ForwardOverReverse_Quadratic) {
   // H[f1] where f1(x,y) = x²:
   // ∂²/∂x² = 2, all others = 0
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{3.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
-  auto H = ve.reverse_mode_hess();
+  auto H = ve.reverse_mode_hess(std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[1][0][0], 2.0);
   EXPECT_DOUBLE_EQ(H[1][0][1], 0.0);
   EXPECT_DOUBLE_EQ(H[1][1][0], 0.0);
@@ -1438,12 +1428,12 @@ TEST(HessianTest, ForwardOverReverse_Quadratic) {
 TEST(HessianTest, ForwardOverReverse_WithValues) {
   // Same as above but via the values-accepting overload (sets point first).
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{0.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{0.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
   std::array<double, 2> pt{2.0, 3.0};
   auto H = ve.reverse_mode_hess(pt);
-  auto f = ve.evaluate();
+  auto f = ve.evaluate(std::array{D{2.0}, D{3.0}});
   EXPECT_DOUBLE_EQ(f[0].template get<0>(), 6.0);
   EXPECT_DOUBLE_EQ(H[0][0][1], 1.0);
   EXPECT_DOUBLE_EQ(H[1][0][0], 2.0);
@@ -1454,10 +1444,10 @@ TEST(HessianTest, ForwardOverReverse_TrigFunction) {
   // H[f0]: ∂²(y*sin(x))/∂x² = -y*sin(x), ∂²/∂x∂y = cos(x), ∂²/∂y² = 0
   double xv = 1.0, yv = 2.0;
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{xv}};
-  Variable<D, diff::FixedString{"y"}> y{D{yv}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto ve = Equation(sin(x) * y, x + y);
-  auto H = ve.reverse_mode_hess();
+  auto H = ve.reverse_mode_hess(std::array{xv, yv});
   EXPECT_NEAR(H[0][0][0], -yv * std::sin(xv), 1e-12); // -y*sin(x)
   EXPECT_NEAR(H[0][0][1], std::cos(xv), 1e-12);       // cos(x)
   EXPECT_NEAR(H[0][1][0], std::cos(xv), 1e-12);       // symmetric
@@ -1469,10 +1459,10 @@ TEST(HessianTest, ForwardOverReverse_Symmetric) {
   // f(x,y) = (exp(x*y),)  — we need 2 outputs so wrap it
   double xv = 0.5, yv = 1.5;
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{xv}};
-  Variable<D, diff::FixedString{"y"}> y{D{yv}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto ve = Equation(exp(x * y), x + y);
-  auto H = ve.reverse_mode_hess();
+  auto H = ve.reverse_mode_hess(std::array{xv, yv});
   EXPECT_NEAR(H[0][0][1], H[0][1][0], 1e-12);
 }
 
@@ -1482,20 +1472,20 @@ TEST(HessianTest, ForwardOverReverse_Symmetric) {
 
 TEST(HessianForwardTest, FunctionValues) {
   // f(x,y) = (x*y, x*x) at (2, 3) => f0=6, f1=4
-  Variable<double, diff::FixedString{"x"}> x{2.0};
-  Variable<double, diff::FixedString{"y"}> y{3.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
-  auto f = ve.evaluate();
+  auto f = ve.evaluate(std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(f[0], 6.0);
   EXPECT_DOUBLE_EQ(f[1], 4.0);
 }
 
 TEST(HessianForwardTest, XY) {
   // H[f0] where f0(x,y) = x*y — H = [[0,1],[1,0]]
-  Variable<double, diff::FixedString{"x"}> x{2.0};
-  Variable<double, diff::FixedString{"y"}> y{3.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
-  auto H = ve.derivative_tensor<2>();
+  auto H = ve.derivative_tensor<2>(std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][0][0], 0.0);
   EXPECT_DOUBLE_EQ(H[0][0][1], 1.0);
   EXPECT_DOUBLE_EQ(H[0][1][0], 1.0);
@@ -1504,10 +1494,10 @@ TEST(HessianForwardTest, XY) {
 
 TEST(HessianForwardTest, Quadratic) {
   // H[f1] where f1(x,y) = x² — H = [[2,0],[0,0]]
-  Variable<double, diff::FixedString{"x"}> x{2.0};
-  Variable<double, diff::FixedString{"y"}> y{3.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
-  auto H = ve.derivative_tensor<2>();
+  auto H = ve.derivative_tensor<2>(std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[1][0][0], 2.0);
   EXPECT_DOUBLE_EQ(H[1][0][1], 0.0);
   EXPECT_DOUBLE_EQ(H[1][1][0], 0.0);
@@ -1520,15 +1510,15 @@ TEST(HessianForwardTest, AgreesWithForwardOverReverse) {
   double xv = 1.5, yv = 2.5;
 
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> xr{D{xv}};
-  Variable<D, diff::FixedString{"y"}> yr{D{yv}};
+  Variable<D, FixedString{"x"}> xr;
+  Variable<D, FixedString{"y"}> yr;
   auto ve_rev = Equation(xr * yr, xr * xr);
-  auto H_rev = ve_rev.reverse_mode_hess();
+  auto H_rev = ve_rev.reverse_mode_hess(std::array{xv, yv});
 
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
   auto ve_fwd = Equation(xf * yf, xf * xf);
-  auto H_fwd = ve_fwd.derivative_tensor<2>();
+  auto H_fwd = ve_fwd.derivative_tensor<2>(std::array{xv, yv});
 
   for (int k = 0; k < 2; ++k)
     for (int i = 0; i < 2; ++i)
@@ -1538,8 +1528,8 @@ TEST(HessianForwardTest, AgreesWithForwardOverReverse) {
 
 TEST(HessianForwardTest, WithValues) {
   // Values-accepting overload: variables at (0,0), evaluated at (2,3).
-  Variable<double, diff::FixedString{"x"}> x{0.0};
-  Variable<double, diff::FixedString{"y"}> y{0.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(x * y, x * x);
   auto H = ve.derivative_tensor<2>(std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][0][1], 1.0);
@@ -1553,8 +1543,8 @@ TEST(HessianForwardTest, WithValues) {
 TEST(ScalarHessianTest, ReverseMode_XY) {
   // f(x,y) = x*y  =>  H = [[0, 1], [1, 0]]
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{3.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = x * y;
   auto H = reverse_mode_hess(expr, std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][0], 0.0);
@@ -1566,8 +1556,8 @@ TEST(ScalarHessianTest, ReverseMode_XY) {
 TEST(ScalarHessianTest, ReverseMode_QuadraticForm) {
   // f(x,y) = x*x + 2*y*y  =>  H = [[2, 0], [0, 4]]
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{1.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{1.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = x * x + PC(D{2.0}) * y * y;
   auto H = reverse_mode_hess(expr, std::array{1.0, 1.0});
   EXPECT_DOUBLE_EQ(H[0][0], 2.0);
@@ -1579,8 +1569,8 @@ TEST(ScalarHessianTest, ReverseMode_QuadraticForm) {
 TEST(ScalarHessianTest, ReverseMode_Symmetric) {
   // H must be symmetric for smooth f.
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{0.5}};
-  Variable<D, diff::FixedString{"y"}> y{D{1.5}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = exp(x * y);
   auto H = reverse_mode_hess(expr, std::array{0.5, 1.5});
   EXPECT_NEAR(H[0][1], H[1][0], 1e-12);
@@ -1588,8 +1578,8 @@ TEST(ScalarHessianTest, ReverseMode_Symmetric) {
 
 TEST(ScalarHessianTest, ForwardMode_XY) {
   // f(x,y) = x*y  =>  H = [[0, 1], [1, 0]] — plain double variables
-  Variable<double, diff::FixedString{"x"}> x{2.0};
-  Variable<double, diff::FixedString{"y"}> y{3.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto expr = x * y;
   auto H = derivative_tensor<2>(expr, std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][0], 0.0);
@@ -1600,8 +1590,8 @@ TEST(ScalarHessianTest, ForwardMode_XY) {
 
 TEST(ScalarHessianTest, ForwardMode_QuadraticForm) {
   // f(x,y) = x*x + 2*y*y  =>  H = [[2, 0], [0, 4]]
-  Variable<double, diff::FixedString{"x"}> x{1.0};
-  Variable<double, diff::FixedString{"y"}> y{1.0};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto expr = x * x + PC(2.0) * y * y;
   auto H = derivative_tensor<2>(expr, std::array{1.0, 1.0});
   EXPECT_DOUBLE_EQ(H[0][0], 2.0);
@@ -1613,21 +1603,21 @@ TEST(ScalarHessianTest, ForwardMode_QuadraticForm) {
 TEST(ScalarHessianTest, ReverseMode_NoValues) {
   // No-values overload reads current variable state via collect().
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{3.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto expr = x * y;
-  auto H = reverse_mode_hess(expr);
+  auto H = reverse_mode_hess(expr, std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][1], 1.0);
   EXPECT_DOUBLE_EQ(H[1][0], 1.0);
   EXPECT_DOUBLE_EQ(H[0][0], 0.0);
   EXPECT_DOUBLE_EQ(H[1][1], 0.0);
 }
 
-TEST(ScalarHessianTest, ForwardMode_NoValues) {
-  Variable<double, diff::FixedString{"x"}> x{2.0};
-  Variable<double, diff::FixedString{"y"}> y{3.0};
+TEST(ScalarHessianTest, ForwardMode_AtAPoint) {
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto expr = x * y;
-  auto H = derivative_tensor<2>(expr);
+  auto H = derivative_tensor<2>(expr, std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][1], 1.0);
   EXPECT_DOUBLE_EQ(H[1][0], 1.0);
   EXPECT_DOUBLE_EQ(H[0][0], 0.0);
@@ -1639,13 +1629,13 @@ TEST(ScalarHessianTest, ForwardAgreesWithReverse) {
   double xv = 0.5, yv = 1.5;
 
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> xr{D{xv}};
-  Variable<D, diff::FixedString{"y"}> yr{D{yv}};
+  Variable<D, FixedString{"x"}> xr;
+  Variable<D, FixedString{"y"}> yr;
   auto expr_r = exp(xr * yr);
   auto H_rev = reverse_mode_hess(expr_r, std::array{xv, yv});
 
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
   auto expr_f = exp(xf * yf);
   auto H_fwd = derivative_tensor<2>(expr_f, std::array{xv, yv});
 
@@ -1660,7 +1650,7 @@ TEST(ScalarHessianTest, ForwardAgreesWithReverse) {
 
 TEST(DerivativeTensorTest, Order1_ScalarVariable) {
   // Plain scalar Variable<double>, f(x) = x^3, f'(3) = 27
-  Variable<double, diff::FixedString{"x"}> x{3.0};
+  Variable<double, FixedString{"x"}> x;
   auto expr = x * x * x;
   auto T1 = derivative_tensor<1>(expr, std::array{3.0});
   EXPECT_NEAR(T1[0], 27.0, 1e-12);
@@ -1669,8 +1659,9 @@ TEST(DerivativeTensorTest, Order1_ScalarVariable) {
 TEST(DerivativeTensorTest, Order1_MatchesGradient) {
   // derivative_tensor<1> should match reverse-mode gradient.
   double xv = 1.5, yv = 2.5;
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  (void)xv; (void)yv;
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto expr = x * x + x * y; // df/dx = 2x+y, df/dy = x
 
   auto T1 = derivative_tensor<1>(expr, std::array{xv, yv});
@@ -1680,7 +1671,7 @@ TEST(DerivativeTensorTest, Order1_MatchesGradient) {
 
 TEST(DerivativeTensorTest, Order2_ScalarVariable) {
   // Plain double: f(x) = x^3, f''(2) = 12
-  Variable<double, diff::FixedString{"x"}> x{2.0};
+  Variable<double, FixedString{"x"}> x;
   auto expr = x * x * x;
   auto T2 = derivative_tensor<2>(expr, std::array{2.0});
   EXPECT_NEAR(T2[0][0], 12.0, 1e-12);
@@ -1690,13 +1681,13 @@ TEST(DerivativeTensorTest, Order2_MatchesHessian) {
   // derivative_tensor<2> must agree with reverse-mode Hessian.
   double xv = 0.7, yv = 1.3;
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> xr{D{xv}};
-  Variable<D, diff::FixedString{"y"}> yr{D{yv}};
+  Variable<D, FixedString{"x"}> xr;
+  Variable<D, FixedString{"y"}> yr;
   auto expr_r = exp(xr * yr);
   auto H_rev = reverse_mode_hess(expr_r, std::array{xv, yv});
 
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
   auto expr_f = exp(xf * yf);
   auto H_fwd = derivative_tensor<2>(expr_f, std::array{xv, yv});
 
@@ -1707,26 +1698,25 @@ TEST(DerivativeTensorTest, Order2_MatchesHessian) {
 
 TEST(DerivativeTensorTest, Order3_Polynomial) {
   // f(x) = x^4, f'''(x) = 24x, f'''(2) = 48
-  Variable<double, diff::FixedString{"x"}> x{2.0};
+  Variable<double, FixedString{"x"}> x;
   auto expr = x * x * x * x;
   auto T3 = derivative_tensor<3>(expr, std::array{2.0});
   EXPECT_NEAR(T3[0][0][0], 48.0, 1e-9);
 }
 
-TEST(DerivativeTensorTest, NoArgReadsCurrentValues) {
-  // No-arg overload reads current values from variables.
+TEST(DerivativeTensorTest, SecondOrderAtAPoint) {
   const double x0 = std::numbers::pi / 4.0;
-  Variable<double, diff::FixedString{"x"}> x{x0};
+  Variable<double, FixedString{"x"}> x;
   auto expr = sin(x);
-  auto T2 = derivative_tensor<2>(expr);
+  auto T2 = derivative_tensor<2>(expr, std::array{x0});
   EXPECT_NEAR(T2[0][0], -std::sin(x0), 1e-12);
 }
 
 TEST(DerivativeTensorTest, MixedPartials_Symmetric) {
   // Hessian must be symmetric for smooth f.
   double xv = 0.5, yv = 1.5;
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto expr = exp(x * y);
   auto H = derivative_tensor<2>(expr, std::array{xv, yv});
   EXPECT_NEAR(H[0][1], H[1][0], 1e-12);
@@ -1735,15 +1725,15 @@ TEST(DerivativeTensorTest, MixedPartials_Symmetric) {
 TEST(DerivativeTensorTest, Equation_Order1_IsJacobian) {
   // derivative_tensor<1> for Equation must match reverse-mode Jacobian.
   double xv = 1.0, yv = 2.0;
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
   auto ve_fwd = Equation(xf * yf, xf * xf);
-  auto J_fwd = ve_fwd.derivative_tensor<1>();
+  auto J_fwd = ve_fwd.derivative_tensor<1>(std::array{xv, yv});
 
   auto xr = PV(xv, "x");
   auto yr = PV(yv, "y");
   auto ve_rev = Equation(xr * yr, xr * xr);
-  auto J_rev = ve_rev.reverse_mode_jac();
+  auto J_rev = ve_rev.reverse_mode_jac(std::array{xv, yv});
 
   for (std::size_t i = 0; i < 2; ++i)
     for (std::size_t j = 0; j < 2; ++j)
@@ -1753,15 +1743,16 @@ TEST(DerivativeTensorTest, Equation_Order1_IsJacobian) {
 TEST(DerivativeTensorTest, Equation_Order2_IsHessianStack) {
   // derivative_tensor<2> shape [2,2,2] must match per-output reverse Hessians.
   double xv = 1.5, yv = 2.5;
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
+  (void)xv; (void)yv;
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
   auto ve_fwd = Equation(xf * yf, xf * xf);
   auto H_fwd = ve_fwd.derivative_tensor<2>(std::array{xv, yv});
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> xr{D{xv}};
-  Variable<D, diff::FixedString{"y"}> yr{D{yv}};
+  Variable<D, FixedString{"x"}> xr;
+  Variable<D, FixedString{"y"}> yr;
   auto ve_rev = Equation(xr * yr, xr * xr);
-  auto H_rev = ve_rev.reverse_mode_hess();
+  auto H_rev = ve_rev.reverse_mode_hess(std::array{2.0, 3.0});
 
   for (std::size_t k = 0; k < 2; ++k)
     for (std::size_t i = 0; i < 2; ++i)
@@ -1773,7 +1764,7 @@ TEST(DerivativeTensorTest, Equation_Order3_TrigPolynomial) {
   // f(x) = sin(x)*x^2, f'''(x) = -sin(x)*x^2 - ... validated at x=1
   // Use finite differences as ground truth for 3rd order.
   // Actually use a pure polynomial: f(x) = x^4, f'''(x) = 24x, f'''(1) = 24
-  Variable<double, diff::FixedString{"x"}> x{1.0};
+  Variable<double, FixedString{"x"}> x;
   auto ve = Equation(x * x * x * x);
   auto T3 = ve.derivative_tensor<3>(std::array{1.0});
   EXPECT_NEAR(T3[0][0][0][0], 24.0, 1e-9);
@@ -1793,18 +1784,18 @@ TEST(TutorialForward, SingleVar_SymbolicValueAndDerivative) {
   double x0 = 2.0;
   auto x = PV(x0, "x");
   auto f = PC(1.0) + x + x * x + PC(1.0) / x + log(x);
-  EXPECT_NEAR(f.eval(), 1.0 + x0 + x0 * x0 + 1.0 / x0 + std::log(x0), 1e-12);
+  EXPECT_NEAR(f.eval(x0), 1.0 + x0 + x0 * x0 + 1.0 / x0 + std::log(x0), 1e-12);
   // f'(x) = 1 + 2x - 1/x² + 1/x
   double expected_df = 1.0 + 2.0 * x0 - 1.0 / (x0 * x0) + 1.0 / x0;
-  EXPECT_NEAR(f.derivative().eval(), expected_df, 1e-12);
+  EXPECT_NEAR(f.derivative().eval(x0), expected_df, 1e-12);
 }
 
 TEST(TutorialForward, SingleVar_DualNumbers) {
   // Same function via forward-mode dual numbers (seed = 1)
   double x0 = 2.0;
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{x0, 1.0}};
+  Variable<Dual<double>, FixedString{"x"}> x;
   auto f = 1.0 + x + x * x + 1.0 / x + log(x);
-  auto [fv, df] = f.eval();
+  auto [fv, df] = f.eval(Dual<double>{x0, 1.0});
   EXPECT_NEAR(fv, 1.0 + x0 + x0 * x0 + 1.0 / x0 + std::log(x0), 1e-12);
   EXPECT_NEAR(df, 1.0 + 2.0 * x0 - 1.0 / (x0 * x0) + 1.0 / x0, 1e-12);
 }
@@ -1813,7 +1804,7 @@ TEST(TutorialForward, SingleVar_ReverseMode) {
   double x0 = 2.0;
   auto x = PV(x0, "x");
   auto f = PC(1.0) + x + x * x + PC(1.0) / x + log(x);
-  auto g = reverse_mode_grad(f);
+  auto g = reverse_mode_grad(f, x0);
   EXPECT_NEAR(g[0], 1.0 + 2.0 * x0 - 1.0 / (x0 * x0) + 1.0 / x0, 1e-12);
 }
 
@@ -1831,7 +1822,7 @@ TEST(TutorialMultiVar, Value) {
            exp(x / y + y / z);
   double expected = 1.0 + xv + yv + zv + xv * yv + yv * zv + xv * zv +
                     xv * yv * zv + std::exp(xv / yv + yv / zv);
-  EXPECT_NEAR(f.eval(), expected, 1e-12);
+  EXPECT_NEAR(f.eval(xv, yv, zv), expected, 1e-12);
 }
 
 TEST(TutorialMultiVar, SymbolicPartials) {
@@ -1842,7 +1833,7 @@ TEST(TutorialMultiVar, SymbolicPartials) {
   auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
            exp(x / y + y / z);
   auto eq = Equation(f);
-  auto [dx, dy, dz] = eq.eval_derivatives();
+  auto [dx, dy, dz] = eq.eval_derivatives(std::array{xv, yv, zv});
   double e = std::exp(xv / yv + yv / zv);
   // df/dx = 1 + y + z + y*z + exp(.)/y
   EXPECT_NEAR(dx, 1.0 + yv + zv + yv * zv + e / yv, 1e-10);
@@ -1860,7 +1851,7 @@ TEST(TutorialMultiVar, ReverseGradient) {
   auto z = PV(zv, "z");
   auto f = PC(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
            exp(x / y + y / z);
-  auto g = reverse_mode_grad(f);
+  auto g = reverse_mode_grad(f, xv, yv, zv);
   double e = std::exp(xv / yv + yv / zv);
   EXPECT_NEAR(g[0], 1.0 + yv + zv + yv * zv + e / yv, 1e-10);
   EXPECT_NEAR(g[1], 1.0 + xv + zv + xv * zv + e * (-xv / (yv * yv) + 1.0 / zv),
@@ -1871,9 +1862,9 @@ TEST(TutorialMultiVar, ReverseGradient) {
 TEST(TutorialMultiVar, ForwardReverseGradientAgree) {
   double xv = 1.0, yv = 2.0, zv = 3.0;
   // Forward mode via derivative_tensor
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
-  Variable<double, diff::FixedString{"z"}> zf{zv};
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
+  Variable<double, FixedString{"z"}> zf;
   auto f_fwd = 1.0 + xf + yf + zf + xf * yf + yf * zf + xf * zf + xf * yf * zf +
                exp(xf / yf + yf / zf);
   auto T1 = derivative_tensor<1>(f_fwd, std::array{xv, yv, zv});
@@ -1883,7 +1874,7 @@ TEST(TutorialMultiVar, ForwardReverseGradientAgree) {
   auto zr = PV(zv, "z");
   auto f_rev = PC(1.0) + xr + yr + zr + xr * yr + yr * zr + xr * zr +
                xr * yr * zr + exp(xr / yr + yr / zr);
-  auto g = reverse_mode_grad(f_rev);
+  auto g = reverse_mode_grad(f_rev, xv, yv, zv);
   EXPECT_NEAR(T1[0], g[0], 1e-10);
   EXPECT_NEAR(T1[1], g[1], 1e-10);
   EXPECT_NEAR(T1[2], g[2], 1e-10);
@@ -1896,8 +1887,8 @@ TEST(TutorialMultiVar, ForwardReverseGradientAgree) {
 TEST(TutorialGradient, ForwardModeDerivativeTensor) {
   // f(x,y) = sin(x)*cos(y) + exp(x*y)  at (1, 0.5)
   double xv = 1.0, yv = 0.5;
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto f = sin(x) * cos(y) + exp(x * y);
   auto g = derivative_tensor<1>(f, std::array{xv, yv});
   EXPECT_NEAR(g[0], std::cos(xv) * std::cos(yv) + yv * std::exp(xv * yv),
@@ -1908,13 +1899,13 @@ TEST(TutorialGradient, ForwardModeDerivativeTensor) {
 
 TEST(TutorialGradient, ForwardReverseAgree) {
   double xv = 1.0, yv = 0.5;
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
   auto T1 = derivative_tensor<1>(sin(xf) * cos(yf) + exp(xf * yf),
                                  std::array{xv, yv});
   auto xr = PV(xv, "x");
   auto yr = PV(yv, "y");
-  auto g = reverse_mode_grad(sin(xr) * cos(yr) + exp(xr * yr));
+  auto g = reverse_mode_grad(sin(xr) * cos(yr) + exp(xr * yr), xv, yv);
   EXPECT_NEAR(T1[0], g[0], 1e-12);
   EXPECT_NEAR(T1[1], g[1], 1e-12);
 }
@@ -1927,7 +1918,7 @@ TEST(TutorialGradient, ForwardReverseAgree) {
 TEST(TutorialHigherOrder, FourthOrder_SinX) {
   // f(x) = sin(x): f''''(x) = sin(x)
   double x0 = std::numbers::pi / 4.0;
-  Variable<double, diff::FixedString{"x"}> x{x0};
+  Variable<double, FixedString{"x"}> x;
   auto T4 = derivative_tensor<4>(sin(x), std::array{x0});
   EXPECT_NEAR(T4[0][0][0][0], std::sin(x0), 1e-9);
 }
@@ -1935,7 +1926,7 @@ TEST(TutorialHigherOrder, FourthOrder_SinX) {
 TEST(TutorialHigherOrder, FourthOrder_ExpX) {
   // f(x) = exp(x): all derivatives = exp(x)
   double x0 = 0.7;
-  Variable<double, diff::FixedString{"x"}> x{x0};
+  Variable<double, FixedString{"x"}> x;
   double ev = std::exp(x0);
   EXPECT_NEAR(derivative_tensor<2>(exp(x), std::array{x0})[0][0], ev, 1e-12);
   EXPECT_NEAR(derivative_tensor<3>(exp(x), std::array{x0})[0][0][0], ev, 1e-12);
@@ -1946,8 +1937,8 @@ TEST(TutorialHigherOrder, FourthOrder_ExpX) {
 TEST(TutorialHigherOrder, FourthOrder_AllCrossPartialsOfSinXplusY) {
   // f(x,y) = sin(x+y): all 4th-order partials equal sin(x+y)
   double xv = 1.0, yv = 1.0;
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto T4 = derivative_tensor<4>(sin(x + y), std::array{xv, yv});
   double expected = std::sin(xv + yv);
   for (int i : {0, 1})
@@ -1960,8 +1951,8 @@ TEST(TutorialHigherOrder, FourthOrder_AllCrossPartialsOfSinXplusY) {
 TEST(TutorialHigherOrder, ThirdOrder_MixedPartial) {
   // f(x,y) = exp(x)*y²:  d³f/dx²dy = 2y*exp(x)  at (1,2)
   double xv = 1.0, yv = 2.0;
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto T3 = derivative_tensor<3>(exp(x) * y * y, std::array{xv, yv});
   EXPECT_NEAR(T3[0][0][1], 2.0 * yv * std::exp(xv), 1e-10);
   EXPECT_NEAR(T3[1][1][1], 0.0, 1e-10); // d³(exp(x)*y²)/dy³ = 0
@@ -1976,9 +1967,9 @@ TEST(TutorialDirectional, FirstOrder_DualSeeding) {
   // Df·u = exp(1)*sin(π/4)/√2 + exp(1)*cos(π/4)/√2 = exp(1)
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   double u = 1.0 / std::sqrt(2.0);
-  Variable<Dual<double>, diff::FixedString{"x"}> x{Dual<double>{xv, u}};
-  Variable<Dual<double>, diff::FixedString{"y"}> y{Dual<double>{yv, u}};
-  auto [fv, dfdu] = (exp(x) * sin(y)).eval();
+  Variable<Dual<double>, FixedString{"x"}> x;
+  Variable<Dual<double>, FixedString{"y"}> y;
+  auto [fv, dfdu] = (exp(x) * sin(y)).eval(Dual<double>{xv, u}, Dual<double>{yv, u});
   EXPECT_NEAR(fv, std::exp(xv) * std::sin(yv), 1e-12);
   EXPECT_NEAR(dfdu, std::exp(xv), 1e-12);
 }
@@ -1987,8 +1978,8 @@ TEST(TutorialDirectional, FirstOrder_ViaGradientDot) {
   // Same result computed by dotting derivative_tensor<1> with direction
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   double u = 1.0 / std::sqrt(2.0);
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto T1 = derivative_tensor<1>(exp(x) * sin(y), std::array{xv, yv});
   EXPECT_NEAR(T1[0] * u + T1[1] * u, std::exp(xv), 1e-12);
 }
@@ -1998,8 +1989,8 @@ TEST(TutorialDirectional, SecondOrder_HessianContraction) {
   // Expected = exp(1)*cos(π/4) = exp(1)/√2
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   double u = 1.0 / std::sqrt(2.0);
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto H = derivative_tensor<2>(exp(x) * sin(y), std::array{xv, yv});
   double d2fdu2 =
       H[0][0] * u * u + H[0][1] * u * u + H[1][0] * u * u + H[1][1] * u * u;
@@ -2011,8 +2002,8 @@ TEST(TutorialDirectional, VectorFunction_JacobianTimesDirection) {
   // Jf*u component-0 = exp(1), component-1 = (x+y)/√2
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   double u = 1.0 / std::sqrt(2.0);
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(exp(x) * sin(y), x * y);
   auto J = ve.derivative_tensor<1>(std::array{xv, yv});
   double df0du = J[0][0] * u + J[0][1] * u;
@@ -2030,7 +2021,7 @@ TEST(TutorialTaylor, ScalarSin_FourthOrderAccuracy) {
   // Residual is O(h^5).
   double x0 = std::numbers::pi / 4.0;
   double h = 0.05;
-  Variable<double, diff::FixedString{"x"}> x{x0};
+  Variable<double, FixedString{"x"}> x;
   auto f = sin(x);
   double f0 = std::sin(x0);
   auto T1 = derivative_tensor<1>(f, std::array{x0});
@@ -2047,10 +2038,10 @@ TEST(TutorialTaylor, VectorFunction_SecondOrderAccuracy) {
   // f(x,y) = (sin(x)*cos(y), exp(x+y)) at (0,0); evaluate Taylor at (h,h).
   // Component-1 = exp(2h): Taylor to order 2 gives 1+2h+2h², residual O(h³).
   double xv = 0.0, yv = 0.0, h = 0.1;
-  Variable<double, diff::FixedString{"x"}> x{xv};
-  Variable<double, diff::FixedString{"y"}> y{yv};
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
   auto ve = Equation(sin(x) * cos(y), exp(x + y));
-  auto f0 = ve.evaluate();
+  auto f0 = ve.evaluate(std::array{xv, yv});
   auto J = ve.derivative_tensor<1>(std::array{xv, yv});
   auto H = ve.derivative_tensor<2>(std::array{xv, yv});
   // Component 1: f0[1] + (J[1][0]+J[1][1])*h +
@@ -2066,23 +2057,20 @@ TEST(TutorialTaylor, VectorFunction_SecondOrderAccuracy) {
 
 TEST(TutorialReverseConditionals, AbsGradientChangesSign) {
   // abs(x) is piecewise: gradient = +1 for x>0, −1 for x<0
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(abs(PV(3.0, "x")))[0], 1.0);
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(abs(PV(-3.0, "x")))[0], -1.0);
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(abs(PV(3.0, "x")), 3.0)[0], 1.0);
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(abs(PV(-3.0, "x")), -3.0)[0], -1.0);
 }
 
 TEST(TutorialReverseConditionals, UpdateReevaluatesDerivatives) {
-  // f(x) = x² + sin(x): update x from 2→5 and verify derivative re-evaluates.
-  // Symbolic jacobian re-evaluates live variables after update().
-  Variable<double, diff::FixedString{"x"}> x{2.0};
+  // f(x) = x² + sin(x).  Re-evaluating at a new point needs no mutation.
+  Variable<double, FixedString{"x"}> x;
   auto eq = Equation(x * x + sin(x));
-  EXPECT_NEAR(eq.evaluate(), 4.0 + std::sin(2.0), 1e-12);
-  EXPECT_NEAR(eq.eval_derivatives()[0], 4.0 + std::cos(2.0),
+  EXPECT_NEAR(eq.evaluate(std::array{2.0}), 4.0 + std::sin(2.0), 1e-12);
+  EXPECT_NEAR(eq.eval_derivatives(std::array{2.0})[0], 4.0 + std::cos(2.0),
               1e-12); // 2x + cos(x)
-
-  using Syms = decltype(eq)::symbols;
-  eq.update(Syms{}, std::array{5.0}); // x←5
-  EXPECT_NEAR(eq.evaluate(), 25.0 + std::sin(5.0), 1e-12);
-  EXPECT_NEAR(eq.eval_derivatives()[0], 10.0 + std::cos(5.0), 1e-12);
+  EXPECT_NEAR(eq.evaluate(std::array{5.0}), 25.0 + std::sin(5.0), 1e-12);
+  EXPECT_NEAR(eq.eval_derivatives(std::array{5.0})[0], 10.0 + std::cos(5.0),
+              1e-12);
 }
 
 // ---------------------------------------------------------------------------
@@ -2093,7 +2081,7 @@ TEST(TutorialReverseParams, SingleParameter) {
   // f(x; p) = p * sin(x): only x is a Variable; df/dx = p*cos(x)
   double xv = 1.0, p = 3.0;
   auto x = PV(xv, "x");
-  auto g = reverse_mode_grad(PC(p) * sin(x));
+  auto g = reverse_mode_grad(PC(p) * sin(x), xv);
   EXPECT_NEAR(g[0], p * std::cos(xv), 1e-12);
 }
 
@@ -2102,7 +2090,7 @@ TEST(TutorialReverseParams, MultiVarWithParameter) {
   double xv = 2.0, yv = 3.0, p = 4.0;
   auto x = PV(xv, "x");
   auto y = PV(yv, "y");
-  auto g = reverse_mode_grad(PC(p) * x * y);
+  auto g = reverse_mode_grad(PC(p) * x * y, xv, yv);
   EXPECT_NEAR(g[0], p * yv, 1e-12);
   EXPECT_NEAR(g[1], p * xv, 1e-12);
 }
@@ -2115,8 +2103,8 @@ TEST(TutorialReverseHessian, QuadraticForm) {
   // f(x,y) = x² + x*y + y²: H = [[2, 1], [1, 2]] (constant, independent of
   // point)
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> x{D{2.0}};
-  Variable<D, diff::FixedString{"y"}> y{D{3.0}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto f = x * x + x * y + y * y;
   auto H = reverse_mode_hess(f, std::array{2.0, 3.0});
   EXPECT_DOUBLE_EQ(H[0][0], 2.0);
@@ -2130,8 +2118,8 @@ TEST(TutorialReverseHessian, TrigFunction) {
   // symmetric]
   using D = Dual<double>;
   double xv = std::numbers::pi / 4.0, yv = std::numbers::pi / 6.0;
-  Variable<D, diff::FixedString{"x"}> x{D{xv}};
-  Variable<D, diff::FixedString{"y"}> y{D{yv}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto f = sin(x) * cos(y);
   auto H = reverse_mode_hess(f, std::array{xv, yv});
   EXPECT_NEAR(H[0][0], -std::sin(xv) * std::cos(yv), 1e-12);
@@ -2144,11 +2132,10 @@ TEST(TutorialReverseHessian, GradientFromSameExpression) {
   // After reverse_mode_hess restores the point, reverse_mode_grad gives ∇f
   using D = Dual<double>;
   double xv = 2.0, yv = 3.0;
-  Variable<D, diff::FixedString{"x"}> x{D{xv}};
-  Variable<D, diff::FixedString{"y"}> y{D{yv}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto f = x * x + x * y + y * y;
-  (void)reverse_mode_hess(f, std::array{xv, yv}); // restores to (xv, yv)
-  auto g = reverse_mode_grad(f);
+  auto g = reverse_mode_grad(f, D{xv}, D{yv});
   EXPECT_NEAR(g[0], 2.0 * xv + yv, 1e-12); // df/dx = 2x + y
   EXPECT_NEAR(g[1], xv + 2.0 * yv, 1e-12); // df/dy = x + 2y
 }
@@ -2160,7 +2147,7 @@ TEST(TutorialReverseHessian, GradientFromSameExpression) {
 TEST(TutorialReverseHigherOrder, SingleVar_SecondAndThird) {
   // f(x) = sin(x): f''(x) = -sin(x), f'''(x) = -cos(x)
   double x0 = 1.0;
-  Variable<double, diff::FixedString{"x"}> x{x0};
+  Variable<double, FixedString{"x"}> x;
   EXPECT_NEAR(derivative_tensor<2>(sin(x), std::array{x0})[0][0], -std::sin(x0),
               1e-12);
   EXPECT_NEAR(derivative_tensor<3>(sin(x), std::array{x0})[0][0][0],
@@ -2171,8 +2158,8 @@ TEST(TutorialReverseHigherOrder, MultiVar_Hessian) {
   // f(x,y) = x²*y + y³: H[0][0]=2y, H[0][1]=H[1][0]=2x, H[1][1]=6y
   using D = Dual<double>;
   double xv = 2.0, yv = 3.0;
-  Variable<D, diff::FixedString{"x"}> x{D{xv}};
-  Variable<D, diff::FixedString{"y"}> y{D{yv}};
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
   auto f = x * x * y + y * y * y;
   auto H = reverse_mode_hess(f, std::array{xv, yv});
   EXPECT_NEAR(H[0][0], 2.0 * yv, 1e-12);
@@ -2184,13 +2171,13 @@ TEST(TutorialReverseHigherOrder, MultiVar_Hessian) {
 TEST(TutorialReverseHigherOrder, ForwardReverseHessianAgree) {
   // derivative_tensor<2> and reverse_mode_hess must agree on sin(x)*exp(y)
   double xv = 0.8, yv = 1.2;
-  Variable<double, diff::FixedString{"x"}> xf{xv};
-  Variable<double, diff::FixedString{"y"}> yf{yv};
+  Variable<double, FixedString{"x"}> xf;
+  Variable<double, FixedString{"y"}> yf;
   auto f_fwd = sin(xf) * exp(yf);
   auto H_fwd = derivative_tensor<2>(f_fwd, std::array{xv, yv});
   using D = Dual<double>;
-  Variable<D, diff::FixedString{"x"}> xr{D{xv}};
-  Variable<D, diff::FixedString{"y"}> yr{D{yv}};
+  Variable<D, FixedString{"x"}> xr;
+  Variable<D, FixedString{"y"}> yr;
   auto f_rev = sin(xr) * exp(yr);
   auto H_rev = reverse_mode_hess(f_rev, std::array{xv, yv});
   for (int i : {0, 1})
@@ -2353,10 +2340,10 @@ TEST(VectorForwardHessian, MatchesScalarDriver) {
 TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
   using D = diff::Dual<double>;
   using diff::FixedString;
-  diff::Variable<D, FixedString{"x00"}> a{D{1.0}};
-  diff::Variable<D, FixedString{"x01"}> b{D{1.0}};
-  diff::Variable<D, FixedString{"x02"}> c{D{1.0}};
-  diff::Variable<D, FixedString{"x03"}> d{D{1.0}};
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  Variable<D, FixedString{"x03"}> d;
   auto expr = a * log(a) + b * log(b) + c * log(c) + d * log(d) +
               0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
               0.52 * (c - d) * (c - d) + exp(a * d);
@@ -2435,41 +2422,41 @@ TEST(NewMathFunctions, ExprUnaryValueAndDerivative) {
   {
     double x0 = 3.0;
     auto x = PV(x0, "x");
-    EXPECT_DOUBLE_EQ(log10(x).eval(), std::log10(x0));
-    EXPECT_DOUBLE_EQ(log10(x).derivative().eval(), 1.0 / (x0 * kLn10));
+    EXPECT_DOUBLE_EQ(log10(x).eval(x0), std::log10(x0));
+    EXPECT_DOUBLE_EQ(log10(x).derivative().eval(x0), 1.0 / (x0 * kLn10));
   }
   {
     double x0 = 2.0;
     auto x = PV(x0, "x");
-    EXPECT_DOUBLE_EQ(cbrt(x).eval(), std::cbrt(x0));
-    EXPECT_DOUBLE_EQ(cbrt(x).derivative().eval(),
+    EXPECT_DOUBLE_EQ(cbrt(x).eval(x0), std::cbrt(x0));
+    EXPECT_DOUBLE_EQ(cbrt(x).derivative().eval(x0),
                      1.0 / (3.0 * std::cbrt(x0) * std::cbrt(x0)));
   }
   {
     double x0 = 0.7;
     auto x = PV(x0, "x");
-    EXPECT_DOUBLE_EQ(asinh(x).eval(), std::asinh(x0));
-    EXPECT_DOUBLE_EQ(asinh(x).derivative().eval(),
+    EXPECT_DOUBLE_EQ(asinh(x).eval(x0), std::asinh(x0));
+    EXPECT_DOUBLE_EQ(asinh(x).derivative().eval(x0),
                      1.0 / std::sqrt(x0 * x0 + 1.0));
   }
   {
     double x0 = 2.0;
     auto x = PV(x0, "x");
-    EXPECT_DOUBLE_EQ(acosh(x).eval(), std::acosh(x0));
-    EXPECT_DOUBLE_EQ(acosh(x).derivative().eval(),
+    EXPECT_DOUBLE_EQ(acosh(x).eval(x0), std::acosh(x0));
+    EXPECT_DOUBLE_EQ(acosh(x).derivative().eval(x0),
                      1.0 / std::sqrt(x0 * x0 - 1.0));
   }
   {
     double x0 = 0.3;
     auto x = PV(x0, "x");
-    EXPECT_DOUBLE_EQ(atanh(x).eval(), std::atanh(x0));
-    EXPECT_DOUBLE_EQ(atanh(x).derivative().eval(), 1.0 / (1.0 - x0 * x0));
+    EXPECT_DOUBLE_EQ(atanh(x).eval(x0), std::atanh(x0));
+    EXPECT_DOUBLE_EQ(atanh(x).derivative().eval(x0), 1.0 / (1.0 - x0 * x0));
   }
   {
     double x0 = 0.5;
     auto x = PV(x0, "x");
-    EXPECT_DOUBLE_EQ(erf(x).eval(), std::erf(x0));
-    EXPECT_DOUBLE_EQ(erf(x).derivative().eval(),
+    EXPECT_DOUBLE_EQ(erf(x).eval(x0), std::erf(x0));
+    EXPECT_DOUBLE_EQ(erf(x).derivative().eval(x0),
                      k2OverSqrtPi * std::exp(-x0 * x0));
   }
 }
@@ -2477,30 +2464,30 @@ TEST(NewMathFunctions, ExprUnaryValueAndDerivative) {
 TEST(NewMathFunctions, ExprBinaryValue) {
   auto x = PV(3.0, "x");
   auto y = PV(4.0, "y");
-  EXPECT_DOUBLE_EQ(hypot(x, y).eval(), 5.0);
-  EXPECT_DOUBLE_EQ(pow(x, y).eval(), std::pow(3.0, 4.0));
-  EXPECT_DOUBLE_EQ(atan2(y, x).eval(), std::atan2(4.0, 3.0));
-  EXPECT_DOUBLE_EQ(max(x, y).eval(), 4.0);
-  EXPECT_DOUBLE_EQ(min(x, y).eval(), 3.0);
+  EXPECT_DOUBLE_EQ(hypot(x, y).eval(3.0, 4.0), 5.0);
+  EXPECT_DOUBLE_EQ(pow(x, y).eval(3.0, 4.0), std::pow(3.0, 4.0));
+  EXPECT_DOUBLE_EQ(atan2(y, x).eval(3.0, 4.0), std::atan2(4.0, 3.0));
+  EXPECT_DOUBLE_EQ(max(x, y).eval(3.0, 4.0), 4.0);
+  EXPECT_DOUBLE_EQ(min(x, y).eval(3.0, 4.0), 3.0);
   // scalar-promotion overloads
-  EXPECT_DOUBLE_EQ(hypot(x, 4.0).eval(), 5.0);
-  EXPECT_DOUBLE_EQ(pow(x, 2.0).eval(), 9.0);
-  EXPECT_DOUBLE_EQ(pow(2.0, x).eval(), 8.0);
+  EXPECT_DOUBLE_EQ(hypot(x, 4.0).eval(3.0), 5.0);
+  EXPECT_DOUBLE_EQ(pow(x, 2.0).eval(3.0), 9.0);
+  EXPECT_DOUBLE_EQ(pow(2.0, x).eval(3.0), 8.0);
 }
 
 // ---- Reverse mode (partials per variable) ---------------------------------
 TEST(NewMathFunctions, ReverseUnary) {
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(log10(PV(3.0, "x")))[0],
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(log10(PV(3.0, "x")), 3.0)[0],
                    1.0 / (3.0 * kLn10));
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(cbrt(PV(2.0, "x")))[0],
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(cbrt(PV(2.0, "x")), 2.0)[0],
                    1.0 / (3.0 * std::cbrt(2.0) * std::cbrt(2.0)));
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(asinh(PV(0.7, "x")))[0],
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(asinh(PV(0.7, "x")), 0.7)[0],
                    1.0 / std::sqrt(0.49 + 1.0));
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(acosh(PV(2.0, "x")))[0],
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(acosh(PV(2.0, "x")), 2.0)[0],
                    1.0 / std::sqrt(4.0 - 1.0));
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(atanh(PV(0.3, "x")))[0],
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(atanh(PV(0.3, "x")), 0.3)[0],
                    1.0 / (1.0 - 0.09));
-  EXPECT_DOUBLE_EQ(reverse_mode_grad(erf(PV(0.5, "x")))[0],
+  EXPECT_DOUBLE_EQ(reverse_mode_grad(erf(PV(0.5, "x")), 0.5)[0],
                    k2OverSqrtPi * std::exp(-0.25));
 }
 
@@ -2508,14 +2495,14 @@ TEST(NewMathFunctions, ReverseBinaryPartials) {
   {
     auto x = PV(3.0, "x");
     auto y = PV(4.0, "y");
-    auto g = reverse_mode_grad(hypot(x, y));
+    auto g = reverse_mode_grad(hypot(x, y), 3.0, 4.0);
     EXPECT_DOUBLE_EQ(g[0], 3.0 / 5.0);
     EXPECT_DOUBLE_EQ(g[1], 4.0 / 5.0);
   }
   {
     auto x = PV(2.0, "x");
     auto y = PV(3.0, "y");
-    auto g = reverse_mode_grad(pow(x, y));
+    auto g = reverse_mode_grad(pow(x, y), 2.0, 3.0);
     EXPECT_DOUBLE_EQ(g[0], 3.0 * std::pow(2.0, 2.0));      // y*x^(y-1)
     EXPECT_DOUBLE_EQ(g[1], std::pow(2.0, 3.0) * std::log(2.0)); // x^y*ln x
   }
@@ -2524,7 +2511,7 @@ TEST(NewMathFunctions, ReverseBinaryPartials) {
     // symbol (x at index 0, y at index 1).
     auto y = PV(1.0, "y");
     auto x = PV(2.0, "x");
-    auto g = reverse_mode_grad(atan2(y, x));
+    auto g = reverse_mode_grad(atan2(y, x), 2.0, 1.0);
     const double q = 1.0 + 4.0;
     EXPECT_DOUBLE_EQ(g[0], -1.0 / q); // d/dx = -y/q
     EXPECT_DOUBLE_EQ(g[1], 2.0 / q);  // d/dy =  x/q
@@ -2534,10 +2521,10 @@ TEST(NewMathFunctions, ReverseBinaryPartials) {
 TEST(NewMathFunctions, ReverseMaxMinSelectsBranch) {
   auto x = PV(3.0, "x");
   auto y = PV(4.0, "y");
-  auto gmax = reverse_mode_grad(max(x, y));
+  auto gmax = reverse_mode_grad(max(x, y), 3.0, 4.0);
   EXPECT_DOUBLE_EQ(gmax[0], 0.0);
   EXPECT_DOUBLE_EQ(gmax[1], 1.0);
-  auto gmin = reverse_mode_grad(min(x, y));
+  auto gmin = reverse_mode_grad(min(x, y), 3.0, 4.0);
   EXPECT_DOUBLE_EQ(gmin[0], 1.0);
   EXPECT_DOUBLE_EQ(gmin[1], 0.0);
 }
@@ -2545,14 +2532,14 @@ TEST(NewMathFunctions, ReverseMaxMinSelectsBranch) {
 // ---- Forward lazy-dual mode (Variable<Dual>) ------------------------------
 TEST(NewMathFunctions, ForwardDualUnary) {
   double x0 = 0.5;
-  Variable<Dual<double>, FixedString{"x"}> x{Dual<double>{x0, 1.0}};
+  Variable<Dual<double>, FixedString{"x"}> x;
   {
-    auto [f, df] = erf(x).eval();
+    auto [f, df] = erf(x).eval(Dual<double>{x0, 1.0});
     EXPECT_DOUBLE_EQ(f, std::erf(x0));
     EXPECT_DOUBLE_EQ(df, k2OverSqrtPi * std::exp(-x0 * x0));
   }
   {
-    auto [f, df] = atanh(x).eval();
+    auto [f, df] = atanh(x).eval(Dual<double>{x0, 1.0});
     EXPECT_DOUBLE_EQ(f, std::atanh(x0));
     EXPECT_DOUBLE_EQ(df, 1.0 / (1.0 - x0 * x0));
   }
@@ -2560,14 +2547,14 @@ TEST(NewMathFunctions, ForwardDualUnary) {
 
 TEST(NewMathFunctions, ForwardDualBinary) {
   double x0 = 3.0;
-  Variable<Dual<double>, FixedString{"x"}> x{Dual<double>{x0, 1.0}};
+  Variable<Dual<double>, FixedString{"x"}> x;
   {
-    auto [f, df] = hypot(x, 4.0).eval();
+    auto [f, df] = hypot(x, 4.0).eval(Dual<double>{x0, 1.0});
     EXPECT_DOUBLE_EQ(f, 5.0);
     EXPECT_DOUBLE_EQ(df, x0 / 5.0);
   }
   {
-    auto [f, df] = pow(x, 3.0).eval();
+    auto [f, df] = pow(x, 3.0).eval(Dual<double>{x0, 1.0});
     EXPECT_DOUBLE_EQ(f, 27.0);
     EXPECT_DOUBLE_EQ(df, 3.0 * x0 * x0);
   }
@@ -2590,60 +2577,60 @@ TEST(NewMathFunctions, DualDirect) {
 // ---- Taylor higher-order (value coeff drives expr + Taylor together) -------
 TEST(NewMathFunctions, TaylorFirstAndSecondDerivative) {
   // First derivatives via order-1 univariate_derivative.
-  EXPECT_NEAR(univariate_derivative<1>(asinh(PV(0.7, "x"))),
+  EXPECT_NEAR(univariate_derivative<1>(asinh(PV(0.7, "x")), 0.7),
               1.0 / std::sqrt(0.49 + 1.0), 1e-12);
-  EXPECT_NEAR(univariate_derivative<1>(erf(PV(0.5, "x"))),
+  EXPECT_NEAR(univariate_derivative<1>(erf(PV(0.5, "x")), 0.5),
               k2OverSqrtPi * std::exp(-0.25), 1e-12);
-  EXPECT_NEAR(univariate_derivative<1>(cbrt(PV(2.0, "x"))),
+  EXPECT_NEAR(univariate_derivative<1>(cbrt(PV(2.0, "x")), 2.0),
               1.0 / (3.0 * std::cbrt(2.0) * std::cbrt(2.0)), 1e-12);
 
   // Second derivatives vs analytic.
   {
     double x0 = 0.7; // asinh'' = -x/(1+x²)^{3/2}
-    EXPECT_NEAR(univariate_derivative<2>(asinh(PV(x0, "x"))),
+    EXPECT_NEAR(univariate_derivative<2>(asinh(PV(x0, "x")), x0),
                 -x0 / std::pow(1.0 + x0 * x0, 1.5), 1e-10);
   }
   {
     double x0 = 0.5; // erf'' = -2x * 2/√π * e^{-x²}
-    EXPECT_NEAR(univariate_derivative<2>(erf(PV(x0, "x"))),
+    EXPECT_NEAR(univariate_derivative<2>(erf(PV(x0, "x")), x0),
                 -2.0 * x0 * k2OverSqrtPi * std::exp(-x0 * x0), 1e-10);
   }
   {
     double x0 = 0.3; // atanh'' = 2x/(1-x²)²
-    EXPECT_NEAR(univariate_derivative<2>(atanh(PV(x0, "x"))),
+    EXPECT_NEAR(univariate_derivative<2>(atanh(PV(x0, "x")), x0),
                 2.0 * x0 / std::pow(1.0 - x0 * x0, 2.0), 1e-10);
   }
   {
     double x0 = 3.0; // log10'' = -1/(x² ln10)
-    EXPECT_NEAR(univariate_derivative<2>(log10(PV(x0, "x"))),
+    EXPECT_NEAR(univariate_derivative<2>(log10(PV(x0, "x")), x0),
                 -1.0 / (x0 * x0 * kLn10), 1e-10);
   }
   {
     double x0 = 2.0; // cbrt'' = -2/9 x^{-5/3}
-    EXPECT_NEAR(univariate_derivative<2>(cbrt(PV(x0, "x"))),
+    EXPECT_NEAR(univariate_derivative<2>(cbrt(PV(x0, "x")), x0),
                 -2.0 / 9.0 * std::pow(x0, -5.0 / 3.0), 1e-10);
   }
   {
     double x0 = 2.0; // acosh'' = -x/(x²-1)^{3/2}
-    EXPECT_NEAR(univariate_derivative<2>(acosh(PV(x0, "x"))),
+    EXPECT_NEAR(univariate_derivative<2>(acosh(PV(x0, "x")), x0),
                 -x0 / std::pow(x0 * x0 - 1.0, 1.5), 1e-10);
   }
 }
 
 TEST(NewMathFunctions, TaylorBinaryUnivariate) {
   // pow(x, 3): f'=3x², f''=6x
-  EXPECT_NEAR(univariate_derivative<1>(pow(PV(2.0, "x"), 3.0)), 12.0, 1e-10);
-  EXPECT_NEAR(univariate_derivative<2>(pow(PV(2.0, "x"), 3.0)), 12.0, 1e-10);
+  EXPECT_NEAR(univariate_derivative<1>(pow(PV(2.0, "x"), 3.0), 2.0), 12.0, 1e-10);
+  EXPECT_NEAR(univariate_derivative<2>(pow(PV(2.0, "x"), 3.0), 2.0), 12.0, 1e-10);
   // hypot(x, 2): f = sqrt(x²+4); f' = x/sqrt(x²+4)
   {
     double x0 = 3.0, h = std::sqrt(x0 * x0 + 4.0);
-    EXPECT_NEAR(univariate_derivative<1>(hypot(PV(x0, "x"), 2.0)), x0 / h,
+    EXPECT_NEAR(univariate_derivative<1>(hypot(PV(x0, "x"), 2.0), x0), x0 / h,
                 1e-10);
   }
   // atan2(x, 2): d/dx atan2(x,2) = 2/(4+x²)
   {
     double x0 = 2.0;
-    EXPECT_NEAR(univariate_derivative<1>(atan2(PV(x0, "x"), 2.0)),
+    EXPECT_NEAR(univariate_derivative<1>(atan2(PV(x0, "x"), 2.0), x0),
                 2.0 / (4.0 + x0 * x0), 1e-10);
   }
 }
@@ -2655,42 +2642,42 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
   {
     double x0 = 0.6, x4 = x0 * x0 * x0 * x0, d = 1.0 + x4;
     auto x = PV(x0, "x");
-    EXPECT_NEAR(univariate_derivative<1>(atan(x * x)), 2.0 * x0 / d, 1e-10);
-    EXPECT_NEAR(univariate_derivative<2>(atan(x * x)), (2.0 - 6.0 * x4) / (d * d),
+    EXPECT_NEAR(univariate_derivative<1>(atan(x * x), x0), 2.0 * x0 / d, 1e-10);
+    EXPECT_NEAR(univariate_derivative<2>(atan(x * x), x0), (2.0 - 6.0 * x4) / (d * d),
                 1e-10);
   }
   // asin(x/2): f' = a/√(1-a²x²), f'' = a³x(1-a²x²)^{-3/2}, a = 1/2.
   {
     double x0 = 1.0, a = 0.5, r = 1.0 - a * a * x0 * x0;
     auto x = PV(x0, "x");
-    EXPECT_NEAR(univariate_derivative<1>(asin(0.5 * x)), a / std::sqrt(r),
+    EXPECT_NEAR(univariate_derivative<1>(asin(0.5 * x), x0), a / std::sqrt(r),
                 1e-10);
-    EXPECT_NEAR(univariate_derivative<2>(asin(0.5 * x)),
+    EXPECT_NEAR(univariate_derivative<2>(asin(0.5 * x), x0),
                 a * a * a * x0 * std::pow(r, -1.5), 1e-10);
   }
   // asinh(2x): f'' = -a³x(1+a²x²)^{-3/2}, a = 2.
   {
     double x0 = 0.3, a = 2.0, r = 1.0 + a * a * x0 * x0;
     auto x = PV(x0, "x");
-    EXPECT_NEAR(univariate_derivative<1>(asinh(2.0 * x)), a / std::sqrt(r),
+    EXPECT_NEAR(univariate_derivative<1>(asinh(2.0 * x), x0), a / std::sqrt(r),
                 1e-10);
-    EXPECT_NEAR(univariate_derivative<2>(asinh(2.0 * x)),
+    EXPECT_NEAR(univariate_derivative<2>(asinh(2.0 * x), x0),
                 -a * a * a * x0 * std::pow(r, -1.5), 1e-10);
   }
   // Identity: atan2(sin x, cos x) == x on (-π, π) ⇒ f'=1, f''=0, f'''=0.
   {
     auto x = PV(0.7, "x");
-    EXPECT_NEAR(univariate_derivative<1>(atan2(sin(x), cos(x))), 1.0, 1e-10);
-    EXPECT_NEAR(univariate_derivative<2>(atan2(sin(x), cos(x))), 0.0, 1e-10);
-    EXPECT_NEAR(univariate_derivative<3>(atan2(sin(x), cos(x))), 0.0, 1e-10);
+    EXPECT_NEAR(univariate_derivative<1>(atan2(sin(x), cos(x)), 0.7), 1.0, 1e-10);
+    EXPECT_NEAR(univariate_derivative<2>(atan2(sin(x), cos(x)), 0.7), 0.0, 1e-10);
+    EXPECT_NEAR(univariate_derivative<3>(atan2(sin(x), cos(x)), 0.7), 0.0, 1e-10);
   }
   // pow(sin x, 2) = sin²x ⇒ f' = sin(2x), f'' = 2cos(2x) (powser composite).
   {
     double x0 = 0.5;
     auto x = PV(x0, "x");
-    EXPECT_NEAR(univariate_derivative<1>(pow(sin(x), 2.0)), std::sin(2.0 * x0),
+    EXPECT_NEAR(univariate_derivative<1>(pow(sin(x), 2.0), x0), std::sin(2.0 * x0),
                 1e-10);
-    EXPECT_NEAR(univariate_derivative<2>(pow(sin(x), 2.0)),
+    EXPECT_NEAR(univariate_derivative<2>(pow(sin(x), 2.0), x0),
                 2.0 * std::cos(2.0 * x0), 1e-10);
   }
 }
@@ -2710,12 +2697,13 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
 // The two agree algebraically but not bit-for-bit — e.g. the quotient rule
 // evaluates (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse — so the
 // tangent is compared to a tolerance a few ULP wide rather than exactly.
-#define EXPECT_TANGENT_MATCHES_REVERSE(expr_)                                  \
+#define EXPECT_TANGENT_MATCHES_REVERSE(expr_, xv_)                             \
   do {                                                                         \
     const auto e_ = (expr_);                                                   \
-    const auto t_ = e_.template eval_with_tangent<"x">();                      \
-    EXPECT_DOUBLE_EQ(t_.value, e_.eval());                                     \
-    EXPECT_NEAR(t_.deriv, reverse_mode_grad(e_)[0], 1e-12);                    \
+    const std::array<double, 1> pt_{xv_};                                      \
+    const auto t_ = e_.template eval_with_tangent<"x">(xv_);                   \
+    EXPECT_DOUBLE_EQ(t_.value, e_.eval(xv_));                                  \
+    EXPECT_NEAR(t_.deriv, reverse_mode_grad(e_, pt_)[0], 1e-12);               \
   } while (0)
 
 TEST(ForwardTangentSweep, LeafSeeding) {
@@ -2723,19 +2711,19 @@ TEST(ForwardTangentSweep, LeafSeeding) {
   auto y = PV(3.0, "y");
 
   // The seeded variable carries tangent 1 ...
-  const auto tx = x.eval_with_tangent<"x">();
+  const auto tx = x.eval_with_tangent<"x">(2.0);
   EXPECT_DOUBLE_EQ(tx.value, 2.0);
   EXPECT_DOUBLE_EQ(tx.deriv, 1.0);
 
   // ... every other variable carries 0, including one whose name differs only
   // in length (FixedString comparison across sizes).
-  const auto ty = y.eval_with_tangent<"x">();
+  const auto ty = y.eval_with_tangent<"x">(3.0);
   EXPECT_DOUBLE_EQ(ty.value, 3.0);
   EXPECT_DOUBLE_EQ(ty.deriv, 0.0);
-  EXPECT_DOUBLE_EQ(x.eval_with_tangent<"xx">().deriv, 0.0);
+  EXPECT_DOUBLE_EQ(x.eval_with_tangent<"xx">(2.0).deriv, 0.0);
 
   // Constants are always zero-tangent.
-  const auto tc = PC(5.0).eval_with_tangent<"x">();
+  const auto tc = PC(5.0).eval_with_tangent<"x">();  // no symbols
   EXPECT_DOUBLE_EQ(tc.value, 5.0);
   EXPECT_DOUBLE_EQ(tc.deriv, 0.0);
 }
@@ -2744,46 +2732,46 @@ TEST(ForwardTangentSweep, ArithmeticRules) {
   double x0 = 1.7;
   auto x = PV(x0, "x");
 
-  EXPECT_TANGENT_MATCHES_REVERSE(x + x * x);         // sum + product
-  EXPECT_TANGENT_MATCHES_REVERSE(x - 3.0 * x * x);   // negate (a - b => a + -b)
-  EXPECT_TANGENT_MATCHES_REVERSE((x + 1.0) / x);     // quotient
-  EXPECT_TANGENT_MATCHES_REVERSE(-(x / (x * x + 2.0)));
+  EXPECT_TANGENT_MATCHES_REVERSE(x + x * x, 0.7);         // sum + product
+  EXPECT_TANGENT_MATCHES_REVERSE(x - 3.0 * x * x, 0.7);   // negate (a - b => a + -b)
+  EXPECT_TANGENT_MATCHES_REVERSE((x + 1.0) / x, 0.7);     // quotient
+  EXPECT_TANGENT_MATCHES_REVERSE(-(x / (x * x + 2.0)), 0.7);
 
   // Cross-check the same sweep against the symbolic derivative tree, which is a
   // third independent path (derivative() is a total derivative, so this is only
   // meaningful for a single-variable expression).
   const auto e = (x * x + 1.0) / (x + 2.0);
-  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"x">().deriv, e.derivative().eval());
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"x">(x0).deriv, e.derivative().eval(x0));
 }
 
 TEST(ForwardTangentSweep, UnaryMathRules) {
   // One probe per op in the DIFF_UNARY_MATH_OP macro, plus AbsOp's hand-written
   // forward().  Arguments stay inside each function's domain.
-  EXPECT_TANGENT_MATCHES_REVERSE(sin(PV(0.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(cos(PV(0.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(tan(PV(0.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(exp(PV(0.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(log(PV(1.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(log10(PV(1.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(sqrt(PV(1.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(cbrt(PV(1.6, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(asin(PV(0.4, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(acos(PV(0.4, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(atan(PV(0.4, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(sinh(PV(0.4, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(cosh(PV(0.4, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(tanh(PV(0.4, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(asinh(PV(0.7, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(acosh(PV(2.0, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(atanh(PV(0.3, "x")));
-  EXPECT_TANGENT_MATCHES_REVERSE(erf(PV(0.5, "x")));
+  EXPECT_TANGENT_MATCHES_REVERSE(sin(PV(0.6, "x")), 0.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(cos(PV(0.6, "x")), 0.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(tan(PV(0.6, "x")), 0.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(exp(PV(0.6, "x")), 0.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(log(PV(1.6, "x")), 1.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(log10(PV(1.6, "x")), 1.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(sqrt(PV(1.6, "x")), 1.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(cbrt(PV(1.6, "x")), 1.6);
+  EXPECT_TANGENT_MATCHES_REVERSE(asin(PV(0.4, "x")), 0.4);
+  EXPECT_TANGENT_MATCHES_REVERSE(acos(PV(0.4, "x")), 0.4);
+  EXPECT_TANGENT_MATCHES_REVERSE(atan(PV(0.4, "x")), 0.4);
+  EXPECT_TANGENT_MATCHES_REVERSE(sinh(PV(0.4, "x")), 0.4);
+  EXPECT_TANGENT_MATCHES_REVERSE(cosh(PV(0.4, "x")), 0.4);
+  EXPECT_TANGENT_MATCHES_REVERSE(tanh(PV(0.4, "x")), 0.4);
+  EXPECT_TANGENT_MATCHES_REVERSE(asinh(PV(0.7, "x")), 0.7);
+  EXPECT_TANGENT_MATCHES_REVERSE(acosh(PV(2.0, "x")), 2.0);
+  EXPECT_TANGENT_MATCHES_REVERSE(atanh(PV(0.3, "x")), 0.3);
+  EXPECT_TANGENT_MATCHES_REVERSE(erf(PV(0.5, "x")), 0.5);
 
   // abs() on both sides of the kink: sign(u)·u'.
-  EXPECT_DOUBLE_EQ(abs(PV(2.0, "x")).eval_with_tangent<"x">().deriv, 1.0);
-  EXPECT_DOUBLE_EQ(abs(PV(-2.0, "x")).eval_with_tangent<"x">().deriv, -1.0);
+  EXPECT_DOUBLE_EQ(abs(PV(2.0, "x")).eval_with_tangent<"x">(2.0).deriv, 1.0);
+  EXPECT_DOUBLE_EQ(abs(PV(-2.0, "x")).eval_with_tangent<"x">(-2.0).deriv, -1.0);
 
   // Composite argument: the chain rule must fire at every level.
-  EXPECT_TANGENT_MATCHES_REVERSE(log(sin(PV(0.9, "x")) + 2.0));
+  EXPECT_TANGENT_MATCHES_REVERSE(log(sin(PV(0.9, "x")) + 2.0), 0.9);
 }
 
 TEST(ForwardTangentSweep, BinaryMathRules) {
@@ -2792,10 +2780,11 @@ TEST(ForwardTangentSweep, BinaryMathRules) {
   auto y = PV(y0, "y");
 
   // Symbols sort alphabetically, so gradient slot 0 is x and slot 1 is y.
-  const auto check = [](const auto &e, double dx, double dy) {
-    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">().value, e.eval());
-    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">().deriv, dx);
-    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"y">().deriv, dy);
+  const auto check = [x0, y0](const auto &e, double dx, double dy) {
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">(x0, y0).value,
+                     e.eval(x0, y0));
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">(x0, y0).deriv, dx);
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"y">(x0, y0).deriv, dy);
   };
 
   // hypot: d/dx = x/h, d/dy = y/h.
@@ -2819,17 +2808,17 @@ TEST(ForwardTangentSweep, MultiVariableMatchesReverseMode) {
   const auto e = sin(x * y) * exp(x + y) + log(y * y + 1.0) / (x + 2.0) -
                  hypot(x, y) * tanh(x);
 
-  const auto g = reverse_mode_grad(e);
-  const auto tx = e.eval_with_tangent<"x">();
-  const auto ty = e.eval_with_tangent<"y">();
+  const auto g = reverse_mode_grad(e, 0.8, 1.3);
+  const auto tx = e.eval_with_tangent<"x">(0.8, 1.3);
+  const auto ty = e.eval_with_tangent<"y">(0.8, 1.3);
 
-  EXPECT_DOUBLE_EQ(tx.value, e.eval());
-  EXPECT_DOUBLE_EQ(ty.value, e.eval());
+  EXPECT_DOUBLE_EQ(tx.value, e.eval(0.8, 1.3));
+  EXPECT_DOUBLE_EQ(ty.value, e.eval(0.8, 1.3));
   EXPECT_NEAR(tx.deriv, g[0], 1e-12);
   EXPECT_NEAR(ty.deriv, g[1], 1e-12);
 
   // A symbol not present in the tree differentiates to zero everywhere.
-  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"z">().deriv, 0.0);
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"z">(0.8, 1.3).deriv, 0.0);
 }
 
 TEST(ForwardTangentSweep, IsConstexpr) {
@@ -2837,10 +2826,147 @@ TEST(ForwardTangentSweep, IsConstexpr) {
   // this holds on every toolchain).
   constexpr auto x = PV(2.0, "x");
   constexpr auto e = x * x + 3.0 * x;
-  constexpr auto t = e.eval_with_tangent<"x">();
+  constexpr auto t = e.eval_with_tangent<"x">(2.0);
   static_assert(t.value == 10.0, "x² + 3x at x = 2");
   static_assert(t.deriv == 7.0, "2x + 3 at x = 2");
   EXPECT_DOUBLE_EQ(t.deriv, 7.0);
 }
 
 #undef EXPECT_TANGENT_MATCHES_REVERSE
+
+// ===========================================================================
+// ValueMap / Bound — root-held values.
+//
+// The point lives in one slot per *variable* rather than one per leaf
+// occurrence.  These tests pin the behaviour that the stateless-leaf change
+// depends on: canonical ordering, symbol lookup, and bit-identity with the
+// existing leaf-storage eval() path.
+// ===========================================================================
+
+TEST(ValueMapTest, SlotsAreInCanonicalOrderNotArgumentOrder) {
+  // Canonical order is alphabetical, so {w,x,y} regardless of how they arrive.
+  const auto m = values(named<"y">(3.0), named<"w">(1.0), named<"x">(2.0));
+  EXPECT_EQ(decltype(m)::arity, 3u);
+  EXPECT_DOUBLE_EQ(m.slots[0], 1.0); // w
+  EXPECT_DOUBLE_EQ(m.slots[1], 2.0); // x
+  EXPECT_DOUBLE_EQ(m.slots[2], 3.0); // y
+  EXPECT_DOUBLE_EQ(m.get<"w">(), 1.0);
+  EXPECT_DOUBLE_EQ(m.get<"x">(), 2.0);
+  EXPECT_DOUBLE_EQ(m.get<"y">(), 3.0);
+}
+
+TEST(ValueMapTest, SetUpdatesTheNamedSlot) {
+  auto m = values(named<"x">(2.0), named<"y">(3.0));
+  m.set<"x">(7.0);
+  EXPECT_DOUBLE_EQ(m.get<"x">(), 7.0);
+  EXPECT_DOUBLE_EQ(m.get<"y">(), 3.0);
+}
+
+TEST(BoundTest, EvalMatchesLeafStorageBitForBit) {
+  // The seeded path and the leaf-storage path must agree exactly - this is a
+  // storage change, not a numerics change.
+  auto x = PV(0.8, "x");
+  auto y = PV(1.3, "y");
+  const auto e = sin(x * y) * exp(x + y) + log(y * y + 1.0) / (x + 2.0) -
+                 hypot(x, y) * tanh(x);
+
+  const auto b = bind(e, named<"x">(0.8), named<"y">(1.3));
+  EXPECT_EQ(b.eval(), e.eval(0.8, 1.3)); // bitwise, not EXPECT_DOUBLE_EQ
+}
+
+TEST(BoundTest, ArgumentOrderIsIrrelevantAndSupersetsAreAllowed) {
+  auto x = PV(2.0, "x");
+  auto y = PV(3.0, "y");
+  const auto e = (x + y) * x; // symbols {x,y}
+
+  EXPECT_DOUBLE_EQ(bind(e, named<"x">(2.0), named<"y">(3.0)).eval(), 10.0);
+  EXPECT_DOUBLE_EQ(bind(e, named<"y">(3.0), named<"x">(2.0)).eval(), 10.0);
+
+  // A map carrying extra symbols still binds; the permutation picks the ones
+  // the expression actually uses.
+  const auto wide =
+      values(named<"z">(9.0), named<"x">(2.0), named<"y">(3.0), named<"a">(9.0));
+  EXPECT_DOUBLE_EQ(bind(e, wide).eval(), 10.0);
+}
+
+TEST(BoundTest, SetChangesTheResult) {
+  auto x = PV(2.0, "x");
+  auto y = PV(3.0, "y");
+  auto b = bind((x + y) * x, named<"x">(2.0), named<"y">(3.0));
+  EXPECT_DOUBLE_EQ(b.eval(), 10.0);
+  b.set<"x">(4.0);
+  EXPECT_DOUBLE_EQ(b.eval(), 28.0); // (4+3)*4
+}
+
+TEST(BoundTest, IsConstexpr) {
+  // constexpr constrains the function, not the caller: the same eval() serves
+  // compile-time and runtime values.
+  constexpr auto x = PV(1.0, "x");
+  constexpr auto y = PV(1.0, "y");
+  constexpr auto b = bind(x * x + y, named<"x">(3.0), named<"y">(4.0));
+  static_assert(b.eval() == 13.0, "x*x + y at (3,4)");
+  EXPECT_DOUBLE_EQ(b.eval(), 13.0);
+}
+
+TEST(PositionalEvalTest, SymbolOrderIsAlphabeticalNotSourceOrder) {
+  auto y = PV(1.0, "y");
+  auto x = PV(1.0, "x");
+  const auto e = y * x; // written y-first
+  constexpr auto order = symbol_order<decltype(e)>();
+  static_assert(order.size() == 2);
+  EXPECT_EQ(order[0], "x"); // canonical order is alphabetical
+  EXPECT_EQ(order[1], "y");
+}
+
+TEST(PositionalEvalTest, VariadicAndRangeAgreeWithNamed) {
+  auto x = PV(1.0, "x");
+  auto y = PV(1.0, "y");
+  const auto e = (x + y) * x; // canonical order {x,y}
+
+  const double expected = 10.0; // (2+3)*2
+  EXPECT_DOUBLE_EQ(eval(e, 2.0, 3.0), expected);
+  EXPECT_DOUBLE_EQ(eval(e, std::array{2.0, 3.0}), expected);
+  EXPECT_DOUBLE_EQ(eval(e, std::vector{2.0, 3.0}), expected);
+  EXPECT_DOUBLE_EQ(bind(e, named<"x">(2.0), named<"y">(3.0)).eval(), expected);
+}
+
+TEST(PositionalEvalTest, AcceptsALazyNonSizedInputRange) {
+  auto x = PV(1.0, "x");
+  auto y = PV(1.0, "y");
+  const auto e = (x + y) * x;
+
+  // A view, single-pass friendly: 2.0, 3.0
+  auto lazy = std::views::iota(2, 4) |
+              std::views::transform([](int i) { return double(i); });
+  EXPECT_DOUBLE_EQ(eval(e, lazy), 10.0);
+}
+
+TEST(PositionalEvalTest, ShortRangeThrowsAtRuntime) {
+  auto x = PV(1.0, "x");
+  auto y = PV(1.0, "y");
+  const auto e = (x + y) * x;
+  const std::vector<double> too_few{2.0};
+  EXPECT_THROW((void)eval(e, too_few), std::out_of_range);
+}
+
+TEST(PositionalEvalTest, IsConstexpr) {
+  constexpr auto x = PV(1.0, "x");
+  constexpr auto y = PV(1.0, "y");
+  constexpr auto e = (x + y) * x;
+  static_assert(eval(e, 2.0, 3.0) == 10.0, "variadic positional eval");
+  static_assert(eval(e, std::array{2.0, 3.0}) == 10.0, "range positional eval");
+  EXPECT_DOUBLE_EQ(eval(e, 2.0, 3.0), 10.0);
+}
+
+TEST(BoundTest, EvalAsCarriesDualsThroughTheGraph) {
+  // eval_as is the deeper-numeric-type entry point the drivers use.
+  auto x = PV(1.0, "x");
+  auto y = PV(1.0, "y");
+  const auto b = bind(x * x + y, named<"x">(3.0), named<"y">(4.0));
+
+  using D = Dual<double>;
+  const std::array<D, 2> seed{D{3.0, 1.0}, D{4.0, 0.0}}; // seed d/dx
+  const auto r = b.eval_as<D>(seed);
+  EXPECT_DOUBLE_EQ(r.get<0>(), 13.0);
+  EXPECT_DOUBLE_EQ(r.get<1>(), 6.0); // d/dx (x² + y) = 2x = 6
+}

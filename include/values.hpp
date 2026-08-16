@@ -296,7 +296,7 @@ template <Numeric T, T V> struct Lit {
 
   template <FixedString, typename, std::size_t N>
   [[nodiscard]] constexpr auto
-  eval_with_tangent(const std::array<T, N> &) const noexcept {
+  tangent_seeded(const std::array<T, N> &) const noexcept {
     return Tangent<T>{V, T{}};
   }
 
@@ -326,6 +326,18 @@ template <Numeric T, T V> struct Lit {
       return T{0};
     }
   }
+
+  // Leaves are expressions too: same eval(...) surface as ExpressionOps.
+  template <typename... Args>
+    requires(sizeof...(Args) > 0)
+  [[nodiscard]] constexpr auto eval(const Args &...args) const {
+    return detail::eval_dispatch(*this, args...);
+  }
+
+  template <FixedString Seed, typename... Args>
+  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
+    return detail::tangent_dispatch<Seed>(*this, args...);
+  }
 };
 
 template <Numeric T> class Constant {
@@ -347,12 +359,16 @@ public:
   [[nodiscard]] constexpr auto get() const noexcept { return value; }
   constexpr operator T() const noexcept { return value; }
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    return Lit<T, T{0}>{};
+    if constexpr (CArithmetic<T>) {
+      return Lit<T, T{0}>{};
+    } else {
+      return Constant<T>{T{0}};
+    }
   }
   // Forward sweep leaf: a constant contributes value with zero tangent.
   template <FixedString, typename, std::size_t N>
   [[nodiscard]] constexpr auto
-  eval_with_tangent(const std::array<T, N> &) const noexcept {
+  tangent_seeded(const std::array<T, N> &) const noexcept {
     return Tangent<T>{value, T{}};
   }
   template <std::size_t Base = 0>
@@ -386,6 +402,17 @@ public:
       return static_cast<T>(derivative());
     }
   }
+
+  template <typename... Args>
+    requires(sizeof...(Args) > 0)
+  [[nodiscard]] constexpr auto eval(const Args &...args) const {
+    return detail::eval_dispatch(*this, args...);
+  }
+
+  template <FixedString Seed, typename... Args>
+  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
+    return detail::tangent_dispatch<Seed>(*this, args...);
+  }
 };
 
 // A symbol.  Carries NO value: the point is supplied at the root instead (see
@@ -413,18 +440,24 @@ public:
   static constexpr bool frozen = Frozen;
   using value_type = T;
 
+  // Lit carries its value as a template argument, so it is only available for
+  // structural types; a dual-valued variable falls back to a stored Constant.
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    if constexpr (Frozen) {
-      return Lit<T, T{0}>{};
+    if constexpr (CArithmetic<T>) {
+      if constexpr (Frozen) {
+        return Lit<T, T{0}>{};
+      } else {
+        return Lit<T, T{1}>{};
+      }
     } else {
-      return Lit<T, T{1}>{};
+      return Constant<T>{Frozen ? T{0} : T{1}};
     }
   }
 
   // Forward sweep leaf: tangent is 1 if this is the seeded variable, else 0.
   template <FixedString Seed, typename Syms, std::size_t N>
   [[nodiscard]] constexpr auto
-  eval_with_tangent(const std::array<T, N> &vals) const noexcept {
+  tangent_seeded(const std::array<T, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
     return Tangent<T>{vals[idx],
                       (!Frozen && symbol == Seed) ? T{1} : T{}};
@@ -454,6 +487,18 @@ public:
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
     static_assert(idx < N, "eval: no value supplied for this symbol");
     return vals[idx];
+  }
+
+  // Leaves are expressions too: same eval(...) surface as ExpressionOps.
+  template <typename... Args>
+    requires(sizeof...(Args) > 0)
+  [[nodiscard]] constexpr auto eval(const Args &...args) const {
+    return detail::eval_dispatch(*this, args...);
+  }
+
+  template <FixedString Seed, typename... Args>
+  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
+    return detail::tangent_dispatch<Seed>(*this, args...);
   }
 };
 

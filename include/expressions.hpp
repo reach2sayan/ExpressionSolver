@@ -47,6 +47,11 @@ concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
 
 template <COperation Op, CExpression... Children> class Expression;
 
+// Expression's storage base; also the CRTP `Derived`, so it has to satisfy
+// CExpression in its own right.
+template <bool Stateless, COperation Op, CExpression... Children>
+class ExpressionImpl;
+
 template <COperation Op, CExpression Exp>
 using MonoExpression = Expression<Op, Exp>;
 template <Numeric T> class Constant;
@@ -101,6 +106,10 @@ struct is_expression_type<Variable<T, C, F>> : std::true_type {};
 
 template <COperation Op, CExpression... Children>
 struct is_expression_type<Expression<Op, Children...>> : std::true_type {};
+
+template <bool S, COperation Op, CExpression... Children>
+struct is_expression_type<ExpressionImpl<S, Op, Children...>>
+    : std::true_type {};
 
 template <typename T> struct is_constant : std::false_type {};
 template <Numeric T> struct is_constant<Constant<T>> : std::true_type {};
@@ -176,6 +185,10 @@ namespace detail {
 // be included from this header.
 template <CExpression Expr, typename... Args>
 [[nodiscard]] constexpr auto eval_dispatch(const Expr &e, const Args &...args);
+
+template <auto Seed, CExpression Expr, typename... Args>
+[[nodiscard]] constexpr auto tangent_dispatch(const Expr &e,
+                                              const Args &...args);
 } // namespace detail
 
 template <typename Derived, COperation Op>
@@ -198,8 +211,9 @@ public:
   // The member forwards to detail::eval_dispatch (declared above, defined in
   // bound.hpp) rather than to the free eval(): a member named `eval` hides the
   // free function, so unqualified lookup here would never reach it.
+  // Nullary is legal exactly when the expression has no free symbols (a
+  // constant-folded tree); otherwise a point is required.
   template <typename... Args>
-    requires(sizeof...(Args) > 0)
   [[nodiscard]] constexpr auto eval(const Args &...args) const {
     return detail::eval_dispatch(self(), args...);
   }
@@ -210,6 +224,12 @@ public:
         self().expressions());
   }
 
+  // Fused forward sweep at a point; the symbol list is deduced.
+  template <FixedString Seed, typename... Args>
+  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
+    return detail::tangent_dispatch<Seed>(self(), args...);
+  }
+
   // Fused forward-mode sweep: one recursion that carries {value, tangent}
   // upward through the tree, seeded on the variable named `Seed`.  Unlike
   // derivative() (which builds a separate derivative tree) and unlike the
@@ -218,11 +238,11 @@ public:
   // Op::forward.
   template <FixedString Seed, typename Syms, std::size_t N>
   [[nodiscard]] constexpr auto
-  eval_with_tangent(const std::array<value_type, N> &vals) const noexcept {
+  tangent_seeded(const std::array<value_type, N> &vals) const noexcept {
     return std::apply(
         [&](const auto &...e) noexcept {
           return Op::forward(
-              e.template eval_with_tangent<Seed, Syms>(vals)...);
+              e.template tangent_seeded<Seed, Syms>(vals)...);
         },
         self().expressions());
   }
@@ -290,9 +310,11 @@ public:
 template <bool Stateless, COperation Op, CExpression... Children>
 class ExpressionImpl;
 
+// The CRTP parameter is the public Expression type, not this base, so that
+// every type-level pattern match sees Expression<Op, C...> as it always has.
 template <COperation Op, CExpression... Children>
 class ExpressionImpl<true, Op, Children...>
-    : public ExpressionOps<ExpressionImpl<true, Op, Children...>, Op> {
+    : public ExpressionOps<Expression<Op, Children...>, Op> {
   friend std::ostream &operator<<(std::ostream &out, const ExpressionImpl &e) {
     if constexpr (sizeof...(Children) == 1) {
       out << std::get<0>(e.expressions());
@@ -305,7 +327,7 @@ class ExpressionImpl<true, Op, Children...>
     return out;
   }
 
-  friend ExpressionOps<ExpressionImpl<true, Op, Children...>, Op>;
+  friend ExpressionOps<Expression<Op, Children...>, Op>;
 
 public:
   using children_t = std::tuple<Children...>;
@@ -319,7 +341,7 @@ public:
 
 template <COperation Op, CExpression... Children>
 class ExpressionImpl<false, Op, Children...>
-    : public ExpressionOps<ExpressionImpl<false, Op, Children...>, Op> {
+    : public ExpressionOps<Expression<Op, Children...>, Op> {
   std::tuple<Children...> operands;
   friend std::ostream &operator<<(std::ostream &out, const ExpressionImpl &e) {
     if constexpr (sizeof...(Children) == 1) {
@@ -333,7 +355,7 @@ class ExpressionImpl<false, Op, Children...>
     return out;
   }
 
-  friend ExpressionOps<ExpressionImpl<false, Op, Children...>, Op>;
+  friend ExpressionOps<Expression<Op, Children...>, Op>;
 
 public:
   using children_t = std::tuple<Children...>;
