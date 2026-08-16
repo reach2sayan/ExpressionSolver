@@ -1,9 +1,11 @@
 #pragma once
 
 #include "fixed_string.hpp" // FixedString, CFixedString
+#include "mpl.hpp"          // CSymbol, CSymbolList
 
 #include <concepts>
 #include <ostream>
+#include <ranges>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
@@ -38,6 +40,29 @@ template <typename T>
 concept CTupleLike =
     requires { std::tuple_size<std::remove_cvref_t<T>>::value; };
 
+// A random-access buffer of numbers.  Every sweep threads two of these — the
+// point (in canonical symbol order) and the node-value cache — and both happen
+// to be std::array, but nothing in the sweeps requires that.
+template <typename R>
+concept CNumericBuffer = std::ranges::random_access_range<R> &&
+                         Numeric<std::ranges::range_value_t<R>>;
+
+namespace detail {
+template <typename F, typename Seq>
+inline constexpr bool index_invocable_v = false;
+template <typename F, std::size_t... Is>
+inline constexpr bool index_invocable_v<F, std::index_sequence<Is...>> =
+    (requires(F &&f) { static_cast<F &&>(f).template operator()<Is>(); } &&
+     ...);
+} // namespace detail
+
+// Invocable as f.template operator()<I>() for every I in [0, N) — the shape
+// static_for folds over, and the reason those lambdas take their index as a
+// template parameter rather than an argument.
+template <typename F, std::size_t N>
+concept CIndexedCallable =
+    detail::index_invocable_v<F, std::make_index_sequence<N>>;
+
 template <typename O>
 concept COperation =
     requires { typename O::value_type; } && Numeric<typename O::value_type>;
@@ -61,6 +86,10 @@ template <Numeric T> class Constant;
 // the ordering predicate can compare.  See fixed_string.hpp for the label type.
 template <auto S> struct symbol_type {
   static constexpr auto value = S;
+  // `name` views into S.data, and S is a template-parameter object, so it has
+  // static storage duration.  That is what makes the views symbol_order<Expr>()
+  // returns safe to keep indefinitely — it is the library's only API that hands
+  // back a view rather than owned storage.
   static constexpr std::string_view name = S.view();
 };
 
@@ -131,10 +160,11 @@ template <COperation Op> struct BaseExpression {
   using value_type = typename Op::value_type;
 };
 
-template <typename T> consteval std::size_t node_count_fn() {
+template <CExpression T> consteval std::size_t node_count_fn() {
   using U = std::remove_cvref_t<T>;
   if constexpr (CExpressionNode<U>) {
-    return []<typename... C>(std::type_identity<std::tuple<C...>>) consteval {
+    return []<CExpression... C>(
+               std::type_identity<std::tuple<C...>>) consteval {
       return (1 + ... + node_count_fn<std::remove_cvref_t<C>>());
     }(std::type_identity<typename U::children_t>{});
   } else {
@@ -142,12 +172,12 @@ template <typename T> consteval std::size_t node_count_fn() {
   }
 }
 
-template <typename T>
+template <CExpression T>
 inline constexpr std::size_t node_count_v =
     node_count_fn<std::remove_cvref_t<T>>();
 
 // Preorder cache slot of the I-th child of a node at `Base1
-template <std::size_t Base, typename Kids, std::size_t I>
+template <std::size_t Base, CTupleLike Kids, std::size_t I>
 consteval std::size_t child_base_at() {
   std::size_t off = Base + 1;
   [&]<std::size_t... K>(std::index_sequence<K...>) {
@@ -156,19 +186,29 @@ consteval std::size_t child_base_at() {
   return off;
 }
 
+// One element of a point, in any of the spellings eval() accepts: a bare
+// number (positional), a range of them, a ValueMap, or a named value.  The
+// last two are matched structurally rather than by name — they are defined
+// further down the include chain (bound.hpp, gradient.hpp), and this concept
+// has to be visible on the eval_dispatch declaration below.
+template <typename T>
+concept CEvalArg = Numeric<T> || std::ranges::input_range<T> ||
+                   requires { typename std::remove_cvref_t<T>::symbols; } ||
+                   requires { std::remove_cvref_t<T>::symbol; };
+
 namespace detail {
 // Defined in bound.hpp.  Declared here so ExpressionOps::eval can forward to
 // it; the definition needs the symbol machinery from traits.hpp, which cannot
 // be included from this header.
-template <CExpression Expr, typename... Args>
+template <CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto eval_dispatch(const Expr &e, const Args &...args);
 
-template <auto Seed, CExpression Expr, typename... Args>
+template <auto Seed, CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto tangent_dispatch(const Expr &e,
                                               const Args &...args);
 } // namespace detail
 
-template <typename Derived, COperation Op>
+template <CExpression Derived, COperation Op>
 class ExpressionOps : public BaseExpression<Op> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
     return static_cast<const Derived &>(*this);
@@ -211,7 +251,7 @@ public:
   // upward through the tree, seeded on the variable named `Seed`.  Walks the
   // existing tree structurally and hands each Op the already-computed child
   // Tangents via Op::forward.
-  template <FixedString Seed, typename Syms, std::size_t N>
+  template <FixedString Seed, CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr auto
   tangent_seeded(const std::array<value_type, N> &vals) const noexcept {
     return std::apply(
@@ -222,7 +262,7 @@ public:
         self().expressions());
   }
 
-  template <typename Syms, std::size_t N>
+  template <CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr auto
   eval_seeded(const std::array<value_type, N> &vals) const noexcept {
     return std::apply(
@@ -234,7 +274,7 @@ public:
   }
 
   // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
-  template <typename U, typename Syms, std::size_t N>
+  template <Numeric U, CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded_as(const std::array<U, N> &vals) const noexcept {
     return std::apply(
@@ -352,12 +392,12 @@ public:
 };
 
 namespace detail {
-template <typename V, std::size_t I, typename = void>
+template <Numeric V, std::size_t I, typename = void>
 struct expression_element {
   using type = V;
 };
 
-template <typename V, std::size_t I>
+template <Numeric V, std::size_t I>
 struct expression_element<V, I,
                           std::void_t<typename std::tuple_element_t<I, V>>> {
   using type = std::tuple_element_t<I, V>;

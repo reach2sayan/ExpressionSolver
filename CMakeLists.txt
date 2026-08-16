@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(ExpressionDifferentiator VERSION 1.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -10,6 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(DIFF_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
 option(DIFF_BUILD_COMPARE "Build comparison benchmarks against autodiff" OFF)
 option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
+option(DIFF_USE_EIGEN "Build the Eigen interop boundary (include/eigen_interop.hpp)" ON)
 
 if (MSVC)
    add_compile_options(/arch:AVX2)
@@ -19,6 +20,26 @@ else ()
     else ()
         add_compile_options(-march=x86-64-v3)
     endif ()
+endif ()
+
+# Eigen backs include/eigen_interop.hpp — the boundary where a Hessian leaves
+# this library for whatever factorizes it downstream, including the sparse form
+# whose structure comes from the compile-time coupling pass and has no
+# Eigen-side equivalent.  Nothing in the AD core includes Eigen: the symbolic
+# path is constexpr and Eigen types cannot be constant-evaluated.
+#
+# The dependency is OPTIONAL but ON by default, and REQUIRED once enabled — a
+# missing Eigen is then a clear configure-time error rather than a confusing
+# failure deep in a header.  With DIFF_USE_EIGEN=OFF the library goes back to
+# being header-only with no third-party dependencies, and eigen_interop.hpp is
+# the only thing that disappears.
+#
+# Enabling it also fixes a latent bug on the compare path: DIFF_BUILD_COMPARE
+# used to reach Eigen only because autodiff calls find_package(Eigen3) without
+# ever linking Eigen3::Eigen to its target, so <Eigen/Core> resolved through a
+# /usr/include/Eigen symlink rather than through any include path CMake set.
+if (DIFF_USE_EIGEN)
+    find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 endif ()
 
 include(FetchContent)
@@ -66,6 +87,8 @@ add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/mpl.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/traits.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/values.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/coupling.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/eigen_interop.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/equation.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dual.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/forward_driver.hpp
@@ -82,6 +105,10 @@ add_library(diff INTERFACE
 # Namespaced alias so consumers can link a stable target name.
 add_library(ExpressionDifferentiator::diff ALIAS diff)
 target_include_directories(diff INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if (DIFF_USE_EIGEN)
+    target_link_libraries(diff INTERFACE Eigen3::Eigen)
+    target_compile_definitions(diff INTERFACE DIFF_USE_EIGEN)
+endif ()
 
 # Only build the standalone executables when this is the top-level project.
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)

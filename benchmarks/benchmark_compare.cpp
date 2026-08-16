@@ -1026,6 +1026,29 @@ static auto make_chain_expr8() {
          0.55 * (g - h) * (g - h) + 0.56 * (h - i) * (h - i) + exp(a * i);
 }
 
+static auto make_chain_expr16() {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  diff::Variable<D, FixedString{"x00"}> v00;
+  diff::Variable<D, FixedString{"x01"}> v01;
+  diff::Variable<D, FixedString{"x02"}> v02;
+  diff::Variable<D, FixedString{"x03"}> v03;
+  diff::Variable<D, FixedString{"x04"}> v04;
+  diff::Variable<D, FixedString{"x05"}> v05;
+  diff::Variable<D, FixedString{"x06"}> v06;
+  diff::Variable<D, FixedString{"x07"}> v07;
+  diff::Variable<D, FixedString{"x08"}> v08;
+  diff::Variable<D, FixedString{"x09"}> v09;
+  diff::Variable<D, FixedString{"x10"}> v10;
+  diff::Variable<D, FixedString{"x11"}> v11;
+  diff::Variable<D, FixedString{"x12"}> v12;
+  diff::Variable<D, FixedString{"x13"}> v13;
+  diff::Variable<D, FixedString{"x14"}> v14;
+  diff::Variable<D, FixedString{"x15"}> v15;
+  return v00 * log(v00) + v01 * log(v01) + v02 * log(v02) + v03 * log(v03) + v04 * log(v04) + v05 * log(v05) + v06 * log(v06) + v07 * log(v07) + v08 * log(v08) + v09 * log(v09) + v10 * log(v10) + v11 * log(v11) + v12 * log(v12) + v13 * log(v13) + v14 * log(v14) + v15 * log(v15) +
+         0.50 * (v00 - v01) * (v00 - v01) + 0.51 * (v01 - v02) * (v01 - v02) + 0.52 * (v02 - v03) * (v02 - v03) + 0.53 * (v03 - v04) * (v03 - v04) + 0.54 * (v04 - v05) * (v04 - v05) + 0.55 * (v05 - v06) * (v05 - v06) + 0.56 * (v06 - v07) * (v06 - v07) + 0.57 * (v07 - v08) * (v07 - v08) + 0.58 * (v08 - v09) * (v08 - v09) + 0.59 * (v09 - v10) * (v09 - v10) + 0.60 * (v10 - v11) * (v10 - v11) + 0.61 * (v11 - v12) * (v11 - v12) + 0.62 * (v12 - v13) * (v12 - v13) + 0.63 * (v13 - v14) * (v13 - v14) + 0.64 * (v14 - v15) * (v14 - v15) + exp(v00 * v15);
+}
+
 // Build the runtime-driver energy lambda for an expression graph: pack the
 // driver's seeded dofs (symbol order) and traverse the graph once.
 template <std::size_t Nv, typename Expr>
@@ -1106,6 +1129,48 @@ static void BM_Ours_Forward_HessExpr8(benchmark::State &state) {
   ours_forward_expr<8>(state, make_chain_expr8);
 }
 BENCHMARK(BM_Ours_Forward_HessExpr8);
+
+// Forward-over-reverse: N reverse sweeps for the whole N x N Hessian, against
+// the scalar driver's N(N+1)/2 forward-over-forward probes.  Only reachable for
+// a compile-time graph, and the public router does not currently pick it.
+template <std::size_t Nv, typename MakeExpr>
+static void ours_revhess_expr(benchmark::State &state, MakeExpr make) {
+  auto E = make();
+  auto x = vf_point(Nv);
+  std::array<double, Nv> xa{};
+  std::copy_n(x.begin(), Nv, xa.begin());
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xa);
+    auto H = diff::hessian<diff::DiffMode::Reverse>(E, xa);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+
+static void BM_Ours_RevHess_HessExpr4(benchmark::State &state) {
+  ours_revhess_expr<4>(state, make_chain_expr4);
+}
+BENCHMARK(BM_Ours_RevHess_HessExpr4);
+static void BM_Ours_RevHess_HessExpr8(benchmark::State &state) {
+  ours_revhess_expr<8>(state, make_chain_expr8);
+}
+BENCHMARK(BM_Ours_RevHess_HessExpr8);
+
+// n=16 is where the O(N)-sweep and O(N^2)-probe drivers separate visibly, and
+// where the tridiagonal+corner structure leaves 88% of the probes on entries
+// that are structurally zero.  autodiff baseline is HessSparse/16.
+static void BM_Ours_RevHess_HessExpr16(benchmark::State &state) {
+  ours_revhess_expr<16>(state, make_chain_expr16);
+}
+BENCHMARK(BM_Ours_RevHess_HessExpr16);
+static void BM_Ours_Forward_HessExpr16(benchmark::State &state) {
+  ours_forward_expr<16>(state, make_chain_expr16);
+}
+BENCHMARK(BM_Ours_Forward_HessExpr16);
+static void BM_Ours_Hessian_HessExpr16(benchmark::State &state) {
+  ours_hessian_expr<16>(state, make_chain_expr16);
+}
+BENCHMARK(BM_Ours_Hessian_HessExpr16);
 
 // Public-router path (should match Ours_Forward above via the routing tag).
 static void BM_Ours_Hessian_HessExpr4(benchmark::State &state) {

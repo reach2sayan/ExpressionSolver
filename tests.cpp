@@ -1,5 +1,8 @@
 #include "bound.hpp"
 #include "dual.hpp"
+#ifdef DIFF_USE_EIGEN
+#include "eigen_interop.hpp"
+#endif
 #include "equation.hpp"
 #include "forward_driver.hpp"
 #include "gradient.hpp"
@@ -645,7 +648,7 @@ TEST(EquationTest, SingleVariable) {
   auto x = PV(4, "x");
   auto expr = x * 2_ci;
   auto eq = Equation(expr);
-  ASSERT_EQ(eq[IDX(1)].eval(4), 2);
+  ASSERT_EQ(eq[idx<1>()].eval(4), 2);
 }
 
 TEST(EquationTest, TwoVariables) {
@@ -653,8 +656,8 @@ TEST(EquationTest, TwoVariables) {
   auto y = PV(2, "y");
   auto expr = x * y;
   auto eq = Equation(expr);
-  ASSERT_EQ(eq[IDX(1)].eval(4, 2), 2); // df/dx = y = 2
-  ASSERT_EQ(eq[IDX(2)].eval(4, 2), 4); // df/dy = x = 4
+  ASSERT_EQ(eq[idx<1>()].eval(4, 2), 2); // df/dx = y = 2
+  ASSERT_EQ(eq[idx<2>()].eval(4, 2), 4); // df/dy = x = 4
 }
 
 TEST(EquationTest, LinearCombination) {
@@ -662,8 +665,8 @@ TEST(EquationTest, LinearCombination) {
   auto y = PV(2, "y");
   auto expr = PC(1) * x + PC(2) * y;
   auto eq = Equation(expr);
-  ASSERT_EQ(eq[IDX(1)].eval(4, 2), 1);
-  ASSERT_EQ(eq[IDX(2)].eval(4, 2), 2);
+  ASSERT_EQ(eq[idx<1>()].eval(4, 2), 1);
+  ASSERT_EQ(eq[idx<2>()].eval(4, 2), 2);
 }
 
 TEST(EquationTest, DifferenceOfSquares) {
@@ -682,7 +685,7 @@ TEST(EquationTest, ExpEquation) {
   auto expr = exp(x);
   auto eq = Equation(expr);
   ASSERT_DOUBLE_EQ(eq.evaluate(std::array{1.0}), std::exp(1.0));
-  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(1.0), std::exp(1.0)); // d(e^x)/dx = e^x
+  ASSERT_DOUBLE_EQ(eq[idx<1>()].eval(1.0), std::exp(1.0)); // d(e^x)/dx = e^x
 }
 
 TEST(EquationTest, TrigEquation) {
@@ -690,16 +693,17 @@ TEST(EquationTest, TrigEquation) {
   auto expr = sin(x) * cos(x);
   auto eq = Equation(expr);
   // d/dx [sin(x)cos(x)] = cos^2(x) - sin^2(x) = cos(2x)
-  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(0.5), std::cos(2 * 0.5));
+  ASSERT_DOUBLE_EQ(eq[idx<1>()].eval(0.5), std::cos(2 * 0.5));
 }
 
 TEST(EquationTest, IdxEquivalence) {
-  // idx<N>() and IDX(N) must produce the same index object
+  // eq[idx<N>()] is the subscript spelling of eq.get<N>(); both must select the
+  // same slot.
   auto x = PV(3, "x");
   auto y = PV(5, "y");
   auto eq = Equation(x * y);
-  ASSERT_EQ(eq[idx<1>()].eval(3, 5), eq[IDX(1)].eval(3, 5));
-  ASSERT_EQ(eq[idx<2>()].eval(3, 5), eq[IDX(2)].eval(3, 5));
+  ASSERT_EQ(eq[idx<1>()].eval(3, 5), eq.get<1>().eval(3, 5));
+  ASSERT_EQ(eq[idx<2>()].eval(3, 5), eq.get<2>().eval(3, 5));
 }
 
 TEST(EquationTest, ThreeVariablePartials) {
@@ -725,11 +729,11 @@ TEST(EquationTest, UpdateAndReevaluate) {
   auto eq = Equation(expr);
 
   ASSERT_EQ(eq.evaluate(std::array{3}), 9);
-  ASSERT_EQ(eq[IDX(1)].eval(3), 6); // 2*3 = 6
+  ASSERT_EQ(eq[idx<1>()].eval(3), 6); // 2*3 = 6
 
   // Re-evaluating at another point is just another point.
   ASSERT_EQ(eq.evaluate(std::array{5}), 25);
-  ASSERT_EQ(eq[IDX(1)].eval(5), 10); // 2*5 = 10
+  ASSERT_EQ(eq[idx<1>()].eval(5), 10); // 2*5 = 10
 }
 
 TEST(EquationTest, MixedTrigExpEquation) {
@@ -739,7 +743,7 @@ TEST(EquationTest, MixedTrigExpEquation) {
   auto expr = exp(x) * sin(x);
   auto eq = Equation(expr);
   double expected = std::exp(1.0) * (std::sin(1.0) + std::cos(1.0));
-  ASSERT_DOUBLE_EQ(eq[IDX(1)].eval(1.0), expected);
+  ASSERT_DOUBLE_EQ(eq[idx<1>()].eval(1.0), expected);
 }
 
 TEST(EquationTest, NumberOfDerivatives) {
@@ -2374,6 +2378,364 @@ TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
   }
 }
 
+// Forward-over-reverse is the third driver for the same Hessian, and the only
+// one that is O(N) sweeps rather than O(N^2) probes.  Before the router may
+// prefer it, it has to agree with both forward-over-forward drivers on a real
+// graph energy — not just the two-variable cases in HessianTest.
+TEST(SeededExprEnergy, ForwardOverReverseAgreesWithNumericDrivers) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  Variable<D, FixedString{"x03"}> d;
+  auto expr = a * log(a) + b * log(b) + c * log(c) + d * log(d) +
+              0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
+              0.52 * (c - d) * (c - d) + exp(a * d);
+
+  const std::array<double, 4> x{0.2, 0.4, 0.6, 0.8};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  auto f = diff::seeded_energy(expr);
+  const auto Hscalar = diff::detail::hessian_scalar(f, xs);
+  const auto Hvf = diff::hessian_vforward(f, xs);
+  const auto Hrev = diff::hessian<diff::DiffMode::Reverse>(expr, x);
+
+  for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t j = 0; j < 4; ++j) {
+      EXPECT_NEAR(Hrev[i][j], Hscalar.h(i, j), 1e-9)
+          << "scalar H(" << i << "," << j << ")";
+      EXPECT_NEAR(Hrev[i][j], Hvf.h(i, j), 1e-7)
+          << "vforward H(" << i << "," << j << ")";
+    }
+  }
+}
+
+// ===========================================================================
+// Memory-ownership contract.
+//
+// Every result the library hands back is owned by the caller: the drivers
+// return a HessianResult whose vectors are its own, and the symbolic API
+// returns std::array by value.  The one raw pointer in the design points the
+// other way — the driver lends the energy callable a `const Dof *` that is
+// valid only for the call and carries no length.  These tests pin down both
+// halves: the borrow is bounds-checked at the router, and the accessors that
+// alias member storage stay usable on temporaries by copying out.
+// ===========================================================================
+
+TEST(Ownership, GraphHessianRejectsAPointShorterThanTheSymbolSet) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  auto expr = a * b + exp(c);
+
+  // Two values for a three-symbol graph.  seeded_energy() reads slots [0,3),
+  // so without the guard this reads off the end of the driver's dof vector.
+  const std::array<double, 2> shortx{0.2, 0.4};
+  EXPECT_THROW(diff::hessian(expr, std::span<const double>{shortx}),
+               std::out_of_range);
+
+  // Surplus values are just as wrong: the extra rows would come back zero.
+  const std::array<double, 4> longx{0.2, 0.4, 0.6, 0.8};
+  EXPECT_THROW(diff::hessian(expr, std::span<const double>{longx}),
+               std::out_of_range);
+
+  // The exact point is accepted.
+  const std::array<double, 3> okx{0.2, 0.4, 0.6};
+  EXPECT_NO_THROW(diff::hessian(expr, std::span<const double>{okx}));
+}
+
+TEST(Ownership, GraphHessianRejectsAnActiveIndexThatNamesNoSymbol) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  auto expr = a * b;
+
+  const std::array<double, 4> x{0.2, 0.4, 0.6, 0.8};
+  const std::array<std::size_t, 2> bad{2, 3}; // no such symbols
+  EXPECT_THROW(diff::hessian(expr, std::span<const double>{x},
+                             std::span<const std::size_t>{bad}),
+               std::out_of_range);
+
+  const std::array<std::size_t, 1> ok{1};
+  EXPECT_NO_THROW(diff::hessian(expr, std::span<const double>{x},
+                                std::span<const std::size_t>{ok}));
+}
+
+TEST(Ownership, ResultAccessorsWorkOnTemporariesByCopyingOut) {
+  // h() on a prvalue HessianResult selects the const overload, which returns
+  // by value — no reference into a buffer that is already gone.
+  auto f = [](const auto *d) { return d[0] * d[0] * d[1]; };
+  const std::array<double, 2> x{2.0, 3.0};
+  EXPECT_DOUBLE_EQ(diff::hessian(f, std::span<const double>{x}).h(0, 1), 4.0);
+  static_assert(
+      std::is_same_v<decltype(diff::hessian(f, std::span<const double>{x}).h(
+                         0, 0)),
+                     double>,
+      "h() on a temporary must return by value");
+
+  // Same for the value maps: lvalue borrows, rvalue copies.
+  const auto m = values(named<"x">(2.0), named<"y">(3.0));
+  static_assert(std::is_same_v<decltype(m.get<"x">()), const double &>,
+                "get() on an lvalue map borrows");
+  static_assert(
+      std::is_same_v<decltype(values(named<"x">(2.0)).get<"x">()), double>,
+      "get() on a temporary map must return by value");
+  EXPECT_DOUBLE_EQ(values(named<"x">(2.0)).get<"x">(), 2.0);
+  EXPECT_DOUBLE_EQ(bind(PV(0.0, "x") * PV(0.0, "y"), named<"x">(4.0),
+                        named<"y">(5.0))
+                       .get<"x">(),
+                   4.0);
+}
+
+TEST(Ownership, EquationSubtreeAccessorsWorkOnTemporaries) {
+  // The nodes are empty types now, so the rvalue overload copies nothing.
+  auto x = PV(0.0, "x");
+  auto y = PV(0.0, "y");
+  EXPECT_DOUBLE_EQ(Equation(x * y).get<1>().eval(4.0, 2.0), 2.0);
+  EXPECT_DOUBLE_EQ(Equation(x * y)[idx<2>()].eval(4.0, 2.0), 4.0);
+}
+
+TEST(Ownership, ReverseHessianAcceptsATemporaryExpression) {
+  // hessian() used to take a non-const lvalue reference, so this did not
+  // compile while the sibling gradient() call did.
+  using D = diff::Dual<double>;
+  const auto H = reverse_mode_hess(PDV(0.0, "x") * PDV(0.0, "y"),
+                                   std::array{2.0, 3.0});
+  const auto g = reverse_mode_grad(PDV(0.0, "x") * PDV(0.0, "y"),
+                                   std::array{D{2.0}, D{3.0}});
+  EXPECT_DOUBLE_EQ(H[0][1], 1.0);
+  EXPECT_DOUBLE_EQ(H[0][0], 0.0);
+  EXPECT_DOUBLE_EQ(g[0], 3.0);
+}
+
+// ===========================================================================
+// Compile-time Hessian sparsity (coupling.hpp).  The pattern drives which
+// entries the compressed driver writes, so a pattern that WRONGLY drops a pair
+// silently zeroes a real Hessian entry — these pin the derivation down.
+// ===========================================================================
+
+TEST(HessianCoupling, ChainPatternIsTridiagonalPlusCorner) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  Variable<D, FixedString{"x03"}> d;
+  auto expr = a * log(a) + b * log(b) + c * log(c) + d * log(d) +
+              0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
+              0.52 * (c - d) * (c - d) + exp(a * d);
+
+  constexpr auto P = diff::hessian_pattern<decltype(expr)>();
+  using Row = diff::symbol_set<4>;
+  // Tridiagonal from the (xk - xk+1)^2 terms and the xk*log(xk) diagonal, plus
+  // the (0, n-1) corner from exp(x0 * x3).
+  static_assert(P[0] == Row{0b1011}, "row 0: self, neighbour, corner");
+  static_assert(P[1] == Row{0b0111}, "row 1: tridiagonal");
+  static_assert(P[2] == Row{0b1110}, "row 2: tridiagonal");
+  static_assert(P[3] == Row{0b1101}, "row 3: self, neighbour, corner");
+
+  // The literals 0.50.. are Constants and must contribute no coupling.
+  const std::array<double, 4> x{0.2, 0.4, 0.6, 0.8};
+  const std::span<const double> xs{x.data(), x.size()};
+  const auto Hscalar =
+      diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t j = 0; j < 4; ++j) {
+      const bool predicted = P[i][j];
+      if (!predicted) {
+        EXPECT_NEAR(Hscalar.h(i, j), 0.0, 1e-12)
+            << "pattern says (" << i << "," << j << ") is structurally zero";
+      }
+    }
+  }
+}
+
+TEST(HessianCoupling, LinearExpressionHasEmptyPattern) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
+  auto expr = 3.0 * x + 4.0 * y - x;
+  constexpr auto P = diff::hessian_pattern<decltype(expr)>();
+  static_assert(P[0].none() && P[1].none(), "a linear form has a zero Hessian");
+  // One colour, and every entry stays zero.
+  constexpr auto C = diff::color_columns<2>(P);
+  static_assert(C.count == 1, "nothing conflicts, so one sweep suffices");
+}
+
+TEST(HessianCoupling, DenseExpressionDegradesToOneSweepPerColumn) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  auto expr = exp(a * b * c);
+  constexpr auto P = diff::hessian_pattern<decltype(expr)>();
+  static_assert(P[0].all() && P[1].all() && P[2].all(),
+                "a fully coupled expression must not be pruned");
+  constexpr auto C = diff::color_columns<3>(P);
+  static_assert(C.count == 3, "dense pattern gives one colour per column");
+}
+
+// A division-heavy energy exercises the quotient rule branch of the coupling
+// pass, where curvature appears within the denominator but not the numerator.
+TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnQuotients) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  auto expr = a / b + b / c + a * c / (1.0 + b) + log(a * b * c);
+
+  const std::array<double, 3> x{0.7, 1.3, 2.1};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  const auto Hcompressed = diff::hessian(expr, xs); // routed: compressed
+  const auto Hprobe =
+      diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+
+  EXPECT_NEAR(Hcompressed.value, Hprobe.value, 1e-12);
+  for (std::size_t i = 0; i < 3; ++i) {
+    EXPECT_NEAR(Hcompressed.gradient[i], Hprobe.gradient[i], 1e-9) << i;
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_NEAR(Hcompressed.h(i, j), Hprobe.h(i, j), 1e-9)
+          << "H(" << i << "," << j << ")";
+    }
+  }
+}
+
+// Trig and mixed products: a shape the chain energy does not cover, checked
+// against the driver that makes no structural assumption at all.
+TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnTrigProducts) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  Variable<D, FixedString{"x03"}> d;
+  auto expr = sin(a) * cos(b) + exp(c * d) + a * b * c + sqrt(d) + a * a;
+
+  const std::array<double, 4> x{0.3, 0.6, 0.9, 1.2};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  const auto Hc = diff::hessian(expr, xs);
+  const auto Hp = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t j = 0; j < 4; ++j) {
+      EXPECT_NEAR(Hc.h(i, j), Hp.h(i, j), 1e-9)
+          << "H(" << i << "," << j << ")";
+    }
+  }
+}
+
+#ifdef DIFF_USE_EIGEN
+// ===========================================================================
+// Eigen boundary (eigen_interop.hpp).  The sparse path writes only the entries
+// the compile-time pattern predicts, so a pattern that is wrong shows up here
+// as a missing entry rather than as a wrong number — these compare it against
+// the structure-blind dense driver.
+// ===========================================================================
+
+TEST(EigenInterop, DenseViewsAliasHessianResult) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  auto expr = a * log(a) + b * log(b) + 0.5 * (a - b) * (a - b);
+
+  const std::array<double, 2> x{0.3, 0.7};
+  const std::span<const double> xs{x.data(), x.size()};
+  const auto H = diff::hessian(expr, xs);
+
+  const auto M = diff::as_matrix(H);
+  const auto g = diff::as_vector(H);
+
+  // A view, not a copy: it must alias the result's own storage.
+  EXPECT_EQ(M.data(), H.hessian.data());
+  EXPECT_EQ(g.data(), H.gradient.data());
+  ASSERT_EQ(M.rows(), 2);
+  ASSERT_EQ(M.cols(), 2);
+  for (std::size_t i = 0; i < 2; ++i) {
+    EXPECT_DOUBLE_EQ(g[static_cast<Eigen::Index>(i)], H.gradient[i]);
+    for (std::size_t j = 0; j < 2; ++j) {
+      EXPECT_DOUBLE_EQ(M(static_cast<Eigen::Index>(i),
+                         static_cast<Eigen::Index>(j)),
+                       H.h(i, j));
+    }
+  }
+}
+
+TEST(EigenInterop, SparseHessianMatchesDenseDriver) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  Variable<D, FixedString{"x03"}> d;
+  auto expr = a * log(a) + b * log(b) + c * log(c) + d * log(d) +
+              0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
+              0.52 * (c - d) * (c - d) + exp(a * d);
+
+  const std::array<double, 4> x{0.2, 0.4, 0.6, 0.8};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  const auto dense = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  const auto sparse = diff::sparse_hessian(expr, xs);
+  const Eigen::MatrixXd M = Eigen::MatrixXd(sparse.matrix());
+
+  // Tridiagonal plus the (0,3) corner: 4 + 2*3 + 2 = 12 nonzeros, not 16.
+  static_assert(decltype(sparse)::nnz == 12,
+                "chain energy stores 12 of 16 entries");
+  EXPECT_EQ(sparse.matrix().nonZeros(), 12);
+
+  for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t j = 0; j < 4; ++j) {
+      const auto ei = static_cast<Eigen::Index>(i);
+      const auto ej = static_cast<Eigen::Index>(j);
+      EXPECT_NEAR(M(ei, ej), dense.h(i, j), 1e-9)
+          << "H(" << i << "," << j << ")";
+    }
+  }
+  // Everything the pattern excludes must be an exact structural zero.
+  EXPECT_DOUBLE_EQ(M(0, 2), 0.0);
+  EXPECT_DOUBLE_EQ(M(1, 3), 0.0);
+}
+
+TEST(EigenInterop, SparseHessianIsSymmetricAndCompressed) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  auto expr = a / b + b / c + log(a * b * c) + exp(a * c);
+
+  const std::array<double, 3> x{0.7, 1.3, 2.1};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  const auto sparse = diff::sparse_hessian(expr, xs);
+  const auto M = sparse.matrix();
+  EXPECT_TRUE(M.isCompressed());
+
+  const auto dense = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  const Eigen::MatrixXd full = Eigen::MatrixXd(M);
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_NEAR(full(static_cast<Eigen::Index>(i),
+                       static_cast<Eigen::Index>(j)),
+                  dense.h(i, j), 1e-9);
+    }
+  }
+  // No symmetrization pass runs on the sparse path, so symmetry has to come out
+  // of the sweeps themselves.
+  EXPECT_NEAR((full - full.transpose()).cwiseAbs().maxCoeff(), 0.0, 1e-9);
+}
+
+#endif // DIFF_USE_EIGEN
+
 // A plain arithmetic energy lambda carries no tag and is not a CExpression, so
 // it must keep routing to vector-forward (the small-n winner) — the expr-graph
 // path is auto-detected, never forced onto raw callables.
@@ -2956,6 +3318,49 @@ TEST(PositionalEvalTest, IsConstexpr) {
   static_assert(eval(e, 2.0, 3.0) == 10.0, "variadic positional eval");
   static_assert(eval(e, std::array{2.0, 3.0}) == 10.0, "range positional eval");
   EXPECT_DOUBLE_EQ(eval(e, 2.0, 3.0), 10.0);
+}
+
+// README advertises "Everything is constexpr" — not just evaluation, but the
+// differentiation entry points — and nothing was asserting it.  This is the
+// guard for that claim, and the tripwire for anything (an Eigen type, a
+// std::vector, an allocation) leaking into the symbolic core: a leak makes
+// these static_asserts fail to compile rather than merely slow something down.
+TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
+  constexpr Variable<double, FixedString{"x"}> x;
+  constexpr Variable<double, FixedString{"y"}> y;
+
+  constexpr auto g = gradient<DiffMode::Reverse>(x * y, std::array{3.0, 4.0});
+  static_assert(g[0] == 4.0 && g[1] == 3.0, "reverse gradient of x*y");
+
+  constexpr auto gf = derivative_tensor<1>(x * y, std::array{3.0, 4.0});
+  static_assert(gf[0] == 4.0 && gf[1] == 3.0, "forward gradient of x*y");
+
+  constexpr auto H = derivative_tensor<2>(x * y, std::array{3.0, 4.0});
+  static_assert(H[0][1] == 1.0 && H[1][0] == 1.0 && H[0][0] == 0.0,
+                "d2(x*y)/dxdy == 1");
+
+  // TaylorDual path: multiply-only, so it stays within the constexpr subset.
+  constexpr auto d2 = univariate_derivative<2>(x * x * x, 2.0);
+  static_assert(d2 == 12.0, "d2(x^3)/dx2 at x=2");
+
+  // N >= 3 takes the VectorDual fast path, which therefore also has to be
+  // usable in constant evaluation.
+  constexpr Variable<double, FixedString{"z"}> z;
+  constexpr auto g3 =
+      derivative_tensor<1>(x * y * z, std::array{2.0, 3.0, 4.0});
+  static_assert(g3[0] == 12.0 && g3[1] == 8.0 && g3[2] == 6.0,
+                "VectorDual gradient path is constexpr");
+
+  // Forward-over-reverse Hessian — the driver the public router now prefers.
+  // It seeds tangents, so its expression carries Dual<double> numbers.
+  using D = Dual<double>;
+  constexpr Variable<D, FixedString{"a"}> a;
+  constexpr Variable<D, FixedString{"b"}> b;
+  constexpr auto Hr = hessian<DiffMode::Reverse>(a * b, std::array{3.0, 4.0});
+  static_assert(Hr[0][1] == 1.0 && Hr[0][0] == 0.0,
+                "forward-over-reverse Hessian in constant evaluation");
+
+  SUCCEED();
 }
 
 TEST(BoundTest, EvalAsCarriesDualsThroughTheGraph) {

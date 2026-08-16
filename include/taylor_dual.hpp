@@ -395,11 +395,11 @@ template <Numeric S, std::size_t N> struct TaylorDual {
 
 // TaylorDual satisfies Numeric — verified by static_assert in gradient.hpp.
 
-template <typename T, std::size_t N>
+template <Numeric T, std::size_t N>
 auto scalar_base_impl(std::type_identity<TaylorDual<T, N>>) -> T;
 
 // dual_depth_v<TaylorDual<S,N>> = N  (mirrors nth_dual_t<S,N> depth)
-template <typename S, std::size_t N>
+template <Numeric S, std::size_t N>
 inline constexpr std::size_t dual_depth_v<TaylorDual<S, N>> = N;
 
 // ---------------------------------------------------------------------------
@@ -407,7 +407,7 @@ inline constexpr std::size_t dual_depth_v<TaylorDual<S, N>> = N;
 // a zero-derivative TaylorDual for constant nodes.
 // ---------------------------------------------------------------------------
 
-template <typename S, std::size_t N> struct ConstantEmbedder<TaylorDual<S, N>> {
+template <Numeric S, std::size_t N> struct ConstantEmbedder<TaylorDual<S, N>> {
   static constexpr TaylorDual<S, N> embed(S val) noexcept {
     TaylorDual<S, N> t;
     t.c[0] = val;

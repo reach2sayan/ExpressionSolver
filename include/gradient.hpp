@@ -5,9 +5,10 @@
 #include "taylor_dual.hpp"
 #include "traits.hpp"
 #include "vector_dual.hpp"
+#include "mpl.hpp"
 #include <algorithm>
 #include <array>
-#include "mpl.hpp"
+#include <ranges>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -185,19 +186,27 @@ template <CExpression Expr,
 reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   std::array<std::array<S, N>, N> H{};
+
+  // The value level is the point and is the same for every column; only the
+  // tangent moves, so build the seeds once and toggle one derivative per sweep.
   std::array<T, N> seeds{};
+  std::ranges::transform(values, seeds.begin(),
+                         [](const S &v) { return T{v, S{}}; });
+
   for (std::size_t j = 0; j < N; j++) {
     // Seed column j, then one reverse sweep gives that column of the Hessian.
-    std::ranges::transform(std::views::iota(std::size_t{0}, N), seeds.begin(),
-                           [&](std::size_t i) {
-                             return T{values[i], i == j ? S{1} : S{}};
-                           });
+    seeds[j].deriv() = S{1};
     std::array<T, N> grads{};
     node_cache_t<Expr> cache{};
     fill_cache<0, symbols>(expr, seeds, cache);
     expr.backward(symbols{}, T{1}, grads, cache);
-    for (std::size_t i = 0; i < N; i++) {
-      H[i][j] = grads[i].template get<1>();
+    seeds[j].deriv() = S{};
+
+    const auto column = grads | std::views::transform([](const T &g) {
+                          return g.template get<1>();
+                        });
+    for (auto &&[row, entry] : std::views::zip(H, column)) {
+      row[j] = entry;
     }
   }
   return H;
@@ -254,14 +263,37 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
   if constexpr (Order == 1 && N >= 3 && std::same_as<S, double>) {
     using V = VectorDual<N>;
     std::array<V, N> seeds{};
+    std::ranges::transform(values, seeds.begin(),
+                           [](double v) { return V{v}; });
+    // Identity tangents: variable k owns lane k.
     for (std::size_t k = 0; k < N; ++k) {
-      seeds[k] = V{values[k]};
       seeds[k].grad[k] = double{1};
     }
     const V r = expr.template eval_seeded_as<V, symbols>(seeds);
-    for (std::size_t k = 0; k < N; ++k) {
-      result[k] = r.grad[k];
-    }
+    std::ranges::copy_n(r.grad.begin(), N, result.begin());
+    return result;
+  }
+
+  // First-order, low arity: one plain Dual pass per variable.  The generic
+  // tensor loop below can do this, but only through machinery that is pure
+  // overhead at Order == 1 — a runtime flat-index unranking (`tmp % N`,
+  // `tmp /= N`) and make_mixed_seed's recursive span walk, none of it constant
+  // enough for the compiler to unroll the N == 2 case.  Here the seeded
+  // variable J is a template parameter, so `k == J` folds away and the passes
+  // become straight-line code instead of a rolled loop over stack-resident
+  // seeds.
+  if constexpr (Order == 1) {
+    [&]<std::size_t... J>(std::index_sequence<J...>) {
+      auto sweep = [&]<std::size_t Seeded>() {
+        std::array<U, N> seeds{};
+        for (std::size_t k = 0; k < N; ++k) {
+          seeds[k] = U{values[k], k == Seeded ? S{1} : S{}};
+        }
+        result[Seeded] =
+            expr.template eval_seeded_as<U, symbols>(seeds).template get<1>();
+      };
+      (sweep.template operator()<J>(), ...);
+    }(std::make_index_sequence<N>{});
     return result;
   }
 
@@ -331,7 +363,7 @@ template <DiffMode Mode, CExpression Expr,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse && DualLike<T>)
-[[nodiscard]] constexpr auto hessian(Expr &expr,
+[[nodiscard]] constexpr auto hessian(const Expr &expr,
                                      std::array<S, N> values) noexcept {
   return detail::reverse_mode_hessian(expr, values);
 }
@@ -340,7 +372,7 @@ template <DiffMode Mode, CExpression Expr,
 template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
           typename T = typename std::remove_cvref_t<Expr>::value_type>
   requires(Mode == DiffMode::Reverse && DualLike<T>)
-[[nodiscard]] constexpr auto hessian(Expr &expr,
+[[nodiscard]] constexpr auto hessian(const Expr &expr,
                                      NamedValue<Syms, Vs>... nv) noexcept {
   return detail::reverse_mode_hessian(
       expr, make_values<Expr, dual_scalar_t<T>>(nv...));

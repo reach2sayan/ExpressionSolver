@@ -30,11 +30,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install compilers (Ubuntu)
+      - name: Install compilers and Eigen (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang gcc
+          sudo apt-get install -y clang gcc libeigen3-dev
+
+      - name: Install Eigen (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install eigen3:x64-windows
+
+      # Eigen is required, but only at the boundary: eigen_interop.hpp must stay
+      # the single header that includes it, or the constexpr symbolic core
+      # silently acquires a dependency it cannot use in constant evaluation.
+      - name: Eigen stays at the boundary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          offenders=$(grep -l '#include <Eigen' include/*.hpp expression_differentiator.hpp \
+                      | grep -v 'include/eigen_interop.hpp' || true)
+          if [ -n "$offenders" ]; then
+            echo "Eigen leaked out of eigen_interop.hpp into:"; echo "$offenders"; exit 1
+          fi
+          echo "Eigen is confined to include/eigen_interop.hpp"
+
+      # Eigen is optional, so the build without it has to keep working — the
+      # header is #error-guarded and its tests are #ifdef-guarded, both of which
+      # rot silently if nothing exercises them.
+      - name: Build and test without Eigen
+        if: runner.os == 'Linux' && matrix.cpp_compiler == 'g++'
+        shell: bash
+        run: |
+          cmake -S . -B build-no-eigen -DDIFF_USE_EIGEN=OFF \
+                -DDIFF_BUILD_BENCHMARKS=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-no-eigen --target tests
+          ctest --test-dir build-no-eigen --output-on-failure
 
       - name: Set build directory
         id: strings
@@ -55,6 +86,7 @@ jobs:
         shell: pwsh
         run: >
           cmake -B "${{ steps.strings.outputs.build-dir }}"
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}

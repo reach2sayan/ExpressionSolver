@@ -11,12 +11,37 @@
 
 namespace diff {
 template <auto S> struct symbol_type;
+
+// A symbol lifted to a type (see expressions.hpp).  Spelled here rather than
+// next to the definition because the list vocabulary below is what needs it.
+template <typename T> inline constexpr bool is_symbol_v = false;
+template <auto S> inline constexpr bool is_symbol_v<symbol_type<S>> = true;
+
+template <typename T>
+concept CSymbol = is_symbol_v<std::remove_cvref_t<T>>;
 } // namespace diff
 
 namespace diff::mpl {
 
 template <class... T> struct mp_list {};
 template <class... T> mp_list(T...) -> mp_list<T...>;
+
+namespace detail {
+template <typename T> inline constexpr bool is_mp_list_v = false;
+template <typename... T>
+inline constexpr bool is_mp_list_v<mp_list<T...>> = true;
+
+template <typename T> inline constexpr bool is_symbol_list_v = false;
+template <typename... T>
+inline constexpr bool is_symbol_list_v<mp_list<T...>> =
+    (::diff::CSymbol<T> && ...);
+} // namespace detail
+
+// The one list shape this metaprogramming layer manipulates.  Everything below
+// takes lists by concept rather than by `typename`, so passing a std::tuple (or
+// an element type) fails here instead of deep inside a rebuild.
+template <typename L>
+concept CTypeList = detail::is_mp_list_v<std::remove_cvref_t<L>>;
 
 // A type ordering, for mp_sort.  It is a captureless generic lambda invoked as
 // `Less.operator()<A, B>()` inside a constant expression — a consteval
@@ -34,14 +59,14 @@ auto at_c(mp_list<T...>)
     -> std::type_identity<std::tuple_element_t<I, std::tuple<T...>>>;
 } // namespace detail
 
-template <typename L, std::size_t I>
+template <CTypeList L, std::size_t I>
 using mp_at_c = typename decltype(detail::at_c<I>(L{}))::type;
 
 template <typename... T> consteval std::size_t mp_size(mp_list<T...>) noexcept {
   return sizeof...(T);
 }
 
-template <typename V, typename... T>
+template <::diff::CSymbol V, typename... T>
 consteval std::size_t mp_find(V, mp_list<T...>) noexcept {
   const std::array<bool, sizeof...(T)> hit{std::is_same_v<T, V>...};
   return static_cast<std::size_t>(std::find(hit.begin(), hit.end(), true) -
@@ -63,12 +88,12 @@ template <typename... A, typename... B>
 auto operator+(box<mp_list<A...>>, box<mp_list<B...>>)
     -> box<mp_list<A..., B...>>;
 
-template <typename... L>
+template <CTypeList... L>
 auto append_fold() -> decltype((box<mp_list<>>{} + ... + box<L>{}));
 
 } // namespace detail
 
-template <typename... L>
+template <CTypeList... L>
 using mp_append = typename decltype(detail::append_fold<L...>())::type;
 
 namespace detail {
@@ -79,11 +104,11 @@ template <std::size_t N> struct index_selection {
   std::size_t count = 0;
 };
 
-template <typename L, auto Sel, std::size_t... Is>
+template <CTypeList L, auto Sel, std::size_t... Is>
 auto rebuild(std::index_sequence<Is...>)
     -> std::type_identity<mp_list<mp_at_c<L, Sel.indices[Is]>...>>;
 
-template <typename L, auto Sel>
+template <CTypeList L, auto Sel>
 using rebuild_t = typename decltype(rebuild<L, Sel>(
     std::make_index_sequence<Sel.count>{}))::type;
 
@@ -115,7 +140,7 @@ less_matrix(mp_list<T...>) {
 }
 
 // Indices of first-occurrence elements (keep-first dedup).
-template <class L> consteval auto unique_selection() {
+template <CTypeList L> consteval auto unique_selection() {
   constexpr std::size_t N = mp_size(L{});
   constexpr std::array<bool, N * N> same = same_matrix(L{});
 
@@ -139,7 +164,7 @@ template <class L> consteval auto unique_selection() {
 }
 
 // Stable sort of the indices [0..N) by the consteval predicate Less.
-template <typename L, auto Less> consteval auto sort_selection() {
+template <CTypeList L, auto Less> consteval auto sort_selection() {
   constexpr std::size_t N = mp_size(L{});
   constexpr std::array<bool, N * N> less = less_matrix<Less>(L{});
   index_selection<N> sel{};
@@ -161,10 +186,21 @@ template <typename L, auto Less> consteval auto sort_selection() {
 
 } // namespace detail
 
-template <class L>
+template <CTypeList L>
 using mp_unique = detail::rebuild_t<L, detail::unique_selection<L>()>;
 
-template <typename L, auto Less>
+template <CTypeList L, auto Less>
 using mp_sort = detail::rebuild_t<L, detail::sort_selection<L, Less>()>;
 
 } // namespace diff::mpl
+
+namespace diff {
+
+// A canonical symbol list: mp_list<symbol_type<...>...>, alphabetical by name.
+// This is the `Syms` threaded through every seeded sweep, and the thing that
+// turns a variable's label into its slot index — so it is worth naming rather
+// than accepting any type at all.
+template <typename L>
+concept CSymbolList = mpl::detail::is_symbol_list_v<std::remove_cvref_t<L>>;
+
+} // namespace diff

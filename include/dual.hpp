@@ -9,7 +9,10 @@
 
 namespace diff {
 
-template <typename T> class Dual {
+// T is the component type, not necessarily a scalar: Dual<Dual<double>> is the
+// second-order number and Dual<VectorDual<N>> the vector-forward one, which is
+// exactly why the parameter is Numeric rather than arithmetic.
+template <Numeric T> class Dual {
 private:
   T val_{};
   T deriv_{};
@@ -20,16 +23,18 @@ public:
 
   template <CArithmetic U>
   constexpr Dual(U s) noexcept : val_(T(s)), deriv_(T{}) {}
-  template <typename O> constexpr Dual &operator+=(const O &o) noexcept {
+  // The operand of a compound assignment is whatever the matching binary
+  // operator accepts: another dual, or a zero-derivative number.
+  template <Numeric O> constexpr Dual &operator+=(const O &o) noexcept {
     return *this = *this + o;
   }
-  template <typename O> constexpr Dual &operator-=(const O &o) noexcept {
+  template <Numeric O> constexpr Dual &operator-=(const O &o) noexcept {
     return *this = *this - o;
   }
-  template <typename O> constexpr Dual &operator*=(const O &o) noexcept {
+  template <Numeric O> constexpr Dual &operator*=(const O &o) noexcept {
     return *this = *this * o;
   }
-  template <typename O> constexpr Dual &operator/=(const O &o) noexcept {
+  template <Numeric O> constexpr Dual &operator/=(const O &o) noexcept {
     return *this = *this / o;
   }
 
@@ -42,6 +47,14 @@ public:
     return out << d.val_ << "+" << d.deriv_ << "e";
   }
 
+  // Deliberately NOT ref-qualified, unlike the result-carrying types
+  // (HessianResult, ValueMap, Bound, Equation).  Ref-qualification is
+  // all-or-nothing per name, so making the mutators lvalue-only would force the
+  // const readers to be `const &` too, and then either `f(dof.data()).deriv()`
+  // (forward_driver.hpp) stops compiling, or a `const &&` overload has to copy
+  // out — 264 bytes for Dual<VectorDual<32>>, on the hottest type here.  Dual
+  // is a numeric value type; reading a component off a temporary is idiomatic
+  // and every such read is consumed inside the same full-expression.
   [[nodiscard]] constexpr const T &value() const noexcept { return val_; }
   [[nodiscard]] constexpr T &value() noexcept { return val_; }
   [[nodiscard]] constexpr const T &deriv() const noexcept { return deriv_; }
@@ -67,27 +80,28 @@ public:
 };
 
 template <typename T> inline constexpr bool is_dual_v = false;
-template <typename T> inline constexpr bool is_dual_v<Dual<T>> = true;
-
-// dual_scalar_t<X>: peel one Dual<> layer if there is one, else X unchanged.
-template <typename T> struct dual_scalar_type {
-  using type = T;
-};
-template <typename T> struct dual_scalar_type<Dual<T>> {
-  using type = T;
-};
-template <typename T> using dual_scalar_t = typename dual_scalar_type<T>::type;
-
-// dual_value_t<X>: the component type T of a Dual<T>.
-template <typename X> struct dual_value_type;
-template <typename T> struct dual_value_type<Dual<T>> {
-  using type = T;
-};
-template <typename X>
-using dual_value_t = typename dual_value_type<std::remove_cvref_t<X>>::type;
+template <Numeric T> inline constexpr bool is_dual_v<Dual<T>> = true;
 
 template <typename X>
 concept DualLike = is_dual_v<std::remove_cvref_t<X>>;
+
+// dual_scalar_t<X>: peel one Dual<> layer if there is one, else X unchanged.
+template <Numeric T> struct dual_scalar_type {
+  using type = T;
+};
+template <Numeric T> struct dual_scalar_type<Dual<T>> {
+  using type = T;
+};
+template <Numeric T>
+using dual_scalar_t = typename dual_scalar_type<T>::type;
+
+// dual_value_t<X>: the component type T of a Dual<T>.
+template <DualLike X> struct dual_value_type;
+template <Numeric T> struct dual_value_type<Dual<T>> {
+  using type = T;
+};
+template <DualLike X>
+using dual_value_t = typename dual_value_type<std::remove_cvref_t<X>>::type;
 
 // Two duals over the same component type — the pairing every binary dual
 // operator and math function accepts.
@@ -98,9 +112,10 @@ concept DualCompatible = DualLike<A> && DualLike<B> &&
 } // namespace diff
 
 namespace std {
-template <typename T>
+template <diff::Numeric T>
 struct tuple_size<diff::Dual<T>> : integral_constant<std::size_t, 2> {};
-template <typename T, std::size_t N> struct tuple_element<N, diff::Dual<T>> {
+template <diff::Numeric T, std::size_t N>
+struct tuple_element<N, diff::Dual<T>> {
   using type = T;
 };
 } // namespace std
@@ -108,7 +123,7 @@ template <typename T, std::size_t N> struct tuple_element<N, diff::Dual<T>> {
 namespace diff {
 
 // nth_dual_t<T, N> = Dual<Dual<...<T>...>> nested N times
-template <typename T, std::size_t N> consteval auto nth_dual_impl() noexcept {
+template <Numeric T, std::size_t N> consteval auto nth_dual_impl() noexcept {
   if constexpr (N == 0) {
     return std::type_identity<T>{};
   } else {
@@ -117,23 +132,23 @@ template <typename T, std::size_t N> consteval auto nth_dual_impl() noexcept {
   }
 }
 
-template <typename T, std::size_t N>
+template <Numeric T, std::size_t N>
 using nth_dual_t = typename decltype(nth_dual_impl<T, N>())::type;
 
-template <typename T> inline constexpr std::size_t dual_depth_v = 0;
-template <typename T>
+template <Numeric T> inline constexpr std::size_t dual_depth_v = 0;
+template <Numeric T>
 inline constexpr std::size_t dual_depth_v<Dual<T>> = 1 + dual_depth_v<T>;
 
-template <typename T> auto scalar_base_impl(std::type_identity<T>) -> T;
-template <typename T>
+template <Numeric T> auto scalar_base_impl(std::type_identity<T>) -> T;
+template <Numeric T>
 auto scalar_base_impl(std::type_identity<Dual<T>>)
     -> decltype(scalar_base_impl(std::type_identity<T>{}));
 
-template <typename T>
+template <Numeric T>
 using scalar_base_t = decltype(scalar_base_impl(std::type_identity<T>{}));
 
 // embed_constant: lift a base scalar into nth_dual_t<T,N> with zero dual parts.
-template <typename T, std::size_t N>
+template <Numeric T, std::size_t N>
 constexpr nth_dual_t<T, N> embed_constant(T val) noexcept {
   if constexpr (N == 0) {
     return val;
@@ -143,14 +158,14 @@ constexpr nth_dual_t<T, N> embed_constant(T val) noexcept {
   }
 }
 
-template <typename U> struct ConstantEmbedder {
+template <Numeric U> struct ConstantEmbedder {
   static constexpr U embed(scalar_base_t<U> val) noexcept {
     return embed_constant<scalar_base_t<U>, dual_depth_v<U>>(val);
   }
 };
 
 // get_real_part: peel N Dual<> layers to recover the base scalar.
-template <std::size_t N, typename T>
+template <std::size_t N, Numeric T>
 constexpr auto get_real_part(const T &x) noexcept {
   if constexpr (N == 0) {
     return x;
@@ -159,9 +174,6 @@ constexpr auto get_real_part(const T &x) noexcept {
   }
 }
 
-using dual = nth_dual_t<double, 1>;    // first-order forward dual
-using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
-
 // X is a dual or a plain arithmetic scalar — the set of operands these
 // helpers accept.
 template <typename X>
@@ -169,16 +181,16 @@ concept DualOrArithmetic = DualLike<X> || CArithmetic<X>;
 
 // val(): recursively peel every Dual<> layer to the underlying base scalar.
 template <CArithmetic T> constexpr T val(T x) noexcept { return x; }
-template <typename T> constexpr auto val(const Dual<T> &d) noexcept {
+template <Numeric T> constexpr auto val(const Dual<T> &d) noexcept {
   return val(d.template get<0>());
 }
 
-template <typename X> constexpr double to_double(const X &x) noexcept {
+template <Numeric X> constexpr double to_double(const X &x) noexcept {
   return static_cast<double>(val(x));
 }
 
 namespace detail {
-template <typename D, typename U> constexpr D as_constant(U s) noexcept {
+template <Numeric D, CArithmetic U> constexpr D as_constant(U s) noexcept {
   using Base = scalar_base_t<D>;
   return embed_constant<Base, dual_depth_v<D>>(static_cast<Base>(s));
 }
@@ -195,41 +207,41 @@ concept ConstOperand =
 template <typename C, typename T>
 concept ScalarOperand = !std::same_as<std::remove_cvref_t<C>, Dual<T>>;
 
-template <typename T>
+template <Numeric T>
 constexpr Dual<T> dual_add(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
   return Dual<T>{av + bv, ad + bd};
 }
 
-template <typename T, ScalarOperand<T> C>
+template <Numeric T, ScalarOperand<T> C>
 constexpr Dual<T> dual_add(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av + s, ad};
 }
-template <typename T>
+template <Numeric T>
 constexpr Dual<T> dual_sub(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
   return Dual<T>{av - bv, ad - bd};
 }
-template <typename T, ScalarOperand<T> C>
+template <Numeric T, ScalarOperand<T> C>
 constexpr Dual<T> dual_sub(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av - s, ad};
 }
-template <typename T, ScalarOperand<T> C>
+template <Numeric T, ScalarOperand<T> C>
 constexpr Dual<T> dual_sub(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s - a == -(a - s);
   return Dual<T>{-(av - s), -ad};
 }
-template <typename T>
+template <Numeric T>
 constexpr Dual<T> dual_mul(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
   return Dual<T>{av * bv, ad * bv + av * bd};
 }
-template <typename T, ScalarOperand<T> C>
+template <Numeric T, ScalarOperand<T> C>
 constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
   return Dual<T>{av * s, ad * s};
@@ -239,7 +251,7 @@ constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noexcept {
 // what VectorDual and autodiff do; it's not bit-identical to the textbook
 // quotient form (it reassociates) but agrees to rounding.  Inner ops stay
 // T-on-T so VectorDual is safe.
-template <typename T>
+template <Numeric T>
 constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
@@ -247,13 +259,13 @@ constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
   const T q = av * inv; // value = a / b
   return Dual<T>{q, (ad - q * bd) * inv};
 }
-template <typename T, ScalarOperand<T> C>
+template <Numeric T, ScalarOperand<T> C>
 constexpr Dual<T> dual_div(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // s is a zero-derivative constant
   const T inv = T{1} / T(s);
   return Dual<T>{av * inv, ad * inv};
 }
-template <typename T, ScalarOperand<T> C>
+template <Numeric T, ScalarOperand<T> C>
 constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (VectorDual-safe)
   const T inv = T{1} / av;
@@ -312,12 +324,21 @@ template <DualLike A> constexpr auto operator-(A &&a) noexcept {
     return NAME##_combine{}(a);                                                \
   }
 
+// Chain rule for a unary math node.  When the descriptor can express its
+// derivative in terms of f(u) (see unary_math.hpp), the primal is computed once
+// and reused; otherwise the value and the derivative are evaluated
+// independently, which costs a second libm call per node *per nesting level*.
 template <template <typename> class Fn> struct unary_dual_combine {
   constexpr auto operator()(const auto &x) const noexcept {
     const auto &[v, d] = x;
     using T = std::remove_cvref_t<decltype(v)>;
     using DT = std::remove_cvref_t<decltype(x)>;
-    return DT{Fn<T>{}(v), Fn<T>::deriv(v) * d};
+    if constexpr (detail::has_deriv_from_value_v<Fn<T>, T>) {
+      const T fv = Fn<T>{}(v);
+      return DT{fv, Fn<T>::deriv_from_value(v, fv) * d};
+    } else {
+      return DT{Fn<T>{}(v), Fn<T>::deriv(v) * d};
+    }
   }
 };
 using sin_combine = unary_dual_combine<detail::SineOpFn>;
@@ -468,12 +489,18 @@ DIFF_PROMOTE_BINARY(atan2)
 DIFF_PROMOTE_BINARY(hypot)
 #undef DIFF_PROMOTE_BINARY
 
-template <typename T> constexpr bool isfinite(const Dual<T> &d) noexcept {
+template <Numeric T> constexpr bool isfinite(const Dual<T> &d) noexcept {
   using std::isfinite;
   return isfinite(val(d));
 }
 
 static_assert(Numeric<Dual<double>>);
 static_assert(Numeric<Dual<float>>);
+
+// Spelled down here, after the operators: Dual's parameter is constrained to
+// Numeric, and Dual<double> only becomes Numeric once the arithmetic above is
+// declared — so naming Dual<Dual<double>> any earlier would not compile.
+using dual = nth_dual_t<double, 1>;    // first-order forward dual
+using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 
 } // namespace diff

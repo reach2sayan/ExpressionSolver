@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <ranges>
 #include <span>
 #include <vector>
 
@@ -19,16 +20,31 @@ inline std::vector<std::size_t> iota_indices(std::size_t n) {
 } // namespace detail
 
 // Result of a second-order forward sweep over `active` variables.
+//
+// Owning: `gradient` and `hessian` are this object's own buffers, not views
+// into the driver or into the point that produced them.  Everything the
+// drivers hand back is owned by the caller, so a HessianResult can be stored,
+// moved, or returned without regard to what is still alive.
 struct HessianResult {
   double value{};               // f(x)
   std::vector<double> gradient; // size = active.size()
   std::vector<double> hessian;  // row-major, active.size() x active.size()
 
-  std::size_t n() const noexcept { return gradient.size(); }
-  double &h(std::size_t i, std::size_t j) noexcept {
+  [[nodiscard]] constexpr std::size_t n() const noexcept {
+    return gradient.size();
+  }
+  // Lvalue-only: this hands out a reference into `hessian`, so binding it to
+  // the result of a hessian() call directly would outlive the buffer.  On a
+  // temporary the const overload below is selected instead and copies out.
+  [[nodiscard]] constexpr double &h(std::size_t i, std::size_t j) & noexcept {
     return hessian[i * n() + j];
   }
-  double h(std::size_t i, std::size_t j) const noexcept {
+  [[nodiscard]] constexpr double h(std::size_t i,
+                                   std::size_t j) const & noexcept {
+    return hessian[i * n() + j];
+  }
+  [[nodiscard]] constexpr double h(std::size_t i,
+                                   std::size_t j) const && noexcept {
     return hessian[i * n() + j];
   }
 };
@@ -42,10 +58,12 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   std::vector<dual> dof(n);
   std::ranges::transform(x, dof.begin(), [](double v) { return dual{v, 0.0}; });
 
-  for (std::size_t j = 0; j < m; ++j) {
-    dof[active[j]].deriv() = 1.0;
-    g[j] = f(dof.data()).deriv();
-    dof[active[j]].deriv() = 0.0;
+  // One seeded pass per active variable: the gradient slot and the dof it comes
+  // from advance together.
+  for (auto &&[slot, dof_index] : std::views::zip(g, active)) {
+    dof[dof_index].deriv() = 1.0;
+    slot = f(dof.data()).deriv();
+    dof[dof_index].deriv() = 0.0;
   }
   return g;
 }

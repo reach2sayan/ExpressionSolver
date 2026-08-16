@@ -23,7 +23,7 @@ concept CBinaryOp =
     std::regular_invocable<F, const T &, const T &> &&
     std::convertible_to<std::invoke_result_t<F, const T &, const T &>, T>;
 
-template <typename T, OpType type> struct Op {
+template <Numeric T, OpType type> struct Op {
   using value_type = T;
   static constexpr OpType op_type = type;
 };

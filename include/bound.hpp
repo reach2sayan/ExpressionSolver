@@ -1,8 +1,8 @@
 #pragma once
 
-#include "fixed_string.hpp" // FixedString
-#include "gradient.hpp"     // NamedValue, named, find_index_of_symbol
-#include "traits.hpp"       // extract_symbols_from_expr_t, unique_tuple_t
+#include "fixed_string.hpp"
+#include "gradient.hpp"
+#include "traits.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,19 +12,10 @@
 #include <tuple>
 #include <type_traits>
 
-// Bound<Expr, Map> pairs an (empty) expression with a map and so keeps eval()
-// nullary.
-
 namespace diff {
 
-// A compile-time label-keyed map: one slot per symbol, stored in canonical
-// (alphabetical) order so it lines up with every other array in the library.
-// Lookup is a consteval index, so `get<"x">()` compiles to a direct member
-// access — this is not a hash table despite the name.
-//
-// Aggregate with a single public array member, so it is a structural type and
-// can be used as a non-type template parameter.
-template <typename Scalar, typename SymList> struct ValueMap {
+// A compile-time label-keyed map: one slot per symbol (NTTP friendly)
+template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
   using symbols = SymList;
   using value_type = Scalar;
 
@@ -33,8 +24,17 @@ template <typename Scalar, typename SymList> struct ValueMap {
 
   std::array<Scalar, arity> slots{};
 
+  // Lvalue-only, because it aliases `slots`.  The rvalue overload copies the
+  // scalar out instead, so `values(named<"x">(1.0)).get<"x">()` stays valid.
   template <FixedString S>
-  [[nodiscard]] constexpr const Scalar &get() const noexcept {
+  [[nodiscard]] constexpr const Scalar &get() const & noexcept {
+    constexpr auto idx = find_index_of_symbol<S, SymList>();
+    static_assert(idx < arity, "ValueMap: symbol not present in map");
+    return slots[idx];
+  }
+
+  template <FixedString S>
+  [[nodiscard]] constexpr Scalar get() const && noexcept {
     constexpr auto idx = find_index_of_symbol<S, SymList>();
     static_assert(idx < arity, "ValueMap: symbol not present in map");
     return slots[idx];
@@ -54,7 +54,7 @@ concept CValueMap = requires {
 };
 
 template <typename T> inline constexpr bool is_named_value_v = false;
-template <FixedString S, typename V>
+template <FixedString S, Numeric V>
 inline constexpr bool is_named_value_v<NamedValue<S, V>> = true;
 template <typename T>
 concept CNamedValue = is_named_value_v<std::remove_cvref_t<T>>;
@@ -62,7 +62,7 @@ concept CNamedValue = is_named_value_v<std::remove_cvref_t<T>>;
 namespace detail {
 
 // For each canonical slot, which argument position supplies it.
-template <typename SymList, std::size_t N, typename... ArgSyms>
+template <CSymbolList SymList, std::size_t N, CSymbol... ArgSyms>
 consteval std::array<std::size_t, N> arg_of_canonical() noexcept {
   const std::array<std::size_t, N> canonical_of_arg{
       find_index_of_symbol<ArgSyms::value, SymList>()...};
@@ -76,7 +76,7 @@ consteval std::array<std::size_t, N> arg_of_canonical() noexcept {
 
 // Permutation taking the expression's canonical symbol order to the map's.
 // The map may legitimately be a superset of the expression's symbols.
-template <typename ExprSyms, typename MapSyms, std::size_t N>
+template <CSymbolList ExprSyms, CSymbolList MapSyms, std::size_t N>
 consteval std::array<std::size_t, N> symbol_permutation() noexcept {
   std::array<std::size_t, N> p{};
   [&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -89,7 +89,7 @@ consteval std::array<std::size_t, N> symbol_permutation() noexcept {
 } // namespace detail
 
 // values(named<"x">(1.0), named<"y">(0.5))
-template <FixedString... Syms, typename... Vs>
+template <FixedString... Syms, Numeric... Vs>
 [[nodiscard]] constexpr auto values(NamedValue<Syms, Vs>... nv) noexcept {
   using SymList = unique_tuple_t<mp::mp_list<symbol_type<Syms>...>>;
   constexpr std::size_t N = sizeof...(Syms);
@@ -107,7 +107,12 @@ template <FixedString... Syms, typename... Vs>
 
 // An expression paired with a point.  The expression is empty, so this costs
 // exactly the map.
-template <typename Expr, typename Map> struct Bound {
+template <CExpression Expr, CValueMap Map> struct Bound {
+  // Both members are stored by value; the remove_cvref_t below makes a
+  // reference member unrepresentable even if someone spells the arguments out.
+  // Stated so the guarantee is checked rather than merely implied.
+  static_assert(!std::is_reference_v<Expr> && !std::is_reference_v<Map>,
+                "Bound stores the expression and the map by value");
   using expr_type = std::remove_cvref_t<Expr>;
   using map_type = std::remove_cvref_t<Map>;
   using symbols = extract_symbols_from_expr_t<expr_type>;
@@ -127,7 +132,7 @@ template <typename Expr, typename Map> struct Bound {
   map_type map{};
 
   // The point, in the expression's canonical symbol order.
-  template <typename U = value_type>
+  template <Numeric U = value_type>
   [[nodiscard]] constexpr std::array<U, arity> point() const noexcept {
     std::array<U, arity> out{};
     std::ranges::transform(kPerm, out.begin(), [&](std::size_t i) {
@@ -141,7 +146,7 @@ template <typename Expr, typename Map> struct Bound {
   }
 
   // Evaluate with a deeper numeric type (Dual, TaylorDual, VectorDual, ...).
-  template <typename U>
+  template <Numeric U>
   [[nodiscard]] constexpr U
   eval_as(const std::array<U, arity> &seed) const noexcept {
     return expr.template eval_seeded_as<U, symbols>(seed);
@@ -151,8 +156,15 @@ template <typename Expr, typename Map> struct Bound {
   constexpr void set(const typename map_type::value_type &v) noexcept {
     map.template set<S>(v);
   }
+  // Same lvalue/rvalue split as ValueMap::get — a Bound built inline by bind()
+  // is a temporary, and the reference would point into its map.
   template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() const noexcept {
+  [[nodiscard]] constexpr decltype(auto) get() const & noexcept {
+    return map.template get<S>();
+  }
+
+  template <FixedString S>
+  [[nodiscard]] constexpr typename map_type::value_type get() const && noexcept {
     return map.template get<S>();
   }
 };
@@ -168,7 +180,7 @@ template <CExpression Expr, CValueMap Map>
 }
 
 // bind(expr, named<"x">(1.0), named<"y">(0.5))
-template <CExpression Expr, FixedString... Syms, typename... Vs>
+template <CExpression Expr, FixedString... Syms, Numeric... Vs>
 [[nodiscard]] constexpr auto bind(Expr &&e,
                                   NamedValue<Syms, Vs>... nv) noexcept {
   return bind(static_cast<Expr &&>(e), values(nv...));
@@ -190,10 +202,10 @@ template <CExpression Expr, FixedString... Syms, typename... Vs>
 
 namespace detail {
 
-template <typename Expr>
+template <CExpression Expr>
 using expr_symbols_t = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
 
-template <typename Expr>
+template <CExpression Expr>
 inline constexpr std::size_t expr_arity_v =
     mp::mp_size(expr_symbols_t<Expr>{});
 

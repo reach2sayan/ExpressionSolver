@@ -24,7 +24,7 @@ concept CompatibleValueTypes =
     std::convertible_to<typename LHS::value_type, typename RHS::value_type> ||
     std::convertible_to<typename RHS::value_type, typename LHS::value_type>;
 
-template <CFixedString auto S, typename SymList>
+template <CFixedString auto S, CSymbolList SymList>
 consteval std::size_t find_index_of_symbol() noexcept {
   return diff::mpl::mp_find<S>(SymList{});
 }
@@ -199,7 +199,7 @@ template <CExpression Expr> constexpr auto erf(const Expr &a) noexcept {
 // zero-derivative constant.  ConstantEmbedder recurses through every Dual<>
 // nesting level, so this is correct even when VT is a multi-level dual (e.g.
 // Dual<Dual<double>>); for non-dual VT it is just a cast.
-template <typename VT, typename S>
+template <Numeric VT, CArithmetic S>
 constexpr Constant<VT> promote_scalar(S s) noexcept {
   return Constant<VT>{
       ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
@@ -294,7 +294,7 @@ template <Numeric T, T V> struct Lit {
     return Lit<T, T{0}>{};
   }
 
-  template <FixedString, typename, std::size_t N>
+  template <FixedString, CSymbolList, std::size_t N>
   [[nodiscard]] constexpr auto
   tangent_seeded(const std::array<T, N> &) const noexcept {
     return Tangent<T>{V, T{}};
@@ -304,13 +304,13 @@ template <Numeric T, T V> struct Lit {
   constexpr void backward(const auto &, T, auto &, const auto &) const noexcept {
   }
 
-  template <typename Syms, std::size_t N>
+  template <CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr T
   eval_seeded(const std::array<T, N> &) const noexcept {
     return V;
   }
 
-  template <typename U, typename Syms, std::size_t N>
+  template <Numeric U, CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded_as(const std::array<U, N> &) const noexcept {
     using S = scalar_base_t<U>;
@@ -366,7 +366,7 @@ public:
     }
   }
   // Forward sweep leaf: a constant contributes value with zero tangent.
-  template <FixedString, typename, std::size_t N>
+  template <FixedString, CSymbolList, std::size_t N>
   [[nodiscard]] constexpr auto
   tangent_seeded(const std::array<T, N> &) const noexcept {
     return Tangent<T>{value, T{}};
@@ -375,7 +375,7 @@ public:
   constexpr void backward(const auto &, T, auto &,
                           const auto &) const noexcept {}
 
-  template <typename Syms, std::size_t N>
+  template <CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr T
   eval_seeded(const std::array<T, N> &) const noexcept {
     return value;
@@ -384,7 +384,7 @@ public:
   // eval_seeded_as<U>: embed constant into the deeper type U with zero dual
   // parts.  Uses ConstantEmbedder<U> so custom numeric types (e.g. TaylorDual)
   // can specialise the embedding without touching this code.
-  template <typename U, typename Syms, std::size_t N>
+  template <Numeric U, CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded_as(const std::array<U, N> &) const noexcept {
     using S = scalar_base_t<U>;
@@ -455,7 +455,7 @@ public:
   }
 
   // Forward sweep leaf: tangent is 1 if this is the seeded variable, else 0.
-  template <FixedString Seed, typename Syms, std::size_t N>
+  template <FixedString Seed, CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr auto
   tangent_seeded(const std::array<T, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
@@ -473,7 +473,7 @@ public:
     }
   }
 
-  template <typename Syms, std::size_t N>
+  template <CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr T
   eval_seeded(const std::array<T, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
@@ -481,7 +481,7 @@ public:
     return vals[idx];
   }
 
-  template <typename U, typename Syms, std::size_t N>
+  template <Numeric U, CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded_as(const std::array<U, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
@@ -561,8 +561,14 @@ struct tuple_element<I, diff::Lit<T, V>> {
 
 // Name a symbol whose value_type is decltype(x); `x` itself is unused, since
 // the point is supplied at the root by bind(expr, ...) / eval(expr, ...).
+//
+// std::decay_t, not bare decltype: on an id-expression decltype yields the
+// declared type, so PV(vec[0], "x") would otherwise name a Variable<double &>.
+// That passes CArithmetic (which strips cv-ref) and only fails much later,
+// inside std::array<double &, N>.
 #define PDV(x, label)                                                          \
-  diff::Variable<diff::Dual<decltype(x)>, diff::FixedString{label}> {}
+  diff::Variable<diff::Dual<std::decay_t<decltype(x)>>,                        \
+                 diff::FixedString{label}> {}
 #define PV(x, label)                                                           \
-  diff::Variable<decltype(x), diff::FixedString{label}> {}
+  diff::Variable<std::decay_t<decltype(x)>, diff::FixedString{label}> {}
 #define PC(x) diff::Constant(x)

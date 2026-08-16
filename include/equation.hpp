@@ -4,6 +4,7 @@
 #include "mpl.hpp"
 #include <algorithm>
 #include <array>
+#include <ranges>
 
 namespace diff {
 
@@ -122,24 +123,29 @@ private:
     using S = dual_scalar_t<value_type>;
     std::array<std::array<std::array<S, input_dim>, input_dim>, output_dim> H{};
 
+    // Values are the point and never move; only the seeded tangent does.
     point_t seeds{};
+    std::ranges::transform(values, seeds.begin(),
+                           [](const S &v) { return value_type{v, S{}}; });
+
     for (std::size_t j = 0; j < input_dim; ++j) {
       // Seed column j; one reverse sweep per output yields that column.
-      std::ranges::transform(
-          std::views::iota(std::size_t{0}, input_dim), seeds.begin(),
-          [&](std::size_t i) {
-            return value_type{values[i], i == j ? S{1} : S{}};
-          });
+      seeds[j].deriv() = S{1};
       static_for<output_dim>([&]<std::size_t K>() {
         point_t grads{};
         const auto &e = std::get<K>(expressions);
         node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
         fill_cache<0, symbols>(e, seeds, cache);
         e.backward(symbols{}, value_type{1}, grads, cache);
-        for (std::size_t i = 0; i < input_dim; ++i) {
-          H[K][i][j] = grads[i].template get<1>();
+
+        const auto column =
+            grads | std::views::transform(
+                        [](const value_type &g) { return g.template get<1>(); });
+        for (auto &&[row, entry] : std::views::zip(H[K], column)) {
+          row[j] = entry;
         }
       });
+      seeds[j].deriv() = S{};
     }
     return H;
   }
@@ -212,8 +218,11 @@ public:
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
   // canonical symbol order.  The index is a template argument, so no tag type
   // is involved.
+  // Lvalue-only: these alias `expressions` / `jacobian_data`.  The rvalue
+  // overload below returns a copy instead, which post-refactor costs nothing —
+  // the nodes it hands back are empty types.
   template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get() noexcept
+  [[nodiscard]] constexpr decltype(auto) get() & noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
     if constexpr (N == 0) {
@@ -224,7 +233,18 @@ public:
   }
 
   template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get() const noexcept
+  [[nodiscard]] constexpr decltype(auto) get() const & noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    if constexpr (N == 0) {
+      return std::get<0>(expressions);
+    } else {
+      return std::get<N - 1>(std::get<0>(jacobian_data));
+    }
+  }
+
+  template <std::size_t N>
+  [[nodiscard]] constexpr auto get() const && noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
     if constexpr (N == 0) {
@@ -235,19 +255,26 @@ public:
   }
 
   // Subscript spelling of the same thing.  operator[] has no template-argument
-  // syntax, so the index arrives as an empty idx_t value (see IDX / idx<N>()).
+  // syntax, so the index arrives as an empty idx_t value (see idx<N>()).
   template <std::size_t N>
-  constexpr decltype(auto) operator[](idx_t<N>) noexcept
+  [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) & noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
     return get<N>();
   }
 
   template <std::size_t N>
-  constexpr decltype(auto) operator[](idx_t<N>) const noexcept
+  [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) const & noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
     return get<N>();
+  }
+
+  template <std::size_t N>
+  [[nodiscard]] constexpr auto operator[](idx_t<N>) const && noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    return std::move(*this).template get<N>();
   }
 
   template <DiffMode Mode>
