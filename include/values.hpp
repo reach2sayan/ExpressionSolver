@@ -269,10 +269,7 @@ DIFF_EXPR_BINFN(max, MaxOp)
 DIFF_EXPR_BINFN(min, MinOp)
 #undef DIFF_EXPR_BINFN
 
-// A literal carried in the type.  Empty, so it costs nothing per node — this
-// is what derivative() manufactures.  The value is still fully inspectable:
-// Lit<double,3.0>::value, lit.eval(), and printing all work; it simply isn't
-// stored per object.  Same idea as std::integral_constant.
+// A literal carried in the type.  Empty
 template <Numeric T, T V> struct Lit {
   using value_type = T;
   static constexpr T value = V;
@@ -328,14 +325,15 @@ template <Numeric T, T V> struct Lit {
   }
 
   // Leaves are expressions too: same eval(...) surface as ExpressionOps.
-  template <CEvalArg... Args>
-    requires(sizeof...(Args) > 0)
-  [[nodiscard]] constexpr auto eval(const Args &...args) const {
+  [[nodiscard]] constexpr auto eval(const CEvalArg auto &...args) const
+    requires(sizeof...(args) > 0)
+  {
     return detail::eval_dispatch(*this, args...);
   }
 
-  template <FixedString Seed, CEvalArg... Args>
-  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
+  template <FixedString Seed>
+  [[nodiscard]] constexpr auto
+  eval_with_tangent(const CEvalArg auto &...args) const {
     return detail::tangent_dispatch<Seed>(*this, args...);
   }
 };
@@ -415,16 +413,9 @@ public:
   }
 };
 
-// A symbol.  Carries NO value: the point is supplied at the root instead (see
-// bound.hpp), so an expression mentioning `x` sixteen times costs one slot
-// rather than sixteen.  This is what makes the whole expression tree an empty
-// type.
-//
 // `Frozen` marks a variable that has been held constant for the purpose of
 // partial differentiation: it still reads its value from the seed array like
-// any other symbol, but its derivative is zero.  Freezing is therefore a pure
-// *type* transform — it needs no value, which is exactly why the symbolic
-// Jacobian can be built from stateless leaves.
+// any other symbol, but its derivative is zero.
 template <Numeric T, CFixedString auto symbol, bool Frozen>
 class Variable {
   friend std::ostream &operator<<(std::ostream &out,

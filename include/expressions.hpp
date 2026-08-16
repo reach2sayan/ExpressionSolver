@@ -210,20 +210,17 @@ consteval std::size_t child_base_at() {
   return off;
 }
 
-// One element of a point, in any of the spellings eval() accepts: a bare
-// number (positional), a range of them, a ValueMap, or a named value.  The
-// last two are matched structurally rather than by name — they are defined
-// further down the include chain (bound.hpp, gradient.hpp), and this concept
-// has to be visible on the eval_dispatch declaration below.
+// One element of a point, in any of the spellings eval() accepts:
+// (a) a bare number (positional),
+// (b) a range of them,
+// (c) a ValueMap,
+// (d) or a named value.
 template <typename T>
 concept CEvalArg = Numeric<T> || std::ranges::input_range<T> ||
                    requires { typename std::remove_cvref_t<T>::symbols; } ||
                    requires { std::remove_cvref_t<T>::symbol; };
 
 namespace detail {
-// Defined in bound.hpp.  Declared here so ExpressionOps::eval can forward to
-// it; the definition needs the symbol machinery from traits.hpp, which cannot
-// be included from this header.
 template <CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto eval_dispatch(const Expr &e, const Args &...args);
 
@@ -248,14 +245,7 @@ public:
   // Evaluation always takes a point: the tree stores no values.  Op::eval is
   // reached only through the seeded sweeps below, where every child has
   // already been reduced to an EvalResult.
-  //
-  // The member forwards to detail::eval_dispatch (declared above, defined in
-  // bound.hpp) rather than to the free eval(): a member named `eval` hides the
-  // free function, so unqualified lookup here would never reach it.
-  // Nullary is legal exactly when the expression has no free symbols (a
-  // constant-folded tree); otherwise a point is required.
-  template <CEvalArg... Args>
-  [[nodiscard]] constexpr auto eval(const Args &...args) const {
+  [[nodiscard]] constexpr auto eval(const CEvalArg auto &...args) const {
     return detail::eval_dispatch(self(), args...);
   }
 
@@ -266,8 +256,9 @@ public:
   }
 
   // Fused forward sweep at a point; the symbol list is deduced.
-  template <FixedString Seed, CEvalArg... Args>
-  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
+  template <FixedString Seed>
+  [[nodiscard]] constexpr auto
+  eval_with_tangent(const CEvalArg auto &...args) const {
     return detail::tangent_dispatch<Seed>(self(), args...);
   }
 
@@ -335,6 +326,7 @@ public:
 // F4-shaped tree keeping the tuple costs 6 bytes; dropping the member costs 1.
 //
 // A child that genuinely holds data (Constant<T>) forces the storing form.
+
 template <bool Stateless, COperation Op, CExpression... Children>
 class ExpressionImpl;
 
@@ -411,7 +403,6 @@ class Expression
 public:
   using base_type::base_type;
   using children_t = typename base_type::children_t;
-
   static constexpr bool stateless = (std::is_empty_v<Children> && ...);
 };
 

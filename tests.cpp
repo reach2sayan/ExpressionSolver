@@ -6,6 +6,8 @@
 #include "equation.hpp"
 #include "forward_driver.hpp"
 #include "gradient.hpp"
+#include "md/layouts.hpp"
+#include "md/tensor.hpp"
 #include "operations.hpp"
 #include "scope_guard.hpp"
 #include "seeded_energy.hpp"
@@ -17,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <numbers>
 #include <random>
+#include <set>
 #include <stdexcept>
 
 using namespace diff;
@@ -2815,6 +2818,39 @@ TEST(EigenInterop, SparseHessianMatchesDenseDriver) {
   EXPECT_DOUBLE_EQ(M(1, 3), 0.0);
 }
 
+TEST(EigenInterop, SparseHessianIndexesLikeADenseMatrix) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> a;
+  Variable<D, FixedString{"x01"}> b;
+  Variable<D, FixedString{"x02"}> c;
+  // a and c never meet: (0,2) and (2,0) are structural zeros.
+  auto expr = a * b + b * c + log(a) + exp(c);
+
+  const std::array<double, 3> x{0.7, 1.3, 2.1};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  const auto sparse = diff::sparse_hessian(expr, xs);
+  const auto dense = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+
+  // Indexed as if dense, while storing only the nonzeros.
+  EXPECT_LT(decltype(sparse)::nnz, 9u);
+  EXPECT_EQ(sparse.values().size(), decltype(sparse)::nnz);
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_NEAR((sparse[i, j]), dense.h(i, j), 1e-9)
+          << "H(" << i << "," << j << ")";
+    }
+  }
+
+  // Structural zeros read as exact zero through the shared sink cell.
+  EXPECT_FALSE(decltype(sparse)::structural(0, 2));
+  EXPECT_FALSE(decltype(sparse)::structural(2, 0));
+  EXPECT_DOUBLE_EQ((sparse[0, 2]), 0.0);
+  EXPECT_DOUBLE_EQ((sparse[2, 0]), 0.0);
+  EXPECT_TRUE(decltype(sparse)::structural(0, 1));
+}
+
 TEST(EigenInterop, SparseHessianIsSymmetricAndCompressed) {
   using D = diff::Dual<double>;
   using diff::FixedString;
@@ -3371,6 +3407,16 @@ TEST(ValueMapTest, SubscriptOwnershipMatchesGet) {
   static_assert(std::is_same_v<decltype(values(named<"x">(2.0))["x"_s]), double>,
                 "subscript on a temporary map must return by value");
   EXPECT_DOUBLE_EQ(values(named<"x">(2.0))["x"_s], 2.0);
+
+  // get<S>() is the same body reached by a different spelling, so it owns its
+  // result exactly as the subscript does - on either side of the
+  // __cpp_explicit_this_parameter split.
+  static_assert(std::is_same_v<decltype(m.get<"x">()), const double &>);
+  static_assert(std::is_same_v<decltype(mut.get<"x">()), double &>);
+  static_assert(std::is_same_v<decltype(values(named<"x">(2.0)).get<"x">()),
+                               double>,
+                "get on a temporary map must return by value");
+  EXPECT_DOUBLE_EQ(values(named<"x">(2.0)).get<"x">(), 2.0);
 }
 
 TEST(ValueMapTest, SubscriptIsConstexpr) {
@@ -3439,6 +3485,17 @@ TEST(BoundTest, SubscriptForwardsToTheMap) {
                      double>,
       "subscript on a temporary Bound must return by value");
   EXPECT_DOUBLE_EQ(bind(x * y, named<"x">(6.0), named<"y">(1.0))["x"_s], 6.0);
+
+  // Same body, other spelling - see the note in ValueMapTest.
+  static_assert(std::is_same_v<decltype(cb.get<"x">()), const double &>);
+  static_assert(std::is_same_v<decltype(b.get<"x">()), double &>);
+  static_assert(
+      std::is_same_v<
+          decltype(bind(x * y, named<"x">(1.0), named<"y">(1.0)).get<"x">()),
+          double>,
+      "get on a temporary Bound must return by value");
+  EXPECT_DOUBLE_EQ(bind(x * y, named<"x">(6.0), named<"y">(1.0)).get<"x">(),
+                   6.0);
 }
 
 TEST(BoundTest, IsConstexpr) {
@@ -3555,4 +3612,153 @@ TEST(BoundTest, EvalAsCarriesDualsThroughTheGraph) {
   const auto r = b.eval_as<D>(seed);
   EXPECT_DOUBLE_EQ(r.get<0>(), 13.0);
   EXPECT_DOUBLE_EQ(r.get<1>(), 6.0); // d/dx (x² + y) = 2x = 6
+}
+
+// ===========================================================================
+// mdspan layer — layouts, accessors, and the owning tensor.
+//
+// The layouts are the load-bearing part: a wrong mapping silently returns the
+// wrong derivative rather than failing, so each one is pinned both as a
+// runtime test and, below, inside constant evaluation.
+// ===========================================================================
+
+TEST(MdLayout, SimplexPackedIsABijectionOnSortedMultiIndices) {
+  using T = diff::md_tensor<double, diff::uniform_extents_t<4, 3>,
+                            diff::layout_simplex_packed>;
+  EXPECT_EQ(T::size(), 20u); // C(4 + 3 - 1, 3) = C(6, 3) = 20
+
+  const auto m = T::mapping();
+  std::set<std::size_t> slots;
+  for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t j = i; j < 4; ++j) {
+      for (std::size_t k = j; k < 4; ++k) {
+        const auto s = static_cast<std::size_t>(m(i, j, k));
+        EXPECT_LT(s, T::size());
+        // Distinct multisets must not collide...
+        EXPECT_TRUE(slots.insert(s).second);
+        // ...and every permutation of one must.
+        EXPECT_EQ(static_cast<std::size_t>(m(k, j, i)), s);
+        EXPECT_EQ(static_cast<std::size_t>(m(j, i, k)), s);
+        EXPECT_EQ(static_cast<std::size_t>(m(k, i, j)), s);
+      }
+    }
+  }
+  EXPECT_EQ(slots.size(), T::size()); // the packing wastes no cell
+}
+
+TEST(MdLayout, LeadingSimplexKeepsOutputsApart) {
+  // Two outputs, each a symmetric 3x3 Hessian: 2 * 6 cells, not 2 * 9.
+  using T = diff::md_tensor<double, diff::stacked_extents_t<2, 3, 2>,
+                            diff::layout_leading_simplex<1>>;
+  EXPECT_EQ(T::size(), 12u);
+
+  T t{};
+  t[0, 1, 2] = 5.0;
+  t[1, 1, 2] = 9.0;
+  EXPECT_DOUBLE_EQ((t[0, 2, 1]), 5.0); // symmetric within an output
+  EXPECT_DOUBLE_EQ((t[1, 2, 1]), 9.0);
+  EXPECT_NE((t[0, 1, 2]), (t[1, 1, 2])); // but outputs never alias
+}
+
+TEST(MdLayout, SparsePatternSendsStructuralZerosToTheSink) {
+  // f = x*y + z*z couples {x,y} and {z,z}, but never x with z or y with z.
+  diff::Variable<double, diff::FixedString{"x"}> x;
+  diff::Variable<double, diff::FixedString{"y"}> y;
+  diff::Variable<double, diff::FixedString{"z"}> z;
+  using E = decltype(x * y + z * z);
+  using L = diff::layout_sparse_pattern<E>;
+
+  const typename L::template mapping<diff::md::extents<std::size_t, 3, 3>> m{};
+  EXPECT_EQ(static_cast<std::size_t>(m.required_span_size()), L::kNnz + 1);
+
+  // Symbols are alphabetical: x=0, y=1, z=2.
+  EXPECT_TRUE(m.contains(0, 1)); // d2/dx dy is in the pattern
+  EXPECT_TRUE(m.contains(2, 2)); // d2/dz2 too
+  EXPECT_FALSE(m.contains(0, 2)); // x and z never meet
+  EXPECT_FALSE(m.contains(1, 2));
+  // Every structural zero shares the one sink cell.
+  EXPECT_EQ(static_cast<std::size_t>(m(0, 2)), L::kNnz);
+  EXPECT_EQ(static_cast<std::size_t>(m(1, 2)), L::kNnz);
+  // ...and every nonzero has its own slot.
+  EXPECT_NE(static_cast<std::size_t>(m(0, 1)), static_cast<std::size_t>(m(2, 2)));
+}
+
+TEST(MdTensor, BothIndexSpellingsAgree) {
+  auto t = diff::nd_tensor_t<double, 3, 3>{};
+  double v = 0.0;
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = i; j < 3; ++j) {
+      for (std::size_t k = j; k < 3; ++k) {
+        t[i, j, k] = (v += 1.0);
+      }
+    }
+  }
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      for (std::size_t k = 0; k < 3; ++k) {
+        EXPECT_DOUBLE_EQ((t[i, j, k]), t[i][j][k]);
+      }
+    }
+  }
+}
+
+// The gate on workstream 6: the packed tensor with the permutations skipped
+// must equal the dense tensor with every multi-index evaluated.  If the
+// symmetry assumption or the simplex ranking is ever wrong, this is what says
+// so — the existing derivative tests only check a handful of entries.
+template <std::size_t Order, typename Expr, typename Values>
+void ExpectPackedMatchesDense(const Expr &expr, const Values &values) {
+  const auto packed = diff::derivative_tensor<Order>(expr, values);
+  constexpr std::size_t N = std::tuple_size_v<Values>;
+
+  // Recompute every cell densely, straight from the definition, with no
+  // symmetry assumed anywhere.
+  using S = double;
+  using U = diff::nth_dual_t<S, Order>;
+  using symbols = diff::extract_symbols_from_expr_t<Expr>;
+  for (const auto &multi : diff::detail::index_grid<N, Order>()) {
+    const auto idx = std::apply(
+        [](auto... i) { return std::array<std::size_t, Order>{i...}; }, multi);
+    std::array<U, N> seeds{};
+    for (std::size_t k = 0; k < N; ++k) {
+      seeds[k] = diff::detail::make_mixed_seed<S, Order>(values[k], idx, k);
+    }
+    const U val = expr.template eval_seeded_as<U, symbols>(seeds);
+    const double dense = diff::detail::extract_nth<Order>(val);
+    EXPECT_DOUBLE_EQ(packed.at_index(idx), dense)
+        << "order " << Order << " at index " << idx[0];
+  }
+}
+
+TEST(MdTensor, PackedSymmetricTensorMatchesDenseEvaluation) {
+  diff::Variable<double, diff::FixedString{"x"}> x;
+  diff::Variable<double, diff::FixedString{"y"}> y;
+  diff::Variable<double, diff::FixedString{"z"}> z;
+
+  ExpectPackedMatchesDense<2>(x * y + x * x, std::array{2.0, 3.0});
+  ExpectPackedMatchesDense<3>(x * y * y, std::array{2.0, 3.0});
+  ExpectPackedMatchesDense<2>(exp(x * y) + sin(z), std::array{0.3, 0.4, 0.5});
+  ExpectPackedMatchesDense<3>(exp(x * y) + sin(z), std::array{0.3, 0.4, 0.5});
+  ExpectPackedMatchesDense<4>(x * y * z, std::array{1.5, 2.5, 0.5});
+}
+
+// The constexpr half of the contract: every mapping and the tensor itself must
+// survive constant evaluation, or the symbolic path silently stops being
+// constexpr and only the ConstexprContract suite would notice, much later.
+TEST(ConstexprContract, MdspanLayerIsConstantEvaluated) {
+  constexpr auto simplex = [] {
+    diff::nd_tensor_t<double, 3, 3> t{};
+    t[2, 1, 0] = 6.0;
+    return (t[0, 1, 2]) + (t[1, 0, 2]);
+  }();
+  static_assert(simplex == 12.0);
+
+  constexpr auto stacked = [] {
+    diff::nd_stack_t<double, 2, 3, 2> s{};
+    s[1, 0, 2] = 3.0;
+    return (s[1, 2, 0]) + (s[0, 0, 2]); // second output set, first still zero
+  }();
+  static_assert(stacked == 3.0);
+
+  SUCCEED(); // the static_asserts above are the test
 }

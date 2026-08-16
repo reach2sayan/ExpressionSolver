@@ -138,7 +138,7 @@ struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"}> {
   // Forward sweep: quotient rule on child {value, tangent} pairs.
   [[nodiscard]] static constexpr auto forward(const auto &a,
                                               const auto &b) noexcept {
-    return Tangent<T>{a.value / b.value,
+    return Tangent{a.value / b.value,
                       (a.deriv * b.value - a.value * b.deriv) /
                           (b.value * b.value)};
   }
@@ -163,7 +163,7 @@ template <Numeric T> struct MinOp;
 
 namespace detail {
 struct abs_impl {
-  template <Numeric T> constexpr T operator()(const T &a) const noexcept {
+  constexpr auto operator()(const Numeric auto &a) const noexcept {
     using std::abs;
     return abs(a);
   }
@@ -171,35 +171,35 @@ struct abs_impl {
 // Binary impls.  ADL resolves pow/atan2/hypot for diff::Dual (defined in
 // dual.hpp) when T is a Dual, and to std::* for plain arithmetic T.
 struct pow_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a, const T &b) const noexcept {
+  constexpr auto operator()(const Numeric auto &a,
+                            const Numeric auto &b) const noexcept {
     using std::pow;
     return pow(a, b);
   }
 };
 struct atan2_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a, const T &b) const noexcept {
+  constexpr auto operator()(const Numeric auto &a,
+                            const Numeric auto &b) const noexcept {
     using std::atan2;
     return atan2(a, b);
   }
 };
 struct hypot_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a, const T &b) const noexcept {
+  constexpr auto operator()(const Numeric auto &a,
+                            const Numeric auto &b) const noexcept {
     using std::hypot;
     return hypot(a, b);
   }
 };
 struct max_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a, const T &b) const noexcept {
+  constexpr auto operator()(const Numeric auto &a,
+                            const Numeric auto &b) const noexcept {
     return a < b ? b : a;
   }
 };
 struct min_impl {
-  template <Numeric T>
-  constexpr T operator()(const T &a, const T &b) const noexcept {
+  constexpr auto operator()(const Numeric auto &a,
+                            const Numeric auto &b) const noexcept {
     return b < a ? b : a;
   }
 };

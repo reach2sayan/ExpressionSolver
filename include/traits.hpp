@@ -205,14 +205,6 @@ template <CExpression T>
 using extract_symbols_from_expr_t =
     typename decltype(extract_symbols_impl<T>())::type;
 
-// A compile-time index carried as a *value*, for the one place that cannot
-// take a template argument: operator[].  Spell it idx<N>() at the call site.
-// Prefer the template form — eq.get<N>() — everywhere else; it needs no tag
-// type at all.
-//
-// Not a std::integral_constant specialisation: the only thing inherited from it
-// was ::value, and spelling that here keeps the index API inside the library
-// (and out of overload resolution for anything else keyed on integral_constant).
 template <std::size_t N> struct idx_t {
   static constexpr std::size_t value = N;
 };

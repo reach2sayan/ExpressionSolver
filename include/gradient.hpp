@@ -2,6 +2,7 @@
 
 #include "dual.hpp"
 #include "expressions.hpp"
+#include "md/tensor.hpp"
 #include "named_value.hpp"
 #include "scope_guard.hpp"
 #include "taylor_dual.hpp"
@@ -106,30 +107,12 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
   return out;
 }
 
-namespace detail {
-template <Numeric S, std::size_t N, std::size_t Order>
-consteval auto nd_array_fn() {
-  if constexpr (Order == 0) {
-    return std::type_identity<S>{};
-  } else {
-    return std::type_identity<std::array<
-        typename decltype(nd_array_fn<S, N, Order - 1>())::type, N>>{};
-  }
-}
-} // namespace detail
-
-template <Numeric S, std::size_t N, std::size_t Order>
-using nd_array_t = typename decltype(detail::nd_array_fn<S, N, Order>())::type;
-
-// arr[idx[0]][idx[1]]...[idx[Order-1]]
-template <std::size_t Order>
-constexpr auto &nd_index(auto &arr, std::span<const std::size_t> idx) noexcept {
-  if constexpr (Order == 0) {
-    return arr;
-  } else {
-    return nd_index<Order - 1>(arr[idx[0]], idx.subspan(1));
-  }
-}
+// nd_array_t and nd_index used to live here: a recursively nested std::array
+// plus a recursive operator[] walk over a span of indices.  Both are now
+// md_tensor (include/md/tensor.hpp), which puts the rank in an md::extents
+// instead of in the type nesting and gets the index walk from a layout
+// mapping.  nd_tensor_t<S, N, Order> is the direct replacement, and the
+// t[i][j][k] spelling those callers used still works.
 
 enum class DiffMode { Symbolic, Forward, Reverse };
 namespace detail {
@@ -177,7 +160,7 @@ template <CExpression Expr,
 [[nodiscard]] constexpr auto
 reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  std::array<std::array<S, N>, N> H{};
+  nd_tensor_t<S, N, 2> H{};
 
   // The value level is the point and is the same for every column; only the
   // tangent moves, so build the seeds once and toggle one derivative per sweep.
@@ -198,8 +181,10 @@ reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
     const auto column = grads | std::views::transform([](const T &g) {
                           return g.template get<1>();
                         });
-    for (auto &&[row, entry] : std::views::zip(H, column)) {
-      row[j] = entry;
+    // The tensor is not a range of rows the way the nested array was, so the
+    // row index is zipped in rather than walked implicitly.
+    for (auto &&[i, entry] : std::views::zip(std::views::iota(0uz, N), column)) {
+      H[i, j] = entry;
     }
   }
   return H;
@@ -219,6 +204,74 @@ constexpr nth_dual_t<S, Depth> make_mixed_seed(S value,
     auto outer_tangent = embed_constant<S, Depth - 1>(k == idx[0] ? S{1} : S{});
     return nth_dual_t<S, Depth>{std::move(inner), std::move(outer_tangent)};
   }
+}
+
+// Every multi-index of a rank-Order tensor with uniform extent N, in
+// layout_right order: the cartesian product of Order copies of [0, N).  The
+// index_sequence element is discarded — it exists only to give the pack
+// something to expand over.
+template <std::size_t N, std::size_t Order>
+[[nodiscard]] constexpr auto index_grid() noexcept {
+  return []<std::size_t... D>(std::index_sequence<D...>) {
+    return std::views::cartesian_product(
+        ((void)D, std::views::iota(std::size_t{0}, N))...);
+  }(std::make_index_sequence<Order>{});
+}
+
+// The multi-indices a symmetric rank-Order tensor actually has to evaluate:
+// the non-decreasing ones, C(N + Order - 1, Order) of them rather than
+// N^Order.  Mixed partials commute (Clairaut/Schwarz), so each of those is the
+// canonical representative of a permutation class whose members all name the
+// same packed cell.
+//
+// Enumerated directly rather than as `index_grid | views::filter(is_sorted)`.
+// That spelling was shorter and wrong on cost: filtering still *walks* all
+// N^Order tuples and throws most away, so it saved the evaluations but not the
+// traversal — measured 4x SLOWER than the dense loop on a cheap expression at
+// N=2/Order=2, where one evaluation is saved and four tuples are still visited.
+// Advancing to the next non-decreasing tuple directly makes the traversal
+// O(C(N + Order - 1, Order)) too.
+// It is a consteval *table* rather than a lazy iterator, and that is the whole
+// point.  An iterator that stops on a data-dependent flag hides the trip count
+// from the optimiser, which costs far more than the traversal it saves: the
+// generic loop below then stops unrolling, and a derivative tensor that used to
+// fold to constants (the Hessian of x^2 + xy + y^2 does not depend on the
+// point) stops folding.  Measured 4x slower that way.  A table has a
+// compile-time size, so the loop over it unrolls exactly as the old flat
+// counter loop did, and the traversal is C(N + Order - 1, Order) rather than
+// N^Order.
+template <std::size_t N, std::size_t Order>
+  requires(N > 0 && Order > 0)
+consteval auto simplex_index_table() noexcept {
+  // binomial() lives in md/layouts.hpp, same namespace — the layout's own
+  // cell count, so the table and the storage cannot disagree on the size.
+  std::array<std::array<std::size_t, Order>, binomial(N + Order - 1, Order)>
+      out{};
+  std::array<std::size_t, Order> idx{};
+  for (auto &slot : out) {
+    slot = idx;
+    // Advance to the next non-decreasing tuple: raise the rightmost position
+    // that can still be raised, and collapse everything right of it onto the
+    // new value, which is what keeps the tuple sorted.
+    for (std::size_t p = Order; p-- > 0;) {
+      if (idx[p] + 1 < N) {
+        const std::size_t v = ++idx[p];
+        std::ranges::fill(idx | std::views::drop(p + 1), v);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+// Instantiated once per (N, Order), so the walk above runs once however many
+// callers ask for the table.
+template <std::size_t N, std::size_t Order>
+inline constexpr auto simplex_index_table_v = simplex_index_table<N, Order>();
+
+template <std::size_t N, std::size_t Order>
+[[nodiscard]] constexpr const auto &symmetric_index_grid() noexcept {
+  return simplex_index_table_v<N, Order>;
 }
 
 template <std::size_t N, Numeric T>
@@ -241,7 +294,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   using U = nth_dual_t<S, Order>;
 
-  nd_array_t<S, N, Order> result{};
+  nd_tensor_t<S, N, Order> result{};
 
   // First-order gradient fast path (N >= 3): one vector-forward pass instead of
   // N scalar Dual passes.  Seeding identity tangents into a VectorDual<N>
@@ -263,18 +316,19 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
       seeds[k].grad[k] = double{1};
     }
     const V r = expr.template eval_seeded_as<V, symbols>(seeds);
-    std::ranges::copy_n(r.grad.begin(), N, result.begin());
+    // Rank 1 under layout_right: storage order is index order, so the lane
+    // pack copies straight into the tensor's cells.
+    std::ranges::copy_n(r.grad.begin(), N, result.data());
     return result;
   }
 
   // First-order, low arity: one plain Dual pass per variable.  The generic
   // tensor loop below can do this, but only through machinery that is pure
-  // overhead at Order == 1 — a runtime flat-index unranking (`tmp % N`,
-  // `tmp /= N`) and make_mixed_seed's recursive span walk, none of it constant
-  // enough for the compiler to unroll the N == 2 case.  Here the seeded
-  // variable J is a template parameter, so `k == J` folds away and the passes
-  // become straight-line code instead of a rolled loop over stack-resident
-  // seeds.
+  // overhead at Order == 1 — a runtime index walk over the cartesian grid and
+  // make_mixed_seed's recursive span walk, none of it constant enough for the
+  // compiler to unroll the N == 2 case.  Here the seeded variable J is a
+  // template parameter, so `k == J` folds away and the passes become
+  // straight-line code instead of a rolled loop over stack-resident seeds.
   if constexpr (Order == 1) {
     [&]<std::size_t... J>(std::index_sequence<J...>) {
       auto sweep = [&]<std::size_t Seeded>() {
@@ -290,25 +344,32 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
     return result;
   }
   
-  std::size_t total = 1;
-  for (std::size_t d = 0; d < Order; ++d) {
-    total *= N;
-  }
-
-  for (std::size_t flat = 0; flat < total; ++flat) {
-    std::array<std::size_t, Order> idx{};
-    std::size_t tmp = flat;
-    for (int d = (int)Order - 1; d >= 0; --d) {
-      idx[d] = tmp % N;
-      tmp /= N;
-    }
-
+  // The multi-indices worth evaluating.  This used to be a flat counter plus a
+  // hand-written `tmp % N; tmp /= N` unranking — layout_right's inverse
+  // mapping, open-coded — running over all N^Order of them.
+  //
+  // Two things changed.  cartesian_product says the unranking directly, and
+  // because it is a view the symmetry becomes one filter in front of it: the
+  // tensor is symmetric in every pair of axes, so the permutations of a
+  // multi-index all name the same packed cell and evaluating more than one of
+  // them is recomputation.  That takes the sweep count from N^Order to
+  // C(N + Order - 1, Order) — at Order 3 over 6 variables, 56 sweeps instead
+  // of 216, each one a full seeded evaluation of the expression.
+  // Left as a plain loop over the table.  Unrolling it with the multi-index as
+  // a template parameter looks like the obvious next step — the Order == 1
+  // path above does exactly that — but it needs the index to be nameable
+  // inside the seeding lambda without capture, i.e. `static constexpr`, and
+  // that puts it in static storage and stops it folding at all: measured 33 ns
+  // against 4.6 ns for this loop on the quadratic THess case.
+  for (const auto &idx : detail::symmetric_index_grid<N, Order>()) {
     std::array<U, N> seeds{};
-    for (std::size_t k = 0; k < N; ++k) {
-      seeds[k] = make_mixed_seed<S, Order>(values[k], idx, k);
-    }
+    std::ranges::transform(
+        values, std::views::iota(0uz, N), seeds.begin(),
+        [&idx](const S &v, std::size_t k) {
+          return make_mixed_seed<S, Order>(v, idx, k);
+        });
     U val = expr.template eval_seeded_as<U, symbols>(seeds);
-    nd_index<Order>(result, idx) = extract_nth<Order>(val);
+    result.at_index(idx) = extract_nth<Order>(val);
   }
   return result;
 }

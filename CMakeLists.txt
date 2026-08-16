@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-# Equation::get<N>() has two spellings behind __cpp_explicit_this_parameter: one
-# definition using deducing this (P0847), and an explicit overload set for
-# toolchains without it.  Both compile and behave identically, so nothing here
+# The accessors -- Equation::get<N>(), ValueMap::get<S>() and Bound::get<S>(),
+# plus their operator[] spellings -- have two forms behind DIFF_DEDUCING_THIS
+# (include/config.hpp): one definition using deducing this (P0847), and an
+# explicit overload set for toolchains without it.  Each pair shares a single
+# static slot() body, so they compile and behave identically and nothing here
 # is a hard requirement -- but our own builds should exercise the deducing-this
 # path, and the default /usr/bin/c++ is still GCC 13, which lacks it.  Pick the
 # newest GCC on PATH when the caller has not chosen a compiler; a caller who
@@ -24,11 +26,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Report which of the two get<N>() spellings this toolchain will take, so a
-# stale compiler selection is visible at configure time rather than only in a
-# disassembly.  Clang implements P0847 from 18 without defining the macro, so
-# it is reported as taking the fallback -- which it does, correctly.
+# Which accessor spelling this build takes, and why -- see include/config.hpp,
+# which owns the decision and is the only header that names P0847's macro.  The
+# option is here so the choice is visible at configure time rather than only in
+# a disassembly, and so a stale compiler selection is caught immediately.
+#
+#   auto - the compiler's own answer (__cpp_explicit_this_parameter)
+#   on   - deducing this even where the macro is absent.  Clang implements P0847
+#          from 18 without ever defining it, so `auto` is merely conservative
+#          there and this is the switch that says so.
+#   off  - the ref-qualified overload set even where the feature works, for a
+#          build whose other tools cannot parse it yet.
+#
+# Two probes, because the macro and the feature are not the same question: the
+# first asks what the compiler advertises (what `auto` will pick up), the second
+# whether the feature actually compiles (what `on` requires).
 include(CheckCXXSourceCompiles)
+set(DIFF_DEDUCING_THIS "auto" CACHE STRING "Accessor spelling: auto|on|off")
+set_property(CACHE DIFF_DEDUCING_THIS PROPERTY STRINGS auto on off)
+
 set(CMAKE_REQUIRED_FLAGS "-std=c++23")
 check_cxx_source_compiles(
         "struct S { int f(this S) { return 0; } };
@@ -37,11 +53,77 @@ check_cxx_source_compiles(
          #endif
          int main() { return S{}.f(); }"
         DIFF_HAS_DEDUCING_THIS)
+check_cxx_source_compiles(
+        "struct S { int f(this S) { return 0; } };
+         int main() { return S{}.f(); }"
+        DIFF_DEDUCING_THIS_COMPILES)
 unset(CMAKE_REQUIRED_FLAGS)
-if (DIFF_HAS_DEDUCING_THIS)
-    message(STATUS "Equation::get<N>: deducing this (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+
+if (DIFF_DEDUCING_THIS STREQUAL "on" AND NOT DIFF_DEDUCING_THIS_COMPILES)
+    message(FATAL_ERROR
+            "DIFF_DEDUCING_THIS=on but ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} "
+            "cannot compile an explicit object parameter.  Use DIFF_DEDUCING_THIS=auto or =off.")
+elseif (DIFF_DEDUCING_THIS STREQUAL "on")
+    set(DIFF_DEDUCING_THIS_VALUE 1)
+elseif (DIFF_DEDUCING_THIS STREQUAL "off")
+    set(DIFF_DEDUCING_THIS_VALUE 0)
+elseif (DIFF_DEDUCING_THIS STREQUAL "auto")
+    # Leave it undefined and let config.hpp decide, so a consumer compiling
+    # against the installed headers without this CMake file gets the same
+    # answer as one building through it.
+    unset(DIFF_DEDUCING_THIS_VALUE)
 else ()
-    message(STATUS "Equation::get<N>: ref-qualified overload set (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+    message(FATAL_ERROR "DIFF_DEDUCING_THIS must be auto, on or off (got '${DIFF_DEDUCING_THIS}').")
+endif ()
+
+if (DEFINED DIFF_DEDUCING_THIS_VALUE AND DIFF_DEDUCING_THIS_VALUE)
+    message(STATUS "accessors: deducing this, forced on (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+elseif (DEFINED DIFF_DEDUCING_THIS_VALUE)
+    message(STATUS "accessors: ref-qualified overload set, forced off (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+elseif (DIFF_HAS_DEDUCING_THIS)
+    message(STATUS "accessors: deducing this (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+else ()
+    message(STATUS "accessors: ref-qualified overload set (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+endif ()
+
+# include/md/md.hpp needs an mdspan.  No toolchain we target ships one yet --
+# libstdc++ 15.2 has no <mdspan> at all -- and three of the pieces the layouts
+# and drivers use (submdspan, the padded layouts, the accessor machinery around
+# them) are C++26 even where <mdspan> does exist.  So the reference
+# implementation is vendored under include/md/third_party and this probe decides
+# which one md.hpp binds to, the same way the deducing-this probe above reports
+# which get<N>() spelling is live.
+#
+#   auto     - standard <mdspan> when it is complete enough, vendored otherwise
+#   std      - require the standard one; hard error if incomplete
+#   vendored - always the vendored one, so that path stays continuously built
+set(DIFF_MDSPAN_MODE "auto" CACHE STRING "Which mdspan md.hpp binds to: auto|std|vendored")
+set_property(CACHE DIFF_MDSPAN_MODE PROPERTY STRINGS auto std vendored)
+
+set(CMAKE_REQUIRED_FLAGS "-std=c++23")
+check_cxx_source_compiles(
+        "#include <version>
+         #if !defined(__cpp_lib_mdspan) || __cpp_lib_mdspan < 202207L
+         #error no mdspan
+         #endif
+         #if !defined(__cpp_lib_submdspan) || __cpp_lib_submdspan < 202306L
+         #error no submdspan
+         #endif
+         #include <mdspan>
+         int main() { double a[2]{}; std::mdspan m(a, 2); return (int)m.extent(0) - 2; }"
+        DIFF_HAS_STD_MDSPAN)
+unset(CMAKE_REQUIRED_FLAGS)
+
+if (DIFF_MDSPAN_MODE STREQUAL "std" AND NOT DIFF_HAS_STD_MDSPAN)
+    message(FATAL_ERROR
+            "DIFF_MDSPAN_MODE=std but ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} "
+            "has no complete <mdspan>/<submdspan>.  Use DIFF_MDSPAN_MODE=auto or =vendored.")
+elseif (DIFF_MDSPAN_MODE STREQUAL "vendored" OR NOT DIFF_HAS_STD_MDSPAN)
+    set(DIFF_MDSPAN_VENDORED ON)
+    message(STATUS "mdspan: vendored reference implementation (include/md/third_party/mdspan.hpp)")
+else ()
+    set(DIFF_MDSPAN_VENDORED OFF)
+    message(STATUS "mdspan: standard <mdspan> (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
 endif ()
 
 option(DIFF_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
@@ -118,6 +200,7 @@ endif ()
 # Use CMAKE_CURRENT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so this file works
 # both standalone and as a git submodule via add_subdirectory().
 add_library(diff INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/config.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/fixed_string.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/expressions.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/operations.hpp
@@ -130,6 +213,10 @@ add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dual.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/forward_driver.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/gradient.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/md.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/tensor.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/layouts.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/third_party/mdspan.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/named_value.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/bound.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/scope_guard.hpp
@@ -147,6 +234,12 @@ target_include_directories(diff INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 if (DIFF_USE_EIGEN)
     target_link_libraries(diff INTERFACE Eigen3::Eigen)
     target_compile_definitions(diff INTERFACE DIFF_USE_EIGEN)
+endif ()
+if (DIFF_MDSPAN_VENDORED)
+    target_compile_definitions(diff INTERFACE DIFF_MDSPAN_FORCE_VENDORED)
+endif ()
+if (DEFINED DIFF_DEDUCING_THIS_VALUE)
+    target_compile_definitions(diff INTERFACE DIFF_DEDUCING_THIS=${DIFF_DEDUCING_THIS_VALUE})
 endif ()
 
 # Only build the standalone executables when this is the top-level project.

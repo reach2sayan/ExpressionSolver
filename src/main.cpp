@@ -69,7 +69,7 @@ int main() {
 
   auto J3 = ve3.symbolic_mode_jac(pt3);
   std::cout << "Jacobian:\n";
-  for (const auto &row : J3) {
+  for (const auto &row : J3.rows()) {
     std::cout << "  [";
     for (std::size_t j = 0; j < row.size(); ++j)
       std::cout << (j ? ", " : "") << row[j];

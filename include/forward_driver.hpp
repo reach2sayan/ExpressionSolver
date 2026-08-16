@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dual.hpp"
+#include "md/md.hpp"          // md::mdspan — the Hessian's 2D view
 #include "scope_guard.hpp" // scoped_value — RAII for the per-probe seed toggle
 
 #include <algorithm>
@@ -47,24 +48,59 @@ inline std::vector<std::size_t> iota_indices(std::size_t n) {
 struct HessianResult {
   double value{};               // f(x)
   std::vector<double> gradient; // size = active.size()
-  std::vector<double> hessian;  // row-major, active.size() x active.size()
+  std::vector<double> hessian;  // active.size() x active.size(), see matrix()
 
-  [[nodiscard]] constexpr std::size_t n() const noexcept {
-    return gradient.size();
+  // The extent is stored rather than recovered from gradient.size().  It is
+  // the same number, but a Hessian's shape is not a fact about the gradient's
+  // length, and every index below now goes through a mapping that has to be
+  // handed one.
+  std::size_t extent{};
+
+  // The single place the buffers get their size, so the two vectors and the
+  // extent cannot drift apart.
+  void resize(std::size_t m) {
+    extent = m;
+    gradient.assign(m, 0.0);
+    hessian.assign(m * m, 0.0);
   }
+
+  [[nodiscard]] constexpr std::size_t n() const noexcept { return extent; }
+
+  // The Hessian as what it actually is: a rank-2 row-major view, so a caller
+  // gets extents and a mapping instead of being told in a comment.
+  //
+  // The drivers deliberately do NOT go through this.  Slicing their sweeps with
+  // submdspan reads better but measured 8-16% slower on the HessExpr
+  // benchmarks, and a Hessian sweep is the one place in this library where that
+  // cost lands in a loop.  Here it is opt-in and costs nothing unless asked
+  // for; h() likewise indexes the buffer directly rather than building a view
+  // per call.
+  [[nodiscard]] constexpr auto matrix() & noexcept {
+    return md::mdspan<double, md::dextents<std::size_t, 2>>(hessian.data(),
+                                                            extent, extent);
+  }
+  [[nodiscard]] constexpr auto matrix() const & noexcept {
+    return md::mdspan<const double, md::dextents<std::size_t, 2>>(
+        hessian.data(), extent, extent);
+  }
+  // A view onto a temporary's buffer would dangle the moment the full
+  // expression ends, and unlike h() there is no copy-out to fall back on.
+  auto matrix() && = delete;
+  auto matrix() const && = delete;
+
   // Lvalue-only: this hands out a reference into `hessian`, so binding it to
   // the result of a hessian() call directly would outlive the buffer.  On a
   // temporary the const overload below is selected instead and copies out.
   [[nodiscard]] constexpr double &h(std::size_t i, std::size_t j) & noexcept {
-    return hessian[i * n() + j];
+    return hessian[i * extent + j];
   }
   [[nodiscard]] constexpr double h(std::size_t i,
                                    std::size_t j) const & noexcept {
-    return hessian[i * n() + j];
+    return hessian[i * extent + j];
   }
   [[nodiscard]] constexpr double h(std::size_t i,
                                    std::size_t j) const && noexcept {
-    return hessian[i * n() + j];
+    return hessian[i * extent + j];
   }
 };
 
@@ -109,8 +145,7 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
   const std::size_t m = active.size();
 
   HessianResult res;
-  res.gradient.assign(m, 0.0);
-  res.hessian.assign(m * m, 0.0);
+  res.resize(m);
 
   std::vector<dual2nd> dof(n);
   using Inner = Dual<double>;

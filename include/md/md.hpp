@@ -1,0 +1,173 @@
+#pragma once
+
+// ===========================================================================
+// The one place the library says "mdspan".
+//
+// C++23 standardised std::mdspan, but no toolchain this library targets ships
+// it yet: libstdc++ 15.2 has nothing (its only trace is a `// FIXME <mdspan>`
+// in bits/std.cc), and clang here uses that same libstdc++.  Worse, three of
+// the four pieces we actually want — submdspan, the padded layouts, mdarray —
+// are C++26, so even a libstdc++ that grows <mdspan> would only get us part of
+// the way.
+//
+// So the reference implementation is vendored (include/third_party/mdspan.hpp,
+// Apache-2.0 WITH LLVM-exception) into its own namespace, and this header
+// picks between it and the standard one at compile time.  Everything else in
+// the library spells these names `diff::md::...` and never learns which it
+// got.  When a real <mdspan> shows up, the only edit is deleting the vendored
+// branch.
+//
+// The re-exports are explicit `using` declarations rather than a namespace
+// alias on purpose: `namespace md = std` would drag every name in std into
+// diff::md, and `diff::md::vector` should not be a thing that compiles.
+// ===========================================================================
+
+#include <version> // __cpp_lib_mdspan / __cpp_lib_submdspan
+
+// DIFF_MDSPAN_FORCE_VENDORED is what the CMake `DIFF_MDSPAN_MODE=vendored`
+// option sets; it exists so the vendored path stays continuously compiled even
+// on a toolchain that could use the standard one.
+#if defined(DIFF_MDSPAN_FORCE_VENDORED)
+#define DIFF_MDSPAN_USE_STD 0
+#elif __has_include(<mdspan>) && defined(__cpp_lib_mdspan) &&                   \
+    __cpp_lib_mdspan >= 202207L && defined(__cpp_lib_submdspan) &&             \
+    __cpp_lib_submdspan >= 202306L
+// Both halves or neither: a std::mdspan without std::submdspan would leave the
+// driver slicing in workstream 5 with no spelling at all, and silently falling
+// back to hand-rolled offsets is exactly the split this header exists to end.
+#define DIFF_MDSPAN_USE_STD 1
+#else
+#define DIFF_MDSPAN_USE_STD 0
+#endif
+
+#if DIFF_MDSPAN_USE_STD
+#include <mdspan>
+#define DIFF_MDSPAN_NS std
+// P2642's padded layouts rode in with the C++26 mdspan revision.
+#if __cpp_lib_mdspan >= 202406L
+#define DIFF_MDSPAN_HAS_PADDED 1
+#else
+#define DIFF_MDSPAN_HAS_PADDED 0
+#endif
+#else
+// Must be defined before the include: the vendored header guards this with
+// #ifndef and otherwise plants itself in ::std, which is UB and would collide
+// with a future real <mdspan> in the same translation unit.
+#ifndef MDSPAN_IMPL_STANDARD_NAMESPACE
+#define MDSPAN_IMPL_STANDARD_NAMESPACE diff_mdspan
+#endif
+#include "third_party/mdspan.hpp"
+#define DIFF_MDSPAN_NS MDSPAN_IMPL_STANDARD_NAMESPACE
+#define DIFF_MDSPAN_HAS_PADDED 1
+#endif
+
+#include <concepts>
+#include <cstddef>
+#include <type_traits>
+
+namespace diff::md {
+
+using DIFF_MDSPAN_NS::dextents;
+using DIFF_MDSPAN_NS::dynamic_extent;
+using DIFF_MDSPAN_NS::extents;
+using DIFF_MDSPAN_NS::mdspan;
+
+using DIFF_MDSPAN_NS::default_accessor;
+using DIFF_MDSPAN_NS::layout_left;
+using DIFF_MDSPAN_NS::layout_right;
+using DIFF_MDSPAN_NS::layout_stride;
+
+using DIFF_MDSPAN_NS::full_extent;
+using DIFF_MDSPAN_NS::full_extent_t;
+using DIFF_MDSPAN_NS::strided_slice;
+using DIFF_MDSPAN_NS::submdspan;
+using DIFF_MDSPAN_NS::submdspan_extents;
+// submdspan_mapping is deliberately not re-exported: it is the layout's own
+// customization hook and is found by ADL on the mapping type, so a custom
+// layout in diff:: supplies it as a hidden friend and submdspan() picks it up
+// without any name here.
+
+#if DIFF_MDSPAN_HAS_PADDED
+using DIFF_MDSPAN_NS::layout_left_padded;
+using DIFF_MDSPAN_NS::layout_right_padded;
+#endif
+
+namespace detail {
+template <typename T> inline constexpr bool is_extents_v = false;
+template <typename I, std::size_t... E>
+inline constexpr bool is_extents_v<extents<I, E...>> = true;
+
+template <typename T> inline constexpr bool is_mdspan_v = false;
+template <typename T, typename E, typename L, typename A>
+inline constexpr bool is_mdspan_v<mdspan<T, E, L, A>> = true;
+} // namespace detail
+
+template <typename E>
+concept CExtents = detail::is_extents_v<std::remove_cvref_t<E>>;
+
+template <typename M>
+concept CMdspan = detail::is_mdspan_v<std::remove_cvref_t<M>>;
+
+// Every extent is known at compile time, so a tensor over it can own a
+// std::array and stay usable in constant evaluation.
+template <typename E>
+concept CStaticExtents =
+    CExtents<E> && (std::remove_cvref_t<E>::rank_dynamic() == 0);
+
+// A layout mapping, checked against the extents it will actually carry.
+//
+// There is deliberately no unparameterised CLayoutPolicy: a policy is only a
+// template, and the interesting ones here are rank-constrained (the packed
+// symmetric layout static_asserts rank() == 2), so probing them with an
+// arbitrary extents type would hard-error rather than fail the concept.
+template <typename M, typename E>
+concept CLayoutMappingOf =
+    CExtents<E> && std::copyable<M> && std::equality_comparable<M> &&
+    requires(const M m) {
+      typename M::extents_type;
+      typename M::index_type;
+      typename M::rank_type;
+      typename M::layout_type;
+      // Deliberately no `M(e)`: construction from bare extents is layout
+      // specific — layout_stride's mapping needs the strides too — so it is
+      // not part of what every mapping must provide.
+      { m.extents() } -> std::convertible_to<E>;
+      { m.required_span_size() } -> std::convertible_to<typename M::index_type>;
+      { M::is_always_unique() } -> std::same_as<bool>;
+      { M::is_always_exhaustive() } -> std::same_as<bool>;
+      { M::is_always_strided() } -> std::same_as<bool>;
+      { m.is_unique() } -> std::same_as<bool>;
+      { m.is_exhaustive() } -> std::same_as<bool>;
+      { m.is_strided() } -> std::same_as<bool>;
+    };
+
+template <typename P, typename E>
+concept CLayoutFor = CExtents<E> && requires {
+  typename P::template mapping<E>;
+} && CLayoutMappingOf<typename P::template mapping<E>, E>;
+
+template <typename A>
+concept CAccessorPolicy =
+    std::copyable<A> && requires {
+      typename A::element_type;
+      typename A::reference;
+      typename A::data_handle_type;
+      typename A::offset_policy;
+    } && requires(const A a, const typename A::data_handle_type p,
+                  std::size_t i) {
+      { a.access(p, i) } -> std::same_as<typename A::reference>;
+      {
+        a.offset(p, i)
+      } -> std::same_as<typename A::offset_policy::data_handle_type>;
+    };
+
+static_assert(CExtents<extents<std::size_t, 2, 3>>);
+static_assert(CStaticExtents<extents<std::size_t, 2, 3>>);
+static_assert(!CStaticExtents<dextents<std::size_t, 2>>);
+static_assert(CMdspan<mdspan<double, dextents<std::size_t, 2>>>);
+static_assert(CLayoutFor<layout_right, extents<std::size_t, 2, 3>>);
+static_assert(CLayoutFor<layout_left, dextents<std::size_t, 2>>);
+static_assert(CLayoutFor<layout_stride, dextents<std::size_t, 2>>);
+static_assert(CAccessorPolicy<default_accessor<double>>);
+
+} // namespace diff::md

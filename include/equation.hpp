@@ -1,4 +1,5 @@
 #pragma once
+#include "config.hpp"
 #include "dual.hpp"
 #include "gradient.hpp"
 #include "mpl.hpp"
@@ -92,13 +93,14 @@ private:
   jacobian_symbolic(const point_t &vals) const noexcept
     requires(input_dim > 0)
   {
-    std::array<std::array<value_type, input_dim>, output_dim> J{};
+    md_tensor<value_type, md::extents<std::size_t, output_dim, input_dim>> J{};
     static_for<output_dim>([&]<std::size_t I>() {
-      J[I] = std::apply(
-          [&](const auto &...ds) {
-            return detail::eval_all<symbols>(vals, ds...);
-          },
-          std::get<I>(jacobian_data));
+      assign_row(J, I,
+                 std::apply(
+                     [&](const auto &...ds) {
+                       return detail::eval_all<symbols>(vals, ds...);
+                     },
+                     std::get<I>(jacobian_data)));
     });
     return J;
   }
@@ -107,12 +109,16 @@ private:
   jacobian_reverse_mode(const point_t &vals) const noexcept
     requires(input_dim > 0)
   {
-    std::array<std::array<value_type, input_dim>, output_dim> J{};
+    md_tensor<value_type, md::extents<std::size_t, output_dim, input_dim>> J{};
     static_for<output_dim>([&]<std::size_t I>() {
       const auto &e = std::get<I>(expressions);
       node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
       fill_cache<0, symbols>(e, vals, cache);
-      e.backward(symbols{}, value_type{1}, J[I], cache);
+      // backward() writes through a CNumericBuffer, so the sweep fills a plain
+      // array and the row lands in the tensor afterwards.
+      std::array<value_type, input_dim> row{};
+      e.backward(symbols{}, value_type{1}, row, cache);
+      assign_row(J, I, row);
     });
     return J;
   }
@@ -123,7 +129,7 @@ private:
     requires(DualLike<value_type> && input_dim > 0)
   {
     using S = dual_scalar_t<value_type>;
-    std::array<std::array<std::array<S, input_dim>, input_dim>, output_dim> H{};
+    nd_stack_t<S, output_dim, input_dim, 2> H{};
 
     // Values are the point and never move; only the seeded tangent does.
     point_t seeds{};
@@ -145,8 +151,9 @@ private:
         const auto column =
             grads | std::views::transform(
                         [](const value_type &g) { return g.template get<1>(); });
-        for (auto &&[row, entry] : std::views::zip(H[K], column)) {
-          row[j] = entry;
+        for (auto &&[i, entry] :
+             std::views::zip(std::views::iota(0uz, input_dim), column)) {
+          H[K, i, j] = entry;
         }
       });
     }
@@ -160,30 +167,34 @@ private:
   {
     using S = scalar_base_t<value_type>;
     using U = nth_dual_t<S, Order>;
-    std::array<nd_array_t<S, input_dim, Order>, output_dim> result{};
+    nd_stack_t<S, output_dim, input_dim, Order> result{};
 
-    std::size_t total = 1;
-    for (std::size_t d = 0; d < Order; ++d) {
-      total *= input_dim;
-    }
-
-    for (std::size_t flat = 0; flat < total; ++flat) {
-      std::array<std::size_t, Order> idx{};
-      std::size_t tmp = flat;
-      for (int d = (int)Order - 1; d >= 0; --d) {
-        idx[d] = tmp % input_dim;
-        tmp /= input_dim;
-      }
+    // Was a flat counter plus a hand-written `tmp % input_dim; tmp /= input_dim`
+    // unranking — layout_right's inverse mapping, open-coded — over all
+    // input_dim^Order multi-indices.  The grid says the unranking directly, the
+    // symmetry filter drops every permutation but one, and both are shared with
+    // derivative_tensor_impl in gradient.hpp rather than written out again
+    // here.  Note the saving multiplies: each skipped multi-index skips a sweep
+    // per output.
+    for (const auto &idx : detail::symmetric_index_grid<input_dim, Order>()) {
 
       std::array<U, input_dim> seeds{};
-      for (std::size_t k = 0; k < input_dim; ++k) {
-        seeds[k] = detail::make_mixed_seed<S, Order>(values[k], idx, k);
-      }
+      std::ranges::transform(values, std::views::iota(0uz, input_dim),
+                             seeds.begin(),
+                             [&idx](const S &v, std::size_t k) {
+                               return detail::make_mixed_seed<S, Order>(v, idx,
+                                                                        k);
+                             });
 
       static_for<output_dim>([&]<std::size_t OUT>() {
         U val = std::get<OUT>(expressions)
                     .template eval_seeded_as<U, symbols>(seeds);
-        nd_index<Order>(result[OUT], idx) = detail::extract_nth<Order>(val);
+        // The output axis leads, so the stacked index is OUT followed by the
+        // multi-index.
+        const auto stacked = [&]<std::size_t... K>(std::index_sequence<K...>) {
+          return std::array<std::size_t, Order + 1>{OUT, idx[K]...};
+        }(std::make_index_sequence<Order>{});
+        result.at_index(stacked) = detail::extract_nth<Order>(val);
       });
     }
     return result;
@@ -235,22 +246,22 @@ public:
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
   // canonical symbol order.  The index is a template argument, so no tag type
   // is involved.
-#ifdef __cpp_explicit_this_parameter
+#if DIFF_DEDUCING_THIS
   template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get(this auto &&self) noexcept
+  [[nodiscard]] constexpr decltype(auto) get(DIFF_SELF) noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    return slot<N>(std::forward<decltype(self)>(self));
+    return slot<N>(DIFF_FWD_SELF);
   }
 
   // Subscript spelling of the same thing.  operator[] has no template-argument
   // syntax, so the index arrives as an empty idx_t value (see idx<N>()).
   template <std::size_t N>
   [[nodiscard]] constexpr decltype(auto)
-  operator[](this auto &&self, idx_t<N>) noexcept
+  operator[](DIFF_SELF, idx_t<N>) noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    return slot<N>(std::forward<decltype(self)>(self));
+    return slot<N>(DIFF_FWD_SELF);
   }
 #else
   template <std::size_t N>

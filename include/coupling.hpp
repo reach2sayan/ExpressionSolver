@@ -1,6 +1,7 @@
 #pragma once
 
 #include "expressions.hpp"
+#include "md/md.hpp"
 #include "mpl.hpp"
 #include "operations.hpp"
 #include "traits.hpp"
@@ -12,6 +13,7 @@
 #include <functional>
 #include <numeric>
 #include <ranges>
+#include <span>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -283,6 +285,118 @@ consteval scatter_map<N> sparse_slots() noexcept {
     }
   }
   return slots;
+}
+
+// ===========================================================================
+// layout_sparse_pattern<Expr> — the compressed Hessian, indexed as if dense.
+//
+// sparse_layout<Expr>() already fixes, at compile time, which (i, j) pairs are
+// structurally nonzero and which slot of the value array each one occupies.
+// That is exactly a layout mapping, so saying so lets a caller write H[i, j]
+// over storage that only ever holds the nnz values.
+//
+// The wrinkle is totality: an mdspan mapping has to return an offset for every
+// index inside its extents, and a structural zero has no slot.  So the span is
+// nnz + 1 cells and every structural zero maps to the last one, which the
+// owner keeps at zero.  Reads of a structural zero then give 0.0, which is the
+// right answer; writes to one land in that shared cell and are discarded,
+// which is the right behaviour for a pattern that says the entry cannot be
+// nonzero.  It costs uniqueness — hence is_always_unique() == false.
+// ===========================================================================
+template <CExpression Expr,
+          std::size_t N = mpl::mp_size(
+              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{}),
+          std::size_t NNZ = hessian_nnz<Expr>()>
+consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {
+  constexpr auto layout = sparse_layout<Expr>();
+  // Everything is the sink until the pattern says otherwise.
+  std::array<std::size_t, N * N> table{};
+  table.fill(NNZ);
+  for (const auto j : std::views::iota(0uz, N)) {
+    for (const auto k :
+         std::views::iota(static_cast<std::size_t>(layout.outer[j]),
+                          static_cast<std::size_t>(layout.outer[j + 1]))) {
+      const auto i = static_cast<std::size_t>(layout.inner[k]);
+      table[i * N + j] = k;
+    }
+  }
+  return table;
+}
+
+template <CExpression Expr> struct layout_sparse_pattern {
+  using expr_type = std::remove_cvref_t<Expr>;
+  static constexpr std::size_t kN =
+      mpl::mp_size(extract_symbols_from_expr_t<expr_type>{});
+  static constexpr std::size_t kNnz = hessian_nnz<expr_type>();
+  // One copy in the binary, shared by every mapping and every call — the same
+  // property the compressed index arrays already have.
+  static constexpr auto kTable = sparse_slot_table<expr_type>();
+
+  template <md::CExtents Ext> class mapping {
+    static_assert(Ext::rank() == 2);
+
+  public:
+    using extents_type = Ext;
+    using index_type = typename Ext::index_type;
+    using rank_type = typename Ext::rank_type;
+    using layout_type = layout_sparse_pattern;
+
+    constexpr mapping() noexcept = default;
+    constexpr explicit mapping(const Ext &e) noexcept : ext_(e) {}
+
+    [[nodiscard]] constexpr const Ext &extents() const noexcept { return ext_; }
+
+    [[nodiscard]] constexpr index_type required_span_size() const noexcept {
+      return static_cast<index_type>(kNnz + 1);
+    }
+
+    [[nodiscard]] constexpr index_type operator()(index_type i,
+                                                  index_type j) const noexcept {
+      return static_cast<index_type>(
+          kTable[static_cast<std::size_t>(i) * kN +
+                 static_cast<std::size_t>(j)]);
+    }
+
+    // True when (i, j) is in the pattern rather than aliasing the sink — the
+    // question a caller has to be able to ask before writing.
+    [[nodiscard]] constexpr bool contains(index_type i,
+                                          index_type j) const noexcept {
+      return static_cast<std::size_t>((*this)(i, j)) != kNnz;
+    }
+
+    static constexpr bool is_always_unique() noexcept { return false; }
+    static constexpr bool is_always_exhaustive() noexcept { return false; }
+    static constexpr bool is_always_strided() noexcept { return false; }
+    [[nodiscard]] constexpr bool is_unique() const noexcept { return false; }
+    [[nodiscard]] constexpr bool is_exhaustive() const noexcept {
+      return false;
+    }
+    [[nodiscard]] constexpr bool is_strided() const noexcept { return false; }
+
+    [[nodiscard]] friend constexpr bool operator==(const mapping &a,
+                                                   const mapping &b) noexcept {
+      return a.ext_ == b.ext_;
+    }
+
+  private:
+    Ext ext_{};
+  };
+};
+
+// A compressed value buffer, read as though it were the dense N x N matrix.
+//
+// Eigen-free on purpose: the sparse Hessian's *structure* is this library's
+// own compile-time property, so being able to index it should not depend on
+// the interop boundary being compiled in.  The buffer must hold nnz + 1
+// doubles — hessian_values_sparse allocates exactly that — with the last cell
+// left at zero to serve as the structural-zero sink.
+template <CExpression Expr>
+[[nodiscard]] constexpr auto sparse_matrix_view(std::span<const double> values)
+    noexcept {
+  using L = layout_sparse_pattern<std::remove_cvref_t<Expr>>;
+  using Ext = md::extents<std::size_t, L::kN, L::kN>;
+  return md::mdspan<const double, Ext, L>(values.data(),
+                                          typename L::template mapping<Ext>{});
 }
 
 } // namespace diff

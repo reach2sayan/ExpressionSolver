@@ -27,11 +27,18 @@ namespace diff {
 using EigenDenseMatrix =
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
-// Views, not conversions
+// Views, not conversions.  Built from HessianResult::matrix() rather than from
+// the raw buffer, so the row-major claim above is inherited from that view's
+// md::layout_right instead of being asserted a second time here.
 [[nodiscard]] inline Eigen::Map<const EigenDenseMatrix>
 as_matrix(const HessianResult &h) noexcept {
-  const auto n = static_cast<Eigen::Index>(h.n());
-  return {h.hessian.data(), n, n};
+  const auto m = h.matrix();
+  static_assert(std::same_as<typename decltype(m)::layout_type,
+                             md::layout_right>,
+                "as_matrix maps Eigen::RowMajor onto the Hessian's own view; "
+                "if that view stops being row-major this mapping is wrong");
+  return {m.data_handle(), static_cast<Eigen::Index>(m.extent(0)),
+          static_cast<Eigen::Index>(m.extent(1))};
 }
 
 [[nodiscard]] inline Eigen::Map<const Eigen::VectorXd>
@@ -75,8 +82,29 @@ public:
             values_.data()};
   }
 
-  [[nodiscard]] const std::vector<double> &values() const noexcept {
-    return values_;
+  // The compressed buffer read as the dense matrix it stands for.  The
+  // pattern is a compile-time property of Expr, so it is a layout mapping;
+  // structural zeros share one sink cell and read back as exactly 0.0, which
+  // is what they are.  Nothing here is Eigen — sparse_matrix_view lives in
+  // coupling.hpp and works with DIFF_USE_EIGEN=OFF.
+  [[nodiscard]] auto view() const noexcept {
+    return sparse_matrix_view<E>(values_);
+  }
+  [[nodiscard]] double operator[](std::size_t i, std::size_t j) const noexcept {
+    return view()[i, j];
+  }
+  // Whether (i, j) is in the pattern at all, as opposed to reading 0.0 because
+  // the structure says it cannot be anything else.
+  [[nodiscard]] static constexpr bool structural(std::size_t i,
+                                                 std::size_t j) noexcept {
+    return typename layout_sparse_pattern<E>::template mapping<
+        md::extents<std::size_t, kN, kN>>{}
+        .contains(i, j);
+  }
+
+  // The nnz values, without the sink cell the view appends.
+  [[nodiscard]] std::span<const double> values() const noexcept {
+    return std::span<const double>{values_}.first(nnz);
   }
 };
 

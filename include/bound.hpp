@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.hpp"
 #include "fixed_string.hpp"
 #include "gradient.hpp"
 #include "named_value.hpp"
@@ -26,52 +27,84 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
 
   std::array<Scalar, arity> slots{};
 
-  // Lvalue-only, because it aliases `slots`.  The rvalue overload copies the
-  // scalar out instead, so `values(named<"x">(1.0)).get<"x">()` stays valid.
+  // The one body behind get<S>(), set<S>() and operator[](symbol_type<S>).
+  // Taking the object as an ordinary forwarded parameter keeps it spellable on
+  // compilers without deducing this.  An lvalue map hands back the slot itself,
+  // constness intact; an rvalue map hands back a value, never a reference into
+  // the temporary.
   template <FixedString S>
-  [[nodiscard]] constexpr const Scalar &get() const & noexcept {
+  [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     constexpr auto idx = find_index_of_symbol<S, SymList>();
     static_assert(idx < arity, "ValueMap: symbol not present in map");
-    return slots[idx];
+    if constexpr (std::is_lvalue_reference_v<decltype(self)>) {
+      return std::forward<decltype(self)>(self).slots[idx];
+    } else {
+      return Scalar{self.slots[idx]};
+    }
+  }
+
+#if DIFF_DEDUCING_THIS
+  template <FixedString S>
+  [[nodiscard]] constexpr decltype(auto) get(DIFF_SELF) noexcept {
+    return slot<S>(DIFF_FWD_SELF);
+  }
+
+  // Subscript spelling of the same thing.  operator[] has no template-argument
+  // syntax, so the symbol arrives as an empty symbol_type value (see "x"_s).
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](DIFF_SELF, symbol_type<S>) noexcept {
+    return slot<S>(DIFF_FWD_SELF);
+  }
+#else
+  template <FixedString S>
+  [[nodiscard]] constexpr decltype(auto) get() & noexcept {
+    return slot<S>(*this);
   }
 
   template <FixedString S>
-  [[nodiscard]] constexpr Scalar get() const && noexcept {
-    constexpr auto idx = find_index_of_symbol<S, SymList>();
-    static_assert(idx < arity, "ValueMap: symbol not present in map");
-    return slots[idx];
+  [[nodiscard]] constexpr decltype(auto) get() const & noexcept {
+    return slot<S>(*this);
   }
+
+  template <FixedString S>
+  [[nodiscard]] constexpr decltype(auto) get() && noexcept {
+    return slot<S>(std::move(*this));
+  }
+
+  template <FixedString S>
+  [[nodiscard]] constexpr decltype(auto) get() const && noexcept {
+    return slot<S>(std::move(*this));
+  }
+
+  // Subscript spelling of the same thing.  operator[] has no template-argument
+  // syntax, so the symbol arrives as an empty symbol_type value (see "x"_s).
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr decltype(auto) operator[](symbol_type<S>) & noexcept {
+    return slot<S>(*this);
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](symbol_type<S>) const & noexcept {
+    return slot<S>(*this);
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](symbol_type<S>) && noexcept {
+    return slot<S>(std::move(*this));
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](symbol_type<S>) const && noexcept {
+    return slot<S>(std::move(*this));
+  }
+#endif
 
   template <FixedString S> constexpr void set(const Scalar &v) noexcept {
-    constexpr auto idx = find_index_of_symbol<S, SymList>();
-    static_assert(idx < arity, "ValueMap: symbol not present in map");
-    slots[idx] = v;
-  }
-
-  // Subscript spelling of get/set.  operator[] has no template-argument syntax,
-  // so the symbol arrives as an empty symbol_type value — sym<"x">, or "x"_s
-  // with `using namespace diff::literals`.  Same lvalue/rvalue split as get():
-  // the borrow is only offered where the map outlives the reference.
-  //
-  // This is an alias, not a replacement: get<"x">()/set<"x">() remain the
-  // primary spelling (and the one Bound and Equation match).  What the
-  // subscript adds is the mutable form, m["x"_s] = v.
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr const Scalar &
-  operator[](symbol_type<S>) const & noexcept {
-    return get<S>();
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr Scalar &operator[](symbol_type<S>) & noexcept {
-    constexpr auto idx = find_index_of_symbol<S, SymList>();
-    static_assert(idx < arity, "ValueMap: symbol not present in map");
-    return slots[idx];
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr Scalar operator[](symbol_type<S>) const && noexcept {
-    return get<S>();
+    slot<S>(*this) = v;
   }
 };
 
@@ -130,9 +163,6 @@ template <FixedString... Syms, Numeric... Vs>
 // An expression paired with a point.  The expression is empty, so this costs
 // exactly the map.
 template <CExpression Expr, CValueMap Map> struct Bound {
-  // Both members are stored by value; the remove_cvref_t below makes a
-  // reference member unrepresentable even if someone spells the arguments out.
-  // Stated so the guarantee is checked rather than merely implied.
   static_assert(!std::is_reference_v<Expr> && !std::is_reference_v<Map>,
                 "Bound stores the expression and the map by value");
   using expr_type = std::remove_cvref_t<Expr>;
@@ -145,8 +175,10 @@ template <CExpression Expr, CValueMap Map> struct Bound {
   static constexpr auto kPerm =
       detail::symbol_permutation<symbols, typename map_type::symbols, arity>();
 
-  static_assert(std::ranges::all_of(
-                    kPerm, [](std::size_t i) { return i < map_type::arity; }),
+  static_assert(std::ranges::all_of(kPerm,
+                                    [](std::size_t i) {
+                                      return i < map_type::arity;
+                                    }),
                 "bind: the map does not supply every symbol the expression "
                 "uses");
 
@@ -178,42 +210,79 @@ template <CExpression Expr, CValueMap Map> struct Bound {
   constexpr void set(const typename map_type::value_type &v) noexcept {
     map.template set<S>(v);
   }
-  // Same lvalue/rvalue split as ValueMap::get — a Bound built inline by bind()
-  // is a temporary, and the reference would point into its map.
+
+  // The one body behind get<S>() and operator[](symbol_type<S>), handed
+  // straight to the map so the two cannot drift.  Forwarding the object carries
+  // the caller's value category into map, and ValueMap::slot takes it the rest
+  // of the way -- a reference from an lvalue Bound, a value from an rvalue one.
+  template <FixedString S>
+  [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
+    return map_type::template slot<S>(std::forward<decltype(self)>(self).map);
+  }
+
+#if DIFF_DEDUCING_THIS
+  template <FixedString S>
+  [[nodiscard]] constexpr decltype(auto) get(DIFF_SELF) noexcept {
+    return slot<S>(DIFF_FWD_SELF);
+  }
+
+  // Subscript spelling; b["x"_s] = v is the reason it exists.  See the note on
+  // ValueMap::operator[].
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](DIFF_SELF, symbol_type<S>) noexcept {
+    return slot<S>(DIFF_FWD_SELF);
+  }
+#else
+  template <FixedString S>
+  [[nodiscard]] constexpr decltype(auto) get() & noexcept {
+    return slot<S>(*this);
+  }
+
   template <FixedString S>
   [[nodiscard]] constexpr decltype(auto) get() const & noexcept {
-    return map.template get<S>();
+    return slot<S>(*this);
   }
 
   template <FixedString S>
-  [[nodiscard]] constexpr typename map_type::value_type get() const && noexcept {
-    return map.template get<S>();
+  [[nodiscard]] constexpr decltype(auto) get() && noexcept {
+    return slot<S>(std::move(*this));
   }
 
-  // Subscript spelling, forwarded to the map so the two cannot drift; b["x"_s]
-  // = v is the reason it exists.  See the note on ValueMap::operator[].
+  template <FixedString S>
+  [[nodiscard]] constexpr decltype(auto) get() const && noexcept {
+    return slot<S>(std::move(*this));
+  }
+
+  // Subscript spelling; b["x"_s] = v is the reason it exists.  See the note on
+  // ValueMap::operator[].
   template <CFixedString auto S>
-  [[nodiscard]] constexpr const typename map_type::value_type &
+  [[nodiscard]] constexpr decltype(auto) operator[](symbol_type<S>) & noexcept {
+    return slot<S>(*this);
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr decltype(auto)
   operator[](symbol_type<S>) const & noexcept {
-    return map.template get<S>();
+    return slot<S>(*this);
   }
 
   template <CFixedString auto S>
-  [[nodiscard]] constexpr typename map_type::value_type &
-  operator[](symbol_type<S> s) & noexcept {
-    return map[s];
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](symbol_type<S>) && noexcept {
+    return slot<S>(std::move(*this));
   }
 
   template <CFixedString auto S>
-  [[nodiscard]] constexpr typename map_type::value_type
+  [[nodiscard]] constexpr decltype(auto)
   operator[](symbol_type<S>) const && noexcept {
-    return map.template get<S>();
+    return slot<S>(std::move(*this));
   }
+#endif
 };
 
 // Lets `Bound{expr, map}` work without naming either parameter.
-template <CExpression Expr, CValueMap Map>
-Bound(Expr, Map) -> Bound<Expr, Map>;
+template <CExpression Expr, CValueMap Map> Bound(Expr, Map) -> Bound<Expr, Map>;
 
 template <CExpression Expr, CValueMap Map>
 [[nodiscard]] constexpr auto bind(Expr &&e, Map &&m) noexcept {
@@ -228,32 +297,13 @@ template <CExpression Expr, FixedString... Syms, Numeric... Vs>
   return bind(static_cast<Expr &&>(e), values(nv...));
 }
 
-// ===========================================================================
-// Positional evaluation.
-//
-// Values are supplied in CANONICAL symbol order — alphabetical by name, not
-// source order.  Use symbol_order<Expr>() (gradient.hpp) to see that order, or
-// the named/map forms above to be immune to it.
-//
-// Both forms stay constexpr.  A `throw` inside a constexpr function is only a
-// problem if it is actually reached during constant evaluation, so a
-// too-short range is a *compile error* at compile time and an exception at
-// run time.  That is why these are not noexcept: silently evaluating at the
-// wrong point is the worst outcome an AD library can produce.
-// ===========================================================================
-
 namespace detail {
 
 template <CExpression Expr>
 using expr_symbols_t = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
 
 template <CExpression Expr>
-inline constexpr std::size_t expr_arity_v =
-    mp::mp_size(expr_symbols_t<Expr>{});
-
-// std::array and friends advertise a static size; plain ranges do not.
-template <typename R>
-concept CStaticSized = requires { std::tuple_size<std::remove_cvref_t<R>>::value; };
+inline constexpr std::size_t expr_arity_v = mp::mp_size(expr_symbols_t<Expr>{});
 
 } // namespace detail
 
@@ -268,26 +318,33 @@ template <CExpression Expr>
 namespace detail {
 
 template <CExpression Expr, CEvalArg... Args>
-[[nodiscard]] constexpr auto eval_dispatch(const Expr &e,
-                                           const Args &...args) {
+[[nodiscard]] constexpr auto eval_dispatch(const Expr &e, const Args &...args) {
   using VT = typename std::remove_cvref_t<Expr>::value_type;
   using Syms = expr_symbols_t<Expr>;
   constexpr std::size_t N = expr_arity_v<Expr>;
 
+  // clang-format off
   if constexpr (sizeof...(Args) == 0) { // constant-folded: no free symbols
     static_assert(N == 0,
                   "eval: this expression has free symbols, so it needs a point "
                   "(see symbol_order<Expr>())");
     return e.template eval_seeded<Syms>(std::array<VT, 0>{});
-  } else if constexpr (sizeof...(Args) == 1 &&
-                       (CValueMap<Args> && ...)) { // eval(map)
+  }
+
+  // eval(map)
+  else if constexpr (sizeof...(Args) == 1 && (CValueMap<Args> && ...)) {
     return bind(e, args...).eval();
-  } else if constexpr ((CNamedValue<Args> && ...)) { // eval(named<"x">(..), ..)
+  }
+
+  // eval(named<"x">(..), ..)
+  else if constexpr ((CNamedValue<Args> && ...)) {
     return bind(e, args...).eval();
-  } else if constexpr (sizeof...(Args) == 1 &&
-                       (std::ranges::input_range<Args> && ...)) { // eval(range)
+  }
+
+  // eval(range)
+  else if constexpr (sizeof...(Args) == 1 && (std::ranges::input_range<Args> && ...)) {
     return [&](const auto &r) {
-      if constexpr (CStaticSized<decltype(r)>) {
+      if constexpr (CTupleLike<decltype(r)>) {
         static_assert(
             std::tuple_size_v<std::remove_cvref_t<decltype(r)>> == N,
             "eval: range size must equal the expression's symbol count "
@@ -298,18 +355,23 @@ template <CExpression Expr, CEvalArg... Args>
       std::ranges::for_each(r | std::views::take(N), [&](const auto &v) {
         vals[i++] = static_cast<VT>(v);
       });
-      if (i != N)
+      if (i != N) {
         throw std::out_of_range("eval: range supplied fewer values than the "
                                 "expression has symbols");
+      }
       return e.template eval_seeded<Syms>(vals);
     }(args...);
-  } else { // eval(x, y, z) — positional
+  }
+
+  // eval(x, y, z) — positional
+  else {
     static_assert(sizeof...(Args) == N,
                   "eval: supply exactly one value per symbol, in canonical "
                   "order (see symbol_order<Expr>())");
     const std::array<VT, N> vals{static_cast<VT>(args)...};
     return e.template eval_seeded<Syms>(vals);
   }
+  // clang-format on
 }
 
 template <auto Seed, CExpression Expr, CEvalArg... Args>

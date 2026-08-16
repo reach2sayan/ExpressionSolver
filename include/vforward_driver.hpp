@@ -64,8 +64,7 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
   using D = Dual<V>;
 
   HessianResult res;
-  res.gradient.assign(m, 0.0);
-  res.hessian.assign(m * m, 0.0);
+  res.resize(m);
 
   // Value-level seeds: identity tangents over `active`, identical every sweep.
   std::vector<V> base(n);
@@ -92,8 +91,13 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
       res.value = A.value;
       std::ranges::copy(A.grad | std::views::take(m), res.gradient.begin());
     }
+    // This sweep produced row i whole.  Written through the buffer directly:
+    // submdspan(H, i, full_extent) says the same thing and reads better, but it
+    // measured 8-16% slower across the HessExpr benchmarks and this is the
+    // driver's hot loop.  HessianResult::matrix() is still there for callers,
+    // where the cost does not land in a sweep.
     std::ranges::copy(B.grad | std::views::take(m),
-                      res.hessian.begin() + i * m);
+                      res.hessian.begin() + static_cast<std::ptrdiff_t>(i * m));
   }
 
   // Each row was computed by an independent sweep, so H(i,j) and H(j,i) can
@@ -138,8 +142,7 @@ HessianResult hessian_expr_reverse(const Expr &expr,
   static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
 
   HessianResult res;
-  res.gradient.assign(N, 0.0);
-  res.hessian.assign(N * N, 0.0);
+  res.resize(N);
 
   // The value level is the point and is identical on every sweep; only the
   // seeded tangents move between colours.
@@ -216,7 +219,11 @@ std::vector<double> hessian_values_sparse(const Expr &expr,
   static constexpr auto kColors = color_columns<N>(kPattern);
   static constexpr auto kSlots = sparse_slots<E>();
 
-  std::vector<double> values(hessian_nnz<E>(), 0.0);
+  // One cell past the nonzeros: layout_sparse_pattern maps every structural
+  // zero onto that last slot, so H[i, j] answers for indices the pattern
+  // excludes without the caller checking first.  Eigen reads exactly nnz
+  // entries from values.data(), so the extra cell is invisible to it.
+  std::vector<double> values(hessian_nnz<E>() + 1, 0.0);
 
   std::array<T, N> seeds{};
   std::ranges::transform(x, seeds.begin(),
