@@ -132,6 +132,7 @@ add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/gradient.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/named_value.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/bound.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/scope_guard.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/seeded_energy.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/taylor_dual.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/unary_math.hpp

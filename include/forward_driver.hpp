@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dual.hpp"
+#include "scope_guard.hpp" // scoped_value — RAII for the per-probe seed toggle
 
 #include <algorithm>
 #include <concepts>
@@ -77,11 +78,11 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   std::ranges::transform(x, dof.begin(), [](double v) { return dual{v, 0.0}; });
 
   // One seeded pass per active variable: the gradient slot and the dof it comes
-  // from advance together.
+  // from advance together.  The seed lives exactly as long as the guard, so it
+  // is cleared before the next pass even if the energy throws.
   for (auto &&[slot, dof_index] : std::views::zip(g, active)) {
-    dof[dof_index].deriv() = 1.0;
+    const auto seed = scoped_seed<1.0>(dof[dof_index].deriv());
     slot = f(dof.data()).deriv();
-    dof[dof_index].deriv() = 0.0;
   }
   return g;
 }
@@ -122,19 +123,24 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
   // the two derivative scalars in place rather than reconstructing the whole
   // dual2nd on every seed and reset (the gradient() driver toggles the same
   // way).
+  //
+  // Each toggle is a scoped_value whose scope IS the span the seed covers.
+  // Both guards hold a bare double, never the enclosing dual2nd: when ai == aj
+  // they name two different scalars of the same number, and a guard over the
+  // number would clobber its sibling.
   std::ranges::transform(x, dof.begin(), [](double v) {
     return dual2nd{Inner{v, 0.0}, Inner{0.0, 0.0}};
   });
 
   for (std::size_t j = 0; j < m; ++j) {
     const std::size_t aj = active[j];
-    // Inner seed e_j is constant across the whole i-loop: set it once.
-    dof[aj].value().deriv() = 1.0;
+    // Inner seed e_j is constant across the whole i-loop: held by this guard.
+    const auto inner_seed = scoped_seed<1.0>(dof[aj].value().deriv());
     for (std::size_t i = 0; i <= j; ++i) {
       const std::size_t ai = active[i];
 
       // Outer seed e_i on ai (when ai == aj this lands in aj's other slot).
-      dof[ai].deriv().value() = 1.0;
+      const auto outer_seed = scoped_seed<1.0>(dof[ai].deriv().value());
 
       const dual2nd r = f(dof.data());
       const auto &[A, B] = r;   // value-component, outer-derivative component
@@ -146,12 +152,7 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
       res.gradient[j] = a1;
       res.hessian[i * m + j] = b1;
       res.hessian[j * m + i] = b1;
-
-      // Reset only the outer seed; the inner seed persists for the next i.
-      dof[ai].deriv().value() = 0.0;
     }
-    // Reset the inner seed before moving to the next j.
-    dof[aj].value().deriv() = 0.0;
   }
   return res;
 }

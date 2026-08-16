@@ -2,6 +2,7 @@
 #include "dual.hpp"
 #include "gradient.hpp"
 #include "mpl.hpp"
+#include "scope_guard.hpp"
 #include <algorithm>
 #include <array>
 #include <ranges>
@@ -130,8 +131,10 @@ private:
                            [](const S &v) { return value_type{v, S{}}; });
 
     for (std::size_t j = 0; j < input_dim; ++j) {
-      // Seed column j; one reverse sweep per output yields that column.
-      seeds[j].deriv() = S{1};
+      // Seed column j; one reverse sweep per output yields that column.  The
+      // guard holds the tangent across the whole static_for fold and clears it
+      // when j advances.
+      const auto seed = scoped_seed<1>(seeds[j].deriv());
       static_for<output_dim>([&]<std::size_t K>() {
         point_t grads{};
         const auto &e = std::get<K>(expressions);
@@ -146,7 +149,6 @@ private:
           row[j] = entry;
         }
       });
-      seeds[j].deriv() = S{};
     }
     return H;
   }

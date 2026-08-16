@@ -3,6 +3,7 @@
 #include "dual.hpp"
 #include "expressions.hpp"
 #include "named_value.hpp"
+#include "scope_guard.hpp"
 #include "taylor_dual.hpp"
 #include "traits.hpp"
 #include "vector_dual.hpp"
@@ -186,12 +187,13 @@ reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
 
   for (std::size_t j = 0; j < N; j++) {
     // Seed column j, then one reverse sweep gives that column of the Hessian.
-    seeds[j].deriv() = S{1};
+    // The guard scopes the tangent to this iteration; it is constexpr, so the
+    // whole sweep still runs during constant evaluation.
+    const auto seed = scoped_seed<1>(seeds[j].deriv());
     std::array<T, N> grads{};
     node_cache_t<Expr> cache{};
     fill_cache<0, symbols>(expr, seeds, cache);
     expr.backward(symbols{}, T{1}, grads, cache);
-    seeds[j].deriv() = S{};
 
     const auto column = grads | std::views::transform([](const T &g) {
                           return g.template get<1>();

@@ -385,16 +385,12 @@ struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, true> {
                              : Tangent<T>{a.value, a.deriv};
   }
   template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
+  static constexpr auto adjoints(T adj, const auto &cache) noexcept {
+    using ret_t = std::array<T, sizeof...(CB)>;
     constexpr std::size_t cb[]{CB...};
-    if (cache[cb[1]] < cache[cb[0]])
-      return {T{}, adj};
-    return {adj, T{}};
+    return cache[cb[1]] < cache[cb[0]] ? ret_t{T{}, adj} : ret_t{adj, T{}};
   }
 };
-
-// --- out-of-line derivative definitions (binary math ops) ---
 
 template <Numeric T>
 constexpr auto PowOp<T>::derivative(const CExpression auto &lhs,

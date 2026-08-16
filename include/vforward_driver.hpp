@@ -5,6 +5,7 @@
 #include "expressions.hpp"    // CExpression
 #include "forward_driver.hpp" // HessianResult + scalar hessian() fallback
 #include "gradient.hpp"       // fill_cache / node_cache_t for the reverse sweep
+#include "scope_guard.hpp"    // scoped_value — RAII for the per-sweep seed
 #include "seeded_energy.hpp"  // seeded_energy() bridge for expression graphs
 #include "vector_dual.hpp"
 
@@ -35,9 +36,10 @@ template <typename F>
 concept CVForwardEnergy =
     CEnergyOf<F, Dual<VectorDual<kVForwardN>>> && CEnergyOf<F, dual2nd>;
 
-// Everything hessian() knows how to differentiate: an expression graph (which
-// it bridges or sweeps in reverse), a graph already bridged by seeded_energy(),
-// or a raw energy callable.
+// Everything hessian() knows how to differentiate:
+// 1. an expression graph (which it bridges or sweeps in reverse),
+// 2. a graph already bridged by seeded_energy(),
+// 3. a raw energy callable.
 template <typename F>
 concept CHessianTarget =
     CExpression<F> || CSeededExprEnergy<F> || CVForwardEnergy<F>;
@@ -73,19 +75,17 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
   }
 
   // Build dof once: value level = the identity tangent pack (constant across
-  // sweeps), outer-derivative level = all zero.  Across sweeps only the single
-  // outer-derivative *value* at k == active[i] toggles 0->1->0, so per sweep we
-  // flip that one scalar instead of rewriting all n entries (was O(n*N)/sweep).
+  // sweeps), outer-derivative level = all zero.
   std::vector<D> dof(n);
   std::ranges::transform(base, dof.begin(),
                          [](const V &v) { return D{v, V{}}; });
   for (std::size_t i = 0; i < m; ++i) {
     const std::size_t ai = active[i];
-    auto &dof_ai = dof[ai].deriv();
-
-    dof_ai.value = double{1}; // outer-deriv seed e_i
+    // Outer-deriv seed e_i, cleared when the guard leaves this body.  Only the
+    // outer level is guarded: the value-level pack above is deliberately
+    // sticky.
+    const auto seed = scoped_seed<1.0>(dof[ai].deriv().value);
     const D r = f(dof.data());
-    dof_ai.value = double{0}; // reset for next sweep
 
     const auto &[A, B] = r; // value & outer-derivative component (no copy)
     if (i == 0) {
@@ -98,8 +98,8 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
 
   // Each row was computed by an independent sweep, so H(i,j) and H(j,i) can
   // differ in the last ULP.  Symmetrize to honour the same exactly-symmetric
-  // contract the scalar hessian() returns (downstream LDLT/eigensolvers expect
-  // it); analytically H is symmetric, so averaging only removes FP noise.
+  // contract the other drivers do; H is analytically symmetric, so averaging
+  // only removes FP noise.
   for (std::size_t i = 0; i < m; ++i) {
     for (std::size_t j = i + 1; j < m; ++j) {
       const double s = 0.5 * (res.hessian[i * m + j] + res.hessian[j * m + i]);

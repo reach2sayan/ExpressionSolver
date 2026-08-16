@@ -14,6 +14,7 @@
 #include "include/forward_driver.hpp"
 #include "include/gradient.hpp"
 #include "include/named_value.hpp"
+#include "include/scope_guard.hpp"
 #include "include/taylor_dual.hpp"
 #include "include/values.hpp"
 #include "include/vector_dual.hpp"

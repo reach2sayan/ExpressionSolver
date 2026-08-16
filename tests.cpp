@@ -7,6 +7,7 @@
 #include "forward_driver.hpp"
 #include "gradient.hpp"
 #include "operations.hpp"
+#include "scope_guard.hpp"
 #include "seeded_energy.hpp"
 #include "traits.hpp"
 #include "values.hpp"
@@ -16,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <numbers>
 #include <random>
+#include <stdexcept>
 
 using namespace diff;
 using namespace diff::literals; // "x"_s
@@ -2282,6 +2284,113 @@ TEST(ForwardDriver, IdealMixingHessianMatchesClosedForm) {
   EXPECT_NEAR(H.h(0, 0), R * T / 0.3, 1e-3);
   EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
   EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6); // no cross term
+}
+
+// ===========================================================================
+// scoped_value — the RAII seed toggle every driver's sweep loop is built on.
+// ===========================================================================
+
+TEST(ScopedValue, SeedsOnEntryAndRestoresOnExit) {
+  double slot = 7.5;
+  {
+    const auto seed = scoped_seed<1.0>(slot);
+    EXPECT_DOUBLE_EQ(slot, 1.0);
+  }
+  EXPECT_DOUBLE_EQ(slot, 7.5); // the previous value, not zero
+}
+
+TEST(ScopedValue, RestoreIsBitExactFromAnyBase) {
+  // Why the guard saves the old bits instead of undoing arithmetically: a
+  // `slot += 1` / `slot -= 1` round trip is not the identity in floating
+  // point, and this library cares about the last ULP.
+  double slot = 0.1;
+  {
+    const auto seed = scoped_seed<1.0>(slot);
+    EXPECT_DOUBLE_EQ(slot, 1.0);
+  }
+  EXPECT_EQ(slot, 0.1);            // exact, not merely close
+  EXPECT_NE(0.1 + 1.0 - 1.0, 0.1); // what the arithmetic undo would have given
+}
+
+TEST(ScopedValue, NestedGuardsOverSiblingScalarsOfOneDual) {
+  // The hessian_scalar shape: the inner- and outer-derivative seeds of the
+  // SAME dual2nd are held by two independently scoped guards.
+  dual2nd d{Dual<double>{2.0, 0.0}, Dual<double>{0.0, 0.0}};
+  {
+    const auto inner = scoped_seed<1.0>(d.value().deriv());
+    {
+      const auto outer = scoped_seed<1.0>(d.deriv().value());
+      EXPECT_DOUBLE_EQ(d.value().deriv(), 1.0); // both live at once
+      EXPECT_DOUBLE_EQ(d.deriv().value(), 1.0);
+    }
+    EXPECT_DOUBLE_EQ(d.deriv().value(), 0.0); // outer cleared
+    EXPECT_DOUBLE_EQ(d.value().deriv(), 1.0); // inner survives, unclobbered
+  }
+  EXPECT_DOUBLE_EQ(d.value().deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(d.value().value(), 2.0); // the point never moved
+}
+
+TEST(ScopedValue, RestoresWhenTheGuardedScopeThrows) {
+  // The behaviour the hand-written `slot = 0` reset could not give: an energy
+  // that throws mid-probe no longer leaves the dof buffer seeded.
+  double slot = 0.0;
+  auto blow_up = [&slot] {
+    const auto seed = scoped_seed<1.0>(slot);
+    throw std::runtime_error("energy blew up");
+  };
+  EXPECT_THROW(blow_up(), std::runtime_error);
+  EXPECT_DOUBLE_EQ(slot, 0.0);
+}
+
+TEST(ScopedValue, SeedValueIsPartOfTheType) {
+  // The NTTP form: two seeds are two types, and the guard carries only the
+  // reference plus the saved scalar — nothing for the value.
+  static_assert(!std::is_same_v<decltype(scoped_seed<1.0>(std::declval<double &>())),
+                                decltype(scoped_seed<2.0>(std::declval<double &>()))>);
+  static_assert(sizeof(decltype(scoped_seed<1.0>(std::declval<double &>()))) ==
+                sizeof(double *) + sizeof(double));
+  SUCCEED();
+}
+
+TEST(ScopedValue, UsableDuringConstantEvaluation) {
+  // gradient.hpp's reverse_mode_hessian and equation.hpp's
+  // hessian_forward_over_reverse are constexpr, so the guard must be too.
+  static constexpr auto probe = []() constexpr {
+    double slot = 3.0;
+    double seen = 0.0;
+    {
+      const auto seed = scoped_seed<1.0>(slot);
+      seen = slot;
+    }
+    return std::array<double, 2>{seen, slot};
+  }();
+  static_assert(probe[0] == 1.0);
+  static_assert(probe[1] == 3.0);
+  SUCCEED();
+}
+
+TEST(ForwardDriver, RepeatedCallsDoNotLeakSeeds) {
+  // A seed left behind by one sweep would show up as a wrong second answer.
+  auto f = [](const auto *x) {
+    return x[0] * x[0] * x[1] + x[1] * x[1] * x[1];
+  };
+  const std::array<double, 2> x{2.0, 3.0};
+  const std::span<const double> xs{x.data(), x.size()};
+
+  const auto g1 = diff::gradient(f, xs);
+  const auto g2 = diff::gradient(f, xs);
+  EXPECT_DOUBLE_EQ(g1[0], g2[0]);
+  EXPECT_DOUBLE_EQ(g1[1], g2[1]);
+
+  const auto H1 = diff::hessian(f, xs);
+  const auto H2 = diff::hessian(f, xs);
+  EXPECT_DOUBLE_EQ(H1.value, H2.value);
+  for (std::size_t i = 0; i < H1.n(); ++i) {
+    EXPECT_DOUBLE_EQ(H1.gradient[i], H2.gradient[i]);
+    for (std::size_t j = 0; j < H1.n(); ++j) {
+      EXPECT_DOUBLE_EQ(H1.h(i, j), H2.h(i, j));
+    }
+  }
 }
 
 // ===========================================================================
