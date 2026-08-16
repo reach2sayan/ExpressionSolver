@@ -12,15 +12,15 @@ namespace diff {
 
 template <typename T> class Dual {
 private:
-  T val{};
-  T deriv{};
+  T val_{};
+  T deriv_{};
 
 public:
   constexpr Dual() noexcept = default;
-  constexpr explicit Dual(T v, T d = T{}) noexcept : val(v), deriv(d) {}
+  constexpr explicit Dual(T v, T d = T{}) noexcept : val_(v), deriv_(d) {}
 
   template <CArithmetic U>
-  constexpr Dual(U s) noexcept : val(T(s)), deriv(T{}) {}
+  constexpr Dual(U s) noexcept : val_(T(s)), deriv_(T{}) {}
   template <typename O> constexpr Dual &operator+=(const O &o) noexcept {
     return *this = *this + o;
   }
@@ -35,29 +35,34 @@ public:
   }
 
   constexpr Dual &operator++() noexcept {
-    ++val;
+    ++val_;
     return *this;
   }
 
   friend std::ostream &operator<<(std::ostream &out, const Dual &d) {
-    return out << d.val << "+" << d.deriv << "e";
+    return out << d.val_ << "+" << d.deriv_ << "e";
   }
+
+  [[nodiscard]] constexpr const T &value() const noexcept { return val_; }
+  [[nodiscard]] constexpr T &value() noexcept { return val_; }
+  [[nodiscard]] constexpr const T &deriv() const noexcept { return deriv_; }
+  [[nodiscard]] constexpr T &deriv() noexcept { return deriv_; }
 
   template <std::size_t Index>
   [[nodiscard]] constexpr const T &get() const noexcept {
     static_assert(Index < 2, "Dual index out of bounds");
     if constexpr (Index == 0) {
-      return val;
+      return val_;
     } else {
-      return deriv;
+      return deriv_;
     }
   }
   template <std::size_t Index> [[nodiscard]] constexpr T &get() noexcept {
     static_assert(Index < 2, "Dual index out of bounds");
     if constexpr (Index == 0) {
-      return val;
+      return val_;
     } else {
-      return deriv;
+      return deriv_;
     }
   }
 };
@@ -155,7 +160,6 @@ constexpr auto get_real_part(const T &x) noexcept {
   }
 }
 
-// Public aliases matching autodiff's spelling.
 using dual = nth_dual_t<double, 1>;    // first-order forward dual
 using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 

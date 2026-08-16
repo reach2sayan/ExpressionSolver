@@ -43,9 +43,9 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   std::ranges::transform(x, dof.begin(), [](double v) { return dual{v, 0.0}; });
 
   for (std::size_t j = 0; j < m; ++j) {
-    dof[active[j]].template get<1>() = 1.0;
-    g[j] = f(dof.data()).template get<1>();
-    dof[active[j]].template get<1>() = 0.0;
+    dof[active[j]].deriv() = 1.0;
+    g[j] = f(dof.data()).deriv();
+    dof[active[j]].deriv() = 0.0;
   }
   return g;
 }
@@ -79,10 +79,10 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
   using Inner = Dual<double>;
 
   // Seed once to the zero-derivative base.  Of a dual2nd's four scalars
-  // [val.val, val.deriv, deriv.val, deriv.deriv] only the two first-order seed
-  // slots ever move per probe: val.deriv carries e_j (inner, d/dx_j) and
-  // deriv.val carries e_i (outer, d/dx_i).  val.val == x[k] and the
-  // second-order seed deriv.deriv == 0 are loop-invariant, so we toggle just
+  // [value.value, value.deriv, deriv.value, deriv.deriv] only the two
+  // first-order seed slots ever move per probe: value.deriv carries e_j (inner,
+  // d/dx_j) and deriv.value carries e_i (outer, d/dx_i).  value.value == x[k]
+  // and the second-order seed deriv.deriv == 0 are loop-invariant, so we toggle
   // the two derivative scalars in place rather than reconstructing the whole
   // dual2nd on every seed and reset (the gradient() driver toggles the same
   // way).
@@ -93,12 +93,12 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
   for (std::size_t j = 0; j < m; ++j) {
     const std::size_t aj = active[j];
     // Inner seed e_j is constant across the whole i-loop: set it once.
-    dof[aj].template get<0>().template get<1>() = 1.0;
+    dof[aj].value().deriv() = 1.0;
     for (std::size_t i = 0; i <= j; ++i) {
       const std::size_t ai = active[i];
 
       // Outer seed e_i on ai (when ai == aj this lands in aj's other slot).
-      dof[ai].template get<1>().template get<0>() = 1.0;
+      dof[ai].deriv().value() = 1.0;
 
       const dual2nd r = f(dof.data());
       const auto &[A, B] = r;   // value-component, outer-derivative component
@@ -112,10 +112,10 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
       res.hessian[j * m + i] = b1;
 
       // Reset only the outer seed; the inner seed persists for the next i.
-      dof[ai].template get<1>().template get<0>() = 0.0;
+      dof[ai].deriv().value() = 0.0;
     }
     // Reset the inner seed before moving to the next j.
-    dof[aj].template get<0>().template get<1>() = 0.0;
+    dof[aj].value().deriv() = 0.0;
   }
   return res;
 }

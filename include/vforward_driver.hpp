@@ -30,8 +30,8 @@ namespace detail {
 // of every dof carries the full identity tangent pack (lane t ==
 // d/dx_active[t]), so each sweep also yields the gradient; the *outer*
 // derivative level carries the scalar seed e_i.  After f(dof):
-// r.get<0>() : value-level VectorDual -> value = f(x), grad[t] = df/dx_t
-// r.get<1>() : outer-deriv VectorDual -> grad[t] = d2f/dx_i dx_t (Hessianrow i)
+// r.value() : value-level VectorDual -> value = f(x), grad[t] = df/dx_t
+// r.deriv() : outer-deriv VectorDual -> grad[t] = d2f/dx_i dx_t (Hessian row i)
 
 template <std::size_t N, typename F>
 HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
@@ -61,7 +61,7 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
                          [](const V &v) { return D{v, V{}}; });
   for (std::size_t i = 0; i < m; ++i) {
     const std::size_t ai = active[i];
-    auto &dof_ai = dof[ai].template get<1>();
+    auto &dof_ai = dof[ai].deriv();
 
     dof_ai.value = double{1}; // outer-deriv seed e_i
     const D r = f(dof.data());

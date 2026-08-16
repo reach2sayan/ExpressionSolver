@@ -1,7 +1,8 @@
 #pragma once
 
-#include "gradient.hpp" // NamedValue, named, find_index_of_symbol
-#include "traits.hpp"   // extract_symbols_from_expr_t, unique_tuple_t
+#include "fixed_string.hpp" // FixedString
+#include "gradient.hpp"     // NamedValue, named, find_index_of_symbol
+#include "traits.hpp"       // extract_symbols_from_expr_t, unique_tuple_t
 
 #include <algorithm>
 #include <array>
@@ -11,21 +12,8 @@
 #include <tuple>
 #include <type_traits>
 
-// ===========================================================================
-// Root-held values.
-//
-// Expression leaves carry no value of their own; a point is supplied at the
-// root instead.  The saving is not in *having* values, it is in holding one
-// slot per VARIABLE rather than one per leaf occurrence: an expression that
-// mentions `x` sixteen times still costs a single slot.
-//
-// ValueMap is make_values() (gradient.hpp) made storable — a plain array of
-// values in canonical symbol order, with a consteval label->index lookup.
-//
 // Bound<Expr, Map> pairs an (empty) expression with a map and so keeps eval()
-// nullary.  Because the expression contributes no bytes, sizeof(Bound) is just
-// the map.
-// ===========================================================================
+// nullary.
 
 namespace diff {
 
@@ -64,22 +52,17 @@ template <typename Scalar, typename SymList> struct ValueMap {
   }
 };
 
-// No deduction guide for ValueMap: SymList is a type-level symbol list and
-// cannot be recovered from the slot array, so values() is the way to build one.
-
-// Anything carrying the tag; deliberately narrow so a map is never also
-// matched as an input_range by the eval overloads.
 template <typename T>
 concept CValueMap = requires {
   typename std::remove_cvref_t<T>::symbols;
   requires std::remove_cvref_t<T>::kValueMap;
 };
 
-template <typename T> struct is_named_value : std::false_type {};
+template <typename T> inline constexpr bool is_named_value_v = false;
 template <FixedString S, typename V>
-struct is_named_value<NamedValue<S, V>> : std::true_type {};
+inline constexpr bool is_named_value_v<NamedValue<S, V>> = true;
 template <typename T>
-concept CNamedValue = is_named_value<std::remove_cvref_t<T>>::value;
+concept CNamedValue = is_named_value_v<std::remove_cvref_t<T>>;
 
 namespace detail {
 
@@ -90,8 +73,9 @@ consteval std::array<std::size_t, N> arg_of_canonical() noexcept {
       find_index_of_symbol<ArgSyms::value, SymList>()...};
   std::array<std::size_t, N> out{};
   // Scatter: invert canonical_of_arg.
-  std::ranges::for_each(std::views::iota(std::size_t{0}, N),
-                        [&](std::size_t j) { out[canonical_of_arg[j]] = j; });
+  for (std::size_t j = 0; j < N; ++j) {
+    out[canonical_of_arg[j]] = j;
+  }
   return out;
 }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <numeric>
 #include <tuple>
@@ -17,7 +18,15 @@ namespace diff::mpl {
 template <class... T> struct mp_list {};
 template <class... T> mp_list(T...) -> mp_list<T...>;
 
-template <bool B> using mp_bool = std::integral_constant<bool, B>;
+// A type ordering, for mp_sort.  It is a captureless generic lambda invoked as
+// `Less.operator()<A, B>()` inside a constant expression — a consteval
+// predicate, not an integral_constant metafunction.  Being a value rather than
+// a template, it is passed as a template *argument* and can be written inline
+// at the use site.
+template <typename Less, typename A, typename B>
+concept CTypeOrder = requires(Less less) {
+  { less.template operator()<A, B>() } -> std::same_as<bool>;
+};
 
 namespace detail {
 template <std::size_t I, class... T>
@@ -25,21 +34,21 @@ auto at_c(mp_list<T...>)
     -> std::type_identity<std::tuple_element_t<I, std::tuple<T...>>>;
 } // namespace detail
 
-template <class L, std::size_t I>
+template <typename L, std::size_t I>
 using mp_at_c = typename decltype(detail::at_c<I>(L{}))::type;
 
-template <class... T> consteval std::size_t mp_size(mp_list<T...>) noexcept {
+template <typename... T> consteval std::size_t mp_size(mp_list<T...>) noexcept {
   return sizeof...(T);
 }
 
-template <class V, class... T>
+template <typename V, typename... T>
 consteval std::size_t mp_find(V, mp_list<T...>) noexcept {
   const std::array<bool, sizeof...(T)> hit{std::is_same_v<T, V>...};
   return static_cast<std::size_t>(std::find(hit.begin(), hit.end(), true) -
                                   hit.begin());
 }
 
-template <auto Needle, class... T>
+template <auto Needle, typename... T>
 consteval std::size_t mp_find(mp_list<T...> list) noexcept {
   return mp_find(::diff::symbol_type<Needle>{}, list);
 }
@@ -50,16 +59,16 @@ template <class L> struct box {
   using type = L;
 };
 
-template <class... A, class... B>
+template <typename... A, typename... B>
 auto operator+(box<mp_list<A...>>, box<mp_list<B...>>)
     -> box<mp_list<A..., B...>>;
 
-template <class... L>
+template <typename... L>
 auto append_fold() -> decltype((box<mp_list<>>{} + ... + box<L>{}));
 
 } // namespace detail
 
-template <class... L>
+template <typename... L>
 using mp_append = typename decltype(detail::append_fold<L...>())::type;
 
 namespace detail {
@@ -70,16 +79,16 @@ template <std::size_t N> struct index_selection {
   std::size_t count = 0;
 };
 
-template <class L, auto Sel, std::size_t... Is>
+template <typename L, auto Sel, std::size_t... Is>
 auto rebuild(std::index_sequence<Is...>)
     -> std::type_identity<mp_list<mp_at_c<L, Sel.indices[Is]>...>>;
 
-template <class L, auto Sel>
+template <typename L, auto Sel>
 using rebuild_t = typename decltype(rebuild<L, Sel>(
     std::make_index_sequence<Sel.count>{}))::type;
 
 // same[i*N + j] == (element i is the same type as element j).
-template <class... T>
+template <typename... T>
 consteval std::array<bool, sizeof...(T) * sizeof...(T)>
 same_matrix(mp_list<T...>) {
   std::array<bool, sizeof...(T) * sizeof...(T)> m{};
@@ -91,14 +100,15 @@ same_matrix(mp_list<T...>) {
   return m;
 }
 
-// less[i*N + j] == P<element i, element j>::value.
-template <template <class...> class P, class... T>
+// less[i*N + j] == Less<element i, element j>().
+template <auto Less, typename... T>
+  requires(CTypeOrder<decltype(Less), T, T> && ...)
 consteval std::array<bool, sizeof...(T) * sizeof...(T)>
 less_matrix(mp_list<T...>) {
   std::array<bool, sizeof...(T) * sizeof...(T)> m{};
   std::size_t k = 0;
-  [[maybe_unused]] auto row = [&]<class R>() {
-    ((m[k++] = P<R, T>::value), ...);
+  [[maybe_unused]] auto row = [&]<typename R>() {
+    ((m[k++] = Less.template operator()<R, T>()), ...);
   };
   (row.template operator()<T>(), ...);
   return m;
@@ -128,11 +138,10 @@ template <class L> consteval auto unique_selection() {
   return sel;
 }
 
-// Stable sort of the indices [0..N) by the predicate P.
-template <class L, template <class...> class P>
-consteval auto sort_selection() {
+// Stable sort of the indices [0..N) by the consteval predicate Less.
+template <typename L, auto Less> consteval auto sort_selection() {
   constexpr std::size_t N = mp_size(L{});
-  constexpr std::array<bool, N * N> less = less_matrix<P>(L{});
+  constexpr std::array<bool, N * N> less = less_matrix<Less>(L{});
   index_selection<N> sel{};
   std::iota(sel.indices.begin(), sel.indices.end(), std::size_t{0});
   sel.count = N;
@@ -155,7 +164,7 @@ consteval auto sort_selection() {
 template <class L>
 using mp_unique = detail::rebuild_t<L, detail::unique_selection<L>()>;
 
-template <class L, template <class...> class P>
-using mp_sort = detail::rebuild_t<L, detail::sort_selection<L, P>()>;
+template <typename L, auto Less>
+using mp_sort = detail::rebuild_t<L, detail::sort_selection<L, Less>()>;
 
 } // namespace diff::mpl

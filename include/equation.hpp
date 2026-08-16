@@ -218,10 +218,12 @@ public:
     return result;
   }
 
+  // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
+  // canonical symbol order.  The index is a template argument, so no tag type
+  // is involved.
   template <std::size_t N>
-  constexpr decltype(auto)
-  operator[](std::integral_constant<std::size_t, N>) noexcept
-    requires(output_dim == 1)
+  [[nodiscard]] constexpr decltype(auto) get() noexcept
+    requires(output_dim == 1 && N <= input_dim)
   {
     if constexpr (N == 0) {
       return std::get<0>(expressions);
@@ -231,15 +233,30 @@ public:
   }
 
   template <std::size_t N>
-  constexpr decltype(auto)
-  operator[](std::integral_constant<std::size_t, N>) const noexcept
-    requires(output_dim == 1)
+  [[nodiscard]] constexpr decltype(auto) get() const noexcept
+    requires(output_dim == 1 && N <= input_dim)
   {
     if constexpr (N == 0) {
       return std::get<0>(expressions);
     } else {
       return std::get<N - 1>(std::get<0>(jacobian_data));
     }
+  }
+
+  // Subscript spelling of the same thing.  operator[] has no template-argument
+  // syntax, so the index arrives as an empty idx_t value (see IDX / idx<N>()).
+  template <std::size_t N>
+  constexpr decltype(auto) operator[](idx_t<N>) noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    return get<N>();
+  }
+
+  template <std::size_t N>
+  constexpr decltype(auto) operator[](idx_t<N>) const noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    return get<N>();
   }
 
   template <DiffMode Mode>

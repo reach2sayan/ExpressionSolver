@@ -115,7 +115,8 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 }
 
 namespace detail {
-template <typename S, std::size_t N, std::size_t Order> auto nd_array_fn() {
+template <typename S, std::size_t N, std::size_t Order>
+consteval auto nd_array_fn() {
   if constexpr (Order == 0)
     return std::type_identity<S>{};
   else
@@ -233,8 +234,8 @@ template <std::size_t Order, CExpression Expr,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && N > 0)
-[[nodiscard]] auto derivative_tensor_impl(const Expr &expr,
-                                          std::array<S, N> values) noexcept {
+[[nodiscard]] constexpr auto
+derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   using U = nth_dual_t<S, Order>;
 
@@ -330,7 +331,8 @@ template <DiffMode Mode, CExpression Expr,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse && DualLike<T>)
-[[nodiscard]] auto hessian(Expr &expr, std::array<S, N> values) noexcept {
+[[nodiscard]] constexpr auto hessian(Expr &expr,
+                                     std::array<S, N> values) noexcept {
   return detail::reverse_mode_hessian(expr, values);
 }
 
@@ -338,7 +340,8 @@ template <DiffMode Mode, CExpression Expr,
 template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
           typename T = typename std::remove_cvref_t<Expr>::value_type>
   requires(Mode == DiffMode::Reverse && DualLike<T>)
-[[nodiscard]] auto hessian(Expr &expr, NamedValue<Syms, Vs>... nv) noexcept {
+[[nodiscard]] constexpr auto hessian(Expr &expr,
+                                     NamedValue<Syms, Vs>... nv) noexcept {
   return detail::reverse_mode_hessian(
       expr, make_values<Expr, dual_scalar_t<T>>(nv...));
 }
@@ -350,8 +353,8 @@ template <std::size_t Order, CExpression Expr,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && N > 0)
-[[nodiscard]] auto derivative_tensor(const Expr &expr,
-                                     std::array<S, N> values) noexcept {
+[[nodiscard]] constexpr auto derivative_tensor(const Expr &expr,
+                                               std::array<S, N> values) noexcept {
   return detail::derivative_tensor_impl<Order>(expr, values);
 }
 
@@ -359,8 +362,8 @@ template <std::size_t Order, CExpression Expr,
 template <std::size_t Order, CExpression Expr, FixedString... Syms,
           typename... Vs>
   requires(Order > 0 && sizeof...(Syms) > 0)
-[[nodiscard]] auto derivative_tensor(const Expr &expr,
-                                     NamedValue<Syms, Vs>... nv) noexcept {
+[[nodiscard]] constexpr auto derivative_tensor(const Expr &expr,
+                                               NamedValue<Syms, Vs>... nv) noexcept {
   return detail::derivative_tensor_impl<Order>(expr, make_values<Expr>(nv...));
 }
 
@@ -391,7 +394,8 @@ template <std::size_t Order, CExpression Expr,
           std::size_t NVars = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)
-[[nodiscard]] S univariate_derivative_impl(const Expr &expr, S x0) noexcept {
+[[nodiscard]] constexpr S univariate_derivative_impl(const Expr &expr,
+                                                     S x0) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   using TD = TaylorDual<S, Order>;
 
@@ -414,7 +418,8 @@ template <std::size_t Order, CExpression Expr,
           std::size_t NVars = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)
-[[nodiscard]] S univariate_derivative(const Expr &expr, S x0) noexcept {
+[[nodiscard]] constexpr S univariate_derivative(const Expr &expr,
+                                                S x0) noexcept {
   return detail::univariate_derivative_impl<Order>(expr, x0);
 }
 

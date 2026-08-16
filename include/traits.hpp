@@ -1,4 +1,5 @@
 #pragma once
+#include "fixed_string.hpp" // CFixedString
 #include "values.hpp"
 #include "mpl.hpp"
 #include <type_traits>
@@ -169,8 +170,12 @@ make_all_constant_except(const Expression<Op, C...> &expr) noexcept
       expr.expressions());
 }
 
-template <typename A, typename B>
-using symbol_less = mp::mp_bool<(A::name < B::name)>;
+// Canonical symbol order: alphabetical by name.  A consteval predicate rather
+// than an integral_constant metafunction — the ordering is spelled once, as the
+// comparison that actually decides it.
+inline constexpr auto symbol_less = []<typename A, typename B>() consteval {
+  return A::name < B::name;
+};
 template <typename List> using sort_tuple_t = mp::mp_sort<List, symbol_less>;
 
 template <typename List>
@@ -197,11 +202,20 @@ template <typename T>
 using extract_symbols_from_expr_t =
     typename decltype(extract_symbols_impl<T>())::type;
 
-template <std::size_t N> consteval auto idx() noexcept {
-  return std::integral_constant<std::size_t, N>{};
-}
+// A compile-time index carried as a *value*, for the one place that cannot
+// take a template argument: operator[].  Prefer the template form —
+// eq.get<N>() — everywhere else; it needs no tag type at all.
+//
+// Not a std::integral_constant specialisation: the only thing inherited from it
+// was ::value, and spelling that here keeps the index API inside the library
+// (and out of overload resolution for anything else keyed on integral_constant).
+template <std::size_t N> struct idx_t {
+  static constexpr std::size_t value = N;
+};
 
-template <size_t value> struct idx_t : std::integral_constant<size_t, value> {};
+template <std::size_t N> [[nodiscard]] consteval idx_t<N> idx() noexcept {
+  return {};
+}
 
 } // namespace diff
 

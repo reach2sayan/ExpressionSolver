@@ -60,6 +60,7 @@ endif ()
 # Use CMAKE_CURRENT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so this file works
 # both standalone and as a git submodule via add_subdirectory().
 add_library(diff INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/fixed_string.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/expressions.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/operations.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/mpl.hpp

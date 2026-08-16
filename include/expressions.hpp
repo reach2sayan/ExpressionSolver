@@ -1,5 +1,7 @@
 #pragma once
 
+#include "fixed_string.hpp" // FixedString, CFixedString
+
 #include <concepts>
 #include <ostream>
 #include <string_view>
@@ -9,16 +11,15 @@
 
 namespace diff {
 
-// A built-in arithmetic scalar (cv/ref stripped): the scalar half of every
-// mixed scalar/expression and scalar/dual operation.  The standard library has
-// no `arithmetic` concept, so this is the one gap we fill ourselves — and only
-// by composing the two std concepts that partition it.
+// The standard library has no `arithmetic` concept, so this is the one gap we
+// fill ourselves — and only by composing the two std concepts that partition
+// it.
 template <typename T>
 concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
                       std::floating_point<std::remove_cvref_t<T>>;
 
 // Closed under the four arithmetic operators and negation (Dual, TaylorDual,
-// VectorDual, ...).  Arithmetic scalars qualify outright.
+// VectorDual, ...).
 template <typename T>
 concept CFieldLike = std::default_initializable<T> && requires(T a, T b) {
   { a + b } -> std::convertible_to<T>;
@@ -41,9 +42,9 @@ template <typename O>
 concept COperation =
     requires { typename O::value_type; } && Numeric<typename O::value_type>;
 
-template <typename T> struct is_expression_type : std::false_type {};
+template <typename T> inline constexpr bool is_expression_type_v = false;
 template <typename T>
-concept CExpression = is_expression_type<std::remove_cvref_t<T>>::value;
+concept CExpression = is_expression_type_v<std::remove_cvref_t<T>>;
 
 template <COperation Op, CExpression... Children> class Expression;
 
@@ -56,30 +57,8 @@ template <COperation Op, CExpression Exp>
 using MonoExpression = Expression<Op, Exp>;
 template <Numeric T> class Constant;
 
-template <std::size_t N> struct FixedString {
-  char data[N];
-  constexpr FixedString(const char (&str)[N]) noexcept {
-    for (std::size_t i = 0; i < N; ++i)
-      data[i] = str[i];
-  }
-  constexpr bool operator==(const FixedString &) const noexcept = default;
-  template <std::size_t M>
-  constexpr bool operator==(const FixedString<M> &) const noexcept {
-    return false;
-  }
-  constexpr std::string_view view() const noexcept { return {data, N - 1}; }
-};
-template <std::size_t N> FixedString(const char (&)[N]) -> FixedString<N>;
-
-namespace detail {
-template <typename T> struct is_fixed_string_t : std::false_type {};
-template <std::size_t N>
-struct is_fixed_string_t<FixedString<N>> : std::true_type {};
-} // namespace detail
-
-template <typename T>
-concept CFixedString = detail::is_fixed_string_t<T>::value;
-
+// A symbol-list element: the label lifted to a type, with the name in a form
+// the ordering predicate can compare.  See fixed_string.hpp for the label type.
 template <auto S> struct symbol_type {
   static constexpr auto value = S;
   static constexpr std::string_view name = S.view();
@@ -96,34 +75,35 @@ template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 // and can therefore hold any runtime number without minting a type per value.
 template <Numeric T, T V> struct Lit;
 
-template <Numeric T> struct is_expression_type<Constant<T>> : std::true_type {};
+template <Numeric T> inline constexpr bool is_expression_type_v<Constant<T>> =
+    true;
 
 template <Numeric T, T V>
-struct is_expression_type<Lit<T, V>> : std::true_type {};
+inline constexpr bool is_expression_type_v<Lit<T, V>> = true;
 
 template <Numeric T, CFixedString auto C, bool F>
-struct is_expression_type<Variable<T, C, F>> : std::true_type {};
+inline constexpr bool is_expression_type_v<Variable<T, C, F>> = true;
 
 template <COperation Op, CExpression... Children>
-struct is_expression_type<Expression<Op, Children...>> : std::true_type {};
+inline constexpr bool is_expression_type_v<Expression<Op, Children...>> = true;
 
 template <bool S, COperation Op, CExpression... Children>
-struct is_expression_type<ExpressionImpl<S, Op, Children...>>
-    : std::true_type {};
+inline constexpr bool is_expression_type_v<ExpressionImpl<S, Op, Children...>> =
+    true;
 
-template <typename T> struct is_constant : std::false_type {};
-template <Numeric T> struct is_constant<Constant<T>> : std::true_type {};
-template <Numeric T, T V> struct is_constant<Lit<T, V>> : std::true_type {};
+template <typename T> inline constexpr bool is_constant_v = false;
+template <Numeric T> inline constexpr bool is_constant_v<Constant<T>> = true;
+template <Numeric T, T V> inline constexpr bool is_constant_v<Lit<T, V>> = true;
 template <typename T>
-concept CConstant = is_constant<std::remove_cvref_t<T>>::value;
+concept CConstant = is_constant_v<std::remove_cvref_t<T>>;
 
-template <typename T> struct is_lit : std::false_type {};
-template <Numeric T, T V> struct is_lit<Lit<T, V>> : std::true_type {};
+template <typename T> inline constexpr bool is_lit_v = false;
+template <Numeric T, T V> inline constexpr bool is_lit_v<Lit<T, V>> = true;
 // A literal whose value is a template argument, so folding two of them yields
 // another empty node rather than a stored one.  This is what keeps derivative
 // trees — which are mostly 0s and 1s — free.
 template <typename T>
-concept CLit = is_lit<std::remove_cvref_t<T>>::value;
+concept CLit = is_lit_v<std::remove_cvref_t<T>>;
 
 // An internal node: Expression<Op, Children...> is the only node that carries
 // children, so `children_t` is exactly the branch/leaf discriminator.
@@ -138,17 +118,14 @@ template <Numeric T> struct EvalResult {
   constexpr operator T() const noexcept { return value; }
 };
 
-// Result of a fused forward-mode sweep (eval_with_tangent): the node's value
-// and its tangent w.r.t. the seed variable, accumulated together in one tree
-// walk. Plain aggregate so `auto [v, dv] = expr.eval_with_tangent<"x">();`
-// works.
+// Result of a fused forward-mode sweep (eval_with_tangent)
 template <Numeric T> struct Tangent {
   T value;
   T deriv;
 };
 
-template <Numeric T>
-struct is_expression_type<EvalResult<T>> : std::true_type {};
+template <Numeric T> inline constexpr bool is_expression_type_v<EvalResult<T>> =
+    true;
 
 template <COperation Op> struct BaseExpression {
   using value_type = typename Op::value_type;
@@ -231,11 +208,9 @@ public:
   }
 
   // Fused forward-mode sweep: one recursion that carries {value, tangent}
-  // upward through the tree, seeded on the variable named `Seed`.  Unlike
-  // derivative() (which builds a separate derivative tree) and unlike the
-  // Dual<T> path (which substitutes value_type), this walks the existing tree
-  // structurally and hands each Op the already-computed child Tangents via
-  // Op::forward.
+  // upward through the tree, seeded on the variable named `Seed`.  Walks the
+  // existing tree structurally and hands each Op the already-computed child
+  // Tangents via Op::forward.
   template <FixedString Seed, typename Syms, std::size_t N>
   [[nodiscard]] constexpr auto
   tangent_seeded(const std::array<value_type, N> &vals) const noexcept {

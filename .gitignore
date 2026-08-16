@@ -503,3 +503,4 @@ build/
 *.toc
 /*/settings.local.json
 /build_test/*
+*.md
