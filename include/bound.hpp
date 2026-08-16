@@ -45,11 +45,6 @@ template <typename Scalar, typename SymList> struct ValueMap {
     static_assert(idx < arity, "ValueMap: symbol not present in map");
     slots[idx] = v;
   }
-
-  [[nodiscard]] constexpr const std::array<Scalar, arity> &
-  to_array() const noexcept {
-    return slots;
-  }
 };
 
 template <typename T>

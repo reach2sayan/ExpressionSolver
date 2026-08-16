@@ -245,17 +245,6 @@ public:
         self().expressions());
   }
 
-  constexpr void update(const auto &symbols, const auto &updates) noexcept {
-    std::apply([&](auto &...e) noexcept { (e.update(symbols, updates), ...); },
-               self().expressions());
-  }
-
-  constexpr void collect(const auto &symbols, auto &out) const noexcept {
-    std::apply(
-        [&](const auto &...e) noexcept { (e.collect(symbols, out), ...); },
-        self().expressions());
-  }
-
   template <std::size_t Base = 0>
   constexpr void backward(const auto &syms, value_type adj, auto &grads,
                           const auto &cache) const noexcept {

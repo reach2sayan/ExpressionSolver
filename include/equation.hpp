@@ -10,15 +10,6 @@ namespace diff {
 namespace mp = diff::mpl;
 
 namespace detail {
-struct eval_func_t {
-  constexpr auto operator()(const auto &...exprs) const noexcept {
-    return std::array{
-        static_cast<typename std::remove_cvref_t<decltype(exprs)>::value_type>(
-            exprs)...};
-  }
-};
-inline constexpr eval_func_t eval_func{};
-
 // Evaluate a tuple of expressions at one point, in canonical symbol order.
 template <typename Syms, typename Vals, typename... Es>
 constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
@@ -290,22 +281,12 @@ public:
     return equation_derivative_tensor_impl<Order>(std::move(values));
   }
 
-  // Iterate over each sub-expression, passing it by reference to f.
-  template <std::invocable<const TFirst &> F>
-  constexpr void for_each_expr(F &&f) const noexcept {
-    std::apply([&](const auto &...exprs) noexcept { (f(exprs), ...); },
-               expressions);
-  }
 };
 
 template <CExpression T, CExpression... Ts>
 Equation(T, Ts...) -> Equation<T, Ts...>;
 
 } // namespace diff
-
-constexpr auto make_equation(auto &&...args) noexcept {
-  return diff::Equation(std::forward<decltype(args)>(args)...);
-}
 
 #define reverse_mode_jac jacobian<diff::DiffMode::Reverse>
 #define symbolic_mode_jac jacobian<diff::DiffMode::Symbolic>

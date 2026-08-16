@@ -6,7 +6,6 @@
 #include <ostream>
 #include <tuple>
 #include <type_traits>
-#include <utility>
 
 namespace diff {
 
@@ -262,65 +261,42 @@ constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
   return Dual<T>{q, -(q * ad) * inv};
 }
 
-// ---- Op tags: stateless combiners carrying the exact eager formulas --------
-// Each picks the (Dual,Dual) or (Dual,C) formula by overload resolution on the
-// materialized operands.
-struct add_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    return dual_add(x, y);
-  }
-};
-struct sub_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    return dual_sub(x, y);
-  }
-};
-struct mul_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    return dual_mul(x, y);
-  }
-};
-struct div_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    return dual_div(x, y);
-  }
-};
-
 // ---- binary operators (eager) ---------------------------------------------
-// Each operator computes value+derivative immediately via the *_combine formula
-// and returns a concrete Dual<T>.
+// Each operator computes value+derivative immediately and returns a concrete
+// Dual<T>.  The dual_* name is an overload set, so the (Dual,Dual) or (Dual,C)
+// formula is chosen by ordinary overload resolution on the operands.
 #define DIFF_DUAL_BINOP(OP, COMB)                                              \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
-    return COMB{}(a, b);                                                       \
+    return COMB(a, b);                                                         \
   }                                                                            \
   template <DualLike A, ConstOperand<A> C>                                     \
   constexpr auto operator OP(A &&a, C &&s) noexcept {                          \
-    return COMB{}(a, s);                                                       \
+    return COMB(a, s);                                                         \
   }
-DIFF_DUAL_BINOP(+, add_combine)
-DIFF_DUAL_BINOP(-, sub_combine)
-DIFF_DUAL_BINOP(*, mul_combine)
-DIFF_DUAL_BINOP(/, div_combine)
+DIFF_DUAL_BINOP(+, dual_add)
+DIFF_DUAL_BINOP(-, dual_sub)
+DIFF_DUAL_BINOP(*, dual_mul)
+DIFF_DUAL_BINOP(/, dual_div)
 #undef DIFF_DUAL_BINOP
 
 // Scalar-on-the-left: + and * commute (pass the dual first); - and / use the
-// reversed (C, Dual) combine (pass the scalar first).
+// reversed (C, Dual) overload (pass the scalar first).
 template <DualLike A, ConstOperand<A> C>
 constexpr auto operator+(C &&s, A &&a) noexcept {
-  return add_combine{}(a, s);
+  return dual_add(a, s);
 }
 template <DualLike A, ConstOperand<A> C>
 constexpr auto operator*(C &&s, A &&a) noexcept {
-  return mul_combine{}(a, s);
+  return dual_mul(a, s);
 }
 template <DualLike A, ConstOperand<A> C>
 constexpr auto operator-(C &&s, A &&a) noexcept {
-  return sub_combine{}(s, a);
+  return dual_sub(s, a);
 }
 template <DualLike A, ConstOperand<A> C>
 constexpr auto operator/(C &&s, A &&a) noexcept {
-  return div_combine{}(s, a);
+  return dual_div(s, a);
 }
 
 // ---- unary minus + math functions (eager) ---------------------------------
@@ -413,64 +389,57 @@ constexpr bool operator==(const A &a, const B &b) noexcept {
 }
 
 // ---- pow / max / min ------------------------------------------------------
+// Each takes both operands dual; DIFF_PROMOTE_BINARY below supplies the
+// scalar-mixed forms by lifting the scalar to a zero-derivative Dual, so the
+// formula is written exactly once.  The inner call (std::pow on scalars,
+// diff::pow by ADL on nested duals) is what makes these work at any depth.
+
 // pow(a, b) = a^b.  d(a^b) = a^b (b' ln a + b a'/a).
-struct pow_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    using std::log, std::pow;
-    const auto &[av, ad] = x;
-    const auto &[bv, bd] = y;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(av)>;
-    const T p = pow(av, bv);
-    return DT{p, p * (bd * log(av) + bv * ad / av)};
-  }
-};
-struct max_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return val(x) < val(y) ? DT{y} : DT{x};
-  }
-};
-struct min_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return val(y) < val(x) ? DT{y} : DT{x};
-  }
-};
+template <DualLike A, DualCompatible<A> B>
+constexpr auto pow(A &&a, B &&b) noexcept {
+  using std::log, std::pow;
+  const auto &[av, ad] = a;
+  const auto &[bv, bd] = b;
+  using DT = std::remove_cvref_t<A>;
+  using T = std::remove_cvref_t<decltype(av)>;
+  const T p = pow(av, bv);
+  return DT{p, p * (bd * log(av) + bv * ad / av)};
+}
+
+template <DualLike A, DualCompatible<A> B>
+constexpr auto max(A &&a, B &&b) noexcept {
+  using DT = std::remove_cvref_t<A>;
+  return val(a) < val(b) ? DT{b} : DT{a};
+}
+
+template <DualLike A, DualCompatible<A> B>
+constexpr auto min(A &&a, B &&b) noexcept {
+  using DT = std::remove_cvref_t<A>;
+  return val(b) < val(a) ? DT{b} : DT{a};
+}
+
 // atan2(y, x): the first operand is the numerator y, the second is x.
 //   d atan2 = (x*dy - y*dx) / (x² + y²).
-struct atan2_combine {
-  constexpr auto operator()(const auto &y, const auto &x) const noexcept {
-    using std::atan2;
-    const auto &[yv, yd] = y;
-    const auto &[xv, xd] = x;
-    using DT = std::remove_cvref_t<decltype(y)>;
-    const auto q = xv * xv + yv * yv;
-    return DT{atan2(yv, xv), (xv * yd - yv * xd) / q};
-  }
-};
+template <DualLike A, DualCompatible<A> B>
+constexpr auto atan2(A &&y, B &&x) noexcept {
+  using std::atan2;
+  const auto &[yv, yd] = y;
+  const auto &[xv, xd] = x;
+  using DT = std::remove_cvref_t<A>;
+  const auto q = xv * xv + yv * yv;
+  return DT{atan2(yv, xv), (xv * yd - yv * xd) / q};
+}
+
 // hypot(x, y) = sqrt(x² + y²).  d hypot = (x*dx + y*dy) / hypot.
-struct hypot_combine {
-  constexpr auto operator()(const auto &x, const auto &y) const noexcept {
-    using std::hypot;
-    const auto &[xv, xd] = x;
-    const auto &[yv, yd] = y;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    const auto h = hypot(xv, yv);
-    return DT{h, (xv * xd + yv * yd) / h};
-  }
-};
-#define DIFF_DUAL_BINFN(NAME, COMB)                                            \
-  template <DualLike A, DualCompatible<A> B>                                   \
-  constexpr auto NAME(A &&a, B &&b) noexcept {                                 \
-    return COMB{}(a, b);                                                       \
-  }
-DIFF_DUAL_BINFN(pow, pow_combine)
-DIFF_DUAL_BINFN(max, max_combine)
-DIFF_DUAL_BINFN(min, min_combine)
-DIFF_DUAL_BINFN(atan2, atan2_combine)
-DIFF_DUAL_BINFN(hypot, hypot_combine)
-#undef DIFF_DUAL_BINFN
+template <DualLike A, DualCompatible<A> B>
+constexpr auto hypot(A &&a, B &&b) noexcept {
+  using std::hypot;
+  const auto &[xv, xd] = a;
+  const auto &[yv, yd] = b;
+  using DT = std::remove_cvref_t<A>;
+  const auto h = hypot(xv, yv);
+  return DT{h, (xv * xd + yv * yd) / h};
+}
 
 // 3-argument hypot(x, y, z) = sqrt(x² + y² + z²) (all-dual; scalar mixing for
 // the ternary form is not provided).  d hypot = (x*dx + y*dy + z*dz) / hypot.
