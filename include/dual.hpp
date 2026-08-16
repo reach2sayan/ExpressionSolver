@@ -300,16 +300,11 @@ constexpr auto operator/(C &&s, A &&a) noexcept {
 }
 
 // ---- unary minus + math functions (eager) ---------------------------------
-struct neg_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
-    const auto &[v, d] = x;
-    using DT = std::remove_cvref_t<decltype(x)>;
-    return DT{-v, -d};
-  }
-};
-
-constexpr auto operator-(DualLike auto &&a) noexcept {
-  return neg_combine{}(a);
+// Negation needs no chain rule: both components just flip sign.
+template <DualLike A> constexpr auto operator-(A &&a) noexcept {
+  const auto &[v, d] = a;
+  using DT = std::remove_cvref_t<A>;
+  return DT{-v, -d};
 }
 
 #define DIFF_DUAL_UNARY(NAME)                                                  \
