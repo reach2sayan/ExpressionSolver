@@ -328,13 +328,13 @@ template <Numeric T, T V> struct Lit {
   }
 
   // Leaves are expressions too: same eval(...) surface as ExpressionOps.
-  template <typename... Args>
+  template <CEvalArg... Args>
     requires(sizeof...(Args) > 0)
   [[nodiscard]] constexpr auto eval(const Args &...args) const {
     return detail::eval_dispatch(*this, args...);
   }
 
-  template <FixedString Seed, typename... Args>
+  template <FixedString Seed, CEvalArg... Args>
   [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
     return detail::tangent_dispatch<Seed>(*this, args...);
   }
@@ -403,13 +403,13 @@ public:
     }
   }
 
-  template <typename... Args>
+  template <CEvalArg... Args>
     requires(sizeof...(Args) > 0)
   [[nodiscard]] constexpr auto eval(const Args &...args) const {
     return detail::eval_dispatch(*this, args...);
   }
 
-  template <FixedString Seed, typename... Args>
+  template <FixedString Seed, CEvalArg... Args>
   [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
     return detail::tangent_dispatch<Seed>(*this, args...);
   }
@@ -490,13 +490,13 @@ public:
   }
 
   // Leaves are expressions too: same eval(...) surface as ExpressionOps.
-  template <typename... Args>
+  template <CEvalArg... Args>
     requires(sizeof...(Args) > 0)
   [[nodiscard]] constexpr auto eval(const Args &...args) const {
     return detail::eval_dispatch(*this, args...);
   }
 
-  template <FixedString Seed, typename... Args>
+  template <FixedString Seed, CEvalArg... Args>
   [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
     return detail::tangent_dispatch<Seed>(*this, args...);
   }

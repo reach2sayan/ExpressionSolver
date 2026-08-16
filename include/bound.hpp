@@ -225,7 +225,7 @@ template <CExpression Expr>
 // expr.eval(...), so the two can never drift apart.
 namespace detail {
 
-template <CExpression Expr, typename... Args>
+template <CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto eval_dispatch(const Expr &e,
                                            const Args &...args) {
   using VT = typename std::remove_cvref_t<Expr>::value_type;
@@ -270,7 +270,7 @@ template <CExpression Expr, typename... Args>
   }
 }
 
-template <auto Seed, CExpression Expr, typename... Args>
+template <auto Seed, CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto tangent_dispatch(const Expr &e,
                                               const Args &...args) {
   using VT = typename std::remove_cvref_t<Expr>::value_type;
@@ -286,7 +286,7 @@ template <auto Seed, CExpression Expr, typename... Args>
 } // namespace detail
 
 // eval(expr, ...) — same dispatcher the member uses.
-template <CExpression Expr, typename... Args>
+template <CExpression Expr, CEvalArg... Args>
   requires(sizeof...(Args) > 0)
 [[nodiscard]] constexpr auto eval(const Expr &e, const Args &...args) {
   return detail::eval_dispatch(e, args...);

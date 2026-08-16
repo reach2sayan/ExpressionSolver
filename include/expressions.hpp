@@ -230,7 +230,7 @@ public:
   // free function, so unqualified lookup here would never reach it.
   // Nullary is legal exactly when the expression has no free symbols (a
   // constant-folded tree); otherwise a point is required.
-  template <typename... Args>
+  template <CEvalArg... Args>
   [[nodiscard]] constexpr auto eval(const Args &...args) const {
     return detail::eval_dispatch(self(), args...);
   }
@@ -242,7 +242,7 @@ public:
   }
 
   // Fused forward sweep at a point; the symbol list is deduced.
-  template <FixedString Seed, typename... Args>
+  template <FixedString Seed, CEvalArg... Args>
   [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
     return detail::tangent_dispatch<Seed>(self(), args...);
   }
