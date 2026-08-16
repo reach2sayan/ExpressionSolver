@@ -3,13 +3,31 @@
 #include "dual.hpp"
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace diff {
+
+// An energy in the shape every driver here hands one: it is called with a
+// pointer into the driver's own seed buffer and returns a number of the same
+// type.  The buffer's length is deliberately not part of the type — the
+// driver owns it and the callable reads a window the caller has guaranteed
+// (see SeededExprEnergy in seeded_energy.hpp).
+//
+// D is the number the driver seeds with, and it is what distinguishes the
+// drivers from each other: `dual` for the gradient sweep, `dual2nd` for the
+// scalar forward-over-forward Hessian, Dual<VectorDual<N>> for the
+// vector-forward one.  Naming it here is what lets an energy that is not
+// generic enough fail at its call site rather than inside a sweep.
+template <typename F, typename D>
+concept CEnergyOf =
+    std::invocable<F &, const D *> &&
+    std::convertible_to<std::invoke_result_t<F &, const D *>, D>;
 
 namespace detail {
 inline std::vector<std::size_t> iota_indices(std::size_t n) {
@@ -49,7 +67,7 @@ struct HessianResult {
   }
 };
 
-template <typename F>
+template <CEnergyOf<dual> F>
 std::vector<double> gradient(F &&f, std::span<const double> x,
                              std::span<const std::size_t> active) {
   const std::size_t n = x.size();
@@ -68,7 +86,7 @@ std::vector<double> gradient(F &&f, std::span<const double> x,
   return g;
 }
 
-template <typename F>
+template <CEnergyOf<dual> F>
 std::vector<double> gradient(F &&f, std::span<const double> x) {
   const auto all = detail::iota_indices(x.size());
   return gradient(static_cast<F &&>(f), x, all);
@@ -83,7 +101,7 @@ namespace detail {
 // slot and active[j] in the inner derivative slot; evaluating f then yields, in
 // the result D = ((A0,A1),(B0,B1)):
 //   A0 = f(x),  B0 = df/dx_i,  A1 = df/dx_j,  B1 = d2f/dx_i dx_j.
-template <typename F>
+template <CEnergyOf<dual2nd> F>
 HessianResult hessian_scalar(F &&f, std::span<const double> x,
                              std::span<const std::size_t> active) {
   const std::size_t n = x.size();
@@ -139,7 +157,7 @@ HessianResult hessian_scalar(F &&f, std::span<const double> x,
 }
 
 // Convenience: differentiate every variable.
-template <typename F>
+template <CEnergyOf<dual2nd> F>
 HessianResult hessian_scalar(F &&f, std::span<const double> x) {
   const auto all = iota_indices(x.size());
   return hessian_scalar(static_cast<F &&>(f), x, all);

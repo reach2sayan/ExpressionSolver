@@ -1,6 +1,7 @@
 #pragma once
 
-#include "traits.hpp" // extract_symbols_from_expr_t
+#include "expressions.hpp" // CExpression, Numeric
+#include "traits.hpp"      // extract_symbols_from_expr_t
 
 #include <algorithm>
 #include <array>
@@ -22,11 +23,10 @@ namespace diff {
 // *scalar* O(n^2) forward-over-forward driver instead of vector-forward.  A
 // graph node carries wide Dual<VectorDual<N>> intermediates whose per-node cost
 // scales with pack width and dwarfs the fewer-sweeps saving the vector-forward
-// driver is built for (BENCHMARKS.md: expression-template n=4 measures
-// 4,095 ns vector-forward vs 723 ns scalar).  Raw arithmetic energy lambdas
+// driver is built for.  Raw arithmetic energy lambdas
 // carry no tag, so the router keeps routing those to vector-forward, where they
 // win at small n.
-template <typename Expr> class SeededExprEnergy {
+template <CExpression Expr> class SeededExprEnergy {
   static_assert(!std::is_reference_v<Expr>,
                 "SeededExprEnergy stores the expression by value on purpose — a "
                 "reference parameter would leave the callable holding a "
@@ -43,13 +43,7 @@ public:
   explicit constexpr SeededExprEnergy(Expr expr) noexcept
       : expr_(static_cast<Expr &&>(expr)) {}
 
-  // `dof` is a NON-OWNING borrow of the driver's seed buffer, valid only for
-  // the duration of this call — it must not be retained.  It carries no length,
-  // so the read window is fixed by the expression instead: exactly slots
-  // [0, arity), in canonical symbol order.  Callers are responsible for handing
-  // over a buffer at least that long; the public hessian() router enforces it
-  // (see detail::check_graph_point in vforward_driver.hpp).
-  template <typename Dof>
+  template <Numeric Dof>
   [[nodiscard]] constexpr auto operator()(const Dof *dof) const noexcept {
     using T = std::remove_cvref_t<Dof>;
     // Built by copy, not value-initialized then overwritten: this runs once per
@@ -61,7 +55,7 @@ public:
   }
 };
 
-template <typename Expr>
+template <CExpression Expr>
 [[nodiscard]] constexpr auto seeded_energy(Expr &&expr) noexcept {
   return SeededExprEnergy<std::remove_cvref_t<Expr>>(
       static_cast<Expr &&>(expr));

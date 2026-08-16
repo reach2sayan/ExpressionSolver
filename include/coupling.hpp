@@ -24,17 +24,17 @@
 namespace diff {
 
 // Curvature classification of an operation.
-template <typename Op> inline constexpr bool is_linear_op_v = false;
+template <COperation Op> inline constexpr bool is_linear_op_v = false;
 template <Numeric T> inline constexpr bool is_linear_op_v<SumOp<T>> = true;
 template <Numeric T> inline constexpr bool is_linear_op_v<NegateOp<T>> = true;
 
 // a*b: curvature only ACROSS the operands (d2/da db = 1), never within one.
-template <typename Op> inline constexpr bool is_product_op_v = false;
+template <COperation Op> inline constexpr bool is_product_op_v = false;
 template <Numeric T> inline constexpr bool is_product_op_v<MultiplyOp<T>> = true;
 
 // a/b: across the operands, plus within the denominator (d2/db2 = 2a/b^3).
 // Linear in the numerator, so a-with-a is genuinely absent.
-template <typename Op> inline constexpr bool is_quotient_op_v = false;
+template <COperation Op> inline constexpr bool is_quotient_op_v = false;
 template <Numeric T> inline constexpr bool is_quotient_op_v<DivideOp<T>> = true;
 
 // Row i of the pattern: the set of j for which d2f/dxi dxj may be nonzero.
@@ -66,7 +66,7 @@ consteval void couple(coupling_rows<N> &rows, const symbol_set<N> &a,
 // Walk the expression type, propagating (symbols, coupled pairs) upward.
 // Recursion is on the type — a storing node is not default-constructible, so
 // there is no object to walk.
-template <typename E, typename Syms, std::size_t N>
+template <CExpression E, CSymbolList Syms, std::size_t N>
 consteval coupling_info<N> coupling_of() noexcept {
   using U = std::remove_cvref_t<E>;
   coupling_info<N> info{};
@@ -114,7 +114,7 @@ consteval coupling_info<N> coupling_of() noexcept {
 
 // The Hessian sparsity pattern of `Expr`: rows[i][j] means d2f/dxi dxj may be
 // nonzero.  A conservative superset of the true pattern.
-template <typename Expr,
+template <CExpression Expr,
           std::size_t N = mpl::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
 consteval coupling_rows<N> hessian_pattern() noexcept {
@@ -124,7 +124,7 @@ consteval coupling_rows<N> hessian_pattern() noexcept {
 
 // A variable template is instantiated once per Expr, so the type walk above
 // runs once however many of the derived tables below ask for the pattern.
-template <typename Expr>
+template <CExpression Expr>
 inline constexpr auto hessian_pattern_v = hessian_pattern<Expr>();
 
 // A partition of the columns into groups that can be seeded together.
@@ -212,7 +212,7 @@ scatter_targets(const coupling_rows<N> &rows,
 // includes Eigen, this header only produces data Eigen can consume.
 // ===========================================================================
 
-template <typename Expr,
+template <CExpression Expr,
           std::size_t N = mpl::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
 consteval std::size_t hessian_nnz() noexcept {
@@ -233,7 +233,7 @@ template <std::size_t N, std::size_t NNZ> struct sparse_layout_t {
 // Column-major, row indices ascending within each column — the sorted,
 // compressed form Eigen expects.  The pattern is symmetric, so reading it by
 // column or by row gives the same structure.
-template <typename Expr,
+template <CExpression Expr,
           std::size_t N = mpl::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{}),
           std::size_t NNZ = hessian_nnz<Expr>()>
@@ -268,7 +268,7 @@ consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
 // Per colour, the slot in the VALUE array each row's sweep result belongs to —
 // the sparse counterpart of scatter_targets, so the sweep writes straight into
 // compressed storage and the dense N x N matrix is never materialised.
-template <typename Expr,
+template <CExpression Expr,
           std::size_t N = mpl::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
 consteval scatter_map<N> sparse_slots() noexcept {

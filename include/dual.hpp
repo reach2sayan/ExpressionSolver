@@ -9,9 +9,6 @@
 
 namespace diff {
 
-// T is the component type, not necessarily a scalar: Dual<Dual<double>> is the
-// second-order number and Dual<VectorDual<N>> the vector-forward one, which is
-// exactly why the parameter is Numeric rather than arithmetic.
 template <Numeric T> class Dual {
 private:
   T val_{};
@@ -23,8 +20,7 @@ public:
 
   template <CArithmetic U>
   constexpr Dual(U s) noexcept : val_(T(s)), deriv_(T{}) {}
-  // The operand of a compound assignment is whatever the matching binary
-  // operator accepts: another dual, or a zero-derivative number.
+
   template <Numeric O> constexpr Dual &operator+=(const O &o) noexcept {
     return *this = *this + o;
   }
@@ -47,14 +43,6 @@ public:
     return out << d.val_ << "+" << d.deriv_ << "e";
   }
 
-  // Deliberately NOT ref-qualified, unlike the result-carrying types
-  // (HessianResult, ValueMap, Bound, Equation).  Ref-qualification is
-  // all-or-nothing per name, so making the mutators lvalue-only would force the
-  // const readers to be `const &` too, and then either `f(dof.data()).deriv()`
-  // (forward_driver.hpp) stops compiling, or a `const &&` overload has to copy
-  // out — 264 bytes for Dual<VectorDual<32>>, on the hottest type here.  Dual
-  // is a numeric value type; reading a component off a temporary is idiomatic
-  // and every such read is consumed inside the same full-expression.
   [[nodiscard]] constexpr const T &value() const noexcept { return val_; }
   [[nodiscard]] constexpr T &value() noexcept { return val_; }
   [[nodiscard]] constexpr const T &deriv() const noexcept { return deriv_; }
@@ -92,8 +80,7 @@ template <Numeric T> struct dual_scalar_type {
 template <Numeric T> struct dual_scalar_type<Dual<T>> {
   using type = T;
 };
-template <Numeric T>
-using dual_scalar_t = typename dual_scalar_type<T>::type;
+template <Numeric T> using dual_scalar_t = typename dual_scalar_type<T>::type;
 
 // dual_value_t<X>: the component type T of a Dual<T>.
 template <DualLike X> struct dual_value_type;
@@ -246,11 +233,9 @@ constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
   return Dual<T>{av * s, ad * s};
 }
+
 // Division in reciprocal form: compute inv = 1/denominator once, then use
-// multiplies (one hardware division per nesting level instead of two).  This is
-// what VectorDual and autodiff do; it's not bit-identical to the textbook
-// quotient form (it reassociates) but agrees to rounding.  Inner ops stay
-// T-on-T so VectorDual is safe.
+// multiplies (one hardware division per nesting level instead of two).
 template <Numeric T>
 constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
@@ -269,7 +254,7 @@ template <Numeric T, ScalarOperand<T> C>
 constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (VectorDual-safe)
   const T inv = T{1} / av;
-  const T q = T(s) * inv; // value = s / a
+  const T q = T{s} * inv; // value = s / a
   return Dual<T>{q, -(q * ad) * inv};
 }
 
@@ -497,9 +482,6 @@ template <Numeric T> constexpr bool isfinite(const Dual<T> &d) noexcept {
 static_assert(Numeric<Dual<double>>);
 static_assert(Numeric<Dual<float>>);
 
-// Spelled down here, after the operators: Dual's parameter is constrained to
-// Numeric, and Dual<double> only becomes Numeric once the arithmetic above is
-// declared — so naming Dual<Dual<double>> any earlier would not compile.
 using dual = nth_dual_t<double, 1>;    // first-order forward dual
 using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 

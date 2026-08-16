@@ -503,21 +503,21 @@ public:
 };
 
 #define DEFINE_CONST_UDL(type, suffix)                                         \
-  consteval diff::Constant<type> operator"" _##suffix(                         \
+  consteval diff::Constant<type> operator""_##suffix(                          \
       unsigned long long val) {                                                \
     return diff::Constant<type>{static_cast<type>(val)};                       \
   }                                                                            \
-  consteval diff::Constant<type> operator"" _##suffix(long double val) {       \
+  consteval diff::Constant<type> operator""_##suffix(long double val) {        \
     return diff::Constant<type>{static_cast<type>(val)};                       \
   }
 
 // A variable is a pure symbol, so the literal's value is unused; only its type
 // selects the variable's value_type.
 #define DEFINE_VAR_UDL(type, suffix, label)                                    \
-  consteval auto operator"" _##suffix(unsigned long long) {                    \
+  consteval auto operator""_##suffix(unsigned long long) {                     \
     return diff::Variable<type, diff::FixedString{label}>{};                   \
   }                                                                            \
-  consteval auto operator"" _##suffix(long double) {                           \
+  consteval auto operator""_##suffix(long double) {                            \
     return diff::Variable<type, diff::FixedString{label}>{};                   \
   }
 

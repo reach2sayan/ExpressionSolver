@@ -197,7 +197,7 @@ void update(const auto& symbols, const auto& updates);
 void collect(const auto& symbols, auto& out) const;
 
 // 4. Stateless evaluation from an explicit seed array (no mutation).
-template<typename Syms, size_t N>
+template<CSymbolList Syms, size_t N>
 auto eval_seeded(const array<value_type,N>& vals) const -> value_type;
 
 // 5. Reverse-mode adjoint propagation.
@@ -478,7 +478,7 @@ $\varepsilon^2 = 0$:
 \subsection{Implementation: \texttt{Dual<T>} (\texttt{dual.hpp})}
 
 \begin{lstlisting}
-template <typename T> class Dual {
+template <Numeric T> class Dual {
     T val{};    // primal
     T deriv{};  // tangent
 

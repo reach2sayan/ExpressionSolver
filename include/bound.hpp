@@ -2,6 +2,7 @@
 
 #include "fixed_string.hpp"
 #include "gradient.hpp"
+#include "named_value.hpp"
 #include "traits.hpp"
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 namespace diff {
 
@@ -45,6 +47,32 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
     static_assert(idx < arity, "ValueMap: symbol not present in map");
     slots[idx] = v;
   }
+
+  // Subscript spelling of get/set.  operator[] has no template-argument syntax,
+  // so the symbol arrives as an empty symbol_type value — sym<"x">, or "x"_s
+  // with `using namespace diff::literals`.  Same lvalue/rvalue split as get():
+  // the borrow is only offered where the map outlives the reference.
+  //
+  // This is an alias, not a replacement: get<"x">()/set<"x">() remain the
+  // primary spelling (and the one Bound and Equation match).  What the
+  // subscript adds is the mutable form, m["x"_s] = v.
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr const Scalar &
+  operator[](symbol_type<S>) const & noexcept {
+    return get<S>();
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr Scalar &operator[](symbol_type<S>) & noexcept {
+    constexpr auto idx = find_index_of_symbol<S, SymList>();
+    static_assert(idx < arity, "ValueMap: symbol not present in map");
+    return slots[idx];
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr Scalar operator[](symbol_type<S>) const && noexcept {
+    return get<S>();
+  }
 };
 
 template <typename T>
@@ -52,12 +80,6 @@ concept CValueMap = requires {
   typename std::remove_cvref_t<T>::symbols;
   requires std::remove_cvref_t<T>::kValueMap;
 };
-
-template <typename T> inline constexpr bool is_named_value_v = false;
-template <FixedString S, Numeric V>
-inline constexpr bool is_named_value_v<NamedValue<S, V>> = true;
-template <typename T>
-concept CNamedValue = is_named_value_v<std::remove_cvref_t<T>>;
 
 namespace detail {
 
@@ -165,6 +187,26 @@ template <CExpression Expr, CValueMap Map> struct Bound {
 
   template <FixedString S>
   [[nodiscard]] constexpr typename map_type::value_type get() const && noexcept {
+    return map.template get<S>();
+  }
+
+  // Subscript spelling, forwarded to the map so the two cannot drift; b["x"_s]
+  // = v is the reason it exists.  See the note on ValueMap::operator[].
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr const typename map_type::value_type &
+  operator[](symbol_type<S>) const & noexcept {
+    return map.template get<S>();
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr typename map_type::value_type &
+  operator[](symbol_type<S> s) & noexcept {
+    return map[s];
+  }
+
+  template <CFixedString auto S>
+  [[nodiscard]] constexpr typename map_type::value_type
+  operator[](symbol_type<S>) const && noexcept {
     return map.template get<S>();
   }
 };

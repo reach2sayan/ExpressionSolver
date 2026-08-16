@@ -17,7 +17,7 @@ constexpr void static_for(F &&f) noexcept {
 }
 
 template <typename T> inline constexpr bool is_variable_v = false;
-template <typename T, CFixedString auto C, bool F>
+template <Numeric T, CFixedString auto C, bool F>
 inline constexpr bool is_variable_v<Variable<T, C, F>> = true;
 
 template <typename T>

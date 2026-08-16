@@ -18,6 +18,7 @@
 #include <random>
 
 using namespace diff;
+using namespace diff::literals; // "x"_s
 
 // ===========================================================================
 // Math function tests — ported from autodiff's test suite
@@ -3224,6 +3225,55 @@ TEST(ValueMapTest, SetUpdatesTheNamedSlot) {
   EXPECT_DOUBLE_EQ(m.get<"y">(), 3.0);
 }
 
+// ---------------------------------------------------------------------------
+// operator[] — the subscript spelling of get/set.  It is an alias, so what
+// these pin is that it stays one: same slot, same errors, same ownership
+// rules, plus the assignment form that get/set cannot express.
+// ---------------------------------------------------------------------------
+
+TEST(ValueMapTest, SubscriptReadsTheSameSlotAsGet) {
+  const auto m = values(named<"y">(3.0), named<"w">(1.0), named<"x">(2.0));
+  // Both spellings of the key, since sym<"x"> is what "x"_s expands to.
+  EXPECT_DOUBLE_EQ(m[sym<"w">], m.get<"w">());
+  EXPECT_DOUBLE_EQ(m["x"_s], 2.0);
+  EXPECT_DOUBLE_EQ(m["y"_s], 3.0);
+  static_assert(std::is_same_v<decltype(sym<"x">), const symbol_type<
+                                                      FixedString{"x"}>>,
+                R"("x"_s and sym<"x"> must name the same key type)");
+}
+
+TEST(ValueMapTest, SubscriptAssignsIntoTheNamedSlot) {
+  auto m = values(named<"x">(2.0), named<"y">(3.0));
+  m["x"_s] = 7.0;
+  EXPECT_DOUBLE_EQ(m.get<"x">(), 7.0); // the point of having a subscript
+  EXPECT_DOUBLE_EQ(m.get<"y">(), 3.0);
+  m[sym<"y">] += 1.0;                // it is a real reference, not a proxy
+  EXPECT_DOUBLE_EQ(m.slots[1], 4.0); // canonical order: {x,y}
+  EXPECT_DOUBLE_EQ(m.slots[0], 7.0);
+}
+
+TEST(ValueMapTest, SubscriptOwnershipMatchesGet) {
+  const auto m = values(named<"x">(2.0), named<"y">(3.0));
+  auto mut = m;
+  static_assert(std::is_same_v<decltype(m["x"_s]), const double &>,
+                "subscript on a const lvalue map borrows");
+  static_assert(std::is_same_v<decltype(mut["x"_s]), double &>,
+                "subscript on a mutable lvalue map hands out the slot");
+  static_assert(std::is_same_v<decltype(values(named<"x">(2.0))["x"_s]), double>,
+                "subscript on a temporary map must return by value");
+  EXPECT_DOUBLE_EQ(values(named<"x">(2.0))["x"_s], 2.0);
+}
+
+TEST(ValueMapTest, SubscriptIsConstexpr) {
+  constexpr double folded = [] {
+    auto m = values(named<"x">(2.0), named<"y">(3.0));
+    m["x"_s] = 7.0;
+    return m["x"_s] + m["y"_s];
+  }();
+  static_assert(folded == 10.0, "read and write both fold at compile time");
+  EXPECT_DOUBLE_EQ(folded, 10.0);
+}
+
 TEST(BoundTest, EvalMatchesLeafStorageBitForBit) {
   // The seeded path and the leaf-storage path must agree exactly - this is a
   // storage change, not a numerics change.
@@ -3258,6 +3308,28 @@ TEST(BoundTest, SetChangesTheResult) {
   EXPECT_DOUBLE_EQ(b.eval(), 10.0);
   b.set<"x">(4.0);
   EXPECT_DOUBLE_EQ(b.eval(), 28.0); // (4+3)*4
+}
+
+TEST(BoundTest, SubscriptForwardsToTheMap) {
+  auto x = PV(2.0, "x");
+  auto y = PV(3.0, "y");
+  auto b = bind((x + y) * x, named<"x">(2.0), named<"y">(3.0));
+  EXPECT_DOUBLE_EQ(b["x"_s], 2.0);
+
+  b["x"_s] = 4.0; // must move the same slot set<"x"> does
+  EXPECT_DOUBLE_EQ(b.eval(), 28.0);
+  EXPECT_DOUBLE_EQ(b.get<"x">(), 4.0);
+  EXPECT_DOUBLE_EQ(b.map.get<"x">(), 4.0);
+
+  const auto &cb = b;
+  static_assert(std::is_same_v<decltype(cb["x"_s]), const double &>,
+                "subscript on a const lvalue Bound borrows");
+  static_assert(
+      std::is_same_v<decltype(bind(x * y, named<"x">(1.0), named<"y">(1.0))
+                                  ["x"_s]),
+                     double>,
+      "subscript on a temporary Bound must return by value");
+  EXPECT_DOUBLE_EQ(bind(x * y, named<"x">(6.0), named<"y">(1.0))["x"_s], 6.0);
 }
 
 TEST(BoundTest, IsConstexpr) {

@@ -2,6 +2,7 @@
 
 #include "dual.hpp"
 #include "expressions.hpp"
+#include "named_value.hpp"
 #include "taylor_dual.hpp"
 #include "traits.hpp"
 #include "vector_dual.hpp"
@@ -17,15 +18,15 @@ namespace diff {
 
 namespace mp = diff::mpl;
 
-template <typename Expr>
+template <CExpression Expr>
 using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
                                 node_count_v<std::remove_cvref_t<Expr>>>;
 
 // Leaves hold no value, so the point is threaded through the sweep: a leaf
 // reads its slot out of `vals` (in canonical symbol order) instead of out of
 // itself.
-template <std::size_t Base = 0, typename Syms, CExpression E, typename Vals,
-          typename Cache>
+template <std::size_t Base = 0, CSymbolList Syms, CExpression E,
+          CNumericBuffer Vals, CNumericBuffer Cache>
 constexpr auto fill_cache(const E &node, const Vals &vals,
                           Cache &cache) noexcept {
   using U = std::remove_cvref_t<E>;
@@ -62,17 +63,6 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 // introspection / building arrays by hand.
 // ===========================================================================
 
-template <FixedString Sym, typename V> struct NamedValue {
-  static constexpr auto symbol = Sym;
-  V value;
-};
-
-// named<"x">(1.25) — bind a value to a symbol by name.
-template <FixedString Sym, typename V>
-[[nodiscard]] constexpr NamedValue<Sym, V> named(V v) noexcept {
-  return {v};
-}
-
 // The canonical (alphabetical-by-name) order of an expression's free symbols.
 template <CExpression Expr>
 [[nodiscard]] consteval auto symbol_order() noexcept {
@@ -89,9 +79,9 @@ template <CExpression Expr>
 // defaults to the type derivative_tensor expects (scalar_base_t); override it
 // for the reverse-mode hessian path (e.g. make_values<Expr, dual_scalar_t<T>>).
 template <CExpression Expr,
-          typename Scalar =
+          Numeric Scalar =
               scalar_base_t<typename std::remove_cvref_t<Expr>::value_type>,
-          FixedString... Syms, typename... Vs>
+          FixedString... Syms, Numeric... Vs>
 [[nodiscard]] constexpr std::array<
     Scalar,
     mp::mp_size(extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
@@ -106,7 +96,7 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
       "make_values: duplicate symbol");
   std::array<Scalar, N> out{};
   (
-      [&]<FixedString Sy, typename Vv>(const NamedValue<Sy, Vv> &v) {
+      [&]<FixedString Sy, Numeric Vv>(const NamedValue<Sy, Vv> &v) {
         constexpr std::size_t idx = find_index_of_symbol<Sy, SymList>();
         static_assert(idx < N, "make_values: symbol not present in expression");
         out[idx] = static_cast<Scalar>(v.value);
@@ -116,17 +106,18 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 }
 
 namespace detail {
-template <typename S, std::size_t N, std::size_t Order>
+template <Numeric S, std::size_t N, std::size_t Order>
 consteval auto nd_array_fn() {
-  if constexpr (Order == 0)
+  if constexpr (Order == 0) {
     return std::type_identity<S>{};
-  else
+  } else {
     return std::type_identity<std::array<
         typename decltype(nd_array_fn<S, N, Order - 1>())::type, N>>{};
+  }
 }
 } // namespace detail
 
-template <typename S, std::size_t N, std::size_t Order>
+template <Numeric S, std::size_t N, std::size_t Order>
 using nd_array_t = typename decltype(detail::nd_array_fn<S, N, Order>())::type;
 
 // arr[idx[0]][idx[1]]...[idx[Order-1]]
@@ -142,7 +133,7 @@ constexpr auto &nd_index(auto &arr, std::span<const std::size_t> idx) noexcept {
 enum class DiffMode { Symbolic, Forward, Reverse };
 namespace detail {
 
-template <CExpression Expr, typename T = typename Expr::value_type,
+template <CExpression Expr, Numeric T = typename Expr::value_type,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(!DualLike<T>)
@@ -157,7 +148,7 @@ reverse_mode_gradient(const Expr &expr,
   return grads;
 }
 
-template <CExpression Expr, typename T = typename Expr::value_type,
+template <CExpression Expr, Numeric T = typename Expr::value_type,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires DualLike<T>
@@ -177,8 +168,8 @@ reverse_mode_gradient(const Expr &expr,
 }
 
 template <CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = dual_scalar_t<T>,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
+          Numeric S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires DualLike<T>
@@ -212,7 +203,7 @@ reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
   return H;
 }
 
-template <typename S, std::size_t Depth>
+template <Numeric S, std::size_t Depth>
 constexpr nth_dual_t<S, Depth> make_mixed_seed(S value,
                                                std::span<const std::size_t> idx,
                                                std::size_t k) noexcept {
@@ -228,7 +219,7 @@ constexpr nth_dual_t<S, Depth> make_mixed_seed(S value,
   }
 }
 
-template <std::size_t N, typename T>
+template <std::size_t N, Numeric T>
 constexpr auto extract_nth(const T &x) noexcept {
   if constexpr (N == 0) {
     return x;
@@ -238,8 +229,8 @@ constexpr auto extract_nth(const T &x) noexcept {
 }
 
 template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
+          Numeric S = scalar_base_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && N > 0)
@@ -296,7 +287,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
     }(std::make_index_sequence<N>{});
     return result;
   }
-
+  
   std::size_t total = 1;
   for (std::size_t d = 0; d < Order; ++d) {
     total *= N;
@@ -323,7 +314,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
 } // namespace detail
 
 template <DiffMode Mode, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse)
@@ -333,8 +324,8 @@ template <DiffMode Mode, CExpression Expr,
 }
 
 // Order-safe named form: values bind by symbol name (see make_values).
-template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
-          typename T = typename std::remove_cvref_t<Expr>::value_type>
+template <DiffMode Mode, CExpression Expr, FixedString... Syms, Numeric... Vs,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type>
   requires(Mode == DiffMode::Reverse && sizeof...(Syms) > 0)
 [[nodiscard]] constexpr auto gradient(const Expr &expr,
                                       NamedValue<Syms, Vs>... nv) noexcept {
@@ -342,8 +333,8 @@ template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
 }
 
 // Positional scalars, in canonical symbol order.
-template <DiffMode Mode, CExpression Expr, typename... Args,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
+template <DiffMode Mode, CExpression Expr, Numeric... Args,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse && sizeof...(Args) > 0 &&
@@ -358,8 +349,8 @@ template <DiffMode Mode, CExpression Expr, typename... Args,
 }
 
 template <DiffMode Mode, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = dual_scalar_t<T>,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
+          Numeric S = dual_scalar_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Mode == DiffMode::Reverse && DualLike<T>)
@@ -369,8 +360,8 @@ template <DiffMode Mode, CExpression Expr,
 }
 
 // Order-safe named form: values bind by symbol name (see make_values).
-template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
-          typename T = typename std::remove_cvref_t<Expr>::value_type>
+template <DiffMode Mode, CExpression Expr, FixedString... Syms, Numeric... Vs,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type>
   requires(Mode == DiffMode::Reverse && DualLike<T>)
 [[nodiscard]] constexpr auto hessian(const Expr &expr,
                                      NamedValue<Syms, Vs>... nv) noexcept {
@@ -380,8 +371,8 @@ template <DiffMode Mode, CExpression Expr, FixedString... Syms, typename... Vs,
 
 
 template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
+          Numeric S = scalar_base_t<T>,
           std::size_t N = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && N > 0)
@@ -392,7 +383,7 @@ template <std::size_t Order, CExpression Expr,
 
 // Order-safe named form: values bind by symbol name (see make_values).
 template <std::size_t Order, CExpression Expr, FixedString... Syms,
-          typename... Vs>
+          Numeric... Vs>
   requires(Order > 0 && sizeof...(Syms) > 0)
 [[nodiscard]] constexpr auto derivative_tensor(const Expr &expr,
                                                NamedValue<Syms, Vs>... nv) noexcept {
@@ -402,7 +393,7 @@ template <std::size_t Order, CExpression Expr, FixedString... Syms,
 
 namespace detail {
 
-template <Numeric T> consteval T compile_time_factorial(T Order) {
+template <CArithmetic T> consteval T compile_time_factorial(T Order) {
   T result = 1;
   for (T i = 1; i <= Order; ++i) {
     result *= i;
@@ -410,19 +401,22 @@ template <Numeric T> consteval T compile_time_factorial(T Order) {
   return result;
 }
 #if !defined(NDEBUG)
-static_assert(compile_time_factorial(5) == 120,
-              "compile_time_factorial is broken");
-static_assert(compile_time_factorial(7) == 5040,
-              "compile_time_factorial is broken");
-static_assert(compile_time_factorial(4) == 24,
-              "compile_time_factorial is broken");
-static_assert(compile_time_factorial(3) == 6,
-              "compile_time_factorial is broken");
+// A macro, not a `const char[]`: static_assert takes a *string literal* until
+// C++26's user-generated messages, so naming the message any other way does not
+// compile.
+#define DIFF_FACTORIAL_BROKEN "compile_time_factorial is broken"
+// clang-format off
+static_assert(compile_time_factorial(5) == 120, DIFF_FACTORIAL_BROKEN);
+static_assert(compile_time_factorial(7) == 5040, DIFF_FACTORIAL_BROKEN);
+static_assert(compile_time_factorial(4) == 24, DIFF_FACTORIAL_BROKEN);
+static_assert(compile_time_factorial(3) == 6, DIFF_FACTORIAL_BROKEN);
+// clang-format on
+#undef DIFF_FACTORIAL_BROKEN
 #endif
 
 template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
+          Numeric S = scalar_base_t<T>,
           std::size_t NVars = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)
@@ -445,8 +439,8 @@ template <std::size_t Order, CExpression Expr,
 } // namespace detail
 
 template <std::size_t Order, CExpression Expr,
-          typename T = typename std::remove_cvref_t<Expr>::value_type,
-          typename S = scalar_base_t<T>,
+          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
+          Numeric S = scalar_base_t<T>,
           std::size_t NVars = mp::mp_size(
               extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
   requires(Order > 0 && NVars == 1)

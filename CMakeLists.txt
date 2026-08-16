@@ -1,11 +1,48 @@
 cmake_minimum_required(VERSION 3.20)
 
+# Equation::get<N>() has two spellings behind __cpp_explicit_this_parameter: one
+# definition using deducing this (P0847), and an explicit overload set for
+# toolchains without it.  Both compile and behave identically, so nothing here
+# is a hard requirement -- but our own builds should exercise the deducing-this
+# path, and the default /usr/bin/c++ is still GCC 13, which lacks it.  Pick the
+# newest GCC on PATH when the caller has not chosen a compiler; a caller who
+# passes -DCMAKE_CXX_COMPILER or sets $CXX always wins, and a consumer pulling
+# this in via add_subdirectory already has the variable set, so the block is a
+# no-op there.  CMAKE_CXX_COMPILER must be set before project().
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
+        AND NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+    find_program(DIFF_PREFERRED_CXX NAMES g++-15 g++-14)
+    if (DIFF_PREFERRED_CXX)
+        set(CMAKE_CXX_COMPILER "${DIFF_PREFERRED_CXX}")
+    endif ()
+endif ()
+
 project(ExpressionDifferentiator VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Report which of the two get<N>() spellings this toolchain will take, so a
+# stale compiler selection is visible at configure time rather than only in a
+# disassembly.  Clang implements P0847 from 18 without defining the macro, so
+# it is reported as taking the fallback -- which it does, correctly.
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS "-std=c++23")
+check_cxx_source_compiles(
+        "struct S { int f(this S) { return 0; } };
+         #ifndef __cpp_explicit_this_parameter
+         #error no macro
+         #endif
+         int main() { return S{}.f(); }"
+        DIFF_HAS_DEDUCING_THIS)
+unset(CMAKE_REQUIRED_FLAGS)
+if (DIFF_HAS_DEDUCING_THIS)
+    message(STATUS "Equation::get<N>: deducing this (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+else ()
+    message(STATUS "Equation::get<N>: ref-qualified overload set (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+endif ()
 
 option(DIFF_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
 option(DIFF_BUILD_COMPARE "Build comparison benchmarks against autodiff" OFF)
@@ -93,6 +130,7 @@ add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dual.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/forward_driver.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/gradient.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/named_value.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/bound.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/seeded_energy.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/include/taylor_dual.hpp

@@ -25,6 +25,23 @@ template <typename F>
 concept CSeededExprEnergy =
     requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };
 
+// An energy the vector-forward driver can sweep.  The bucket ladder picks a
+// lane capacity at run time, so the callable has to be generic over the pack
+// width; and because m > kVForwardN falls back to the scalar driver, both
+// branches are instantiated for every F that reaches hessian().  Requiring the
+// widest pack *and* the scalar type is therefore not conservative — it is the
+// set the router actually calls.
+template <typename F>
+concept CVForwardEnergy =
+    CEnergyOf<F, Dual<VectorDual<kVForwardN>>> && CEnergyOf<F, dual2nd>;
+
+// Everything hessian() knows how to differentiate: an expression graph (which
+// it bridges or sweeps in reverse), a graph already bridged by seeded_energy(),
+// or a raw energy callable.
+template <typename F>
+concept CHessianTarget =
+    CExpression<F> || CSeededExprEnergy<F> || CVForwardEnergy<F>;
+
 namespace detail {
 
 // Vector-forward Hessian for a known compile-time capacity N >= m.
@@ -36,7 +53,7 @@ namespace detail {
 // r.value() : value-level VectorDual -> value = f(x), grad[t] = df/dx_t
 // r.deriv() : outer-deriv VectorDual -> grad[t] = d2f/dx_i dx_t (Hessian row i)
 
-template <std::size_t N, typename F>
+template <std::size_t N, CEnergyOf<Dual<VectorDual<N>>> F>
 HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
                                     std::span<const std::size_t> active) {
   const std::size_t n = x.size();
@@ -294,7 +311,7 @@ reverse_hessian_applies(std::size_t n, std::span<const double> x,
 // dispatch the smallest capacity N >= m, so a small active set runs narrow
 // lanes instead of always paying for the full kVForwardN-wide pack.  Only the
 // buckets on this ladder are instantiated (log2(kVForwardN)+1 of them).
-template <std::size_t N, typename F>
+template <std::size_t N, CVForwardEnergy F>
 HessianResult vforward_pick(std::size_t m, F &&f, std::span<const double> x,
                             std::span<const std::size_t> active) {
   if constexpr (N >= kVForwardN) {
@@ -317,7 +334,7 @@ HessianResult vforward_pick(std::size_t m, F &&f, std::span<const double> x,
 // O(m^2).  The lane capacity is bucketed to the smallest power of two >= m
 // (capped at kVForwardN); m > kVForwardN falls back to the scalar O(m^2)
 // driver.
-template <typename F>
+template <CVForwardEnergy F>
 HessianResult hessian_vforward(F &&f, std::span<const double> x,
                                std::span<const std::size_t> active) {
   const std::size_t m = active.size();
@@ -329,7 +346,7 @@ HessianResult hessian_vforward(F &&f, std::span<const double> x,
 }
 
 // Convenience: differentiate every variable.
-template <typename F>
+template <CVForwardEnergy F>
 HessianResult hessian_vforward(F &&f, std::span<const double> x) {
   const auto all = detail::iota_indices(x.size());
   return hessian_vforward(static_cast<F &&>(f), x, all);
@@ -358,7 +375,7 @@ inline constexpr std::size_t kVForwardCrossover = DIFF_VFORWARD_CROSSOVER;
 //   seeded_energy tag -> scalar forward-over-forward (the graph already bridged
 //                        by the caller, so no tree is left to sweep).
 //   raw callable      -> vector-forward, the small-m winner.
-template <typename F>
+template <CHessianTarget F>
 HessianResult hessian(F &&f, std::span<const double> x,
                       std::span<const std::size_t> active) {
   if constexpr (CExpression<F>) {
@@ -383,7 +400,8 @@ HessianResult hessian(F &&f, std::span<const double> x,
     return hessian_vforward(static_cast<F &&>(f), x, active);
   }
 }
-template <typename F> HessianResult hessian(F &&f, std::span<const double> x) {
+template <CHessianTarget F>
+HessianResult hessian(F &&f, std::span<const double> x) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
       constexpr std::size_t N = mpl::mp_size(

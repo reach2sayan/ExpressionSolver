@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <ranges>
+#include <utility>
 
 namespace diff {
 
@@ -12,13 +13,13 @@ namespace mp = diff::mpl;
 
 namespace detail {
 // Evaluate a tuple of expressions at one point, in canonical symbol order.
-template <typename Syms, typename Vals, typename... Es>
+template <CSymbolList Syms, CNumericBuffer Vals, CExpression... Es>
 constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
   return std::array{es.template eval_seeded<Syms>(vals)...};
 }
 } // namespace detail
 
-template <typename... Ts>
+template <CExpression... Ts>
 constexpr std::ostream &print_tup(std::ostream &out,
                                   const std::tuple<Ts...> &tup) {
   out << "(\n";
@@ -35,7 +36,7 @@ constexpr std::ostream &print_tup(std::ostream &out,
   return out;
 }
 
-template <typename... Syms, CExpression Expr>
+template <CSymbol... Syms, CExpression Expr>
 constexpr auto make_derivatives(mp::mp_list<Syms...>,
                                 const Expr &expr) noexcept {
   return std::tuple(
@@ -44,7 +45,7 @@ constexpr auto make_derivatives(mp::mp_list<Syms...>,
 
 template <CExpression... Ts> class Equation;
 
-template <typename... Syms, typename... Exprs>
+template <CSymbol... Syms, CExpression... Exprs>
 constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
                              mp::mp_list<Syms...> = {}) noexcept {
   return std::apply(
@@ -186,6 +187,20 @@ private:
     return result;
   }
 
+  // The one body behind get<N>() and operator[](idx_t<N>).  Taking the object
+  // as an ordinary forwarded parameter keeps it spellable on compilers without
+  // deducing this; std::get's own ref-qualified overloads then carry the
+  // caller's value category down to the selected slot.
+  template <std::size_t N>
+  [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
+    if constexpr (N == 0) {
+      return std::get<0>(std::forward<decltype(self)>(self).expressions);
+    } else {
+      return std::get<N - 1>(
+          std::get<0>(std::forward<decltype(self)>(self).jacobian_data));
+    }
+  }
+
 public:
   constexpr Equation(TFirst first, TRest... rest) noexcept
       : expressions{std::move(first), std::move(rest)...},
@@ -218,40 +233,50 @@ public:
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
   // canonical symbol order.  The index is a template argument, so no tag type
   // is involved.
-  // Lvalue-only: these alias `expressions` / `jacobian_data`.  The rvalue
-  // overload below returns a copy instead, which post-refactor costs nothing —
-  // the nodes it hands back are empty types.
+#ifdef __cpp_explicit_this_parameter
+  template <std::size_t N>
+  [[nodiscard]] constexpr decltype(auto) get(this auto &&self) noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    return slot<N>(std::forward<decltype(self)>(self));
+  }
+
+  // Subscript spelling of the same thing.  operator[] has no template-argument
+  // syntax, so the index arrives as an empty idx_t value (see idx<N>()).
+  template <std::size_t N>
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](this auto &&self, idx_t<N>) noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    return slot<N>(std::forward<decltype(self)>(self));
+  }
+#else
   template <std::size_t N>
   [[nodiscard]] constexpr decltype(auto) get() & noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    if constexpr (N == 0) {
-      return std::get<0>(expressions);
-    } else {
-      return std::get<N - 1>(std::get<0>(jacobian_data));
-    }
+    return slot<N>(*this);
   }
 
   template <std::size_t N>
   [[nodiscard]] constexpr decltype(auto) get() const & noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    if constexpr (N == 0) {
-      return std::get<0>(expressions);
-    } else {
-      return std::get<N - 1>(std::get<0>(jacobian_data));
-    }
+    return slot<N>(*this);
   }
 
   template <std::size_t N>
-  [[nodiscard]] constexpr auto get() const && noexcept
+  [[nodiscard]] constexpr decltype(auto) get() && noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    if constexpr (N == 0) {
-      return std::get<0>(expressions);
-    } else {
-      return std::get<N - 1>(std::get<0>(jacobian_data));
-    }
+    return slot<N>(std::move(*this));
+  }
+
+  template <std::size_t N>
+  [[nodiscard]] constexpr decltype(auto) get() const && noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    return slot<N>(std::move(*this));
   }
 
   // Subscript spelling of the same thing.  operator[] has no template-argument
@@ -260,22 +285,31 @@ public:
   [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) & noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    return get<N>();
+    return slot<N>(*this);
   }
 
   template <std::size_t N>
   [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) const & noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    return get<N>();
+    return slot<N>(*this);
   }
 
   template <std::size_t N>
-  [[nodiscard]] constexpr auto operator[](idx_t<N>) const && noexcept
+  [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) && noexcept
     requires(output_dim == 1 && N <= input_dim)
   {
-    return std::move(*this).template get<N>();
+    return slot<N>(std::move(*this));
   }
+
+  template <std::size_t N>
+  [[nodiscard]] constexpr decltype(auto)
+  operator[](idx_t<N>) const && noexcept
+    requires(output_dim == 1 && N <= input_dim)
+  {
+    return slot<N>(std::move(*this));
+  }
+#endif
 
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto jacobian(const point_t &values) const noexcept

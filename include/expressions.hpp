@@ -93,6 +93,30 @@ template <auto S> struct symbol_type {
   static constexpr std::string_view name = S.view();
 };
 
+// The same symbol carried as a *value*, for the one place that cannot take a
+// template argument: operator[].  Exactly the role idx<N>() plays for indices
+// (traits.hpp), and for the same reason — but no new tag type is needed, since
+// symbol_type is already the library's "symbol lifted to a type".
+//
+// Prefer the template form — m.get<"x">() — everywhere except the assignment
+// spelling m["x"_s] = v, which has no template-argument equivalent.
+// FixedString, not `CFixedString auto`: the placeholder has to be the class
+// template so that CTAD turns the literal in sym<"x"> into a FixedString rather
+// than decaying it to const char*.  (The operator[] overloads below deduce from
+// a symbol_type<S> argument instead, where no CTAD is involved.)
+template <FixedString S> inline constexpr symbol_type<S> sym{};
+
+namespace literals {
+
+// "x"_s — a string-literal operator template, so the characters end up in the
+// type rather than in a (never constant-expression) function parameter.  That
+// is why m["x"] cannot work and m["x"_s] can.
+template <FixedString S> [[nodiscard]] consteval auto operator""_s() noexcept {
+  return sym<S>;
+}
+
+} // namespace literals
+
 // `Frozen` holds a symbol constant for partial differentiation: it still reads
 // its value from the seed array, but differentiates to zero.  Because freezing
 // needs no value, it is a pure type transform.
