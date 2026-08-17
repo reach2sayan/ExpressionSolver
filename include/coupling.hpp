@@ -139,10 +139,6 @@ template <std::size_t N> struct column_coloring {
 // otherwise their contributions would add up in that row and be
 // indistinguishable.  That is a distance-1 colouring of the column
 // intersection graph; greedy is enough, and is what CPR does.
-//
-// The payoff is structural: a banded Hessian needs a fixed number of colours no
-// matter how large n gets, so the driver's sweep count stops growing with n.
-// Tridiagonal-plus-corner colours in 5.
 template <std::size_t N>
 consteval column_coloring<N>
 color_columns(const coupling_rows<N> &rows) noexcept {

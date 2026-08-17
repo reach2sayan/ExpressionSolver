@@ -114,7 +114,10 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 // mapping.  nd_tensor_t<S, N, Order> is the direct replacement, and the
 // t[i][j][k] spelling those callers used still works.
 
-enum class DiffMode { Symbolic, Forward, Reverse };
+// The two modes an entry point can be asked for.  Forward mode is reached
+// through the drivers (forward_driver.hpp / vforward_driver.hpp), which take a
+// callable rather than a Mode, so it is not a value here.
+enum class DiffMode { Symbolic, Reverse };
 
 namespace detail {
 

@@ -27,11 +27,6 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
 
   std::array<Scalar, arity> slots{};
 
-  // The one body behind get<S>(), set<S>() and operator[](symbol_type<S>).
-  // Taking the object as an ordinary forwarded parameter keeps it spellable on
-  // compilers without deducing this.  An lvalue map hands back the slot itself,
-  // constness intact; an rvalue map hands back a value, never a reference into
-  // the temporary.
   template <FixedString S>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     constexpr auto idx = find_index_of_symbol<S, SymList>();
@@ -211,10 +206,6 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     map.template set<S>(v);
   }
 
-  // The one body behind get<S>() and operator[](symbol_type<S>), handed
-  // straight to the map so the two cannot drift.  Forwarding the object carries
-  // the caller's value category into map, and ValueMap::slot takes it the rest
-  // of the way -- a reference from an lvalue Bound, a value from an rvalue one.
   template <FixedString S>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     return map_type::template slot<S>(std::forward<decltype(self)>(self).map);
@@ -226,8 +217,6 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     return slot<S>(DIFF_FWD_SELF);
   }
 
-  // Subscript spelling; b["x"_s] = v is the reason it exists.  See the note on
-  // ValueMap::operator[].
   template <CFixedString auto S>
   [[nodiscard]] constexpr decltype(auto)
   operator[](DIFF_SELF, symbol_type<S>) noexcept {

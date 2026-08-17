@@ -259,9 +259,6 @@ constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
 }
 
 // ---- binary operators (eager) ---------------------------------------------
-// Each operator computes value+derivative immediately and returns a concrete
-// Dual<T>.  The dual_* name is an overload set, so the (Dual,Dual) or (Dual,C)
-// formula is chosen by ordinary overload resolution on the operands.
 #define DIFF_DUAL_BINOP(OP, COMB)                                              \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
@@ -297,7 +294,6 @@ constexpr auto operator/(C &&s, A &&a) noexcept {
 }
 
 // ---- unary minus + math functions (eager) ---------------------------------
-// Negation needs no chain rule: both components just flip sign.
 template <DualLike A> constexpr auto operator-(A &&a) noexcept {
   const auto &[v, d] = a;
   using DT = std::remove_cvref_t<A>;
@@ -310,9 +306,7 @@ template <DualLike A> constexpr auto operator-(A &&a) noexcept {
   }
 
 // Chain rule for a unary math node.  When the descriptor can express its
-// derivative in terms of f(u) (see unary_math.hpp), the primal is computed once
-// and reused; otherwise the value and the derivative are evaluated
-// independently, which costs a second libm call per node *per nesting level*.
+// derivative in terms of f(u), the primal is computed once and reused;
 template <template <typename> class Fn> struct unary_dual_combine {
   constexpr auto operator()(const auto &x) const noexcept {
     const auto &[v, d] = x;

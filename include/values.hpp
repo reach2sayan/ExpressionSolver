@@ -7,7 +7,8 @@
 
 namespace diff {
 
-constexpr bool PRINT_VARIABLE_VALUE = false;
+// A Variable is stateless, so there is no value to print alongside the label —
+// only the label flag exists for it.
 constexpr bool PRINT_VARIABLE_LABEL = true;
 constexpr bool PRINT_CONSTANT_VALUE = true;
 constexpr bool PRINT_CONSTANT_LABEL = false;
@@ -363,6 +364,7 @@ public:
       return Constant<T>{T{0}};
     }
   }
+
   // Forward sweep leaf: a constant contributes value with zero tangent.
   template <FixedString, CSymbolList, std::size_t N>
   [[nodiscard]] constexpr auto

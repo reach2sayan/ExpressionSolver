@@ -90,14 +90,10 @@ make_const_variable(const Variable<T, othersymbol, F> &var) noexcept
   return var;
 }
 
-template <CFixedString auto symbol, Numeric T>
-constexpr auto make_const_variable(const Constant<T> &c) noexcept {
+// Either form of constant — nothing to freeze, so it is already the answer.
+template <CFixedString auto symbol, Numeric T, auto... V>
+constexpr auto make_const_variable(const Lit<T, V...> &c) noexcept {
   return c;
-}
-
-template <CFixedString auto symbol, Numeric T, T V>
-constexpr auto make_const_variable(const Lit<T, V> &l) noexcept {
-  return l;
 }
 
 template <CFixedString auto symbol, COperation Op, CExpression... C>
@@ -150,14 +146,9 @@ constexpr auto make_all_constant_except(
   return {};
 }
 
-template <CFixedString auto symbol, Numeric T>
-constexpr auto make_all_constant_except(const Constant<T> &c) noexcept {
+template <CFixedString auto symbol, Numeric T, auto... V>
+constexpr auto make_all_constant_except(const Lit<T, V...> &c) noexcept {
   return c;
-}
-
-template <CFixedString auto symbol, Numeric T, T V>
-constexpr auto make_all_constant_except(const Lit<T, V> &l) noexcept {
-  return l;
 }
 
 template <CFixedString auto symbol, COperation Op, CExpression... C>

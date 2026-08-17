@@ -112,9 +112,7 @@ template <std::size_t Lead> struct layout_leading_simplex {
 
     // The symmetric axes must be uniform: two axes can only be interchangeable
     // if they have the same length, and every use here comes from
-    // uniform_extents_t / stacked_extents_t.  Static extents make that
-    // checkable at the tensor, which is where the shape is chosen, so it is
-    // not re-checked per mapping.
+    // uniform_extents_t / stacked_extents_t.
     constexpr mapping() noexcept = default;
     constexpr explicit mapping(const Ext &e) noexcept : ext_(e) {}
 

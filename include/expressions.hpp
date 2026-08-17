@@ -80,7 +80,26 @@ class ExpressionImpl;
 
 template <COperation Op, CExpression Exp>
 using MonoExpression = Expression<Op, Exp>;
-template <Numeric T> class Constant;
+
+// A constant leaf.  One name, two forms, told apart by whether the value pack
+// is there: `Lit<double, 2.0>` carries the number as a template argument and is
+// therefore empty, while `Constant<double>` (below) carries an empty pack and
+// stores one.  They share the whole leaf protocol — see ConstantOps in
+// values.hpp — and differ only in where get() reads from.
+//
+// `auto...`, not the `T V` this used to be, for two reasons.  An empty pack is
+// the only way to say "no compile-time value" without naming a type for it; and
+// a parameter declared as type T is ill-formed for non-structural T, which is
+// exactly the case the storing form exists to serve (Dual keeps its members
+// private, so it can never be a template argument).  The price is that the
+// argument's type must now match T exactly — the constrained specialisation
+// rejects Lit<double, 0> rather than silently minting a second type for a
+// number Lit<double, 0.0> already names.
+template <Numeric T, auto... V> class Lit;
+
+// The storing form, named at the call site for what it is rather than for the
+// pack it lacks.
+template <Numeric T> using Constant = Lit<T>;
 
 // A symbol-list element: the label lifted to a type, with the name in a form
 // the ordering predicate can compare.  See fixed_string.hpp for the label type.
@@ -122,17 +141,8 @@ template <FixedString S> [[nodiscard]] consteval auto operator""_s() noexcept {
 // needs no value, it is a pure type transform.
 template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 
-// A literal whose value lives in the type, so the object is empty.  This is
-// what derivative() manufactures: the 0s and 1s that flood a Jacobian cost
-// nothing.  User-written constants stay in Constant<T>, which stores a value
-// and can therefore hold any runtime number without minting a type per value.
-template <Numeric T, T V> struct Lit;
-
-template <Numeric T> inline constexpr bool is_expression_type_v<Constant<T>> =
-    true;
-
-template <Numeric T, T V>
-inline constexpr bool is_expression_type_v<Lit<T, V>> = true;
+template <Numeric T, auto... V>
+inline constexpr bool is_expression_type_v<Lit<T, V...>> = true;
 
 template <Numeric T, CFixedString auto C, bool F>
 inline constexpr bool is_expression_type_v<Variable<T, C, F>> = true;
@@ -144,14 +154,15 @@ template <bool S, COperation Op, CExpression... Children>
 inline constexpr bool is_expression_type_v<ExpressionImpl<S, Op, Children...>> =
     true;
 
+// Either form of constant leaf: a value with no symbols under it.
 template <typename T> inline constexpr bool is_constant_v = false;
-template <Numeric T> inline constexpr bool is_constant_v<Constant<T>> = true;
-template <Numeric T, T V> inline constexpr bool is_constant_v<Lit<T, V>> = true;
+template <Numeric T, auto... V>
+inline constexpr bool is_constant_v<Lit<T, V...>> = true;
 template <typename T>
 concept CConstant = is_constant_v<std::remove_cvref_t<T>>;
 
 template <typename T> inline constexpr bool is_lit_v = false;
-template <Numeric T, T V> inline constexpr bool is_lit_v<Lit<T, V>> = true;
+template <Numeric T, auto V> inline constexpr bool is_lit_v<Lit<T, V>> = true;
 // A literal whose value is a template argument, so folding two of them yields
 // another empty node rather than a stored one.  This is what keeps derivative
 // trees — which are mostly 0s and 1s — free.
@@ -325,7 +336,8 @@ public:
 // same X and two base subobjects of one type need distinct addresses.  An
 // F4-shaped tree keeping the tuple costs 6 bytes; dropping the member costs 1.
 //
-// A child that genuinely holds data (Constant<T>) forces the storing form.
+// A child that genuinely holds data — Constant<T>, i.e. the Lit form with no
+// value in its type — forces the storing form.
 
 template <bool Stateless, COperation Op, CExpression... Children>
 class ExpressionImpl;
