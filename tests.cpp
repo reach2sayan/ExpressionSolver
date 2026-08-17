@@ -3683,6 +3683,70 @@ TEST(MdLayout, SparsePatternSendsStructuralZerosToTheSink) {
   EXPECT_NE(static_cast<std::size_t>(m(0, 1)), static_cast<std::size_t>(m(2, 2)));
 }
 
+TEST(DerivativeTensorTest, Order2PicksTheAlgorithmAndAgreesEitherWay) {
+  // derivative_tensor<2> switches from forward-over-forward to
+  // forward-over-reverse at N >= 5, where the crossover was measured.  Both
+  // must produce the same tensor, so the choice stays an implementation
+  // detail; this pins that at N = 4 (forward) and N = 5 (reverse).
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  {
+    Variable<D, FixedString{"a"}> a; Variable<D, FixedString{"b"}> b;
+    Variable<D, FixedString{"c"}> c; Variable<D, FixedString{"d"}> d;
+    auto e = a * log(a) + b * log(b) + c * c * d + exp(a * d);
+    const std::array<double, 4> p{0.3, 0.4, 0.5, 0.6};
+    const auto T = diff::derivative_tensor<2>(e, p);           // forward here
+    const auto R = diff::detail::reverse_mode_hessian(e, p);
+    for (std::size_t i = 0; i < 4; ++i) {
+      for (std::size_t j = 0; j < 4; ++j) {
+        EXPECT_NEAR((T[i, j]), (R[i, j]), 1e-12) << "N=4 at (" << i << "," << j << ")";
+      }
+    }
+  }
+  {
+    Variable<D, FixedString{"a"}> a; Variable<D, FixedString{"b"}> b;
+    Variable<D, FixedString{"c"}> c; Variable<D, FixedString{"d"}> d;
+    Variable<D, FixedString{"e"}> e5;
+    auto e = a * log(a) + b * log(b) + c * c * d + exp(a * d) + e5 * e5 * b;
+    const std::array<double, 5> p{0.3, 0.4, 0.5, 0.6, 0.7};
+    const std::span<const double> xs{p.data(), p.size()};
+    const auto T = diff::derivative_tensor<2>(e, p);           // reverse here
+    const auto R = diff::detail::reverse_mode_hessian(e, p);
+    const auto H = diff::hessian(e, xs);  // independent driver, as a cross-check
+    for (std::size_t i = 0; i < 5; ++i) {
+      for (std::size_t j = 0; j < 5; ++j) {
+        EXPECT_NEAR((T[i, j]), (R[i, j]), 1e-12) << "N=5 at (" << i << "," << j << ")";
+        EXPECT_NEAR((T[i, j]), (H[i, j]), 1e-9) << "N=5 vs driver at (" << i << "," << j << ")";
+      }
+    }
+  }
+}
+
+TEST(ForwardDriver, HessianResultSubscriptMatchesH) {
+  // hessian() and hessian<DiffMode::Reverse>() return different types; the
+  // subscript spelling should not depend on which one a caller picked.
+  Variable<diff::Dual<double>, diff::FixedString{"x"}> x;
+  Variable<diff::Dual<double>, diff::FixedString{"y"}> y;
+  auto expr = x * y + x * x + sin(y);
+  const std::array<double, 2> p{0.7, 1.3};
+  const std::span<const double> xs{p.data(), p.size()};
+
+  auto H = diff::hessian(expr, xs);        // -> HessianResult
+  auto T = diff::hessian<diff::DiffMode::Reverse>(expr, p); // -> md_tensor
+
+  for (std::size_t i = 0; i < 2; ++i) {
+    for (std::size_t j = 0; j < 2; ++j) {
+      EXPECT_DOUBLE_EQ((H[i, j]), H.h(i, j));      // same as the old accessor
+      EXPECT_NEAR((H[i, j]), (T[i, j]), 1e-9);     // ...and as the md_tensor
+    }
+  }
+  // The mutable overload writes through.
+  H[0, 1] = 42.0;
+  EXPECT_DOUBLE_EQ(H.h(0, 1), 42.0);
+  // On a temporary the const&& overload copies out rather than dangling.
+  EXPECT_DOUBLE_EQ((diff::hessian(expr, xs)[0, 0]), H.h(0, 0));
+}
+
 TEST(MdTensor, BothIndexSpellingsAgree) {
   auto t = diff::nd_tensor_t<double, 3, 3>{};
   double v = 0.0;

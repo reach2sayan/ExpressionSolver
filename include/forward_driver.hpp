@@ -102,6 +102,27 @@ struct HessianResult {
                                    std::size_t j) const && noexcept {
     return hessian[i * extent + j];
   }
+
+  // H[i, j] — the same thing h() does, spelled the way md_tensor and every
+  // md::mdspan in this library spell it.
+  //
+  // It exists because `hessian()` and `hessian<DiffMode::Reverse>()` return
+  // different types — this one and an md_tensor — and a caller switching
+  // between them should not also have to switch subscript syntax.  Indexed
+  // directly rather than through matrix(): building a view per access is pure
+  // overhead, and this is the accessor a caller puts in a loop.
+  [[nodiscard]] constexpr double &operator[](std::size_t i,
+                                             std::size_t j) & noexcept {
+    return hessian[i * extent + j];
+  }
+  [[nodiscard]] constexpr double operator[](std::size_t i,
+                                            std::size_t j) const & noexcept {
+    return hessian[i * extent + j];
+  }
+  [[nodiscard]] constexpr double operator[](std::size_t i,
+                                            std::size_t j) const && noexcept {
+    return hessian[i * extent + j];
+  }
 };
 
 template <CEnergyOf<dual> F>

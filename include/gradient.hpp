@@ -115,6 +115,29 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 // t[i][j][k] spelling those callers used still works.
 
 enum class DiffMode { Symbolic, Forward, Reverse };
+
+// Arity at which derivative_tensor<2> switches from forward-over-forward to
+// forward-over-reverse.
+//
+// The two compute the same tensor but scale differently: forward evaluates
+// once per distinct index pair, O(N^2) of them; reverse runs N sweeps, one per
+// column.  Measured on a chain energy here, forward wins at N=3 (1.36x) and
+// N=4 (1.15x), reverse wins from N=6 (1.22x) and widens at N=8 (1.27x) — so
+// the crossover sits at 5.
+//
+// It is a knob because that number is a property of the *expression*, not of
+// the library: a cheap-to-evaluate graph favours forward further out, a dense
+// one favours reverse sooner.  Raise it past your arity to pin forward, set it
+// to 1 to always take reverse where it is available.  Same spelling as
+// DIFF_VFORWARD_CAPACITY in vector_dual.hpp.
+#ifndef DIFF_HESSIAN_REVERSE_MIN_N
+#define DIFF_HESSIAN_REVERSE_MIN_N 5
+#endif
+inline constexpr std::size_t kHessianReverseMinN = DIFF_HESSIAN_REVERSE_MIN_N;
+static_assert(kHessianReverseMinN > 0,
+              "DIFF_HESSIAN_REVERSE_MIN_N must be positive; use a value larger "
+              "than your arity to pin the forward algorithm");
+
 namespace detail {
 
 template <CExpression Expr, Numeric T = typename Expr::value_type,
@@ -294,6 +317,26 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
   using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
   using U = nth_dual_t<S, Order>;
 
+  // Second-order, wide enough to pay for it: hand off to forward-over-reverse.
+  //
+  // The two algorithms compute the same tensor and return the same type, but
+  // they scale differently — this path evaluates once per distinct index pair,
+  // O(N^2) of them, while reverse_mode_hessian runs N reverse sweeps, one per
+  // column.  Measured on a chain energy, forward wins at N=3 (1.36x) and N=4
+  // (1.15x), reverse wins from N=6 (1.22x) and pulls further ahead at N=8
+  // (1.27x); the crossover sits at N=5.  So the caller says *what* they want
+  // and this picks *how*, rather than making them know the crossover.
+  //
+  // The guard is narrow on purpose: reverse_mode_hessian needs a Dual-valued
+  // expression, and it takes dual_scalar_t<T> values, which only coincides
+  // with this function's scalar_base_t<T> at depth exactly 1.  A plain-double
+  // graph has no reverse path available at all and stays forward.
+  // hessian<DiffMode::Reverse> remains the explicit override.
+  if constexpr (Order == 2 && DualLike<T> && dual_depth_v<T> == 1 &&
+                N >= kHessianReverseMinN) {
+    return reverse_mode_hessian(expr, values);
+  } else {
+
   nd_tensor_t<S, N, Order> result{};
 
   // First-order gradient fast path (N >= 3): one vector-forward pass instead of
@@ -372,6 +415,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
     result.at_index(idx) = extract_nth<Order>(val);
   }
   return result;
+  } // end of the forward branch
 }
 
 } // namespace detail
