@@ -37,17 +37,10 @@ inline constexpr bool is_symbol_list_v<mp_list<T...>> =
     (::diff::CSymbol<T> && ...);
 } // namespace detail
 
-// The one list shape this metaprogramming layer manipulates.  Everything below
-// takes lists by concept rather than by `typename`, so passing a std::tuple (or
-// an element type) fails here instead of deep inside a rebuild.
 template <typename L>
 concept CTypeList = detail::is_mp_list_v<std::remove_cvref_t<L>>;
 
-// A type ordering, for mp_sort.  It is a captureless generic lambda invoked as
-// `Less.operator()<A, B>()` inside a constant expression — a consteval
-// predicate, not an integral_constant metafunction.  Being a value rather than
-// a template, it is passed as a template *argument* and can be written inline
-// at the use site.
+// A type ordering, for mp_sort.
 template <typename Less, typename A, typename B>
 concept CTypeOrder = requires(Less less) {
   { less.template operator()<A, B>() } -> std::same_as<bool>;

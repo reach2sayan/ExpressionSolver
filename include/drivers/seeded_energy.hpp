@@ -1,14 +1,14 @@
 #pragma once
 
-#include "expressions.hpp" // CExpression, Numeric
-#include "traits.hpp"      // extract_symbols_from_expr_t
+#include "expr/expressions.hpp" // CExpression, Numeric
+#include "expr/traits.hpp"      // extract_symbols_from_expr_t
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <type_traits>
 
-#include "mpl.hpp" // mp_size
+#include "util/mpl.hpp" // mp_size
 
 namespace diff {
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "fixed_string.hpp" // FixedString, CFixedString
-#include "mpl.hpp"          // CSymbol, CSymbolList
+#include "util/fixed_string.hpp" // FixedString, CFixedString
+#include "util/mpl.hpp"          // CSymbol, CSymbolList
 
 #include <concepts>
 #include <ostream>
@@ -81,42 +81,18 @@ class ExpressionImpl;
 template <COperation Op, CExpression Exp>
 using MonoExpression = Expression<Op, Exp>;
 
-// A constant leaf.  One name, two forms, told apart by whether the value pack
-// is there: `Lit<double, 2.0>` carries the number as a template argument and is
-// therefore empty, while `Constant<double>` (below) carries an empty pack and
-// stores one.  They share the whole leaf protocol — see ConstantOps in
-// values.hpp — and differ only in where get() reads from.
-//
-// `auto...`, not the `T V` this used to be, for two reasons.  An empty pack is
-// the only way to say "no compile-time value" without naming a type for it; and
-// a parameter declared as type T is ill-formed for non-structural T, which is
-// exactly the case the storing form exists to serve (Dual keeps its members
-// private, so it can never be a template argument).  The price is that the
-// argument's type must now match T exactly — the constrained specialisation
-// rejects Lit<double, 0> rather than silently minting a second type for a
-// number Lit<double, 0.0> already names.
 template <Numeric T, auto... V> class Lit;
-
-// The storing form, named at the call site for what it is rather than for the
-// pack it lacks.
 template <Numeric T> using Constant = Lit<T>;
 
 // A symbol-list element: the label lifted to a type, with the name in a form
 // the ordering predicate can compare.  See fixed_string.hpp for the label type.
 template <auto S> struct symbol_type {
   static constexpr auto value = S;
-  // `name` views into S.data, and S is a template-parameter object, so it has
-  // static storage duration.  That is what makes the views symbol_order<Expr>()
-  // returns safe to keep indefinitely — it is the library's only API that hands
-  // back a view rather than owned storage.
   static constexpr std::string_view name = S.view();
 };
 
 // The same symbol carried as a *value*, for the one place that cannot take a
-// template argument: operator[].  Exactly the role idx<N>() plays for indices
-// (traits.hpp), and for the same reason — but no new tag type is needed, since
-// symbol_type is already the library's "symbol lifted to a type".
-//
+// template argument: operator[].
 // Prefer the template form — m.get<"x">() — everywhere except the assignment
 // spelling m["x"_s] = v, which has no template-argument equivalent.
 // FixedString, not `CFixedString auto`: the placeholder has to be the class
@@ -127,18 +103,12 @@ template <FixedString S> inline constexpr symbol_type<S> sym{};
 
 namespace literals {
 
-// "x"_s — a string-literal operator template, so the characters end up in the
-// type rather than in a (never constant-expression) function parameter.  That
-// is why m["x"] cannot work and m["x"_s] can.
 template <FixedString S> [[nodiscard]] consteval auto operator""_s() noexcept {
   return sym<S>;
 }
 
 } // namespace literals
 
-// `Frozen` holds a symbol constant for partial differentiation: it still reads
-// its value from the seed array, but differentiates to zero.  Because freezing
-// needs no value, it is a pure type transform.
 template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 
 template <Numeric T, auto... V>
@@ -163,9 +133,7 @@ concept CConstant = is_constant_v<std::remove_cvref_t<T>>;
 
 template <typename T> inline constexpr bool is_lit_v = false;
 template <Numeric T, auto V> inline constexpr bool is_lit_v<Lit<T, V>> = true;
-// A literal whose value is a template argument, so folding two of them yields
-// another empty node rather than a stored one.  This is what keeps derivative
-// trees — which are mostly 0s and 1s — free.
+
 template <typename T>
 concept CLit = is_lit_v<std::remove_cvref_t<T>>;
 
@@ -326,21 +294,6 @@ public:
     }(std::make_index_sequence<std::tuple_size_v<Kids>>{});
   }
 };
-
-// Operand storage.
-//
-// When every child is empty the node stores NOTHING — the children live only
-// as template arguments, so they are never subobjects and nothing can collide.
-// This matters because empty-base-optimisation does *not* save you here:
-// std::tuple<X,X> is 2 bytes, not 1, since both slots ultimately inherit the
-// same X and two base subobjects of one type need distinct addresses.  An
-// F4-shaped tree keeping the tuple costs 6 bytes; dropping the member costs 1.
-//
-// A child that genuinely holds data — Constant<T>, i.e. the Lit form with no
-// value in its type — forces the storing form.
-
-template <bool Stateless, COperation Op, CExpression... Children>
-class ExpressionImpl;
 
 // The CRTP parameter is the public Expression type, not this base, so that
 // every type-level pattern match sees Expression<Op, C...> as it always has.

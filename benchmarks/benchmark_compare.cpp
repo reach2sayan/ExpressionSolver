@@ -1,4 +1,4 @@
-#include "bound.hpp"
+#include "expr/bound.hpp"
 // Apples-to-apples comparison: this library vs. autodiff v1.1.2.
 //
 // Three scalar functions of increasing arity:
@@ -20,12 +20,11 @@
 #include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/reverse/var.hpp>
 
-#include "../include/gradient.hpp"
-#include "dual.hpp"
-#include "gradient.hpp"
-#include "seeded_energy.hpp"
-#include "values.hpp"
-#include "vforward_driver.hpp"
+#include "drivers/gradient.hpp"
+#include "drivers/seeded_energy.hpp"
+#include "drivers/vforward_driver.hpp"
+#include "dual/dual.hpp"
+#include "expr/values.hpp"
 
 #include <array>
 #include <benchmark/benchmark.h>

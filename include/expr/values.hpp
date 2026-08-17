@@ -1,8 +1,8 @@
 #pragma once
-#include "dual.hpp"
-#include "expressions.hpp"
-#include "operations.hpp"
-#include "mpl.hpp"
+#include "dual/dual.hpp"
+#include "expr/expressions.hpp"
+#include "expr/operations.hpp"
+#include "util/mpl.hpp"
 #include <format>
 
 namespace diff {
@@ -270,80 +270,32 @@ DIFF_EXPR_BINFN(max, MaxOp)
 DIFF_EXPR_BINFN(min, MinOp)
 #undef DIFF_EXPR_BINFN
 
-// A literal carried in the type.  Empty
-template <Numeric T, T V> struct Lit {
-  using value_type = T;
-  static constexpr T value = V;
+namespace detail {
 
-  friend std::ostream &operator<<(std::ostream &out, const Lit &) {
+// The constant-leaf protocol, written once.
+//
+// Both forms of constant answer every sweep identically — the value, and a
+// derivative of zero — so the only thing that differs is where the value comes
+// from.  That is the single member the specialisations below supply (read());
+// everything else lives here.
+//
+// CRTP rather than a data member holding the value, because the compile-time
+// form has to stay std::is_empty_v: that predicate is what selects the
+// stateless node storage in expressions.hpp, and a member would defeat it even
+// if the member were itself empty and marked [[no_unique_address]] — occupying
+// no bytes and being no member are different things, and only the second one
+// satisfies is_empty_v.
+template <typename Derived, Numeric T> class ConstantOps {
+  [[nodiscard]] constexpr const Derived &self() const noexcept {
+    return static_cast<const Derived &>(*this);
+  }
+
+  // Hidden friend on Derived, not on this base: ADL still finds it (a class's
+  // associated entities include its bases), and taking the leaf type exactly
+  // keeps it clear of the operator T() conversion below.
+  friend std::ostream &operator<<(std::ostream &out, const Derived &c) {
     if constexpr (PRINT_CONSTANT_VALUE) {
-      out << std::format("{}", V);
-    }
-    if constexpr (PRINT_CONSTANT_LABEL) {
-      out << "_c";
-    }
-    return out;
-  }
-
-  [[nodiscard]] constexpr T eval() const noexcept { return V; }
-  constexpr operator T() const noexcept { return V; }
-  [[nodiscard]] constexpr T get() const noexcept { return V; }
-  [[nodiscard]] constexpr auto derivative() const noexcept {
-    return Lit<T, T{0}>{};
-  }
-
-  template <FixedString, CSymbolList, std::size_t N>
-  [[nodiscard]] constexpr auto
-  tangent_seeded(const std::array<T, N> &) const noexcept {
-    return Tangent<T>{V, T{}};
-  }
-
-  template <std::size_t Base = 0>
-  constexpr void backward(const auto &, T, auto &, const auto &) const noexcept {
-  }
-
-  template <CSymbolList Syms, std::size_t N>
-  [[nodiscard]] constexpr T
-  eval_seeded(const std::array<T, N> &) const noexcept {
-    return V;
-  }
-
-  template <Numeric U, CSymbolList Syms, std::size_t N>
-  [[nodiscard]] constexpr U
-  eval_seeded_as(const std::array<U, N> &) const noexcept {
-    using S = scalar_base_t<U>;
-    return ConstantEmbedder<U>::embed(
-        static_cast<S>(get_real_part<dual_depth_v<T>>(V)));
-  }
-
-  template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
-    static_assert(I < 2);
-    if constexpr (I == 0) {
-      return V;
-    } else {
-      return T{0};
-    }
-  }
-
-  // Leaves are expressions too: same eval(...) surface as ExpressionOps.
-  [[nodiscard]] constexpr auto eval(const CEvalArg auto &...args) const
-    requires(sizeof...(args) > 0)
-  {
-    return detail::eval_dispatch(*this, args...);
-  }
-
-  template <FixedString Seed>
-  [[nodiscard]] constexpr auto
-  eval_with_tangent(const CEvalArg auto &...args) const {
-    return detail::tangent_dispatch<Seed>(*this, args...);
-  }
-};
-
-template <Numeric T> class Constant {
-  T value;
-  friend std::ostream &operator<<(std::ostream &out, const Constant<T> &c) {
-    if constexpr (PRINT_CONSTANT_VALUE) {
-      out << std::format("{}", c.value);
+      out << std::format("{}", c.get());
     }
     if constexpr (PRINT_CONSTANT_LABEL) {
       out << "_c";
@@ -352,11 +304,14 @@ template <Numeric T> class Constant {
   }
 
 public:
-  [[nodiscard]] constexpr auto eval() const noexcept { return value; }
   using value_type = T;
-  constexpr explicit Constant(T value) noexcept : value(value) {}
-  [[nodiscard]] constexpr auto get() const noexcept { return value; }
-  constexpr operator T() const noexcept { return value; }
+
+  [[nodiscard]] constexpr T get() const noexcept { return self().read(); }
+  [[nodiscard]] constexpr T eval() const noexcept { return get(); }
+  constexpr operator T() const noexcept { return get(); }
+
+  // Lit carries its value as a template argument, so it is only available for
+  // structural types; a dual-valued constant falls back to a stored zero.
   [[nodiscard]] constexpr auto derivative() const noexcept {
     if constexpr (CArithmetic<T>) {
       return Lit<T, T{0}>{};
@@ -369,8 +324,10 @@ public:
   template <FixedString, CSymbolList, std::size_t N>
   [[nodiscard]] constexpr auto
   tangent_seeded(const std::array<T, N> &) const noexcept {
-    return Tangent<T>{value, T{}};
+    return Tangent<T>{get(), T{}};
   }
+
+  // Reverse sweep leaf: no symbol underneath, so nothing to accumulate into.
   template <std::size_t Base = 0>
   constexpr void backward(const auto &, T, auto &,
                           const auto &) const noexcept {}
@@ -378,7 +335,7 @@ public:
   template <CSymbolList Syms, std::size_t N>
   [[nodiscard]] constexpr T
   eval_seeded(const std::array<T, N> &) const noexcept {
-    return value;
+    return get();
   }
 
   // eval_seeded_as<U>: embed constant into the deeper type U with zero dual
@@ -389,7 +346,7 @@ public:
   eval_seeded_as(const std::array<U, N> &) const noexcept {
     using S = scalar_base_t<U>;
     return ConstantEmbedder<U>::embed(
-        static_cast<S>(get_real_part<dual_depth_v<T>>(value)));
+        static_cast<S>(get_real_part<dual_depth_v<T>>(get())));
   }
 
   template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
@@ -403,17 +360,47 @@ public:
     }
   }
 
+  // Leaves are expressions too: same eval(...) surface as ExpressionOps.
   template <CEvalArg... Args>
     requires(sizeof...(Args) > 0)
   [[nodiscard]] constexpr auto eval(const Args &...args) const {
-    return detail::eval_dispatch(*this, args...);
+    return detail::eval_dispatch(self(), args...);
   }
 
   template <FixedString Seed, CEvalArg... Args>
   [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
-    return detail::tangent_dispatch<Seed>(*this, args...);
+    return detail::tangent_dispatch<Seed>(self(), args...);
   }
 };
+
+} // namespace detail
+
+// A literal carried in the type, so the object is empty.  This is what
+// derivative() manufactures: the 0s and 1s that flood a Jacobian cost nothing,
+// and a node all of whose children are empty stores nothing at all.
+template <Numeric T, auto V>
+  requires std::same_as<std::remove_cv_t<decltype(V)>, T>
+class Lit<T, V> : public detail::ConstantOps<Lit<T, V>, T> {
+  friend detail::ConstantOps<Lit<T, V>, T>;
+  [[nodiscard]] constexpr T read() const noexcept { return V; }
+
+public:
+  static constexpr T value = V;
+};
+
+// The storing form.  One type per value_type rather than one per value, which
+// is what lets it hold a number that only exists at run time — and a T that
+// could never be a template argument in the first place.
+template <Numeric T> class Lit<T> : public detail::ConstantOps<Lit<T>, T> {
+  friend detail::ConstantOps<Lit<T>, T>;
+  T value;
+  [[nodiscard]] constexpr T read() const noexcept { return value; }
+
+public:
+  constexpr explicit Lit(T value) noexcept : value(value) {}
+};
+
+template <Numeric T> Lit(T) -> Lit<T>;
 
 // `Frozen` marks a variable that has been held constant for the purpose of
 // partial differentiation: it still reads its value from the seed array like
@@ -483,14 +470,14 @@ public:
   }
 
   // Leaves are expressions too: same eval(...) surface as ExpressionOps.
-  template <CEvalArg... Args>
-    requires(sizeof...(Args) > 0)
-  [[nodiscard]] constexpr auto eval(const Args &...args) const {
+  [[nodiscard]] constexpr auto eval(const CEvalArg auto &...args) const
+    requires(sizeof...(args) > 0)
+  {
     return detail::eval_dispatch(*this, args...);
   }
 
-  template <FixedString Seed, CEvalArg... Args>
-  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
+  template <FixedString Seed>
+  [[nodiscard]] constexpr auto eval_with_tangent(const CEvalArg auto &...args) const {
     return detail::tangent_dispatch<Seed>(*this, args...);
   }
 };
@@ -526,11 +513,11 @@ DEFINE_VAR_UDL(int, vi, "c")
 DEFINE_VAR_UDL(double, vd, "v")
 
 namespace std {
-template <diff::Numeric T>
-struct tuple_size<diff::Constant<T>> : integral_constant<std::size_t, 2> {};
+template <diff::Numeric T, auto... V>
+struct tuple_size<diff::Lit<T, V...>> : integral_constant<std::size_t, 2> {};
 
-template <std::size_t I, diff::Numeric T>
-struct tuple_element<I, diff::Constant<T>> {
+template <std::size_t I, diff::Numeric T, auto... V>
+struct tuple_element<I, diff::Lit<T, V...>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
 
@@ -542,23 +529,8 @@ template <std::size_t I, diff::Numeric T, diff::CFixedString auto C, bool F>
 struct tuple_element<I, diff::Variable<T, C, F>> {
   using type = typename diff::detail::expression_element<T, I>::type;
 };
-
-template <diff::Numeric T, T V>
-struct tuple_size<diff::Lit<T, V>> : integral_constant<std::size_t, 2> {};
-
-template <std::size_t I, diff::Numeric T, T V>
-struct tuple_element<I, diff::Lit<T, V>> {
-  using type = typename diff::detail::expression_element<T, I>::type;
-};
 } // namespace std
 
-// Name a symbol whose value_type is decltype(x); `x` itself is unused, since
-// the point is supplied at the root by bind(expr, ...) / eval(expr, ...).
-//
-// std::decay_t, not bare decltype: on an id-expression decltype yields the
-// declared type, so PV(vec[0], "x") would otherwise name a Variable<double &>.
-// That passes CArithmetic (which strips cv-ref) and only fails much later,
-// inside std::array<double &, N>.
 #define PDV(x, label)                                                          \
   diff::Variable<diff::Dual<std::decay_t<decltype(x)>>,                        \
                  diff::FixedString{label}> {}

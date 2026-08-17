@@ -1,14 +1,14 @@
 #pragma once
 
-#include "dual.hpp"
-#include "expressions.hpp"
+#include "dual/dual.hpp"
+#include "dual/taylor_dual.hpp"
+#include "dual/vector_dual.hpp"
+#include "expr/expressions.hpp"
+#include "expr/named_value.hpp"
+#include "expr/traits.hpp"
 #include "md/tensor.hpp"
-#include "named_value.hpp"
-#include "scope_guard.hpp"
-#include "taylor_dual.hpp"
-#include "traits.hpp"
-#include "vector_dual.hpp"
-#include "mpl.hpp"
+#include "util/mpl.hpp"
+#include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>
 #include <ranges>
@@ -347,24 +347,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
     }(std::make_index_sequence<N>{});
     return result;
   }
-  
-  // The multi-indices worth evaluating.  This used to be a flat counter plus a
-  // hand-written `tmp % N; tmp /= N` unranking — layout_right's inverse
-  // mapping, open-coded — running over all N^Order of them.
-  //
-  // Two things changed.  cartesian_product says the unranking directly, and
-  // because it is a view the symmetry becomes one filter in front of it: the
-  // tensor is symmetric in every pair of axes, so the permutations of a
-  // multi-index all name the same packed cell and evaluating more than one of
-  // them is recomputation.  That takes the sweep count from N^Order to
-  // C(N + Order - 1, Order) — at Order 3 over 6 variables, 56 sweeps instead
-  // of 216, each one a full seeded evaluation of the expression.
-  // Left as a plain loop over the table.  Unrolling it with the multi-index as
-  // a template parameter looks like the obvious next step — the Order == 1
-  // path above does exactly that — but it needs the index to be nameable
-  // inside the seeding lambda without capture, i.e. `static constexpr`, and
-  // that puts it in static storage and stops it folding at all: measured 33 ns
-  // against 4.6 ns for this loop on the quadratic THess case.
+
   for (const auto &idx : detail::symmetric_index_grid<N, Order>()) {
     std::array<U, N> seeds{};
     std::ranges::transform(

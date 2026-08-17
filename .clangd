@@ -1,7 +1,7 @@
 # DIFF_DEDUCING_THIS=1 is forced here for the same reason CMake offers
 # -DDIFF_DEDUCING_THIS=on: clang implements P0847 from 18 but never defines
 # __cpp_explicit_this_parameter, so a clangd running with clang semantics would
-# take the fallback branch in include/config.hpp and grey out the deducing-this
+# take the fallback branch in include/util/config.hpp and grey out the deducing-this
 # accessors even when the build compiles them.
 CompileFlags:
   CompilationDatabase: cmake-build-debug

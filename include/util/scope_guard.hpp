@@ -15,7 +15,6 @@ template <auto Seed, CRestorable T>
 class scoped_value {
   static constexpr bool kNothrow = std::is_nothrow_move_constructible_v<T> &&
                                    std::is_nothrow_move_assignable_v<T>;
-
 public:
   explicit constexpr scoped_value(T &slot) noexcept(kNothrow)
       : slot_(slot), saved_(std::move(slot)) {

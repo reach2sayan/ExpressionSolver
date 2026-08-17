@@ -1,7 +1,7 @@
 #pragma once
 
-#include "expressions.hpp" // Numeric
-#include "fixed_string.hpp"
+#include "expr/expressions.hpp" // Numeric
+#include "util/fixed_string.hpp"
 
 #include <type_traits>
 

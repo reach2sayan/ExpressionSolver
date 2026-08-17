@@ -32,9 +32,10 @@ namespace detail {
 // multiply-then-divide form, which never overflows early because the partial
 // product of k consecutive integers is always divisible by k!.
 //
-// constexpr and not consteval: the mapping below calls this with a *runtime*
-// index on every subscript, so it has to survive outside constant evaluation.
-[[nodiscard]] constexpr std::size_t binomial(std::size_t n,
+// consteval: this only ever sizes storage, never indexes it.  The runtime
+// subscript path uses binomial_fixed below instead, so nothing here needs to
+// survive outside constant evaluation and the compiler enforces that.
+[[nodiscard]] consteval std::size_t binomial(std::size_t n,
                                              std::size_t k) noexcept {
   if (k > n) {
     return 0;
@@ -52,12 +53,14 @@ static_assert(binomial(10, 0) == 1);
 // C(n, K) with K fixed at compile time: the falling product
 // n(n-1)...(n-K+1) over K!.
 //
-// This exists because binomial() above is wrong for the *subscript* path, not
-// numerically but structurally: its `k = min(k, n - k)` makes the fold's bound
-// depend on the runtime n, so the loop cannot unroll and every subscript pays a
-// real loop.  Here K is a template parameter and nothing depends on n but the
-// factors themselves, so the whole thing collapses to a few multiplies and one
-// divide.  Measured: this is on the hot path of every packed tensor access.
+// This exists because binomial() above is the wrong shape for the *subscript*
+// path, not numerically but structurally: its `k = min(k, n - k)` makes the
+// fold's bound depend on the runtime n, so the loop cannot unroll and every
+// subscript pays a real loop.  Here K is a template parameter and nothing
+// depends on n but the factors themselves, so the whole thing collapses to a
+// few multiplies and one divide.  Measured: this is on the hot path of every
+// packed tensor access.  Hence constexpr and not consteval, unlike binomial():
+// the mapping calls this with a runtime index on every subscript.
 template <std::size_t K>
 [[nodiscard]] constexpr std::size_t binomial_fixed(std::size_t n) noexcept {
   if (n < K) {
@@ -133,9 +136,10 @@ template <std::size_t Lead> struct layout_leading_simplex {
       return lead * block_size();
     }
 
-    template <std::integral... I>
-      requires(sizeof...(I) == Ext::rank())
-    [[nodiscard]] constexpr index_type operator()(I... idx) const noexcept {
+    [[nodiscard]] constexpr index_type
+    operator()(std::integral auto... idx) const noexcept
+      requires(sizeof...(idx) == Ext::rank())
+    {
       const std::array<index_type, Ext::rank()> all{
           static_cast<index_type>(idx)...};
 
@@ -154,8 +158,7 @@ template <std::size_t Lead> struct layout_leading_simplex {
       //
       // Expanded over an index_sequence rather than folded over a zip so that
       // `t` — and therefore binomial's `k` — is a compile-time constant at each
-      // term.  That matters: this runs on every subscript, and with a runtime k
-      // binomial keeps its loop instead of collapsing to a couple of multiplies.
+      // term.
       const index_type slot = [&]<std::size_t... T>(std::index_sequence<T...>) {
         return static_cast<index_type>(
             (detail::binomial_fixed<T + 1>(static_cast<std::size_t>(a[T]) + T) +

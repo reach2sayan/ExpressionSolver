@@ -1,7 +1,7 @@
 #pragma once
 
-#include "expressions.hpp"
-#include "unary_math.hpp"
+#include "expr/expressions.hpp"
+#include "expr/unary_math.hpp"
 #include <cmath>
 #include <ostream>
 #include <tuple>
@@ -308,7 +308,7 @@ template <DualLike A> constexpr auto operator-(A &&a) noexcept {
 // Chain rule for a unary math node.  When the descriptor can express its
 // derivative in terms of f(u), the primal is computed once and reused;
 template <template <typename> class Fn> struct unary_dual_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
+  constexpr auto operator()(const DualLike auto &x) const noexcept {
     const auto &[v, d] = x;
     using T = std::remove_cvref_t<decltype(v)>;
     using DT = std::remove_cvref_t<decltype(x)>;
@@ -338,8 +338,11 @@ using asinh_combine = unary_dual_combine<detail::AsinhOpFn>;
 using acosh_combine = unary_dual_combine<detail::AcoshOpFn>;
 using atanh_combine = unary_dual_combine<detail::AtanhOpFn>;
 using erf_combine = unary_dual_combine<detail::ErfOpFn>;
+// abs is the one unary that is not a unary_dual_combine: its derivative is a
+// sign, not a function of the primal, and it is only piecewise differentiable —
+// the derivative at 0 is taken as 0 rather than left undefined.
 struct abs_combine {
-  constexpr auto operator()(const auto &x) const noexcept {
+  constexpr auto operator()(const DualLike auto &x) const noexcept {
     using std::abs;
     const auto &[v, d] = x;
     using DT = std::remove_cvref_t<decltype(x)>;

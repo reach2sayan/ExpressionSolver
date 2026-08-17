@@ -41,19 +41,20 @@ jobs:
         shell: pwsh
         run: vcpkg install eigen3:x64-windows
 
-      # Eigen is required, but only at the boundary: eigen_interop.hpp must stay
-      # the single header that includes it, or the constexpr symbolic core
-      # silently acquires a dependency it cannot use in constant evaluation.
+      # Eigen is required, but only at the boundary: interop/eigen_interop.hpp
+      # must stay the single header that includes it, or the constexpr symbolic
+      # core silently acquires a dependency it cannot use in constant
+      # evaluation.  The scan is recursive — the headers live in subdirectories.
       - name: Eigen stays at the boundary
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          offenders=$(grep -l '#include <Eigen' include/*.hpp expression_differentiator.hpp \
-                      | grep -v 'include/eigen_interop.hpp' || true)
+          offenders=$(grep -rl '#include <Eigen' include expression_differentiator.hpp \
+                      | grep -v 'include/interop/eigen_interop.hpp' || true)
           if [ -n "$offenders" ]; then
             echo "Eigen leaked out of eigen_interop.hpp into:"; echo "$offenders"; exit 1
           fi
-          echo "Eigen is confined to include/eigen_interop.hpp"
+          echo "Eigen is confined to include/interop/eigen_interop.hpp"
 
       # Eigen is optional, so the build without it has to keep working — the
       # header is #error-guarded and its tests are #ifdef-guarded, both of which

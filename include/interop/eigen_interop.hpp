@@ -5,10 +5,10 @@
     "eigen_interop.hpp needs Eigen: configure with -DDIFF_USE_EIGEN=ON (the default), or define DIFF_USE_EIGEN and put Eigen on the include path."
 #endif
 
-#include "coupling.hpp"
-#include "expressions.hpp"
-#include "forward_driver.hpp"
-#include "vforward_driver.hpp"
+#include "drivers/coupling.hpp"
+#include "drivers/forward_driver.hpp"
+#include "drivers/vforward_driver.hpp"
+#include "expr/expressions.hpp"
 
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
@@ -20,10 +20,6 @@
 
 namespace diff {
 
-// Row-major, because that is how HessianResult stores it.  The Hessian is
-// symmetric (every driver symmetrizes), so the storage order is immaterial for
-// it — being explicit keeps these helpers correct if they are ever pointed at
-// something that is not symmetric, such as a Jacobian.
 using EigenDenseMatrix =
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
@@ -47,15 +43,6 @@ as_vector(const HessianResult &h) noexcept {
 }
 
 // A sparse Hessian whose sparsity is a property of the expression TYPE.
-//
-// The compressed index arrays are static constexpr — one copy in the binary,
-// shared by every instance and every call — so constructing one allocates only
-// the nnz values.  For the tridiagonal-plus-corner chain energy that is ~3n
-// doubles instead of n^2.
-//
-// Because the structure is fixed for the type, a consumer may call
-// analyzePattern() once and factorize() per point; that is the expensive half
-// of a sparse direct solve, and here it is hoistable by construction.
 template <CExpression Expr> class SparseHessian {
   using E = std::remove_cvref_t<Expr>;
   static constexpr std::size_t kN =

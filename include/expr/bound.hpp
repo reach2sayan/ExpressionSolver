@@ -1,10 +1,10 @@
 #pragma once
 
-#include "config.hpp"
-#include "fixed_string.hpp"
-#include "gradient.hpp"
-#include "named_value.hpp"
-#include "traits.hpp"
+#include "drivers/gradient.hpp"
+#include "expr/named_value.hpp"
+#include "expr/traits.hpp"
+#include "util/config.hpp"
+#include "util/fixed_string.hpp"
 
 #include <algorithm>
 #include <array>

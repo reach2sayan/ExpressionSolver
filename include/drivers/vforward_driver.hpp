@@ -1,13 +1,13 @@
 #pragma once
 
-#include "coupling.hpp"       // compile-time Hessian sparsity + colouring
-#include "dual.hpp"
-#include "expressions.hpp"    // CExpression
-#include "forward_driver.hpp" // HessianResult + scalar hessian() fallback
-#include "gradient.hpp"       // fill_cache / node_cache_t for the reverse sweep
-#include "scope_guard.hpp"    // scoped_value — RAII for the per-sweep seed
-#include "seeded_energy.hpp"  // seeded_energy() bridge for expression graphs
-#include "vector_dual.hpp"
+#include "drivers/coupling.hpp" // compile-time Hessian sparsity + colouring
+#include "drivers/forward_driver.hpp" // HessianResult + scalar hessian() fallback
+#include "drivers/gradient.hpp" // fill_cache / node_cache_t for the reverse sweep
+#include "drivers/seeded_energy.hpp" // seeded_energy() bridge for expression graphs
+#include "dual/dual.hpp"
+#include "dual/vector_dual.hpp"
+#include "expr/expressions.hpp" // CExpression
+#include "util/scope_guard.hpp" // scoped_value — RAII for the per-sweep seed
 
 #include <algorithm>
 #include <cstddef>
@@ -100,17 +100,9 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
                       res.hessian.begin() + static_cast<std::ptrdiff_t>(i * m));
   }
 
-  // Each row was computed by an independent sweep, so H(i,j) and H(j,i) can
-  // differ in the last ULP.  Symmetrize to honour the same exactly-symmetric
-  // contract the other drivers do; H is analytically symmetric, so averaging
-  // only removes FP noise.
-  for (std::size_t i = 0; i < m; ++i) {
-    for (std::size_t j = i + 1; j < m; ++j) {
-      const double s = 0.5 * (res.hessian[i * m + j] + res.hessian[j * m + i]);
-      res.hessian[i * m + j] = s;
-      res.hessian[j * m + i] = s;
-    }
-  }
+  // Each row was computed by an independent sweep, so mirrored entries can
+  // differ in the last ULP.
+  res.symmetrize();
   return res;
 }
 
@@ -182,15 +174,9 @@ HessianResult hessian_expr_reverse(const Expr &expr,
     }
   }
 
-  // Columns come from independent sweeps, so H(i,j) and H(j,i) can differ in
-  // the last ULP.  Same exactly-symmetric contract the other drivers honour.
-  for (std::size_t i = 0; i < N; ++i) {
-    for (std::size_t j = i + 1; j < N; ++j) {
-      const double s = 0.5 * (res.hessian[i * N + j] + res.hessian[j * N + i]);
-      res.hessian[i * N + j] = s;
-      res.hessian[j * N + i] = s;
-    }
-  }
+  // Columns come from independent sweeps, so mirrored entries can differ in
+  // the last ULP.
+  res.symmetrize();
   return res;
 }
 

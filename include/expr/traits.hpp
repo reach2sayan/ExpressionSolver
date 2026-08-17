@@ -1,7 +1,7 @@
 #pragma once
-#include "fixed_string.hpp" // CFixedString
-#include "values.hpp"
-#include "mpl.hpp"
+#include "expr/values.hpp"
+#include "util/fixed_string.hpp" // CFixedString
+#include "util/mpl.hpp"
 #include <type_traits>
 
 namespace diff {

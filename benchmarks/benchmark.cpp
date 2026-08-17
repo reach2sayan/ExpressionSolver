@@ -1,8 +1,8 @@
-#include "bound.hpp"
-#include "dual.hpp"
-#include "equation.hpp"
-#include "gradient.hpp"
-#include "values.hpp"
+#include "drivers/gradient.hpp"
+#include "dual/dual.hpp"
+#include "expr/bound.hpp"
+#include "expr/equation.hpp"
+#include "expr/values.hpp"
 #define _USE_MATH_DEFINES
 #include <array>
 #include <benchmark/benchmark.h>

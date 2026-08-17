@@ -1,10 +1,10 @@
 #pragma once
 
-#include "expressions.hpp"
+#include "expr/expressions.hpp"
+#include "expr/operations.hpp"
+#include "expr/traits.hpp"
 #include "md/md.hpp"
-#include "mpl.hpp"
-#include "operations.hpp"
-#include "traits.hpp"
+#include "util/mpl.hpp"
 
 #include <algorithm>
 #include <array>
@@ -324,8 +324,6 @@ template <CExpression Expr> struct layout_sparse_pattern {
   static constexpr std::size_t kN =
       mpl::mp_size(extract_symbols_from_expr_t<expr_type>{});
   static constexpr std::size_t kNnz = hessian_nnz<expr_type>();
-  // One copy in the binary, shared by every mapping and every call — the same
-  // property the compressed index arrays already have.
   static constexpr auto kTable = sparse_slot_table<expr_type>();
 
   template <md::CExtents Ext> class mapping {
@@ -380,12 +378,6 @@ template <CExpression Expr> struct layout_sparse_pattern {
 };
 
 // A compressed value buffer, read as though it were the dense N x N matrix.
-//
-// Eigen-free on purpose: the sparse Hessian's *structure* is this library's
-// own compile-time property, so being able to index it should not depend on
-// the interop boundary being compiled in.  The buffer must hold nnz + 1
-// doubles — hessian_values_sparse allocates exactly that — with the last cell
-// left at zero to serve as the structural-zero sink.
 template <CExpression Expr>
 [[nodiscard]] constexpr auto sparse_matrix_view(std::span<const double> values)
     noexcept {

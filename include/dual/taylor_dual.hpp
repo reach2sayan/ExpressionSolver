@@ -1,6 +1,6 @@
 #pragma once
 
-#include "dual.hpp"
+#include "dual/dual.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -193,10 +193,14 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   }
 
   [[nodiscard]] constexpr friend TaylorDual sinh(const TaylorDual &u) noexcept {
-    return sinhcosh_td(u).first;
+    const auto [sh, ch] = sinhcosh_td(u);
+    (void)ch;  // unused
+    return sh;
   }
   [[nodiscard]] constexpr friend TaylorDual cosh(const TaylorDual &u) noexcept {
-    return sinhcosh_td(u).second;
+    const auto [sh, ch] = sinhcosh_td(u);
+    (void)sh;  // unused
+    return ch;
   }
   [[nodiscard]] constexpr friend TaylorDual tanh(const TaylorDual &u) noexcept {
     const auto [sh, ch] = sinhcosh_td(u);
@@ -259,10 +263,12 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     w.c[0] = w0;
     for (std::size_t n = 1; n <= N; ++n) {
       S acc{};
-      for (std::size_t j = 1; j <= n; ++j)
+      for (std::size_t j = 1; j <= n; ++j) {
         acc += p * static_cast<S>(j) * u.c[j] * w.c[n - j];
-      for (std::size_t j = 1; j < n; ++j)
+      }
+      for (std::size_t j = 1; j < n; ++j) {
         acc -= static_cast<S>(j) * w.c[j] * u.c[n - j];
+      }
       w.c[n] = acc / (static_cast<S>(n) * u.c[0]);
     }
     return w;
@@ -305,8 +311,9 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     const TaylorDual s = sqrt(one + u * u);
     for (std::size_t k = 1; k <= N; ++k) {
       auto rhs = static_cast<S>(k) * u.c[k];
-      for (std::size_t j = 1; j < k; ++j)
+      for (std::size_t j = 1; j < k; ++j) {
         rhs -= s.c[j] * static_cast<S>(k - j) * w.c[k - j];
+      }
       w.c[k] = rhs / (static_cast<S>(k) * s.c[0]);
     }
     return w;
@@ -322,8 +329,9 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     const TaylorDual s = sqrt(u * u - one);
     for (std::size_t k = 1; k <= N; ++k) {
       auto rhs = static_cast<S>(k) * u.c[k];
-      for (std::size_t j = 1; j < k; ++j)
+      for (std::size_t j = 1; j < k; ++j) {
         rhs -= s.c[j] * static_cast<S>(k - j) * w.c[k - j];
+      }
       w.c[k] = rhs / (static_cast<S>(k) * s.c[0]);
     }
     return w;
@@ -338,8 +346,9 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     p.c[0] += S{1};
     for (std::size_t k = 1; k <= N; ++k) {
       auto rhs = static_cast<S>(k) * u.c[k];
-      for (std::size_t j = 1; j < k; ++j)
+      for (std::size_t j = 1; j < k; ++j) {
         rhs -= p.c[j] * static_cast<S>(k - j) * w.c[k - j];
+      }
       w.c[k] = rhs / (static_cast<S>(k) * p.c[0]);
     }
     return w;
@@ -350,14 +359,15 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     using std::erf;
     TaylorDual w;
     w.c[0] = erf(u.c[0]);
-    const S c = static_cast<S>(S{2} * std::numbers::inv_sqrtpi);
+    constexpr S cc = static_cast<S>(S{2} * std::numbers::inv_sqrtpi);
     const TaylorDual g = exp(-(u * u)); // exp(-u²)
     for (std::size_t k = 1; k <= N; ++k) {
       // coefficient (k-1) of g·u' : Σ_{i=0}^{k-1} g[i]·(k-i)·u[k-i]
       S deriv{};
-      for (std::size_t i = 0; i < k; ++i)
+      for (std::size_t i = 0; i < k; ++i) {
         deriv += g.c[i] * static_cast<S>(k - i) * u.c[k - i];
-      w.c[k] = c * deriv / static_cast<S>(k);
+      }
+      w.c[k] = cc * deriv / static_cast<S>(k);
     }
     return w;
   }
@@ -393,7 +403,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   }
 };
 
-// TaylorDual satisfies Numeric — verified by static_assert in gradient.hpp.
+// TaylorDual satisfies Numeric — verified by static_assert.
 
 template <Numeric T, std::size_t N>
 auto scalar_base_impl(std::type_identity<TaylorDual<T, N>>) -> T;

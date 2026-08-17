@@ -1,9 +1,9 @@
 #pragma once
-#include "config.hpp"
-#include "dual.hpp"
-#include "gradient.hpp"
-#include "mpl.hpp"
-#include "scope_guard.hpp"
+#include "drivers/gradient.hpp"
+#include "dual/dual.hpp"
+#include "util/config.hpp"
+#include "util/mpl.hpp"
+#include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>
 #include <ranges>
@@ -169,13 +169,6 @@ private:
     using U = nth_dual_t<S, Order>;
     nd_stack_t<S, output_dim, input_dim, Order> result{};
 
-    // Was a flat counter plus a hand-written `tmp % input_dim; tmp /= input_dim`
-    // unranking — layout_right's inverse mapping, open-coded — over all
-    // input_dim^Order multi-indices.  The grid says the unranking directly, the
-    // symmetry filter drops every permutation but one, and both are shared with
-    // derivative_tensor_impl in gradient.hpp rather than written out again
-    // here.  Note the saving multiplies: each skipped multi-index skips a sweep
-    // per output.
     for (const auto &idx : detail::symmetric_index_grid<input_dim, Order>()) {
 
       std::array<U, input_dim> seeds{};
@@ -200,10 +193,6 @@ private:
     return result;
   }
 
-  // The one body behind get<N>() and operator[](idx_t<N>).  Taking the object
-  // as an ordinary forwarded parameter keeps it spellable on compilers without
-  // deducing this; std::get's own ref-qualified overloads then carry the
-  // caller's value category down to the selected slot.
   template <std::size_t N>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     if constexpr (N == 0) {

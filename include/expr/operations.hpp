@@ -1,7 +1,7 @@
 #pragma once
 
-#include "expressions.hpp"
-#include "unary_math.hpp"
+#include "expr/expressions.hpp"
+#include "expr/unary_math.hpp"
 #include <array>
 #include <cmath>
 #include <functional>

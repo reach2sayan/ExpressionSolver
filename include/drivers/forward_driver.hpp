@@ -1,8 +1,8 @@
 #pragma once
 
-#include "dual.hpp"
-#include "md/md.hpp"          // md::mdspan — the Hessian's 2D view
-#include "scope_guard.hpp" // scoped_value — RAII for the per-probe seed toggle
+#include "dual/dual.hpp"
+#include "md/md.hpp"            // md::mdspan — the Hessian's 2D view
+#include "util/scope_guard.hpp" // scoped_value — RAII for the per-probe seed toggle
 
 #include <algorithm>
 #include <concepts>
@@ -122,6 +122,26 @@ struct HessianResult {
   [[nodiscard]] constexpr double operator[](std::size_t i,
                                             std::size_t j) const && noexcept {
     return hessian[i * extent + j];
+  }
+
+  // Average each (i,j)/(j,i) pair in place.
+  //
+  // A driver that fills the matrix one row (or column) at a time computes the
+  // two halves in independent sweeps, so mirrored entries can differ in the
+  // last ULP.  H is analytically symmetric, so averaging only removes that FP
+  // noise — and it is what makes the exactly-symmetric contract every driver
+  // advertises true of the buffer as well as of the maths.  Drivers whose
+  // layout names each entry exactly once (the sparse path) have no pair to
+  // average and do not call this.
+  constexpr void symmetrize() noexcept {
+    for (std::size_t i = 0; i < extent; ++i) {
+      for (std::size_t j = i + 1; j < extent; ++j) {
+        const double s = 0.5 * (hessian[i * extent + j] + //
+                                hessian[j * extent + i]);
+        hessian[i * extent + j] = s;
+        hessian[j * extent + i] = s;
+      }
+    }
   }
 };
 

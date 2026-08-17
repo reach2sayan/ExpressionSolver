@@ -15,10 +15,10 @@
 // Both give the same numbers.  The graph gives more entry points and, on a
 // structured problem, a much better Hessian — see the last two sections.
 
-#include "bound.hpp"           // eval(), bind(), named<>()
-#include "coupling.hpp"        // hessian_pattern(), color_columns()
-#include "equation.hpp"        // Equation: vector-valued f, Jacobians
-#include "vforward_driver.hpp" // hessian(), hessian_vforward(), gradient()
+#include "drivers/coupling.hpp"        // hessian_pattern(), color_columns()
+#include "drivers/vforward_driver.hpp" // hessian(), hessian_vforward(), gradient()
+#include "expr/bound.hpp"              // eval(), bind(), named<>()
+#include "expr/equation.hpp"           // Equation: vector-valued f, Jacobians
 
 #include <array>
 #include <chrono>

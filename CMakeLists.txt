@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # The accessors -- Equation::get<N>(), ValueMap::get<S>() and Bound::get<S>(),
 # plus their operator[] spellings -- have two forms behind DIFF_DEDUCING_THIS
-# (include/config.hpp): one definition using deducing this (P0847), and an
+# (include/util/config.hpp): one definition using deducing this (P0847), and an
 # explicit overload set for toolchains without it.  Each pair shares a single
 # static slot() body, so they compile and behave identically and nothing here
 # is a hard requirement -- but our own builds should exercise the deducing-this
@@ -26,7 +26,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Which accessor spelling this build takes, and why -- see include/config.hpp,
+# Which accessor spelling this build takes, and why -- see include/util/config.hpp,
 # which owns the decision and is the only header that names P0847's macro.  The
 # option is here so the choice is visible at configure time rather than only in
 # a disassembly, and so a stale compiler selection is caught immediately.
@@ -129,7 +129,7 @@ endif ()
 option(DIFF_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
 option(DIFF_BUILD_COMPARE "Build comparison benchmarks against autodiff" OFF)
 option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
-option(DIFF_USE_EIGEN "Build the Eigen interop boundary (include/eigen_interop.hpp)" ON)
+option(DIFF_USE_EIGEN "Build the Eigen interop boundary (include/interop/eigen_interop.hpp)" ON)
 
 if (MSVC)
    add_compile_options(/arch:AVX2)
@@ -141,7 +141,7 @@ else ()
     endif ()
 endif ()
 
-# Eigen backs include/eigen_interop.hpp — the boundary where a Hessian leaves
+# Eigen backs include/interop/eigen_interop.hpp — the boundary where a Hessian leaves
 # this library for whatever factorizes it downstream, including the sparse form
 # whose structure comes from the compile-time coupling pass and has no
 # Eigen-side equivalent.  Nothing in the AD core includes Eigen: the symbolic
@@ -200,37 +200,18 @@ endif ()
 # Use CMAKE_CURRENT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so this file works
 # both standalone and as a git submodule via add_subdirectory().
 add_library(diff INTERFACE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/config.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/fixed_string.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/expressions.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/operations.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/mpl.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/traits.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/values.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/coupling.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/eigen_interop.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/equation.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/dual.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/forward_driver.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/gradient.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/md.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/tensor.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/layouts.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/md/third_party/mdspan.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/named_value.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/bound.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/scope_guard.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/seeded_energy.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/taylor_dual.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/unary_math.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/vector_dual.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/vforward_driver.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/version.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/expression_differentiator.hpp
 )
 # Namespaced alias so consumers can link a stable target name.
 add_library(ExpressionDifferentiator::diff ALIAS diff)
 target_include_directories(diff INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Each header directory lists its own files: include/CMakeLists.txt walks the
+# subdirectories and each one calls target_sources(diff INTERFACE ...) on the
+# target created just above.  Nothing is compiled from there -- diff is an
+# INTERFACE library, so the lists exist to make the headers visible in IDEs and
+# to keep a directory's contents described next to the contents themselves.
+add_subdirectory(include)
 if (DIFF_USE_EIGEN)
     target_link_libraries(diff INTERFACE Eigen3::Eigen)
     target_compile_definitions(diff INTERFACE DIFF_USE_EIGEN)
