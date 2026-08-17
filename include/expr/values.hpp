@@ -332,21 +332,21 @@ public:
   constexpr void backward(const auto &, T, auto &,
                           const auto &) const noexcept {}
 
-  template <CSymbolList Syms, std::size_t N>
-  [[nodiscard]] constexpr T
-  eval_seeded(const std::array<T, N> &) const noexcept {
-    return get();
-  }
-
-  // eval_seeded_as<U>: embed constant into the deeper type U with zero dual
-  // parts.  Uses ConstantEmbedder<U> so custom numeric types (e.g. TaylorDual)
-  // can specialise the embedding without touching this code.
-  template <Numeric U, CSymbolList Syms, std::size_t N>
+  // Seeded sweep leaf.  When the seed type is the constant's own type there is
+  // nothing to convert and the stored value passes through verbatim — dual
+  // parts and all.  Seeded with a deeper type, the constant is embedded with
+  // zero dual parts via ConstantEmbedder<U>, so custom numeric types (e.g.
+  // TaylorDual) can specialise the embedding without touching this code.
+  template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
-  eval_seeded_as(const std::array<U, N> &) const noexcept {
-    using S = scalar_base_t<U>;
-    return ConstantEmbedder<U>::embed(
-        static_cast<S>(get_real_part<dual_depth_v<T>>(get())));
+  eval_seeded(const std::array<U, N> &) const noexcept {
+    if constexpr (std::same_as<U, T>) {
+      return get();
+    } else {
+      using S = scalar_base_t<U>;
+      return ConstantEmbedder<U>::embed(
+          static_cast<S>(get_real_part<dual_depth_v<T>>(get())));
+    }
   }
 
   template <std::size_t I> [[nodiscard]] constexpr auto get() const noexcept {
@@ -453,17 +453,10 @@ public:
     }
   }
 
-  template <CSymbolList Syms, std::size_t N>
-  [[nodiscard]] constexpr T
-  eval_seeded(const std::array<T, N> &vals) const noexcept {
-    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-    static_assert(idx < N, "eval: no value supplied for this symbol");
-    return vals[idx];
-  }
-
-  template <Numeric U, CSymbolList Syms, std::size_t N>
+  // Seeded sweep leaf: read this symbol's slot, whatever the seed type is.
+  template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
-  eval_seeded_as(const std::array<U, N> &vals) const noexcept {
+  eval_seeded(const std::array<U, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
     static_assert(idx < N, "eval: no value supplied for this symbol");
     return vals[idx];

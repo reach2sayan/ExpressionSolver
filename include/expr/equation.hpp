@@ -181,7 +181,7 @@ private:
 
       static_for<output_dim>([&]<std::size_t OUT>() {
         U val = std::get<OUT>(expressions)
-                    .template eval_seeded_as<U, symbols>(seeds);
+                    .template eval_seeded<symbols>(seeds);
         // The output axis leads, so the stacked index is OUT followed by the
         // multi-index.
         const auto stacked = [&]<std::size_t... K>(std::index_sequence<K...>) {

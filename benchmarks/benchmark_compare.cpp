@@ -986,7 +986,7 @@ BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
 //   E(x) = Σ_k x_k·log(x_k) + Σ_k c_k·(x_k - x_{k+1})^2 + exp(x_0·x_{n-1})
 //          c_k = 0.5 + 0.01 k          (identical to vf_energy_sparse)
 //
-// The graph is bridged into the runtime driver via eval_seeded_as<T, Syms>:
+// The graph is bridged into the runtime driver via eval_seeded<Syms>:
 // the driver hands us seeded dual dofs, we pack them in symbol order and
 // traverse the graph once.  autodiff has no expression-template layer, so its
 // side reuses vf_energy_sparse — the same closed form — for an honest compare.
@@ -1059,7 +1059,7 @@ static auto expr_energy(const Expr &E) {
     for (std::size_t k = 0; k < Nv; ++k) {
       s[k] = dof[k];
     }
-    return E.template eval_seeded_as<T, Syms>(s);
+    return E.template eval_seeded<Syms>(s);
   };
 }
 

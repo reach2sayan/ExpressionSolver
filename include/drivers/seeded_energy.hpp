@@ -15,7 +15,7 @@ namespace diff {
 // Bridges a compile-time expression *graph* (Variable / + / * / log / exp ...)
 // into the runtime numeric Hessian driver.  The driver hands us seeded dual
 // dofs in sorted symbol order; we pack them and traverse the graph once via
-// eval_seeded_as.  Holding the expression by value keeps the dofs alive for the
+// eval_seeded.  Holding the expression by value keeps the dofs alive for the
 // driver and lets the resulting callable be stored or returned safely.
 //
 // The wrapper carries a static tag (kSeededExprEnergy) that the public
@@ -51,7 +51,7 @@ public:
     const auto s = [&]<std::size_t... I>(std::index_sequence<I...>) {
       return std::array<T, arity>{dof[I]...};
     }(std::make_index_sequence<arity>{});
-    return expr_.template eval_seeded_as<T, symbols>(s);
+    return expr_.template eval_seeded<symbols>(s);
   }
 };
 

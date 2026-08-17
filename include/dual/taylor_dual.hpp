@@ -413,7 +413,7 @@ template <Numeric S, std::size_t N>
 inline constexpr std::size_t dual_depth_v<TaylorDual<S, N>> = N;
 
 // ---------------------------------------------------------------------------
-// ConstantEmbedder specialization — lets Constant::eval_seeded_as produce
+// ConstantEmbedder specialization — lets Constant::eval_seeded produce
 // a zero-derivative TaylorDual for constant nodes.
 // ---------------------------------------------------------------------------
 

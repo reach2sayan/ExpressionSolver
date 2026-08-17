@@ -198,7 +198,7 @@ template <CExpression Expr, CValueMap Map> struct Bound {
   template <Numeric U>
   [[nodiscard]] constexpr U
   eval_as(const std::array<U, arity> &seed) const noexcept {
-    return expr.template eval_seeded_as<U, symbols>(seed);
+    return expr.template eval_seeded<symbols>(seed);
   }
 
   template <FixedString S>

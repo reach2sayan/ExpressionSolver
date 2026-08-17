@@ -319,7 +319,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
     for (std::size_t k = 0; k < N; ++k) {
       seeds[k].grad[k] = double{1};
     }
-    const V r = expr.template eval_seeded_as<V, symbols>(seeds);
+    const V r = expr.template eval_seeded<symbols>(seeds);
     // Rank 1 under layout_right: storage order is index order, so the lane
     // pack copies straight into the tensor's cells.
     std::ranges::copy_n(r.grad.begin(), N, result.data());
@@ -341,7 +341,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
           seeds[k] = U{values[k], k == Seeded ? S{1} : S{}};
         }
         result[Seeded] =
-            expr.template eval_seeded_as<U, symbols>(seeds).template get<1>();
+            expr.template eval_seeded<symbols>(seeds).template get<1>();
       };
       (sweep.template operator()<J>(), ...);
     }(std::make_index_sequence<N>{});
@@ -355,7 +355,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
         [&idx](const S &v, std::size_t k) {
           return make_mixed_seed<S, Order>(v, idx, k);
         });
-    U val = expr.template eval_seeded_as<U, symbols>(seeds);
+    U val = expr.template eval_seeded<symbols>(seeds);
     result.at_index(idx) = extract_nth<Order>(val);
   }
   return result;
@@ -480,7 +480,7 @@ template <std::size_t Order, CExpression Expr,
   seed.c[1] = S{1};
 
   TD result =
-      expr.template eval_seeded_as<TD, symbols>(std::array<TD, 1>{seed});
+      expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
 
   constexpr S factorial = compile_time_factorial(Order);
   return result.c[Order] * factorial;

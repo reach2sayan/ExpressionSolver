@@ -3786,7 +3786,7 @@ void ExpectPackedMatchesDense(const Expr &expr, const Values &values) {
     for (std::size_t k = 0; k < N; ++k) {
       seeds[k] = diff::detail::make_mixed_seed<S, Order>(values[k], idx, k);
     }
-    const U val = expr.template eval_seeded_as<U, symbols>(seeds);
+    const U val = expr.template eval_seeded<symbols>(seeds);
     const double dense = diff::detail::extract_nth<Order>(val);
     EXPECT_DOUBLE_EQ(packed.at_index(idx), dense)
         << "order " << Order << " at index " << idx[0];

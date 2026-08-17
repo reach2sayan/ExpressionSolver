@@ -256,25 +256,17 @@ public:
         self().expressions());
   }
 
-  template <CSymbolList Syms, std::size_t N>
-  [[nodiscard]] constexpr auto
-  eval_seeded(const std::array<value_type, N> &vals) const noexcept {
-    return std::apply(
-        [&](const auto &...e) noexcept {
-          return Op::eval(
-              EvalResult<value_type>{e.template eval_seeded<Syms>(vals)}...);
-        },
-        self().expressions());
-  }
-
-  // eval_seeded_as<U>: evaluate with seeds of a deeper dual type U.
-  template <Numeric U, CSymbolList Syms, std::size_t N>
+  // The one seeded sweep.  The seed type U is deduced from the point, so the
+  // same call evaluates in the expression's own scalar type or in a deeper
+  // dual type (Dual, TaylorDual, VectorDual, ...) — the arithmetic follows
+  // whatever was handed in, and only the leaves care about the difference.
+  template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
-  eval_seeded_as(const std::array<U, N> &vals) const noexcept {
+  eval_seeded(const std::array<U, N> &vals) const noexcept {
     return std::apply(
         [&](const auto &...e) noexcept {
           return Op::eval(
-              EvalResult<U>{e.template eval_seeded_as<U, Syms>(vals)}...);
+              EvalResult<U>{e.template eval_seeded<Syms>(vals)}...);
         },
         self().expressions());
   }
