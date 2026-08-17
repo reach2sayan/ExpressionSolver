@@ -3683,11 +3683,10 @@ TEST(MdLayout, SparsePatternSendsStructuralZerosToTheSink) {
   EXPECT_NE(static_cast<std::size_t>(m(0, 1)), static_cast<std::size_t>(m(2, 2)));
 }
 
-TEST(DerivativeTensorTest, Order2PicksTheAlgorithmAndAgreesEitherWay) {
-  // derivative_tensor<2> switches from forward-over-forward to
-  // forward-over-reverse at N >= 5, where the crossover was measured.  Both
-  // must produce the same tensor, so the choice stays an implementation
-  // detail; this pins that at N = 4 (forward) and N = 5 (reverse).
+TEST(DerivativeTensorTest, ForwardAndReverseHessiansAgree) {
+  // derivative_tensor<2> is forward-over-forward; hessian<Reverse> is
+  // forward-over-reverse.  Two algorithms, same tensor and same type --
+  // which is what lets a caller pick on cost alone.
   using D = diff::Dual<double>;
   using diff::FixedString;
   {
@@ -3695,7 +3694,7 @@ TEST(DerivativeTensorTest, Order2PicksTheAlgorithmAndAgreesEitherWay) {
     Variable<D, FixedString{"c"}> c; Variable<D, FixedString{"d"}> d;
     auto e = a * log(a) + b * log(b) + c * c * d + exp(a * d);
     const std::array<double, 4> p{0.3, 0.4, 0.5, 0.6};
-    const auto T = diff::derivative_tensor<2>(e, p);           // forward here
+    const auto T = diff::derivative_tensor<2>(e, p);
     const auto R = diff::detail::reverse_mode_hessian(e, p);
     for (std::size_t i = 0; i < 4; ++i) {
       for (std::size_t j = 0; j < 4; ++j) {
@@ -3710,7 +3709,7 @@ TEST(DerivativeTensorTest, Order2PicksTheAlgorithmAndAgreesEitherWay) {
     auto e = a * log(a) + b * log(b) + c * c * d + exp(a * d) + e5 * e5 * b;
     const std::array<double, 5> p{0.3, 0.4, 0.5, 0.6, 0.7};
     const std::span<const double> xs{p.data(), p.size()};
-    const auto T = diff::derivative_tensor<2>(e, p);           // reverse here
+    const auto T = diff::derivative_tensor<2>(e, p);
     const auto R = diff::detail::reverse_mode_hessian(e, p);
     const auto H = diff::hessian(e, xs);  // independent driver, as a cross-check
     for (std::size_t i = 0; i < 5; ++i) {
