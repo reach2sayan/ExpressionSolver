@@ -14,6 +14,7 @@
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <vector>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -197,18 +198,7 @@ scatter_targets(const coupling_rows<N> &rows,
 
 // ===========================================================================
 // Compressed-column layout for the sparsity pattern.
-//
-// The pattern is a compile-time constant, so the index arrays of a compressed
-// sparse matrix are too: they can be emitted once as static constexpr data and
-// shared by every call, leaving only the nonzero *values* to be computed at run
-// time.  No triplet assembly, no sorting, no structure discovery, and — because
-// the structure never changes between calls — a consumer may hoist a sparse
-// factorization's symbolic analysis out of its loop.
-//
-// Indices are `int` to match Eigen's default StorageIndex; nothing here
-// includes Eigen, this header only produces data Eigen can consume.
 // ===========================================================================
-
 template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>>
 consteval std::size_t hessian_nnz() noexcept {
@@ -260,6 +250,28 @@ consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
   return layout;
 }
 
+namespace detail {
+
+// Walk a compressed-column layout: for each column j, every stored entry k in
+// it and the row i it sits at.  Both tables below are that same walk differing
+// only in where they write (i, j) -> k, so the walk is written once.
+struct compressed_entry {
+  std::size_t column, row, slot;
+};
+template <typename Layout>
+consteval auto compressed_entries(const Layout &layout, std::size_t n) {
+  std::vector<compressed_entry> out;
+  for (std::size_t j = 0; j < n; ++j) {
+    for (auto k = static_cast<std::size_t>(layout.outer[j]);
+         k < static_cast<std::size_t>(layout.outer[j + 1]); ++k) {
+      out.push_back({j, static_cast<std::size_t>(layout.inner[k]), k});
+    }
+  }
+  return out;
+}
+
+} // namespace detail
+
 // Per colour, the slot in the VALUE array each row's sweep result belongs to —
 // the sparse counterpart of scatter_targets, so the sweep writes straight into
 // compressed storage and the dense N x N matrix is never materialised.
@@ -270,11 +282,8 @@ consteval scatter_map<N> sparse_slots() noexcept {
   constexpr auto layout = sparse_layout<Expr>();
 
   auto slots = unmapped<N>();
-  for (const auto j : std::views::iota(0uz, N)) {
-    for (const auto k : std::views::iota(static_cast<std::size_t>(layout.outer[j]),
-                                         static_cast<std::size_t>(layout.outer[j + 1]))) {
-      slots[coloring.color[j]][static_cast<std::size_t>(layout.inner[k])] = k;
-    }
+  for (const auto [j, i, k] : detail::compressed_entries(layout, N)) {
+    slots[coloring.color[j]][i] = k;
   }
   return slots;
 }
@@ -303,13 +312,8 @@ consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {
   // Everything is the sink until the pattern says otherwise.
   std::array<std::size_t, N * N> table{};
   table.fill(NNZ);
-  for (const auto j : std::views::iota(0uz, N)) {
-    for (const auto k :
-         std::views::iota(static_cast<std::size_t>(layout.outer[j]),
-                          static_cast<std::size_t>(layout.outer[j + 1]))) {
-      const auto i = static_cast<std::size_t>(layout.inner[k]);
-      table[i * N + j] = k;
-    }
+  for (const auto [j, i, k] : detail::compressed_entries(layout, N)) {
+    table[i * N + j] = k;
   }
   return table;
 }

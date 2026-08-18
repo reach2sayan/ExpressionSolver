@@ -18,13 +18,11 @@ template <std::size_t N> struct FixedString {
 
   // Length in characters, excluding the terminating NUL.
   [[nodiscard]] static constexpr std::size_t size() noexcept { return N - 1; }
-  [[nodiscard]] static constexpr bool empty() noexcept { return size() == 0; }
 
   // constexpr, not consteval: printing a symbol reads this at run time.
   [[nodiscard]] constexpr std::string_view view() const noexcept {
     return {data, size()};
   }
-  [[nodiscard]] constexpr const char *c_str() const noexcept { return data; }
 
   constexpr bool operator==(const FixedString &) const noexcept = default;
   template <std::size_t M>

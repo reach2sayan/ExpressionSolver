@@ -7,12 +7,6 @@
 
 namespace diff {
 
-// A Variable is stateless, so there is no value to print alongside the label —
-// only the label flag exists for it.
-constexpr bool PRINT_VARIABLE_LABEL = true;
-constexpr bool PRINT_CONSTANT_VALUE = true;
-constexpr bool PRINT_CONSTANT_LABEL = false;
-
 // Both sides carry the same value_type.
 template <typename LHS, typename RHS>
 concept CSameValueType =
@@ -152,13 +146,7 @@ template <typename Derived, Numeric T> class ConstantOps {
   // associated entities include its bases), and taking the leaf type exactly
   // keeps it clear of the operator T() conversion below.
   friend std::ostream &operator<<(std::ostream &out, const Derived &c) {
-    if constexpr (PRINT_CONSTANT_VALUE) {
-      out << std::format("{}", c.get());
-    }
-    if constexpr (PRINT_CONSTANT_LABEL) {
-      out << "_c";
-    }
-    return out;
+    return out << std::format("{}", c.get());
   }
 
 public:
@@ -257,12 +245,10 @@ template <Numeric T> Lit(T) -> Lit<T>;
 // partial differentiation: it still reads its value from the seed array like
 // any other symbol, but its derivative is zero.
 template <Numeric T, CFixedString auto symbol, bool Frozen> class Variable {
+  // A Variable is stateless, so the label is all there is to print.
   friend std::ostream &operator<<(std::ostream &out,
                                   const Variable<T, symbol, Frozen> &) {
-    if constexpr (PRINT_VARIABLE_LABEL) {
-      out << symbol.view();
-    }
-    return out;
+    return out << symbol.view();
   }
 
 public:

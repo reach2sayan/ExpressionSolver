@@ -296,6 +296,22 @@ constexpr auto extract_nth(const T &x) noexcept {
   }
 }
 
+// The full seed array for one entry of the derivative grid: every variable
+// lifted to nth_dual_t, with the tangents that `idx` names switched on.  Used
+// by both tensor drivers -- the scalar one and Equation's stacked one -- which
+// build it identically and differ only in where the answer lands.
+template <Numeric S, std::size_t Order, std::size_t N>
+[[nodiscard]] constexpr std::array<nth_dual_t<S, Order>, N>
+mixed_seeds(const std::array<S, N> &values,
+            std::span<const std::size_t> idx) noexcept {
+  std::array<nth_dual_t<S, Order>, N> seeds{};
+  std::ranges::transform(values, std::views::iota(0uz, N), seeds.begin(),
+                         [&idx](const S &v, std::size_t k) {
+                           return make_mixed_seed<S, Order>(v, idx, k);
+                         });
+  return seeds;
+}
+
 template <std::size_t Order, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = scalar_base_t<T>,
@@ -357,12 +373,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
   }
 
   for (const auto &idx : detail::symmetric_index_grid<N, Order>()) {
-    std::array<U, N> seeds{};
-    std::ranges::transform(
-        values, std::views::iota(0uz, N), seeds.begin(),
-        [&idx](const S &v, std::size_t k) {
-          return make_mixed_seed<S, Order>(v, idx, k);
-        });
+    const auto seeds = mixed_seeds<S, Order>(values, idx);
     U val = expr.template eval_seeded<symbols>(seeds);
     result.at_index(idx) = extract_nth<Order>(val);
   }

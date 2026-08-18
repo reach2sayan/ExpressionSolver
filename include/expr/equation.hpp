@@ -164,12 +164,7 @@ private:
 
     for (const auto &idx : detail::symmetric_index_grid<input_dim, Order>()) {
 
-      std::array<U, input_dim> seeds{};
-      std::ranges::transform(values, std::views::iota(0uz, input_dim),
-                             seeds.begin(), [&idx](const S &v, std::size_t k) {
-                               return detail::make_mixed_seed<S, Order>(v, idx,
-                                                                        k);
-                             });
+      const auto seeds = detail::mixed_seeds<S, Order>(values, idx);
 
       static_for<output_dim>([&]<std::size_t OUT>() {
         U val = std::get<OUT>(expressions).template eval_seeded<symbols>(seeds);
