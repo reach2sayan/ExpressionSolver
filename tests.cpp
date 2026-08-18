@@ -3726,8 +3726,8 @@ TEST(VectorDualFastPath, CoversEveryUnaryMathFunction) {
 //     ...change a flag or a kernel...
 //     ctest -R BitExactness --output-on-failure     # it must not have moved
 //
-// The value for GCC 15 on x86-64 with -ffp-contract=fast is
-// 0x10bbe21b2157d028.
+// The value for GCC 15 on x86-64 with the flags CMakeLists.txt sets is
+// 0x4af90585ebef1b44.
 // ---------------------------------------------------------------------------
 namespace {
 struct BitHash {
@@ -3757,8 +3757,11 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
     for (double v : gradient<DiffMode::Reverse>(e, p)) feed(v);
     const auto g1 = derivative_tensor<1>(e, p);
     for (std::size_t k = 0; k < 3; ++k) feed(g1.data()[k]);
+    // Packed symmetric storage -- a 3x3 second-order tensor stores 6 elements,
+    // not 9 -- so walk the index space, not the buffer.
     const auto g2 = derivative_tensor<2>(e, p);
-    for (std::size_t k = 0; k < 9; ++k) feed(g2.data()[k]);
+    for (std::size_t r = 0; r < 3; ++r)
+      for (std::size_t cc = 0; cc < 3; ++cc) feed(g2[r, cc]);
     feed(e.eval(a, b, c));
     feed(e.eval_with_tangent<"x">(a, b, c).deriv());
 

@@ -32,8 +32,12 @@ concept CEnergyOf =
     std::convertible_to<std::invoke_result_t<F &, const D *>, D>;
 
 namespace detail {
+// Spelled out rather than piped: the one-line range form needs a library
+// feature libstdc++ only ships from 14, and we still build on 13.
 inline std::vector<std::size_t> iota_indices(std::size_t n) {
-  return std::views::iota(std::size_t{0}, n) | std::ranges::to<std::vector>();
+  std::vector<std::size_t> v(n);
+  std::iota(v.begin(), v.end(), std::size_t{0});
+  return v;
 }
 } // namespace detail
 
