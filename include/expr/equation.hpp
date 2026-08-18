@@ -7,7 +7,9 @@
 #include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <ranges>
+#include <string_view>
 #include <utility>
 
 namespace diff {
@@ -259,11 +261,14 @@ std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
 template <diff::CExpression... Ts>
 struct std::formatter<diff::Equation<Ts...>, char> {
   constexpr auto parse(std::format_parse_context &ctx) {
-    spec_ = {ctx.begin(), static_cast<std::size_t>(ctx.end() - ctx.begin())};
+    // (iterator, sentinel), not (pointer, size): format_parse_context::iterator
+    // is a raw const char* on libstdc++ but a class type on MSVC, so only this
+    // C++20 constructor spells the same thing on both.
+    spec_ = std::string_view(ctx.begin(), ctx.end());
     if (const auto close = spec_.find('}'); close != std::string_view::npos) {
       spec_ = spec_.substr(0, close);
     }
-    return ctx.begin() + spec_.size();
+    return ctx.begin() + static_cast<std::ptrdiff_t>(spec_.size());
   }
 
   auto format(const diff::Equation<Ts...> &eq, std::format_context &ctx) const {
