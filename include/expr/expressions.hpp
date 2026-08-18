@@ -146,7 +146,6 @@ concept CExpressionNode =
 template <Numeric T> struct EvalResult {
   using value_type = T;
   T value;
-  [[nodiscard]] constexpr T eval() const noexcept { return value; }
   constexpr operator T() const noexcept { return value; }
 };
 
@@ -207,13 +206,30 @@ class ExpressionOps : public BaseExpression<Op> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
     return static_cast<const Derived &>(*this);
   }
-  [[nodiscard]] constexpr Derived &self() noexcept {
-    return static_cast<Derived &>(*this);
-  }
 
 public:
   using op_type = Op;
   using value_type = typename BaseExpression<Op>::value_type;
+
+  // Printing reads children through the public expressions(), which both
+  // ExpressionImpl specialisations provide -- the stateless one materialises
+  // them (they are empty) and the storing one returns its tuple.  That is what
+  // lets one definition serve both, instead of a copy per specialisation
+  // differing only in how it names the children.
+  //
+  // Hidden friend on Derived rather than on this base: ADL finds it either way,
+  // since a class's associated entities include its bases.
+  friend std::ostream &operator<<(std::ostream &out, const Derived &e) {
+    if constexpr (std::tuple_size_v<typename Derived::children_t> == 1) {
+      out << std::get<0>(e.expressions());
+    } else {
+      out << '(';
+      std::apply([&out](const auto &...c) { Op::print(out, c...); },
+                 e.expressions());
+      out << ')';
+    }
+    return out;
+  }
 
   // Evaluation always takes a point: the tree stores no values.  Op::eval is
   // reached only through the seeded sweeps below, where every child has
@@ -271,18 +287,6 @@ public:
 template <COperation Op, CExpression... Children>
 class ExpressionImpl<true, Op, Children...>
     : public ExpressionOps<Expression<Op, Children...>, Op> {
-  friend std::ostream &operator<<(std::ostream &out, const ExpressionImpl &e) {
-    if constexpr (sizeof...(Children) == 1) {
-      out << std::get<0>(e.expressions());
-    } else {
-      out << '(';
-      std::apply([&out](const auto &...c) { Op::print(out, c...); },
-                 e.expressions());
-      out << ')';
-    }
-    return out;
-  }
-
   friend ExpressionOps<Expression<Op, Children...>, Op>;
 
 public:
@@ -299,18 +303,6 @@ template <COperation Op, CExpression... Children>
 class ExpressionImpl<false, Op, Children...>
     : public ExpressionOps<Expression<Op, Children...>, Op> {
   std::tuple<Children...> operands;
-  friend std::ostream &operator<<(std::ostream &out, const ExpressionImpl &e) {
-    if constexpr (sizeof...(Children) == 1) {
-      out << std::get<0>(e.operands);
-    } else {
-      out << '(';
-      std::apply([&out](const auto &...c) { Op::print(out, c...); },
-                 e.operands);
-      out << ')';
-    }
-    return out;
-  }
-
   friend ExpressionOps<Expression<Op, Children...>, Op>;
 
 public:
@@ -318,9 +310,6 @@ public:
 
   constexpr ExpressionImpl(Children... c) noexcept : operands{std::move(c)...} {}
   [[nodiscard]] constexpr const children_t &expressions() const noexcept {
-    return operands;
-  }
-  [[nodiscard]] constexpr children_t &expressions() noexcept {
     return operands;
   }
 };

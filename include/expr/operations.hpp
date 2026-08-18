@@ -9,11 +9,6 @@
 
 namespace diff {
 
-enum class OpType : short {
-  Unary = 0,
-  Binary = 1,
-};
-
 template <typename F, typename T>
 concept CUnaryOp = std::regular_invocable<F, const T &> &&
                    std::convertible_to<std::invoke_result_t<F, const T &>, T>;
@@ -23,14 +18,9 @@ concept CBinaryOp =
     std::regular_invocable<F, const T &, const T &> &&
     std::convertible_to<std::invoke_result_t<F, const T &, const T &>, T>;
 
-template <Numeric T, OpType type> struct Op {
-  using value_type = T;
-  static constexpr OpType op_type = type;
-};
-
 template <Numeric T, CUnaryOp<T> func, CFixedString auto symbol>
-struct UnaryOp : Op<T, OpType::Unary> {
-  using value_type = Op<T, OpType::Unary>::value_type;
+struct UnaryOp {
+  using value_type = T;
   using func_type = func;
   static constexpr void print(std::ostream &out,
                               const CExpression auto &lhs) noexcept {
@@ -45,8 +35,8 @@ struct UnaryOp : Op<T, OpType::Unary> {
 
 template <Numeric T, CBinaryOp<T> func, CFixedString auto symbol,
           bool prefix = false>
-struct BinaryOp : Op<T, OpType::Binary> {
-  using value_type = Op<T, OpType::Binary>::value_type;
+struct BinaryOp {
+  using value_type = T;
   using func_type = func;
   // Infix style for operators ("a+b"); prefix=true gives function notation
   // ("pow(a, b)") for math functions like pow/atan2/hypot/min/max.
@@ -147,29 +137,22 @@ struct abs_impl {
     return abs(a);
   }
 };
-// Binary impls.  ADL resolves pow/atan2/hypot for diff::Dual (defined in
-// dual.hpp) when T is a Dual, and to std::* for plain arithmetic T.
-struct pow_impl {
-  constexpr auto operator()(const Numeric auto &a,
-                            const Numeric auto &b) const noexcept {
-    using std::pow;
-    return pow(a, b);
-  }
-};
-struct atan2_impl {
-  constexpr auto operator()(const Numeric auto &a,
-                            const Numeric auto &b) const noexcept {
-    using std::atan2;
-    return atan2(a, b);
-  }
-};
-struct hypot_impl {
-  constexpr auto operator()(const Numeric auto &a,
-                            const Numeric auto &b) const noexcept {
-    using std::hypot;
-    return hypot(a, b);
-  }
-};
+// Binary impls.  ADL resolves pow/atan2/hypot for diff::Dual, TaylorDual and
+// VectorDual (each defines its own) when T is one of those, and to std::* for
+// plain arithmetic T.  The `using std::` + unqualified call is the whole
+// mechanism, so it is written once.
+#define DIFF_ADL_BINARY_IMPL(NAME, FN)                                         \
+  struct NAME {                                                                \
+    constexpr auto operator()(const Numeric auto &a,                           \
+                              const Numeric auto &b) const noexcept {          \
+      using std::FN;                                                           \
+      return FN(a, b);                                                         \
+    }                                                                          \
+  };
+DIFF_ADL_BINARY_IMPL(pow_impl, pow)
+DIFF_ADL_BINARY_IMPL(atan2_impl, atan2)
+DIFF_ADL_BINARY_IMPL(hypot_impl, hypot)
+#undef DIFF_ADL_BINARY_IMPL
 struct max_impl {
   constexpr auto operator()(const Numeric auto &a,
                             const Numeric auto &b) const noexcept {

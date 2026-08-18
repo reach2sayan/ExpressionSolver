@@ -86,12 +86,6 @@ public:
                            const std::array<index_type, Depth> &prefix) noexcept
       : tensor_(&t), prefix_(prefix) {}
 
-  // The length of the axis this proxy is about to index, so a caller can walk
-  // a row the way it walked the nested array's inner std::array.
-  [[nodiscard]] static constexpr std::size_t size() noexcept {
-    return static_cast<std::size_t>(Tensor::extent(Depth));
-  }
-
   [[nodiscard]] constexpr decltype(auto)
   operator[](index_type i) const noexcept {
     const auto next = [&]<std::size_t... K>(std::index_sequence<K...>) {
@@ -139,7 +133,6 @@ private:
 public:
   constexpr md_tensor() noexcept = default;
 
-  [[nodiscard]] static constexpr Ext extents() noexcept { return Ext{}; }
   [[nodiscard]] static constexpr mapping_type mapping() noexcept {
     return kMapping;
   }
@@ -153,13 +146,6 @@ public:
   [[nodiscard]] constexpr S *data() noexcept { return data_.data(); }
   [[nodiscard]] constexpr const S *data() const noexcept {
     return data_.data();
-  }
-
-  [[nodiscard]] constexpr auto view() noexcept {
-    return md::mdspan<S, Ext, Layout>(data_.data(), kMapping);
-  }
-  [[nodiscard]] constexpr auto view() const noexcept {
-    return md::mdspan<const S, Ext, Layout>(data_.data(), kMapping);
   }
 
   // t[i, j, k] — the mdspan spelling.
@@ -190,24 +176,6 @@ public:
   {
     return detail::md_index_proxy<const md_tensor, 1>(
         *this, std::array<index_type, 1>{i});
-  }
-
-  // The leading axis as a range, so `for (const auto &row : t.rows())` reads
-  // the way `for (const auto &row : nested_array)` used to.  Not begin()/end()
-  // on the tensor itself: a rank-3 tensor's "elements" would then be proxies,
-  // which is a range of things that are not the value_type and would make
-  // md_tensor satisfy range concepts it has no business satisfying.
-  [[nodiscard]] constexpr auto rows() noexcept
-    requires(Ext::rank() >= 2)
-  {
-    return std::views::iota(index_type{0}, Ext{}.extent(0)) |
-           std::views::transform([this](index_type i) { return (*this)[i]; });
-  }
-  [[nodiscard]] constexpr auto rows() const noexcept
-    requires(Ext::rank() >= 2)
-  {
-    return std::views::iota(index_type{0}, Ext{}.extent(0)) |
-           std::views::transform([this](index_type i) { return (*this)[i]; });
   }
 
   // The proxy's terminal step, and the array-of-indices spelling nd_index used

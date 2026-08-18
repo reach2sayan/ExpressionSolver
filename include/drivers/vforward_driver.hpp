@@ -107,6 +107,35 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
   return res;
 }
 
+// The colour-compressed reverse sweeps, shared by the dense and the sparse
+// Hessian path.  Seed the point once; then per colour, put a unit tangent on
+// that colour's columns and take one reverse sweep.  What the two callers do
+// with each sweep is the only thing that differs, so that is the parameter:
+// harvest(colour, root, grads).
+template <CExpression Expr, typename Colors, typename Harvest>
+void color_sweeps(const Expr &expr, std::span<const double> x,
+                  const Colors &colors, Harvest &&harvest) {
+  using E = std::remove_cvref_t<Expr>;
+  using T = typename E::value_type;
+  using S = dual_scalar_t<T>;
+  using Syms = detail::expr_symbols_t<E>;
+  constexpr std::size_t N = mpl::mp_size(Syms{});
+
+  // The value level is the point and is identical on every sweep; only the
+  // seeded tangents move between colours.
+  std::array<T, N> seeds{};
+  std::ranges::transform(x, seeds.begin(),
+                         [](double v) { return T{static_cast<S>(v), S{}}; });
+
+  for (std::size_t c = 0; c < colors.count; ++c) {
+    for (auto &&[seed, color] : std::views::zip(seeds, colors.color)) {
+      seed.deriv() = (color == c) ? S{1} : S{};
+    }
+    const auto [root, grads] = reverse_sweep<Syms>(expr, seeds);
+    harvest(c, root, grads);
+  }
+}
+
 // Forward-over-reverse Hessian for a compile-time expression graph.  Seeding
 // column j with a first-order tangent and running ONE backward sweep yields
 // that whole Hessian column, so the full N x N matrix costs N sweeps against
@@ -119,7 +148,6 @@ HessianResult hessian_expr_reverse(const Expr &expr,
                                    std::span<const double> x) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
-  using S = dual_scalar_t<T>;
   using Syms = detail::expr_symbols_t<E>;
   constexpr std::size_t N = mpl::mp_size(Syms{});
 
@@ -132,24 +160,12 @@ HessianResult hessian_expr_reverse(const Expr &expr,
   // degenerates to one sweep per column, i.e. never worse.
   static constexpr auto kPattern = hessian_pattern<E>();
   static constexpr auto kColors = color_columns<N>(kPattern);
-  static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
-
   HessianResult res;
   res.resize(N);
 
-  // The value level is the point and is identical on every sweep; only the
-  // seeded tangents move between colours.
-  std::array<T, N> seeds{};
-  std::ranges::transform(x, seeds.begin(),
-                         [](double v) { return T{static_cast<S>(v), S{}}; });
-
-  for (std::size_t c = 0; c < kColors.count; ++c) {
-    for (auto &&[seed, color] : std::views::zip(seeds, kColors.color)) {
-      seed.deriv() = (color == c) ? S{1} : S{};
-    }
-
-    const auto [root, grads] = reverse_sweep<Syms>(expr, seeds);
-
+  color_sweeps(expr, x, kColors, [&](std::size_t c, const T &root,
+                                     const auto &grads) {
+    static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
     if (c == 0) {
       // The value and the first-order adjoints do not depend on the tangent
       // seeding, so any one sweep yields both.
@@ -170,7 +186,7 @@ HessianResult hessian_expr_reverse(const Expr &expr,
         row[target] = static_cast<double>(grad.template get<1>());
       }
     }
-  }
+  });
 
   // Columns come from independent sweeps, so mirrored entries can differ in
   // the last ULP.
@@ -182,11 +198,6 @@ HessianResult hessian_expr_reverse(const Expr &expr,
 // sparse_layout<Expr>() — the same colour-compressed sweeps as above, but
 // scattered straight into compressed storage, so the dense N x N matrix is
 // never materialised and the buffer is O(nnz) rather than O(N^2).
-//
-// Deliberately Eigen-free: it returns a plain value buffer, and
-// eigen_interop.hpp is what maps that buffer onto an Eigen::SparseMatrix.  This
-// keeps every Eigen contact in one header.
-//
 // No symmetrization pass: the layout already names each entry exactly once, and
 // H(i,j) and H(j,i) are separate slots filled from the sweep of their own
 // colour, so there is no pair to average.
@@ -202,13 +213,11 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
                                                   std::span<const double> x) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
-  using S = dual_scalar_t<T>;
   using Syms = detail::expr_symbols_t<E>;
   constexpr std::size_t N = mpl::mp_size(Syms{});
 
   static constexpr auto kPattern = hessian_pattern<E>();
   static constexpr auto kColors = color_columns<N>(kPattern);
-  static constexpr auto kSlots = sparse_slots<E>();
 
   // One cell past the nonzeros: layout_sparse_pattern maps every structural
   // zero onto that last slot, so H[i, j] answers for indices the pattern
@@ -220,23 +229,15 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
   // back as exactly 0.0.
   std::array<double, NNZ + 1> values{};
 
-  std::array<T, N> seeds{};
-  std::ranges::transform(x, seeds.begin(),
-                         [](double v) { return T{static_cast<S>(v), S{}}; });
-
-  for (std::size_t c = 0; c < kColors.count; ++c) {
-    for (auto &&[seed, color] : std::views::zip(seeds, kColors.color)) {
-      seed.deriv() = (color == c) ? S{1} : S{};
-    }
-
-    const auto grads = reverse_sweep<Syms>(expr, seeds).grads;
-
-    for (auto &&[grad, slot] : std::views::zip(grads, kSlots[c])) {
-      if (slot != no_column) {
-        values[slot] = static_cast<double>(grad.template get<1>());
-      }
-    }
-  }
+  color_sweeps(expr, x, kColors,
+               [&](std::size_t c, const T &, const auto &grads) {
+                 static constexpr auto kSlots = sparse_slots<E>();
+                 for (auto &&[grad, slot] : std::views::zip(grads, kSlots[c])) {
+                   if (slot != no_column) {
+                     values[slot] = static_cast<double>(grad.template get<1>());
+                   }
+                 }
+               });
   return values;
 }
 
@@ -295,11 +296,8 @@ reverse_hessian_applies(std::size_t n, std::span<const double> x,
   if (x.size() != n || active.size() != n) {
     return false;
   }
-  for (std::size_t i = 0; i < n; ++i) {
-    if (active[i] != i) {
-      return false;
-    }
-  }
+
+  return std::ranges::equal(active, std::views::iota(std::size_t{0}, n));
   return true;
 }
 

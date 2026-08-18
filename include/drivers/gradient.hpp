@@ -11,6 +11,7 @@
 #include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <ranges>
 #include <span>
 #include <string_view>
@@ -446,23 +447,17 @@ template <std::size_t Order, CExpression Expr, FixedString... Syms,
 
 namespace detail {
 
+// Same fold as binomial() in md/layouts.hpp, which is the idiom this file
+// should match.  The self-test is a plain static_assert rather than the macro
+// dance the hand-rolled loop needed: consteval means it is checked here, once,
+// in every build rather than only in debug ones.
 template <CArithmetic T> consteval T compile_time_factorial(T Order) {
-  T result = 1;
-  for (T i = 1; i <= Order; ++i) {
-    result *= i;
-  }
-  return result;
+  return std::ranges::fold_left(std::views::iota(T{1}, T(Order + 1)), T{1},
+                                std::multiplies{});
 }
-#if !defined(NDEBUG)
-#define DIFF_FACTORIAL_BROKEN "compile_time_factorial is broken"
-// clang-format off
-static_assert(compile_time_factorial(5) == 120, DIFF_FACTORIAL_BROKEN);
-static_assert(compile_time_factorial(7) == 5040, DIFF_FACTORIAL_BROKEN);
-static_assert(compile_time_factorial(4) == 24, DIFF_FACTORIAL_BROKEN);
-static_assert(compile_time_factorial(3) == 6, DIFF_FACTORIAL_BROKEN);
-// clang-format on
-#undef DIFF_FACTORIAL_BROKEN
-#endif
+static_assert(compile_time_factorial(3) == 6);
+static_assert(compile_time_factorial(5) == 120);
+static_assert(compile_time_factorial(7) == 5040);
 
 template <std::size_t Order, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,

@@ -33,9 +33,7 @@ concept CEnergyOf =
 
 namespace detail {
 inline std::vector<std::size_t> iota_indices(std::size_t n) {
-  std::vector<std::size_t> v(n);
-  std::iota(v.begin(), v.end(), std::size_t{0});
-  return v;
+  return std::views::iota(std::size_t{0}, n) | std::ranges::to<std::vector>();
 }
 } // namespace detail
 
