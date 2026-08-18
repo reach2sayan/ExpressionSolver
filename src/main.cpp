@@ -22,11 +22,22 @@
 
 #include <array>
 #include <chrono>
-#include <print>
+#include <format>
+#include <iostream>
 #include <span>
 #include <string>
+#include <utility>
 
 using namespace diff;
+
+// std::println is C++23, but libstdc++ only ships <print> from GCC 14 and the
+// CI image still carries an older one, so including <print> fails there.  This
+// demo has no reason to gate every call site on a library version: <format>
+// (GCC 13) plus a stream does the same job in two lines.
+template <typename... Args>
+static void println(std::format_string<Args...> fmt, Args &&...args) {
+  std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';
+}
 
 namespace {
 
@@ -63,7 +74,7 @@ double bench_ns(F &&f, int reps = 4000, int rounds = 7) {
 
 // value + timing on one line, so the tour reads as "what it costs".
 void row(const std::string &label, double value, double ns) {
-  std::println("  {:<44}{:>12.4f}{:>11.1f} ns", label, value, ns);
+  println("  {:<44}{:>12.4f}{:>11.1f} ns", label, value, ns);
 }
 
 // f(x, y, z) = x*log(x) + y^2*z + exp(x*z), as a plain function ...
@@ -136,8 +147,8 @@ int main() {
   const auto graph = make_graph();
   constexpr auto gplain = make_graph_plain();
 
-  std::println("point (x, y, z) = ({}, {}, {})", p[0], p[1], p[2]);
-  std::println("timings are ns/call, best of 7 rounds x 4000 reps\n");
+  println("point (x, y, z) = ({}, {}, {})", p[0], p[1], p[2]);
+  println("timings are ns/call, best of 7 rounds x 4000 reps\n");
 
   // =====================================================================
   // An expression is an empty type: a Variable stores nothing, so the whole
@@ -149,16 +160,16 @@ int main() {
     auto symbols_only = x * y + x * y * y;
     static_assert(std::is_empty_v<decltype(symbols_only)>,
                   "an expression over stateless leaves stores nothing");
-    std::println("sizeof(x*y + x*y*y)   = {} byte", sizeof(symbols_only));
+    println("sizeof(x*y + x*y*y)   = {} byte", sizeof(symbols_only));
     auto with_constant = x * y + PC(3) * x * y * y;
-    std::println("sizeof(.. + 3*x*y*y)  = {} bytes (one stored constant)\n",
+    println("sizeof(.. + 3*x*y*y)  = {} bytes (one stored constant)\n",
                  sizeof(with_constant));
   }
 
   // =====================================================================
   // VALUE
   // =====================================================================
-  std::println("VALUE");
+  println("VALUE");
   row("lambda  energy(p.data())", energy(p.data()),
       bench_ns([&] { return energy(p.data()); }));
   row("graph   expr.eval(x, y, z)", gplain.eval(p[0], p[1], p[2]),
@@ -173,7 +184,7 @@ int main() {
   // =====================================================================
   // GRADIENT
   // =====================================================================
-  std::println("\nGRADIENT");
+  println("\nGRADIENT");
   row("lambda  gradient(f, xs)           [0]", diff::gradient(lambda, xs)[0],
       bench_ns([&] { return diff::gradient(lambda, xs)[0]; }, 2000));
   row("graph   gradient<Reverse>(expr,p) [0]",
@@ -192,7 +203,7 @@ int main() {
   // The lambda routes allocate a HessianResult; the symbolic route returns a
   // packed md_tensor on the stack, which is most of why it is quicker here.
   // =====================================================================
-  std::println("\nHESSIAN            H(0,2)");
+  println("\nHESSIAN            H(0,2)");
   row("lambda  hessian(f, xs)", diff::hessian(lambda, xs).h(0, 2),
       bench_ns([&] { return diff::hessian(lambda, xs).h(0, 2); }, 1000));
   row("lambda  hessian_vforward(f, xs)",
@@ -206,13 +217,13 @@ int main() {
           const auto H = diff::hessian<DiffMode::Reverse>(graph, p);
           return (H[0, 2]);
         }));
-    std::println("          packed: stores {} cells, not {}", Hs.size(), 3 * 3);
+    println("          packed: stores {} cells, not {}", Hs.size(), 3 * 3);
   }
 
   // =====================================================================
   // HIGHER ORDER — graph only.  There is no lambda entry point above 2nd.
   // =====================================================================
-  std::println("\nHIGHER ORDER  (graph only)");
+  println("\nHIGHER ORDER  (graph only)");
   {
     const auto T = diff::derivative_tensor<3>(gplain, p);
     row("graph   derivative_tensor<3>  d3f/dx dz dz", (T[0, 2, 2]),
@@ -220,16 +231,16 @@ int main() {
           const auto t = diff::derivative_tensor<3>(gplain, p);
           return (t[0, 2, 2]);
         }, 1000));
-    std::println("          same cell, chained spelling t[0][2][2] = {:.4f}",
+    println("          same cell, chained spelling t[0][2][2] = {:.4f}",
                  T[0][2][2]);
-    std::println("          packed: stores {} cells, not {} — symmetric",
+    println("          packed: stores {} cells, not {} — symmetric",
                  T.size(), 3 * 3 * 3);
   }
 
   // =====================================================================
   // VECTOR-VALUED f — Equation holds one expression per output.
   // =====================================================================
-  std::println("\nJACOBIAN  (vector-valued -> Equation)");
+  println("\nJACOBIAN  (vector-valued -> Equation)");
   {
     Variable<double, FixedString{"x"}> x;
     Variable<double, FixedString{"y"}> y;
@@ -259,7 +270,7 @@ int main() {
   // seeded together and the sweep count is set by the problem's bandwidth
   // rather than by n.  That gap widens with n; at n = 16 it is ~10x.
   // =====================================================================
-  std::println("\nSTRUCTURED PROBLEM — 8-variable chain, Hessian");
+  println("\nSTRUCTURED PROBLEM — 8-variable chain, Hessian");
   {
     std::array<double, 8> q{};
     for (std::size_t k = 0; k < q.size(); ++k) {
@@ -280,21 +291,21 @@ int main() {
     constexpr auto pattern = hessian_pattern<G>();
     constexpr auto colours = color_columns<8>(pattern);
 
-    std::println("  lambda  hessian(f, qs)      {:>10.1f} ns   (probes all {} entries)",
+    println("  lambda  hessian(f, qs)      {:>10.1f} ns   (probes all {} entries)",
                  t_lambda, 8 * 9 / 2);
-    std::println("  graph   hessian(expr, qs)   {:>10.1f} ns   ({} colours -> {} sweeps)",
+    println("  graph   hessian(expr, qs)   {:>10.1f} ns   ({} colours -> {} sweeps)",
                  t_graph, colours.count, colours.count);
-    std::println("  ---> graph is {:.1f}x faster, and the gap grows with n",
+    println("  ---> graph is {:.1f}x faster, and the gap grows with n",
                  t_lambda / t_graph);
-    std::println("\n  sparsity read off the TYPE (. = provably always zero):");
+    println("\n  sparsity read off the TYPE (. = provably always zero):");
     for (std::size_t i = 0; i < 8; ++i) {
       std::string line;
       for (std::size_t j = 0; j < 8; ++j) {
         line += pattern[i][j] ? "# " : ". ";
       }
-      std::println("    {}", line);
+      println("    {}", line);
     }
-    std::println("  {} of {} entries can be nonzero", hessian_nnz<G>(), 8 * 8);
+    println("  {} of {} entries can be nonzero", hessian_nnz<G>(), 8 * 8);
   }
 
   // =====================================================================
@@ -308,6 +319,6 @@ int main() {
   }();
   static_assert(ct[0] == 4.0 && ct[1] == 3.0,
                 "the symbolic path must be constant-evaluable");
-  std::println("\nCOMPILE TIME                                        0.0 ns");
-  std::println("  static_assert(gradient<Reverse>(a*b, {{3,4}})[0] == 4.0)  OK");
+  println("\nCOMPILE TIME                                        0.0 ns");
+  println("  static_assert(gradient<Reverse>(a*b, {{3,4}})[0] == 4.0)  OK");
 }

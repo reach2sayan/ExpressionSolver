@@ -353,4 +353,9 @@ struct tuple_element<I, diff::Variable<T, C, F>> {
                  diff::FixedString{label}> {}
 #define PV(x, label)                                                           \
   diff::Variable<std::decay_t<decltype(x)>, diff::FixedString{label}> {}
-#define PC(x) diff::Constant(x)
+// diff::Lit(x), not diff::Constant(x): Constant is an alias template, and
+// deducing template arguments through one is P1814, which Clang did not
+// implement until 19 -- so the alias spelling is a hard error on older Clang
+// while the class template it aliases deduces fine everywhere (see the
+// deduction guide on Lit above).  Same resulting type, Lit<T> == Constant<T>.
+#define PC(x) diff::Lit(x)
