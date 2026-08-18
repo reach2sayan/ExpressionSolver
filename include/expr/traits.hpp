@@ -1,6 +1,11 @@
 #pragma once
 #include "expr/values.hpp"
-#include "util/fixed_string.hpp" // CFixedString
+// CFixedString is used 14 times below, but only ever as a constrained-auto NTTP
+// placeholder (`CFixedString auto symbol`) — a position clangd's include-cleaner
+// does not count as a reference, so it reports this header as unused.  It is
+// not: dropping it would leave this file depending on expr/values.hpp to drag
+// the concept in transitively.
+#include "util/fixed_string.hpp" // IWYU pragma: keep
 #include "util/mpl.hpp"
 #include <type_traits>
 
@@ -195,6 +200,21 @@ template <CExpression T> consteval auto extract_symbols_impl() {
 template <CExpression T>
 using extract_symbols_from_expr_t =
     typename decltype(extract_symbols_impl<T>())::type;
+
+namespace detail {
+
+// The two things every driver asks of an expression: its symbol list in
+// canonical order, and how many symbols that is.  Spelled out, these are
+// `extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>` and an mp_size
+// around it -- a line and a half that appeared in twenty-odd template
+// parameter lists across the drivers and had to agree exactly in each.
+template <CExpression Expr>
+using expr_symbols_t = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+
+template <CExpression Expr>
+inline constexpr std::size_t expr_arity_v = mp::mp_size(expr_symbols_t<Expr>{});
+
+} // namespace detail
 
 template <std::size_t N> struct idx_t {
   static constexpr std::size_t value = N;

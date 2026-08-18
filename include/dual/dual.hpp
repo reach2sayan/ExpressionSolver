@@ -17,20 +17,18 @@ private:
 public:
   constexpr Dual() noexcept = default;
   constexpr explicit Dual(T v, T d = T{}) noexcept : val_(v), deriv_(d) {}
+  constexpr Dual(CArithmetic auto s) noexcept : val_(T(s)), deriv_(T{}) {}
 
-  template <CArithmetic U>
-  constexpr Dual(U s) noexcept : val_(T(s)), deriv_(T{}) {}
-
-  template <Numeric O> constexpr Dual &operator+=(const O &o) noexcept {
+  constexpr Dual &operator+=(const Numeric auto &o) noexcept {
     return *this = *this + o;
   }
-  template <Numeric O> constexpr Dual &operator-=(const O &o) noexcept {
+  constexpr Dual &operator-=(const Numeric auto &o) noexcept {
     return *this = *this - o;
   }
-  template <Numeric O> constexpr Dual &operator*=(const O &o) noexcept {
+  constexpr Dual &operator*=(const Numeric auto &o) noexcept {
     return *this = *this * o;
   }
-  template <Numeric O> constexpr Dual &operator/=(const O &o) noexcept {
+  constexpr Dual &operator/=(const Numeric auto &o) noexcept {
     return *this = *this / o;
   }
 
@@ -259,7 +257,17 @@ constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
 }
 
 // ---- binary operators (eager) ---------------------------------------------
-#define DIFF_DUAL_BINOP(OP, COMB)                                              \
+// All three shapes of each operator in one place: (Dual, Dual), (Dual, scalar)
+// and (scalar, Dual).  LEFT spells the last one, which is the only shape that
+// differs between operators -- + and * commute, so they hand the dual over
+// first and reuse the (Dual, scalar) kernel; - and / do not, so they take the
+// reversed kernel instead.
+//
+// The scalar shapes are separate kernels rather than a promotion of the scalar
+// to a zero-derivative Dual, and deliberately so: promotion leaves an `ad + 0`
+// that IEEE will not let the compiler fold (-0.0 + 0.0 is +0.0), which at
+// Dual<VectorDual<32>> turns a one-instruction add into thirteen.
+#define DIFF_DUAL_BINOP(OP, COMB, LEFT)                                        \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
     return COMB(a, b);                                                         \
@@ -267,31 +275,16 @@ constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
   template <DualLike A, ConstOperand<A> C>                                     \
   constexpr auto operator OP(A &&a, C &&s) noexcept {                          \
     return COMB(a, s);                                                         \
+  }                                                                            \
+  template <DualLike A, ConstOperand<A> C>                                     \
+  constexpr auto operator OP(C &&s, A &&a) noexcept {                          \
+    return LEFT;                                                               \
   }
-DIFF_DUAL_BINOP(+, dual_add)
-DIFF_DUAL_BINOP(-, dual_sub)
-DIFF_DUAL_BINOP(*, dual_mul)
-DIFF_DUAL_BINOP(/, dual_div)
+DIFF_DUAL_BINOP(+, dual_add, dual_add(a, s))
+DIFF_DUAL_BINOP(-, dual_sub, dual_sub(s, a))
+DIFF_DUAL_BINOP(*, dual_mul, dual_mul(a, s))
+DIFF_DUAL_BINOP(/, dual_div, dual_div(s, a))
 #undef DIFF_DUAL_BINOP
-
-// Scalar-on-the-left: + and * commute (pass the dual first); - and / use the
-// reversed (C, Dual) overload (pass the scalar first).
-template <DualLike A, ConstOperand<A> C>
-constexpr auto operator+(C &&s, A &&a) noexcept {
-  return dual_add(a, s);
-}
-template <DualLike A, ConstOperand<A> C>
-constexpr auto operator*(C &&s, A &&a) noexcept {
-  return dual_mul(a, s);
-}
-template <DualLike A, ConstOperand<A> C>
-constexpr auto operator-(C &&s, A &&a) noexcept {
-  return dual_sub(s, a);
-}
-template <DualLike A, ConstOperand<A> C>
-constexpr auto operator/(C &&s, A &&a) noexcept {
-  return dual_div(s, a);
-}
 
 // ---- unary minus + math functions (eager) ---------------------------------
 template <DualLike A> constexpr auto operator-(A &&a) noexcept {
@@ -299,11 +292,6 @@ template <DualLike A> constexpr auto operator-(A &&a) noexcept {
   using DT = std::remove_cvref_t<A>;
   return DT{-v, -d};
 }
-
-#define DIFF_DUAL_UNARY(NAME)                                                  \
-  template <DualLike A> constexpr auto NAME(A &&a) noexcept {                  \
-    return NAME##_combine{}(a);                                                \
-  }
 
 // Chain rule for a unary math node.  When the descriptor can express its
 // derivative in terms of f(u), the primal is computed once and reused;
@@ -320,24 +308,6 @@ template <template <typename> class Fn> struct unary_dual_combine {
     }
   }
 };
-using sin_combine = unary_dual_combine<detail::SineOpFn>;
-using cos_combine = unary_dual_combine<detail::CosineOpFn>;
-using exp_combine = unary_dual_combine<detail::ExpOpFn>;
-using tan_combine = unary_dual_combine<detail::TanOpFn>;
-using log_combine = unary_dual_combine<detail::LogOpFn>;
-using log10_combine = unary_dual_combine<detail::Log10OpFn>;
-using sqrt_combine = unary_dual_combine<detail::SqrtOpFn>;
-using cbrt_combine = unary_dual_combine<detail::CbrtOpFn>;
-using asin_combine = unary_dual_combine<detail::AsinOpFn>;
-using acos_combine = unary_dual_combine<detail::AcosOpFn>;
-using atan_combine = unary_dual_combine<detail::AtanOpFn>;
-using sinh_combine = unary_dual_combine<detail::SinhOpFn>;
-using cosh_combine = unary_dual_combine<detail::CoshOpFn>;
-using tanh_combine = unary_dual_combine<detail::TanhOpFn>;
-using asinh_combine = unary_dual_combine<detail::AsinhOpFn>;
-using acosh_combine = unary_dual_combine<detail::AcoshOpFn>;
-using atanh_combine = unary_dual_combine<detail::AtanhOpFn>;
-using erf_combine = unary_dual_combine<detail::ErfOpFn>;
 // abs is the one unary that is not a unary_dual_combine: its derivative is a
 // sign, not a function of the primal, and it is only piecewise differentiable —
 // the derivative at 0 is taken as 0 rather than left undefined.
@@ -351,26 +321,19 @@ struct abs_combine {
     return DT{abs(v), sign * d};
   }
 };
-DIFF_DUAL_UNARY(sin)
-DIFF_DUAL_UNARY(cos)
-DIFF_DUAL_UNARY(exp)
-DIFF_DUAL_UNARY(tan)
-DIFF_DUAL_UNARY(log)
-DIFF_DUAL_UNARY(log10)
-DIFF_DUAL_UNARY(sqrt)
-DIFF_DUAL_UNARY(cbrt)
-DIFF_DUAL_UNARY(abs)
-DIFF_DUAL_UNARY(asin)
-DIFF_DUAL_UNARY(acos)
-DIFF_DUAL_UNARY(atan)
-DIFF_DUAL_UNARY(sinh)
-DIFF_DUAL_UNARY(cosh)
-DIFF_DUAL_UNARY(tanh)
-DIFF_DUAL_UNARY(asinh)
-DIFF_DUAL_UNARY(acosh)
-DIFF_DUAL_UNARY(atanh)
-DIFF_DUAL_UNARY(erf)
+// One chain-rule overload per unary math function, generated from the registry
+// in expr/unary_math.hpp: the descriptor is mechanically detail::<Op>Fn, so the
+// name list is not repeated here.
+#define DIFF_DUAL_UNARY(FN, OP, LABEL)                                         \
+  template <DualLike A> constexpr auto FN(A &&a) noexcept {                    \
+    return unary_dual_combine<detail::OP##Fn>{}(a);                            \
+  }
+DIFF_UNARY_MATH_TABLE(DIFF_DUAL_UNARY)
 #undef DIFF_DUAL_UNARY
+
+template <DualLike A> constexpr auto abs(A &&a) noexcept {
+  return abs_combine{}(a);
+}
 
 // ---- comparisons (operate on materialized values) -------------------------
 template <typename A, typename B>
@@ -470,11 +433,6 @@ DIFF_PROMOTE_BINARY(min)
 DIFF_PROMOTE_BINARY(atan2)
 DIFF_PROMOTE_BINARY(hypot)
 #undef DIFF_PROMOTE_BINARY
-
-template <Numeric T> constexpr bool isfinite(const Dual<T> &d) noexcept {
-  using std::isfinite;
-  return isfinite(val(d));
-}
 
 static_assert(Numeric<Dual<double>>);
 static_assert(Numeric<Dual<float>>);

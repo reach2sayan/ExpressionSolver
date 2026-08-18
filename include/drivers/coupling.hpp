@@ -117,10 +117,9 @@ consteval coupling_info<N> coupling_of() noexcept {
 // The Hessian sparsity pattern of `Expr`: rows[i][j] means d2f/dxi dxj may be
 // nonzero.  A conservative superset of the true pattern.
 template <CExpression Expr,
-          std::size_t N = mpl::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
 consteval coupling_rows<N> hessian_pattern() noexcept {
-  using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using Syms = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   return detail::coupling_of<std::remove_cvref_t<Expr>, Syms, N>().rows;
 }
 
@@ -211,8 +210,7 @@ scatter_targets(const coupling_rows<N> &rows,
 // ===========================================================================
 
 template <CExpression Expr,
-          std::size_t N = mpl::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
 consteval std::size_t hessian_nnz() noexcept {
   return std::ranges::fold_left(
       hessian_pattern_v<Expr>, 0uz,
@@ -232,8 +230,7 @@ template <std::size_t N, std::size_t NNZ> struct sparse_layout_t {
 // compressed form Eigen expects.  The pattern is symmetric, so reading it by
 // column or by row gives the same structure.
 template <CExpression Expr,
-          std::size_t N = mpl::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{}),
+          std::size_t N = detail::expr_arity_v<Expr>,
           std::size_t NNZ = hessian_nnz<Expr>()>
 consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
   constexpr auto &pattern = hessian_pattern_v<Expr>;
@@ -267,8 +264,7 @@ consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
 // the sparse counterpart of scatter_targets, so the sweep writes straight into
 // compressed storage and the dense N x N matrix is never materialised.
 template <CExpression Expr,
-          std::size_t N = mpl::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
 consteval scatter_map<N> sparse_slots() noexcept {
   constexpr auto coloring = color_columns<N>(hessian_pattern_v<Expr>);
   constexpr auto layout = sparse_layout<Expr>();
@@ -300,8 +296,7 @@ consteval scatter_map<N> sparse_slots() noexcept {
 // nonzero.  It costs uniqueness — hence is_always_unique() == false.
 // ===========================================================================
 template <CExpression Expr,
-          std::size_t N = mpl::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{}),
+          std::size_t N = detail::expr_arity_v<Expr>,
           std::size_t NNZ = hessian_nnz<Expr>()>
 consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {
   constexpr auto layout = sparse_layout<Expr>();
@@ -322,7 +317,7 @@ consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {
 template <CExpression Expr> struct layout_sparse_pattern {
   using expr_type = std::remove_cvref_t<Expr>;
   static constexpr std::size_t kN =
-      mpl::mp_size(extract_symbols_from_expr_t<expr_type>{});
+      detail::expr_arity_v<expr_type>;
   static constexpr std::size_t kNnz = hessian_nnz<expr_type>();
   static constexpr auto kTable = sparse_slot_table<expr_type>();
 

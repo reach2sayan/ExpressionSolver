@@ -30,66 +30,57 @@ consteval std::size_t find_index_of_symbol() noexcept {
   return diff::mpl::mp_find<S>(SymList{});
 }
 
-template <CExpression LHS, CExpression RHS>
-  requires CompatibleValueTypes<LHS, RHS>
-constexpr auto operator+(const LHS &a, const RHS &b) noexcept {
-  using value_type = typename LHS::value_type;
-  if constexpr (CLit<LHS> && CLit<RHS>) {
-    return Lit<value_type, static_cast<value_type>(
-                               std::remove_cvref_t<LHS>::value +
-                               std::remove_cvref_t<RHS>::value)>{};
-  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
-    return Constant<value_type>{a.get() + b.get()};
-  } else {
-    return Expression<SumOp<value_type>, LHS, RHS>{a, b};
-  }
+// Promote a bare scalar `s` into the expression's value_type as a
+// zero-derivative constant.  ConstantEmbedder recurses through every Dual<>
+// nesting level, so this is correct even when VT is a multi-level dual (e.g.
+// Dual<Dual<double>>); for non-dual VT it is just a cast.
+template <Numeric VT, CArithmetic S>
+constexpr Constant<VT> promote_scalar(S s) noexcept {
+  return Constant<VT>{
+      ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
 }
 
-template <CExpression LHS, CExpression RHS>
-  requires CompatibleValueTypes<LHS, RHS>
-constexpr auto operator*(const LHS &a, const RHS &b) noexcept {
-  using value_type = typename LHS::value_type;
-  if constexpr (CLit<LHS> && CLit<RHS>) {
-    return Lit<value_type, static_cast<value_type>(
-                               std::remove_cvref_t<LHS>::value *
-                               std::remove_cvref_t<RHS>::value)>{};
-  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
-    return Constant<value_type>{a.get() * b.get()};
-  } else {
-    return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};
+// The four arithmetic operators, each in its three shapes: expression OP
+// expression (with the constant-folding ladder), and the two scalar-promoted
+// forms.  Only the node branch differs between them, so that is the argument --
+// everything else was four, then eight, copies of the same text.
+//
+// Folding is what keeps a literal-only subtree from ever becoming a node: two
+// Lits fold to a Lit at compile time, two Constants to a Constant.
+#define DIFF_EXPR_BINOP(OP, ...)                                               \
+  template <CExpression LHS, CExpression RHS>                                  \
+    requires CompatibleValueTypes<LHS, RHS>                                    \
+  constexpr auto operator OP(const LHS &a, const RHS &b) noexcept {            \
+    using value_type = typename LHS::value_type;                               \
+    if constexpr (CLit<LHS> && CLit<RHS>) {                                    \
+      return Lit<value_type,                                                   \
+                 static_cast<value_type>(std::remove_cvref_t<LHS>::value OP    \
+                                         std::remove_cvref_t<RHS>::value)>{};  \
+    } else if constexpr (CConstant<LHS> && CConstant<RHS>) {                   \
+      return Constant<value_type>{a.get() OP b.get()};                         \
+    } else {                                                                   \
+      __VA_ARGS__                                                              \
+    }                                                                          \
+  }                                                                            \
+  template <CArithmetic S, CExpression RHS>                                    \
+  constexpr auto operator OP(S s, const RHS &b) noexcept {                     \
+    return promote_scalar<typename RHS::value_type>(s) OP b;                   \
+  }                                                                            \
+  template <CExpression LHS, CArithmetic S>                                    \
+  constexpr auto operator OP(const LHS &a, S s) noexcept {                     \
+    return a OP promote_scalar<typename LHS::value_type>(s);                   \
   }
-}
 
-template <CExpression LHS, CExpression RHS>
-  requires CompatibleValueTypes<LHS, RHS>
-constexpr auto operator-(const LHS &a, const RHS &b) noexcept {
-  using value_type = typename LHS::value_type;
-  if constexpr (CLit<LHS> && CLit<RHS>) {
-    return Lit<value_type, static_cast<value_type>(
-                               std::remove_cvref_t<LHS>::value -
-                               std::remove_cvref_t<RHS>::value)>{};
-  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
-    return Constant<value_type>{a.get() - b.get()};
-  } else {
-    auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
-    return Expression<SumOp<value_type>, LHS, decltype(neg)>{a, std::move(neg)};
-  }
-}
-
-template <CExpression LHS, CExpression RHS>
-  requires CompatibleValueTypes<LHS, RHS>
-constexpr auto operator/(const LHS &a, const RHS &b) noexcept {
-  using value_type = typename LHS::value_type;
-  if constexpr (CLit<LHS> && CLit<RHS>) {
-    return Lit<value_type, static_cast<value_type>(
-                               std::remove_cvref_t<LHS>::value /
-                               std::remove_cvref_t<RHS>::value)>{};
-  } else if constexpr (CConstant<LHS> && CConstant<RHS>) {
-    return Constant<value_type>{a.get() / b.get()};
-  } else {
-    return Expression<DivideOp<value_type>, LHS, RHS>{a, b};
-  }
-}
+DIFF_EXPR_BINOP(+, return Expression<SumOp<value_type>, LHS, RHS>{a, b};)
+DIFF_EXPR_BINOP(*, return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};)
+DIFF_EXPR_BINOP(/, return Expression<DivideOp<value_type>, LHS, RHS>{a, b};)
+// Subtraction has no node of its own: a - b is a + (-b), which is what keeps
+// the reverse sweep down to one adjoint rule instead of two.
+DIFF_EXPR_BINOP(-,
+                auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
+                return Expression<SumOp<value_type>, LHS, decltype(neg)>{
+                    a, std::move(neg)};)
+#undef DIFF_EXPR_BINOP
 
 template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
@@ -101,150 +92,17 @@ template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
   }
 }
 
-template <CExpression Expr> constexpr auto sin(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<SineOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto cos(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<CosineOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto exp(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<ExpOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto tan(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<TanOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto log(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<LogOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto sqrt(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<SqrtOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto abs(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<AbsOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto asin(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<AsinOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto acos(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<AcosOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto atan(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<AtanOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto sinh(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<SinhOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto cosh(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<CoshOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto tanh(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<TanhOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto log10(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<Log10Op<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto cbrt(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<CbrtOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto asinh(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<AsinhOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto acosh(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<AcoshOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto atanh(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<AtanhOp<value_type>, Expr>{a};
-}
-
-template <CExpression Expr> constexpr auto erf(const Expr &a) noexcept {
-  using value_type = typename Expr::value_type;
-  return MonoExpression<ErfOp<value_type>, Expr>{a};
-}
-
-// Promote a bare scalar `s` into the expression's value_type as a
-// zero-derivative constant.  ConstantEmbedder recurses through every Dual<>
-// nesting level, so this is correct even when VT is a multi-level dual (e.g.
-// Dual<Dual<double>>); for non-dual VT it is just a cast.
-template <Numeric VT, CArithmetic S>
-constexpr Constant<VT> promote_scalar(S s) noexcept {
-  return Constant<VT>{
-      ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
-}
-
-template <CArithmetic S, CExpression RHS>
-constexpr auto operator+(S s, const RHS &b) noexcept {
-  return promote_scalar<typename RHS::value_type>(s) + b;
-}
-
-template <CArithmetic S, CExpression RHS>
-constexpr auto operator*(S s, const RHS &b) noexcept {
-  return promote_scalar<typename RHS::value_type>(s) * b;
-}
-
-template <CArithmetic S, CExpression RHS>
-constexpr auto operator-(S s, const RHS &b) noexcept {
-  return promote_scalar<typename RHS::value_type>(s) - b;
-}
-
-template <CArithmetic S, CExpression RHS>
-constexpr auto operator/(S s, const RHS &b) noexcept {
-  return promote_scalar<typename RHS::value_type>(s) / b;
-}
-
-template <CExpression LHS, CArithmetic S>
-constexpr auto operator+(const LHS &a, S s) noexcept {
-  return a + promote_scalar<typename LHS::value_type>(s);
-}
-
-template <CExpression LHS, CArithmetic S>
-constexpr auto operator*(const LHS &a, S s) noexcept {
-  return a * promote_scalar<typename LHS::value_type>(s);
-}
-
-template <CExpression LHS, CArithmetic S>
-constexpr auto operator-(const LHS &a, S s) noexcept {
-  return a - promote_scalar<typename LHS::value_type>(s);
-}
-
-template <CExpression LHS, CArithmetic S>
-constexpr auto operator/(const LHS &a, S s) noexcept {
-  return a / promote_scalar<typename LHS::value_type>(s);
-}
+// One expression factory per unary math function, generated from the registry
+// in expr/unary_math.hpp so the name list lives in exactly one place.
+#define DIFF_EXPR_UNFN(FN, OP, LABEL)                                          \
+  template <CExpression Expr> constexpr auto FN(const Expr &a) noexcept {      \
+    return MonoExpression<OP<typename Expr::value_type>, Expr>{a};             \
+  }
+DIFF_UNARY_MATH_TABLE(DIFF_EXPR_UNFN)
+// abs is not in the registry (no descriptor -- its derivative is a sign), so
+// its factory is spelled out; AbsOp itself is likewise hand-written.
+DIFF_EXPR_UNFN(abs, AbsOp, "abs")
+#undef DIFF_EXPR_UNFN
 
 // Function-style binary ops (pow, atan2, hypot, max, min): an all-expression
 // form plus scalar-promotion overloads so either operand may be a bare scalar.
@@ -318,13 +176,6 @@ public:
     } else {
       return Constant<T>{T{0}};
     }
-  }
-
-  // Forward sweep leaf: a constant contributes value with zero tangent.
-  template <FixedString, CSymbolList, std::size_t N>
-  [[nodiscard]] constexpr auto
-  tangent_seeded(const std::array<T, N> &) const noexcept {
-    return Tangent<T>{get(), T{}};
   }
 
   // Reverse sweep leaf: no symbol underneath, so nothing to accumulate into.
@@ -405,8 +256,7 @@ template <Numeric T> Lit(T) -> Lit<T>;
 // `Frozen` marks a variable that has been held constant for the purpose of
 // partial differentiation: it still reads its value from the seed array like
 // any other symbol, but its derivative is zero.
-template <Numeric T, CFixedString auto symbol, bool Frozen>
-class Variable {
+template <Numeric T, CFixedString auto symbol, bool Frozen> class Variable {
   friend std::ostream &operator<<(std::ostream &out,
                                   const Variable<T, symbol, Frozen> &) {
     if constexpr (PRINT_VARIABLE_LABEL) {
@@ -434,15 +284,6 @@ public:
     }
   }
 
-  // Forward sweep leaf: tangent is 1 if this is the seeded variable, else 0.
-  template <FixedString Seed, CSymbolList Syms, std::size_t N>
-  [[nodiscard]] constexpr auto
-  tangent_seeded(const std::array<T, N> &vals) const noexcept {
-    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-    return Tangent<T>{vals[idx],
-                      (!Frozen && symbol == Seed) ? T{1} : T{}};
-  }
-
   template <std::size_t Base = 0>
   constexpr void backward(const auto &syms, T adj, auto &grads,
                           const auto &) const noexcept {
@@ -454,12 +295,23 @@ public:
   }
 
   // Seeded sweep leaf: read this symbol's slot, whatever the seed type is.
+  //
+  // A frozen symbol is a constant -- same value lookup, zero derivative -- so
+  // it takes the seed's value and drops its derivative slots, exactly as
+  // Constant::eval_seeded embeds a bare scalar.  Without this the three engines
+  // disagree: derivative() and backward() both guard on Frozen, so only this
+  // one would have reported a nonzero derivative for a variable that was
+  // explicitly frozen.
   template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded(const std::array<U, N> &vals) const noexcept {
     constexpr auto idx = find_index_of_symbol<symbol, Syms>();
     static_assert(idx < N, "eval: no value supplied for this symbol");
-    return vals[idx];
+    if constexpr (Frozen) {
+      return ConstantEmbedder<U>::embed(get_real_part<dual_depth_v<U>>(vals[idx]));
+    } else {
+      return vals[idx];
+    }
   }
 
   // Leaves are expressions too: same eval(...) surface as ExpressionOps.
@@ -470,14 +322,14 @@ public:
   }
 
   template <FixedString Seed>
-  [[nodiscard]] constexpr auto eval_with_tangent(const CEvalArg auto &...args) const {
+  [[nodiscard]] constexpr auto
+  eval_with_tangent(const CEvalArg auto &...args) const {
     return detail::tangent_dispatch<Seed>(*this, args...);
   }
 };
 
 #define DEFINE_CONST_UDL(type, suffix)                                         \
-  consteval diff::Constant<type> operator""_##suffix(                          \
-      unsigned long long val) {                                                \
+  consteval diff::Constant<type> operator""_##suffix(unsigned long long val) { \
     return diff::Constant<type>{static_cast<type>(val)};                       \
   }                                                                            \
   consteval diff::Constant<type> operator""_##suffix(long double val) {        \

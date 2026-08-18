@@ -150,12 +150,6 @@ template <Numeric T> struct EvalResult {
   constexpr operator T() const noexcept { return value; }
 };
 
-// Result of a fused forward-mode sweep (eval_with_tangent)
-template <Numeric T> struct Tangent {
-  T value;
-  T deriv;
-};
-
 template <Numeric T> inline constexpr bool is_expression_type_v<EvalResult<T>> =
     true;
 
@@ -239,21 +233,6 @@ public:
   [[nodiscard]] constexpr auto
   eval_with_tangent(const CEvalArg auto &...args) const {
     return detail::tangent_dispatch<Seed>(self(), args...);
-  }
-
-  // Fused forward-mode sweep: one recursion that carries {value, tangent}
-  // upward through the tree, seeded on the variable named `Seed`.  Walks the
-  // existing tree structurally and hands each Op the already-computed child
-  // Tangents via Op::forward.
-  template <FixedString Seed, CSymbolList Syms, std::size_t N>
-  [[nodiscard]] constexpr auto
-  tangent_seeded(const std::array<value_type, N> &vals) const noexcept {
-    return std::apply(
-        [&](const auto &...e) noexcept {
-          return Op::forward(
-              e.template tangent_seeded<Seed, Syms>(vals)...);
-        },
-        self().expressions());
   }
 
   // The one seeded sweep.  The seed type U is deduced from the point, so the

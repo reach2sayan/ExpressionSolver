@@ -2880,6 +2880,36 @@ TEST(EigenInterop, SparseHessianIsSymmetricAndCompressed) {
   EXPECT_NEAR((full - full.transpose()).cwiseAbs().maxCoeff(), 0.0, 1e-9);
 }
 
+// The degenerate end of the storage range.  A linear expression has a
+// structurally empty Hessian, so nnz is 0 and the buffer collapses to nothing
+// but the sink cell — the one place an off-by-one in the sizing would show up
+// as a zero-length array rather than a wrong answer.
+TEST(EigenInterop, SparseHessianOfALinearExpressionIsEmpty) {
+  using D = diff::Dual<double>;
+  using diff::FixedString;
+  Variable<D, FixedString{"x00"}> x;
+  Variable<D, FixedString{"x01"}> y;
+  auto expr = 3.0 * x + 4.0 * y - x;
+
+  const std::array<double, 2> pt{0.7, 1.3};
+  const std::span<const double> xs{pt.data(), pt.size()};
+
+  const auto sparse = diff::sparse_hessian(expr, xs);
+  static_assert(decltype(sparse)::nnz == 0,
+                "a linear expression couples nothing, so it stores nothing");
+  EXPECT_EQ(sparse.values().size(), 0u);
+  EXPECT_EQ(sparse.matrix().nonZeros(), 0);
+
+  // Every entry is a structural zero, and each one still reads back as exactly
+  // 0.0 through the shared sink cell rather than as garbage.
+  for (std::size_t i = 0; i < 2; ++i) {
+    for (std::size_t j = 0; j < 2; ++j) {
+      EXPECT_FALSE(decltype(sparse)::structural(i, j));
+      EXPECT_DOUBLE_EQ((sparse[i, j]), 0.0);
+    }
+  }
+}
+
 #endif // DIFF_USE_EIGEN
 
 // A plain arithmetic energy lambda carries no tag and is not a CExpression, so
@@ -3191,13 +3221,15 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
 }
 
 // ===========================================================================
-// Fused forward tangent sweep (eval_with_tangent / Op::forward)
+// Forward tangent sweep (eval_with_tangent)
 //
-// eval_with_tangent<"s"> walks the *existing* expression tree once, carrying a
-// {value, tangent} pair upward — no symbolic derivative tree (derivative()) and
-// no value_type substitution (the Dual<T> path).  Every test below cross-checks
-// it against one of those two independent implementations, so a mistranscribed
-// forward rule in operations.hpp cannot pass silently.
+// eval_with_tangent<"s"> walks the *existing* expression tree once, seeded with
+// Dual<T>, and returns a Dual whose .value()/.deriv() are the value and the
+// tangent.  It is the ordinary eval_seeded sweep -- there is no separate
+// forward engine -- so what these tests pin is the seeding and the Dual
+// arithmetic, cross-checked against the two implementations that remain
+// genuinely independent of it: the reverse sweep (backward()/adjoints()) and
+// the symbolic derivative tree (derivative()).
 // ===========================================================================
 
 // Single-variable expression: value must match eval(), tangent must match the
@@ -3210,8 +3242,8 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
     const auto e_ = (expr_);                                                   \
     const std::array<double, 1> pt_{xv_};                                      \
     const auto t_ = e_.template eval_with_tangent<"x">(xv_);                   \
-    EXPECT_DOUBLE_EQ(t_.value, e_.eval(xv_));                                  \
-    EXPECT_NEAR(t_.deriv, reverse_mode_grad(e_, pt_)[0], 1e-12);               \
+    EXPECT_DOUBLE_EQ(t_.value(), e_.eval(xv_));                                  \
+    EXPECT_NEAR(t_.deriv(), reverse_mode_grad(e_, pt_)[0], 1e-12);               \
   } while (0)
 
 TEST(ForwardTangentSweep, LeafSeeding) {
@@ -3220,20 +3252,20 @@ TEST(ForwardTangentSweep, LeafSeeding) {
 
   // The seeded variable carries tangent 1 ...
   const auto tx = x.eval_with_tangent<"x">(2.0);
-  EXPECT_DOUBLE_EQ(tx.value, 2.0);
-  EXPECT_DOUBLE_EQ(tx.deriv, 1.0);
+  EXPECT_DOUBLE_EQ(tx.value(), 2.0);
+  EXPECT_DOUBLE_EQ(tx.deriv(), 1.0);
 
   // ... every other variable carries 0, including one whose name differs only
   // in length (FixedString comparison across sizes).
   const auto ty = y.eval_with_tangent<"x">(3.0);
-  EXPECT_DOUBLE_EQ(ty.value, 3.0);
-  EXPECT_DOUBLE_EQ(ty.deriv, 0.0);
-  EXPECT_DOUBLE_EQ(x.eval_with_tangent<"xx">(2.0).deriv, 0.0);
+  EXPECT_DOUBLE_EQ(ty.value(), 3.0);
+  EXPECT_DOUBLE_EQ(ty.deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(x.eval_with_tangent<"xx">(2.0).deriv(), 0.0);
 
   // Constants are always zero-tangent.
   const auto tc = PC(5.0).eval_with_tangent<"x">();  // no symbols
-  EXPECT_DOUBLE_EQ(tc.value, 5.0);
-  EXPECT_DOUBLE_EQ(tc.deriv, 0.0);
+  EXPECT_DOUBLE_EQ(tc.value(), 5.0);
+  EXPECT_DOUBLE_EQ(tc.deriv(), 0.0);
 }
 
 TEST(ForwardTangentSweep, ArithmeticRules) {
@@ -3249,7 +3281,7 @@ TEST(ForwardTangentSweep, ArithmeticRules) {
   // third independent path (derivative() is a total derivative, so this is only
   // meaningful for a single-variable expression).
   const auto e = (x * x + 1.0) / (x + 2.0);
-  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"x">(x0).deriv, e.derivative().eval(x0));
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"x">(x0).deriv(), e.derivative().eval(x0));
 }
 
 TEST(ForwardTangentSweep, UnaryMathRules) {
@@ -3275,8 +3307,8 @@ TEST(ForwardTangentSweep, UnaryMathRules) {
   EXPECT_TANGENT_MATCHES_REVERSE(erf(PV(0.5, "x")), 0.5);
 
   // abs() on both sides of the kink: sign(u)·u'.
-  EXPECT_DOUBLE_EQ(abs(PV(2.0, "x")).eval_with_tangent<"x">(2.0).deriv, 1.0);
-  EXPECT_DOUBLE_EQ(abs(PV(-2.0, "x")).eval_with_tangent<"x">(-2.0).deriv, -1.0);
+  EXPECT_DOUBLE_EQ(abs(PV(2.0, "x")).eval_with_tangent<"x">(2.0).deriv(), 1.0);
+  EXPECT_DOUBLE_EQ(abs(PV(-2.0, "x")).eval_with_tangent<"x">(-2.0).deriv(), -1.0);
 
   // Composite argument: the chain rule must fire at every level.
   EXPECT_TANGENT_MATCHES_REVERSE(log(sin(PV(0.9, "x")) + 2.0), 0.9);
@@ -3289,10 +3321,10 @@ TEST(ForwardTangentSweep, BinaryMathRules) {
 
   // Symbols sort alphabetically, so gradient slot 0 is x and slot 1 is y.
   const auto check = [x0, y0](const auto &e, double dx, double dy) {
-    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">(x0, y0).value,
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">(x0, y0).value(),
                      e.eval(x0, y0));
-    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">(x0, y0).deriv, dx);
-    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"y">(x0, y0).deriv, dy);
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">(x0, y0).deriv(), dx);
+    EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"y">(x0, y0).deriv(), dy);
   };
 
   // hypot: d/dx = x/h, d/dy = y/h.
@@ -3320,13 +3352,13 @@ TEST(ForwardTangentSweep, MultiVariableMatchesReverseMode) {
   const auto tx = e.eval_with_tangent<"x">(0.8, 1.3);
   const auto ty = e.eval_with_tangent<"y">(0.8, 1.3);
 
-  EXPECT_DOUBLE_EQ(tx.value, e.eval(0.8, 1.3));
-  EXPECT_DOUBLE_EQ(ty.value, e.eval(0.8, 1.3));
-  EXPECT_NEAR(tx.deriv, g[0], 1e-12);
-  EXPECT_NEAR(ty.deriv, g[1], 1e-12);
+  EXPECT_DOUBLE_EQ(tx.value(), e.eval(0.8, 1.3));
+  EXPECT_DOUBLE_EQ(ty.value(), e.eval(0.8, 1.3));
+  EXPECT_NEAR(tx.deriv(), g[0], 1e-12);
+  EXPECT_NEAR(ty.deriv(), g[1], 1e-12);
 
   // A symbol not present in the tree differentiates to zero everywhere.
-  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"z">(0.8, 1.3).deriv, 0.0);
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"z">(0.8, 1.3).deriv(), 0.0);
 }
 
 TEST(ForwardTangentSweep, IsConstexpr) {
@@ -3335,9 +3367,30 @@ TEST(ForwardTangentSweep, IsConstexpr) {
   constexpr auto x = PV(2.0, "x");
   constexpr auto e = x * x + 3.0 * x;
   constexpr auto t = e.eval_with_tangent<"x">(2.0);
-  static_assert(t.value == 10.0, "x² + 3x at x = 2");
-  static_assert(t.deriv == 7.0, "2x + 3 at x = 2");
-  EXPECT_DOUBLE_EQ(t.deriv, 7.0);
+  static_assert(t.value() == 10.0, "x² + 3x at x = 2");
+  static_assert(t.deriv() == 7.0, "2x + 3 at x = 2");
+  EXPECT_DOUBLE_EQ(t.deriv(), 7.0);
+}
+
+// A frozen symbol is a constant: same value lookup, zero derivative.  All three
+// engines have to say so — the seeded sweep that the drivers use, the forward
+// tangent sweep, and the symbolic derivative tree.  Before eval_seeded grew its
+// Frozen guard the first of the three reported the *unfrozen* derivative, so
+// derivative_tensor and eval_with_tangent disagreed on the same expression.
+TEST(FrozenVariable, EveryEngineSeesZeroDerivative) {
+  auto e = make_const_variable<diff::FixedString{"x"}>(PV(2.0, "x") *
+                                                       PV(3.0, "y"));
+  const std::array<double, 2> pt{2.0, 3.0};
+
+  // Value is untouched by freezing.
+  EXPECT_DOUBLE_EQ(e.eval(2.0, 3.0), 6.0);
+
+  const auto g = diff::derivative_tensor<1>(e, pt);
+  EXPECT_DOUBLE_EQ(g.data()[0], 0.0); // d/dx — frozen
+  EXPECT_DOUBLE_EQ(g.data()[1], 2.0); // d/dy — still live
+
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"x">(2.0, 3.0).deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(e.eval_with_tangent<"y">(2.0, 3.0).deriv(), 2.0);
 }
 
 #undef EXPECT_TANGENT_MATCHES_REVERSE
@@ -3556,6 +3609,70 @@ TEST(PositionalEvalTest, IsConstexpr) {
   static_assert(eval(e, 2.0, 3.0) == 10.0, "variadic positional eval");
   static_assert(eval(e, std::array{2.0, 3.0}) == 10.0, "range positional eval");
   EXPECT_DOUBLE_EQ(eval(e, 2.0, 3.0), 10.0);
+}
+
+// derivative_tensor<1> takes the VectorDual<N> fast path at N >= 3, and
+// VectorDual used to implement only 6 of the 19 unary math functions — so an
+// expression that compiled at 2 variables failed to compile at 3, for
+// log10/cbrt/abs/asin/acos/atan/sinh/cosh/tanh/asinh/acosh/atanh/erf.  Now the
+// lane loops are generated from the registry in unary_math.hpp, so the two
+// paths support the same set by construction.  This test is mostly a
+// compile-time guard: every function below has to *instantiate*.
+TEST(VectorDualFastPath, CoversEveryUnaryMathFunction) {
+  const std::array<double, 3> pt{0.6, 0.4, 1.3};
+  auto y = PV(0.4, "y");
+  auto z = PV(1.3, "z");
+
+  // Each case: 3 variables (so N >= 3 forces the VectorDual path), compared
+  // against the same expression differentiated by reverse mode, which does not
+  // use VectorDual at all.
+#define EXPECT_FASTPATH_MATCHES_REVERSE(expr_)                                 \
+  do {                                                                         \
+    const auto e_ = (expr_) + y * z;                                           \
+    const auto fwd_ = diff::derivative_tensor<1>(e_, pt);                      \
+    const auto rev_ = diff::gradient<DiffMode::Reverse>(e_, pt);               \
+    EXPECT_NEAR(fwd_.data()[0], rev_[0], 1e-12);                               \
+    EXPECT_NEAR(fwd_.data()[1], rev_[1], 1e-12);                               \
+    EXPECT_NEAR(fwd_.data()[2], rev_[2], 1e-12);                               \
+  } while (0)
+
+  auto x = PV(0.6, "x");
+  EXPECT_FASTPATH_MATCHES_REVERSE(sin(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(cos(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(tan(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(exp(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(log(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(log10(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(sqrt(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(cbrt(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(abs(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(asin(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(acos(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(atan(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(sinh(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(cosh(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(tanh(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(asinh(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(atanh(x));
+  EXPECT_FASTPATH_MATCHES_REVERSE(erf(x));
+  // acosh needs an argument > 1.
+  {
+    const std::array<double, 3> hi{1.7, 0.4, 1.3};
+    const auto e_ = acosh(PV(1.7, "x")) + y * z;
+    const auto fwd_ = diff::derivative_tensor<1>(e_, hi);
+    const auto rev_ = diff::gradient<DiffMode::Reverse>(e_, hi);
+    EXPECT_NEAR(fwd_.data()[0], rev_[0], 1e-12);
+  }
+#undef EXPECT_FASTPATH_MATCHES_REVERSE
+}
+
+// TaylorDual had no comparison operators, so detail::max_impl/min_impl -- which
+// spell `a < b` -- could not compile for a univariate_derivative sweep at all.
+TEST(UnivariateDerivative, MaxAndMinAreDifferentiable) {
+  auto x = PV(2.0, "x");
+  EXPECT_DOUBLE_EQ(univariate_derivative<1>(max(x * x, 1.0), 2.0), 4.0);
+  EXPECT_DOUBLE_EQ(univariate_derivative<1>(min(x * x, 1.0), 2.0), 0.0);
+  EXPECT_DOUBLE_EQ(univariate_derivative<2>(max(x * x, 1.0), 2.0), 2.0);
 }
 
 // README advertises "Everything is constexpr" — not just evaluation, but the

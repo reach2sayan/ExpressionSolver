@@ -225,22 +225,13 @@ public:
     }(std::make_index_sequence<Ext::rank()>{});
   }
 
-  // Compares stored cells.  Under a packed layout that is exactly the set of
-  // distinct addressable values, so this stays the right comparison.
   [[nodiscard]] friend constexpr bool operator==(const md_tensor &a,
                                                  const md_tensor &b) noexcept {
     return a.data_ == b.data_;
   }
 };
 
-// The direct replacement for nd_array_t<S, N, Order>.
-//
-// The default layout is the symmetric packing, not layout_right: a derivative
-// tensor is symmetric in every pair of its axes, so the dense form stores
-// N^Order cells to hold C(N + Order - 1, Order) distinct values — 216 cells
-// for 56 values at Order 3 over 6 variables.  Every index still reads, the
-// mapping just sorts it first.  Pass md::layout_right explicitly for a tensor
-// that is not symmetric.
+// The default layout is the symmetric packing, not layout_right:
 template <Numeric S, std::size_t N, std::size_t Order,
           typename Layout = layout_simplex_packed>
 using nd_tensor_t = md_tensor<S, uniform_extents_t<N, Order>, Layout>;

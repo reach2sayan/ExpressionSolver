@@ -38,65 +38,9 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
     }
   }
 
-#if DIFF_DEDUCING_THIS
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get(DIFF_SELF) noexcept {
-    return slot<S>(DIFF_FWD_SELF);
-  }
-
-  // Subscript spelling of the same thing.  operator[] has no template-argument
-  // syntax, so the symbol arrives as an empty symbol_type value (see "x"_s).
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](DIFF_SELF, symbol_type<S>) noexcept {
-    return slot<S>(DIFF_FWD_SELF);
-  }
-#else
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() const & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() && noexcept {
-    return slot<S>(std::move(*this));
-  }
-
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() const && noexcept {
-    return slot<S>(std::move(*this));
-  }
-
-  // Subscript spelling of the same thing.  operator[] has no template-argument
-  // syntax, so the symbol arrives as an empty symbol_type value (see "x"_s).
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto) operator[](symbol_type<S>) & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](symbol_type<S>) const & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](symbol_type<S>) && noexcept {
-    return slot<S>(std::move(*this));
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](symbol_type<S>) const && noexcept {
-    return slot<S>(std::move(*this));
-  }
-#endif
+  // Subscript spelling: m["x"_s] = v.  See DIFF_KEYED_ACCESSORS in
+  // util/config.hpp for why both spellings are generated together.
+  DIFF_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 
   template <FixedString S> constexpr void set(const Scalar &v) noexcept {
     slot<S>(*this) = v;
@@ -162,7 +106,7 @@ template <CExpression Expr, CValueMap Map> struct Bound {
                 "Bound stores the expression and the map by value");
   using expr_type = std::remove_cvref_t<Expr>;
   using map_type = std::remove_cvref_t<Map>;
-  using symbols = extract_symbols_from_expr_t<expr_type>;
+  using symbols = detail::expr_symbols_t<expr_type>;
   using value_type = typename expr_type::value_type;
 
   static constexpr std::size_t arity = mp::mp_size(symbols{});
@@ -211,63 +155,8 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     return map_type::template slot<S>(std::forward<decltype(self)>(self).map);
   }
 
-#if DIFF_DEDUCING_THIS
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get(DIFF_SELF) noexcept {
-    return slot<S>(DIFF_FWD_SELF);
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](DIFF_SELF, symbol_type<S>) noexcept {
-    return slot<S>(DIFF_FWD_SELF);
-  }
-#else
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() const & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() && noexcept {
-    return slot<S>(std::move(*this));
-  }
-
-  template <FixedString S>
-  [[nodiscard]] constexpr decltype(auto) get() const && noexcept {
-    return slot<S>(std::move(*this));
-  }
-
-  // Subscript spelling; b["x"_s] = v is the reason it exists.  See the note on
-  // ValueMap::operator[].
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto) operator[](symbol_type<S>) & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](symbol_type<S>) const & noexcept {
-    return slot<S>(*this);
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](symbol_type<S>) && noexcept {
-    return slot<S>(std::move(*this));
-  }
-
-  template <CFixedString auto S>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](symbol_type<S>) const && noexcept {
-    return slot<S>(std::move(*this));
-  }
-#endif
+  // Subscript spelling; b["x"_s] = v is the reason it exists.
+  DIFF_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 };
 
 // Lets `Bound{expr, map}` work without naming either parameter.
@@ -285,16 +174,6 @@ template <CExpression Expr, FixedString... Syms, Numeric... Vs>
                                   NamedValue<Syms, Vs>... nv) noexcept {
   return bind(static_cast<Expr &&>(e), values(nv...));
 }
-
-namespace detail {
-
-template <CExpression Expr>
-using expr_symbols_t = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-
-template <CExpression Expr>
-inline constexpr std::size_t expr_arity_v = mp::mp_size(expr_symbols_t<Expr>{});
-
-} // namespace detail
 
 // symbol_order(expr) — value-taking convenience over symbol_order<Expr>().
 template <CExpression Expr>
@@ -363,6 +242,15 @@ template <CExpression Expr, CEvalArg... Args>
   // clang-format on
 }
 
+// Forward-mode sweep seeded on the variable named `Seed`.
+//
+// This is the ordinary seeded sweep with Dual<VT> as the seed type: Dual
+// already carries {value, tangent} and already implements every chain rule, so
+// there is no separate forward engine to keep in step with it.  Seeding is the
+// whole difference -- slot k gets a unit tangent exactly when symbol k is the
+// one being differentiated.
+//
+// Returns Dual<VT>: read the pair with .value() and .deriv().
 template <auto Seed, CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto tangent_dispatch(const Expr &e,
                                               const Args &...args) {
@@ -373,7 +261,12 @@ template <auto Seed, CExpression Expr, CEvalArg... Args>
                 "eval_with_tangent: supply exactly one value per symbol, in "
                 "canonical order (see symbol_order<Expr>())");
   const std::array<VT, N> vals{static_cast<VT>(args)...};
-  return e.template tangent_seeded<Seed, Syms>(vals);
+  std::array<Dual<VT>, N> seeds{};
+  static_for<N>([&]<std::size_t I>() {
+    constexpr bool seeded = mp::mp_at_c<Syms, I>::value == Seed;
+    seeds[I] = Dual<VT>{vals[I], seeded ? VT{1} : VT{}};
+  });
+  return e.template eval_seeded<Syms>(seeds);
 }
 
 } // namespace detail

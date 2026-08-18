@@ -51,6 +51,35 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
   }
 }
 
+// One reverse sweep: fill the primal cache from `seeds`, then push adjoints
+// back through it from a root adjoint of 1.  Returns {root value, gradients}.
+//
+// This is the whole reverse mode, and every caller of it wants exactly these
+// four lines -- the cache, the fill, the backward, the root adjoint of one.
+// They differ only in what they do with the answer: peel a dual level, harvest
+// one Hessian column, scatter into a sparse buffer, stack a Jacobian row.
+// Writing it once is also what fixes the convention (Syms{}, T{1}) in one
+// place rather than six.
+template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds>
+[[nodiscard]] constexpr auto reverse_sweep(const Expr &expr,
+                                           const Seeds &seeds) noexcept {
+  using T = typename std::remove_cvref_t<Expr>::value_type;
+  // Sized by Syms, NOT by the expression's own arity: backward() indexes grads
+  // by a symbol's position in Syms, and the two differ whenever the caller
+  // sweeps a sub-expression against a wider list -- an Equation row, whose
+  // symbols are the union over all outputs.
+  constexpr std::size_t N = mp::mp_size(Syms{});
+  struct result {
+    T root;
+    std::array<T, N> grads;
+  };
+  std::array<T, N> grads{};
+  node_cache_t<Expr> cache{};
+  const T root = fill_cache<0, Syms>(expr, seeds, cache);
+  expr.backward(Syms{}, T{1}, grads, cache);
+  return result{root, grads};
+}
+
 // ===========================================================================
 // Order-safe seeding for the symbolic value-array APIs.
 //
@@ -68,7 +97,7 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 // The canonical (alphabetical-by-name) order of an expression's free symbols.
 template <CExpression Expr>
 [[nodiscard]] consteval auto symbol_order() noexcept {
-  using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   constexpr std::size_t N = mp::mp_size(SymList{});
   std::array<std::string_view, N> out{};
   [&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -86,9 +115,9 @@ template <CExpression Expr,
           FixedString... Syms, Numeric... Vs>
 [[nodiscard]] constexpr std::array<
     Scalar,
-    mp::mp_size(extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+    detail::expr_arity_v<Expr>>
 make_values(NamedValue<Syms, Vs>... nv) noexcept {
-  using SymList = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   constexpr std::size_t N = mp::mp_size(SymList{});
   static_assert(sizeof...(Syms) == N,
                 "make_values: supply exactly one value per symbol");
@@ -121,49 +150,34 @@ enum class DiffMode { Symbolic, Reverse };
 
 namespace detail {
 
+// Reverse-mode gradient.  A dual-valued expression differentiates the same way
+// -- the sweep is identical -- and then hands back only the value level of each
+// gradient entry, which is the scalar derivative.
 template <CExpression Expr, Numeric T = typename Expr::value_type,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires(!DualLike<T>)
+          std::size_t N = detail::expr_arity_v<Expr>>
 [[nodiscard]] constexpr auto
 reverse_mode_gradient(const Expr &expr,
                       const std::array<T, N> &vals) noexcept {
-  using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  std::array<T, N> grads{};
-  node_cache_t<Expr> cache{};
-  fill_cache<0, Syms>(expr, vals, cache);
-  expr.backward(Syms{}, T{1}, grads, cache);
-  return grads;
-}
-
-template <CExpression Expr, Numeric T = typename Expr::value_type,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
-  requires DualLike<T>
-[[nodiscard]] constexpr auto
-reverse_mode_gradient(const Expr &expr,
-                      const std::array<T, N> &vals) noexcept {
-  using scalar_t = dual_scalar_t<T>;
-  using Syms = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
-  std::array<T, N> grads{};
-  node_cache_t<Expr> cache{};
-  fill_cache<0, Syms>(expr, vals, cache);
-  expr.backward(Syms{}, T{1}, grads, cache);
-  std::array<scalar_t, N> result{};
-  std::ranges::transform(grads, result.begin(),
-                         [](const T &g) { return g.template get<0>(); });
-  return result;
+  using Syms = detail::expr_symbols_t<Expr>;
+  const auto grads = reverse_sweep<Syms>(expr, vals).grads;
+  if constexpr (DualLike<T>) {
+    std::array<dual_scalar_t<T>, N> result{};
+    std::ranges::transform(grads, result.begin(),
+                           [](const T &g) { return g.template get<0>(); });
+    return result;
+  } else {
+    return grads;
+  }
 }
 
 template <CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
   requires DualLike<T>
 [[nodiscard]] constexpr auto
 reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
-  using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   nd_tensor_t<S, N, 2> H{};
 
   // The value level is the point and is the same for every column; only the
@@ -174,19 +188,13 @@ reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
 
   for (std::size_t j = 0; j < N; j++) {
     // Seed column j, then one reverse sweep gives that column of the Hessian.
-    // The guard scopes the tangent to this iteration; it is constexpr, so the
-    // whole sweep still runs during constant evaluation.
     const auto seed = scoped_seed<1>(seeds[j].deriv());
-    std::array<T, N> grads{};
-    node_cache_t<Expr> cache{};
-    fill_cache<0, symbols>(expr, seeds, cache);
-    expr.backward(symbols{}, T{1}, grads, cache);
+    const auto grads = reverse_sweep<symbols>(expr, seeds).grads;
 
     const auto column = grads | std::views::transform([](const T &g) {
                           return g.template get<1>();
                         });
-    // The tensor is not a range of rows the way the nested array was, so the
-    // row index is zipped in rather than walked implicitly.
+
     for (auto &&[i, entry] : std::views::zip(std::views::iota(0uz, N), column)) {
       H[i, j] = entry;
     }
@@ -290,12 +298,11 @@ constexpr auto extract_nth(const T &x) noexcept {
 template <std::size_t Order, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
   requires(Order > 0 && N > 0)
 [[nodiscard]] constexpr auto
 derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
-  using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   using U = nth_dual_t<S, Order>;
 
   nd_tensor_t<S, N, Order> result{};
@@ -365,8 +372,7 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
 
 template <DiffMode Mode, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
   requires(Mode == DiffMode::Reverse)
 [[nodiscard]] constexpr auto gradient(const Expr &expr,
                                       const std::array<T, N> &values) noexcept {
@@ -385,8 +391,7 @@ template <DiffMode Mode, CExpression Expr, FixedString... Syms, Numeric... Vs,
 // Positional scalars, in canonical symbol order.
 template <DiffMode Mode, CExpression Expr, Numeric... Args,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
   requires(Mode == DiffMode::Reverse && sizeof...(Args) > 0 &&
            (std::convertible_to<Args, T> && ...))
 [[nodiscard]] constexpr auto gradient(const Expr &expr,
@@ -401,8 +406,7 @@ template <DiffMode Mode, CExpression Expr, Numeric... Args,
 template <DiffMode Mode, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = dual_scalar_t<T>,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
   requires(Mode == DiffMode::Reverse && DualLike<T>)
 [[nodiscard]] constexpr auto hessian(const Expr &expr,
                                      std::array<S, N> values) noexcept {
@@ -423,8 +427,7 @@ template <DiffMode Mode, CExpression Expr, FixedString... Syms, Numeric... Vs,
 template <std::size_t Order, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = scalar_base_t<T>,
-          std::size_t N = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t N = detail::expr_arity_v<Expr>>
   requires(Order > 0 && N > 0)
 [[nodiscard]] constexpr auto derivative_tensor(const Expr &expr,
                                                std::array<S, N> values) noexcept {
@@ -451,9 +454,6 @@ template <CArithmetic T> consteval T compile_time_factorial(T Order) {
   return result;
 }
 #if !defined(NDEBUG)
-// A macro, not a `const char[]`: static_assert takes a *string literal* until
-// C++26's user-generated messages, so naming the message any other way does not
-// compile.
 #define DIFF_FACTORIAL_BROKEN "compile_time_factorial is broken"
 // clang-format off
 static_assert(compile_time_factorial(5) == 120, DIFF_FACTORIAL_BROKEN);
@@ -467,12 +467,11 @@ static_assert(compile_time_factorial(3) == 6, DIFF_FACTORIAL_BROKEN);
 template <std::size_t Order, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = scalar_base_t<T>,
-          std::size_t NVars = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t NVars = detail::expr_arity_v<Expr>>
   requires(Order > 0 && NVars == 1)
 [[nodiscard]] constexpr S univariate_derivative_impl(const Expr &expr,
                                                      S x0) noexcept {
-  using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   using TD = TaylorDual<S, Order>;
 
   TD seed;
@@ -491,8 +490,7 @@ template <std::size_t Order, CExpression Expr,
 template <std::size_t Order, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = scalar_base_t<T>,
-          std::size_t NVars = mp::mp_size(
-              extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>{})>
+          std::size_t NVars = detail::expr_arity_v<Expr>>
   requires(Order > 0 && NVars == 1)
 [[nodiscard]] constexpr S univariate_derivative(const Expr &expr,
                                                 S x0) noexcept {

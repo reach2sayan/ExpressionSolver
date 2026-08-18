@@ -1,6 +1,7 @@
 #pragma once
 
 #include "expr/expressions.hpp" // Numeric
+#include "expr/unary_math.hpp"  // detail::<Op>Fn descriptors, DIFF_UNARY_MATH_TABLE
 
 #include <array>
 #include <cmath>
@@ -100,73 +101,21 @@ template <std::size_t N> struct VectorDual {
     return *this = *this / o;
   }
 
-  // ADL math functions used by the templated energy stack (log/exp) and by the
-  // Dual<> friends that wrap them.  Derivative of g(value) is g'(value)*grad.
-  [[nodiscard]] friend constexpr VectorDual log(const VectorDual &d) noexcept {
-    using std::log;
-    VectorDual r;
-    r.value = log(d.value);
-    const double inv = double{1} / d.value;
-    for (std::size_t k = 0; k < N; ++k) {
-      r.grad[k] = d.grad[k] * inv;
-    }
-    return r;
+  // Comparisons run on the materialized value, exactly as Dual's do: the
+  // derivative pack carries no ordering.  Needed by every branching kernel --
+  // abs_combine's sign test, and detail::max_impl/min_impl's `a < b` -- which
+  // otherwise cannot compile for a Dual<VectorDual<N>> sweep.  Hidden friends
+  // rather than free templates so N comes from the class and the implicit
+  // double lift above applies to either operand (`v > 0.0` works).
+  [[nodiscard]] friend constexpr auto operator<=>(const VectorDual &a,
+                                                  const VectorDual &b) noexcept {
+    return a.value <=> b.value;
   }
-  [[nodiscard]] friend constexpr VectorDual exp(const VectorDual &d) noexcept {
-    using std::exp;
-    const double e = exp(d.value);
-    VectorDual r;
-    r.value = e;
-    for (std::size_t k = 0; k < N; ++k) {
-      r.grad[k] = e * d.grad[k];
-    }
-    return r;
+  [[nodiscard]] friend constexpr bool operator==(const VectorDual &a,
+                                                 const VectorDual &b) noexcept {
+    return a.value == b.value;
   }
-  [[nodiscard]] friend constexpr VectorDual sin(const VectorDual &d) noexcept {
-    using std::cos, std::sin;
-    VectorDual r;
-    r.value = sin(d.value);
-    const double c = cos(d.value);
-    for (std::size_t k = 0; k < N; ++k) {
-      r.grad[k] = c * d.grad[k];
-    }
-    return r;
-  }
-  [[nodiscard]] friend constexpr VectorDual cos(const VectorDual &d) noexcept {
-    using std::cos, std::sin;
-    VectorDual r;
-    r.value = cos(d.value);
-    const double ms = -sin(d.value);
-    for (std::size_t k = 0; k < N; ++k) {
-      r.grad[k] = ms * d.grad[k];
-    }
-    return r;
-  }
-  [[nodiscard]] friend constexpr VectorDual tan(const VectorDual &d) noexcept {
-    using std::tan;
-    const double t = tan(d.value);
-    VectorDual r;
-    r.value = t;
-    const double sec2 = double{1} + t * t; // sec^2 = 1 + tan^2
-    for (std::size_t k = 0; k < N; ++k) {
-      r.grad[k] = sec2 * d.grad[k];
-    }
-    return r;
-  }
-  [[nodiscard]] friend constexpr VectorDual sqrt(const VectorDual &d) noexcept {
-    using std::sqrt;
-    const double s = sqrt(d.value);
-    VectorDual r;
-    r.value = s;
-    const double f = double{1} / (double{2} * s);
-    for (std::size_t k = 0; k < N; ++k) {
-      r.grad[k] = d.grad[k] * f;
-    }
-    return r;
-  }
-  // a^b.  d(a^b) = a^b (b' ln a + b a'/a).  Needed by Dual<VectorDual>'s own
-  // pow(), which calls pow on the inner scalar (e.g. VolumeContribution's
-  // press_shape raises an RK base to a non-integer exponent).
+
   [[nodiscard]] friend constexpr VectorDual pow(const VectorDual &a,
                                                 const VectorDual &b) noexcept {
     using std::log, std::pow;
@@ -181,6 +130,62 @@ template <std::size_t N> struct VectorDual {
     return r;
   }
 };
+
+// Chain rule for a unary math function, one lane at a time.
+//
+// The descriptor is instantiated at *double*, not at VectorDual: g(value) and
+// g'(value) are scalars, so the whole derivative pack is one scalar scaling a
+// contiguous run of lanes.  Instantiating it at VectorDual instead would
+// propagate a full pack through the derivative formula as well and cost O(N)
+// extra arithmetic per node for an answer that is scalar by construction.
+//
+// This is the same chain rule unary_dual_combine applies in dual.hpp, including
+// the deriv_from_value reuse that computes the primal once when the descriptor
+// can express g' in terms of g(u) (exp, tan, tanh, sqrt, cbrt).
+template <template <typename> class Fn, std::size_t N>
+[[nodiscard]] constexpr VectorDual<N>
+vector_unary(const VectorDual<N> &d) noexcept {
+  VectorDual<N> r;
+  double df;
+  if constexpr (detail::has_deriv_from_value_v<Fn<double>, double>) {
+    r.value = Fn<double>{}(d.value);
+    df = Fn<double>::deriv_from_value(d.value, r.value);
+  } else {
+    r.value = Fn<double>{}(d.value);
+    df = Fn<double>::deriv(d.value);
+  }
+  for (std::size_t k = 0; k < N; ++k) {
+    r.grad[k] = df * d.grad[k];
+  }
+  return r;
+}
+
+// Found by ADL on VectorDual, which is what lets the descriptors in
+// unary_math.hpp -- and so every op node and every Dual<VectorDual<N>> sweep --
+// call these unqualified.  Generated from the registry, so VectorDual supports
+// the same function set as Dual rather than a subset of it.
+#define DIFF_VECTOR_UNARY(FN, OP, LABEL)                                       \
+  template <std::size_t N>                                                     \
+  [[nodiscard]] constexpr VectorDual<N> FN(const VectorDual<N> &d) noexcept {  \
+    return vector_unary<detail::OP##Fn>(d);                                    \
+  }
+DIFF_UNARY_MATH_TABLE(DIFF_VECTOR_UNARY)
+#undef DIFF_VECTOR_UNARY
+
+// abs is not in the registry: its derivative is a sign rather than a function
+// of the primal, and it is only piecewise differentiable -- the derivative at 0
+// is taken as 0, matching abs_combine in dual.hpp.
+template <std::size_t N>
+[[nodiscard]] constexpr VectorDual<N> abs(const VectorDual<N> &d) noexcept {
+  using std::abs;
+  VectorDual<N> r;
+  r.value = abs(d.value);
+  const double sign = d.value > 0.0 ? 1.0 : d.value < 0.0 ? -1.0 : 0.0;
+  for (std::size_t k = 0; k < N; ++k) {
+    r.grad[k] = sign * d.grad[k];
+  }
+  return r;
+}
 
 // val(): recover the underlying scalar.  Lets the dual.hpp val()/to_double()/
 // comparison overloads peel a Dual<VectorDual<N>> down to its base double.

@@ -13,26 +13,22 @@
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 
+#include <array>
 #include <cstddef>
 #include <span>
-#include <utility>
-#include <vector>
 
 namespace diff {
 
 using EigenDenseMatrix =
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
-// Views, not conversions.  Built from HessianResult::matrix() rather than from
-// the raw buffer, so the row-major claim above is inherited from that view's
-// md::layout_right instead of being asserted a second time here.
 [[nodiscard]] inline Eigen::Map<const EigenDenseMatrix>
 as_matrix(const HessianResult &h) noexcept {
   const auto m = h.matrix();
-  static_assert(std::same_as<typename decltype(m)::layout_type,
-                             md::layout_right>,
-                "as_matrix maps Eigen::RowMajor onto the Hessian's own view; "
-                "if that view stops being row-major this mapping is wrong");
+  static_assert(
+      std::same_as<typename decltype(m)::layout_type, md::layout_right>,
+      "as_matrix maps Eigen::RowMajor onto the Hessian's own view; "
+      "if that view stops being row-major this mapping is wrong");
   return {m.data_handle(), static_cast<Eigen::Index>(m.extent(0)),
           static_cast<Eigen::Index>(m.extent(1))};
 }
@@ -46,20 +42,21 @@ as_vector(const HessianResult &h) noexcept {
 template <CExpression Expr> class SparseHessian {
   using E = std::remove_cvref_t<Expr>;
   static constexpr std::size_t kN =
-      mpl::mp_size(extract_symbols_from_expr_t<E>{});
+      detail::expr_arity_v<E>;
   static constexpr auto kLayout = sparse_layout<E>();
+  static constexpr std::size_t kNnz = decltype(kLayout)::nnz;
 
-  std::vector<double> values_;
+  std::array<double, kNnz + 1> values_;
 
 public:
   static constexpr std::size_t rows = kN;
-  static constexpr std::size_t nnz = decltype(kLayout)::nnz;
+  static constexpr std::size_t nnz = kNnz;
 
-  explicit SparseHessian(std::vector<double> values) noexcept
-      : values_(std::move(values)) {}
+  explicit SparseHessian(std::array<double, kNnz + 1> values) noexcept
+      : values_(values) {}
 
   [[nodiscard]] Eigen::Map<const Eigen::SparseMatrix<double>>
-  matrix() const noexcept {
+  matrix() const & noexcept {
     const auto n = static_cast<Eigen::Index>(kN);
     return {n,
             n,
@@ -68,15 +65,13 @@ public:
             kLayout.inner.data(),
             values_.data()};
   }
+  auto matrix() const && = delete;
 
-  // The compressed buffer read as the dense matrix it stands for.  The
-  // pattern is a compile-time property of Expr, so it is a layout mapping;
-  // structural zeros share one sink cell and read back as exactly 0.0, which
-  // is what they are.  Nothing here is Eigen — sparse_matrix_view lives in
-  // coupling.hpp and works with DIFF_USE_EIGEN=OFF.
-  [[nodiscard]] auto view() const noexcept {
+  // The compressed buffer read as the dense matrix it stands for.
+  [[nodiscard]] auto view() const & noexcept {
     return sparse_matrix_view<E>(values_);
   }
+  auto view() const && = delete;
   [[nodiscard]] double operator[](std::size_t i, std::size_t j) const noexcept {
     return view()[i, j];
   }
@@ -85,14 +80,15 @@ public:
   [[nodiscard]] static constexpr bool structural(std::size_t i,
                                                  std::size_t j) noexcept {
     return typename layout_sparse_pattern<E>::template mapping<
-        md::extents<std::size_t, kN, kN>>{}
+               md::extents<std::size_t, kN, kN>>{}
         .contains(i, j);
   }
 
   // The nnz values, without the sink cell the view appends.
-  [[nodiscard]] std::span<const double> values() const noexcept {
+  [[nodiscard]] std::span<const double> values() const & noexcept {
     return std::span<const double>{values_}.first(nnz);
   }
+  auto values() const && = delete;
 };
 
 // The sparse counterpart of hessian(graph, x).

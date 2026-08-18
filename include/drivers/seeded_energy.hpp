@@ -34,7 +34,7 @@ template <CExpression Expr> class SeededExprEnergy {
   Expr expr_;
 
 public:
-  using symbols = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
+  using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   static constexpr std::size_t arity = mp::mp_size(symbols{});
 
   // Marker the hessian() router dispatches on (see vforward_driver.hpp).

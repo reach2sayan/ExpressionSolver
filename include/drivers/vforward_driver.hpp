@@ -10,6 +10,7 @@
 #include "util/scope_guard.hpp" // scoped_value — RAII for the per-sweep seed
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <ranges>
 #include <span>
@@ -119,7 +120,7 @@ HessianResult hessian_expr_reverse(const Expr &expr,
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using S = dual_scalar_t<T>;
-  using Syms = extract_symbols_from_expr_t<E>;
+  using Syms = detail::expr_symbols_t<E>;
   constexpr std::size_t N = mpl::mp_size(Syms{});
 
   // Sparsity read off the expression type, then a colouring of it: columns
@@ -147,10 +148,7 @@ HessianResult hessian_expr_reverse(const Expr &expr,
       seed.deriv() = (color == c) ? S{1} : S{};
     }
 
-    std::array<T, N> grads{};
-    node_cache_t<E> cache{};
-    const T root = fill_cache<0, Syms>(expr, seeds, cache);
-    expr.backward(Syms{}, T{1}, grads, cache);
+    const auto [root, grads] = reverse_sweep<Syms>(expr, seeds);
 
     if (c == 0) {
       // The value and the first-order adjoints do not depend on the tangent
@@ -183,7 +181,7 @@ HessianResult hessian_expr_reverse(const Expr &expr,
 // The nonzero VALUES of the Hessian, in the compressed-column order fixed by
 // sparse_layout<Expr>() — the same colour-compressed sweeps as above, but
 // scattered straight into compressed storage, so the dense N x N matrix is
-// never materialised and the allocation is O(nnz) rather than O(N^2).
+// never materialised and the buffer is O(nnz) rather than O(N^2).
 //
 // Deliberately Eigen-free: it returns a plain value buffer, and
 // eigen_interop.hpp is what maps that buffer onto an Eigen::SparseMatrix.  This
@@ -192,13 +190,20 @@ HessianResult hessian_expr_reverse(const Expr &expr,
 // No symmetrization pass: the layout already names each entry exactly once, and
 // H(i,j) and H(j,i) are separate slots filled from the sweep of their own
 // colour, so there is no pair to average.
-template <CExpression Expr>
-std::vector<double> hessian_values_sparse(const Expr &expr,
-                                          std::span<const double> x) {
+//
+// NNZ rides along as a defaulted template parameter — the same shape as
+// sparse_layout() in coupling.hpp — because hessian_nnz is consteval: the size
+// of this buffer is a property of Expr, so it is an array and not a vector, and
+// the sparse path does not allocate.  std::vector is for the runtime-extent
+// drivers above, where the active-variable count is a span and not a type.
+template <CExpression Expr,
+          std::size_t NNZ = hessian_nnz<std::remove_cvref_t<Expr>>()>
+std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
+                                                  std::span<const double> x) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using S = dual_scalar_t<T>;
-  using Syms = extract_symbols_from_expr_t<E>;
+  using Syms = detail::expr_symbols_t<E>;
   constexpr std::size_t N = mpl::mp_size(Syms{});
 
   static constexpr auto kPattern = hessian_pattern<E>();
@@ -209,7 +214,11 @@ std::vector<double> hessian_values_sparse(const Expr &expr,
   // zero onto that last slot, so H[i, j] answers for indices the pattern
   // excludes without the caller checking first.  Eigen reads exactly nnz
   // entries from values.data(), so the extra cell is invisible to it.
-  std::vector<double> values(hessian_nnz<E>() + 1, 0.0);
+  //
+  // Value-initialised, which zeroes it: the sweeps below only write the slots
+  // the pattern names, and every other cell — the sink included — has to read
+  // back as exactly 0.0.
+  std::array<double, NNZ + 1> values{};
 
   std::array<T, N> seeds{};
   std::ranges::transform(x, seeds.begin(),
@@ -220,10 +229,7 @@ std::vector<double> hessian_values_sparse(const Expr &expr,
       seed.deriv() = (color == c) ? S{1} : S{};
     }
 
-    std::array<T, N> grads{};
-    node_cache_t<E> cache{};
-    fill_cache<0, Syms>(expr, seeds, cache);
-    expr.backward(Syms{}, T{1}, grads, cache);
+    const auto grads = reverse_sweep<Syms>(expr, seeds).grads;
 
     for (auto &&[grad, slot] : std::views::zip(grads, kSlots[c])) {
       if (slot != no_column) {
@@ -253,9 +259,6 @@ concept CGraphReverseHessian =
 // checked here, for the same reason eval() refuses a short range
 // (bound.hpp): silently differentiating at the wrong point is worse than
 // throwing.
-// constexpr, not noexcept, for the reason spelled out in bound.hpp: a throw in
-// a constexpr function only matters if it is actually reached, so a bad point
-// is a compile error during constant evaluation and an exception at run time.
 constexpr void check_graph_point(std::size_t arity, std::span<const double> x,
                                  std::span<const std::size_t> active) {
   if (x.size() < arity) {
@@ -373,14 +376,13 @@ HessianResult hessian(F &&f, std::span<const double> x,
                       std::span<const std::size_t> active) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
-      constexpr std::size_t N = mpl::mp_size(
-          extract_symbols_from_expr_t<std::remove_cvref_t<F>>{});
+      constexpr std::size_t N = detail::expr_arity_v<F>;
       if (detail::reverse_hessian_applies(N, x, active)) {
         return detail::hessian_expr_reverse(f, x);
       }
     }
     detail::check_graph_point(
-        mpl::mp_size(extract_symbols_from_expr_t<std::remove_cvref_t<F>>{}), x,
+        detail::expr_arity_v<F>, x,
         active);
     return detail::hessian_scalar(seeded_energy(static_cast<F &&>(f)), x,
                                   active);
@@ -397,14 +399,13 @@ template <CHessianTarget F>
 HessianResult hessian(F &&f, std::span<const double> x) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
-      constexpr std::size_t N = mpl::mp_size(
-          extract_symbols_from_expr_t<std::remove_cvref_t<F>>{});
+      constexpr std::size_t N = detail::expr_arity_v<F>;
       if (x.size() == N) {
         return detail::hessian_expr_reverse(f, x);
       }
     }
     detail::check_graph_point(
-        mpl::mp_size(extract_symbols_from_expr_t<std::remove_cvref_t<F>>{}), x);
+        detail::expr_arity_v<F>, x);
     return detail::hessian_scalar(seeded_energy(static_cast<F &&>(f)), x);
   } else if constexpr (CSeededExprEnergy<F>) {
     detail::check_graph_point(std::remove_cvref_t<F>::arity, x);

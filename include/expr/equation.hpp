@@ -111,13 +111,10 @@ private:
   {
     md_tensor<value_type, md::extents<std::size_t, output_dim, input_dim>> J{};
     static_for<output_dim>([&]<std::size_t I>() {
-      const auto &e = std::get<I>(expressions);
-      node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
-      fill_cache<0, symbols>(e, vals, cache);
-      // backward() writes through a CNumericBuffer, so the sweep fills a plain
-      // array and the row lands in the tensor afterwards.
-      std::array<value_type, input_dim> row{};
-      e.backward(symbols{}, value_type{1}, row, cache);
+      // reverse_sweep fills a plain array (backward() writes through a
+      // CNumericBuffer); the row lands in the tensor afterwards.
+      const auto row = reverse_sweep<symbols>(std::get<I>(expressions),
+                                              vals).grads;
       assign_row(J, I, row);
     });
     return J;
@@ -137,20 +134,16 @@ private:
                            [](const S &v) { return value_type{v, S{}}; });
 
     for (std::size_t j = 0; j < input_dim; ++j) {
-      // Seed column j; one reverse sweep per output yields that column.  The
-      // guard holds the tangent across the whole static_for fold and clears it
-      // when j advances.
+      // Seed column j; one reverse sweep per output yields that column.
       const auto seed = scoped_seed<1>(seeds[j].deriv());
       static_for<output_dim>([&]<std::size_t K>() {
-        point_t grads{};
-        const auto &e = std::get<K>(expressions);
-        node_cache_t<std::remove_cvref_t<decltype(e)>> cache{};
-        fill_cache<0, symbols>(e, seeds, cache);
-        e.backward(symbols{}, value_type{1}, grads, cache);
+        const auto grads =
+            reverse_sweep<symbols>(std::get<K>(expressions), seeds).grads;
 
         const auto column =
-            grads | std::views::transform(
-                        [](const value_type &g) { return g.template get<1>(); });
+            grads | std::views::transform([](const value_type &g) {
+              return g.template get<1>();
+            });
         for (auto &&[i, entry] :
              std::views::zip(std::views::iota(0uz, input_dim), column)) {
           H[K, i, j] = entry;
@@ -173,15 +166,13 @@ private:
 
       std::array<U, input_dim> seeds{};
       std::ranges::transform(values, std::views::iota(0uz, input_dim),
-                             seeds.begin(),
-                             [&idx](const S &v, std::size_t k) {
+                             seeds.begin(), [&idx](const S &v, std::size_t k) {
                                return detail::make_mixed_seed<S, Order>(v, idx,
                                                                         k);
                              });
 
       static_for<output_dim>([&]<std::size_t OUT>() {
-        U val = std::get<OUT>(expressions)
-                    .template eval_seeded<symbols>(seeds);
+        U val = std::get<OUT>(expressions).template eval_seeded<symbols>(seeds);
         // The output axis leads, so the stacked index is OUT followed by the
         // multi-index.
         const auto stacked = [&]<std::size_t... K>(std::index_sequence<K...>) {
@@ -235,83 +226,10 @@ public:
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
   // canonical symbol order.  The index is a template argument, so no tag type
   // is involved.
-#if DIFF_DEDUCING_THIS
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get(DIFF_SELF) noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(DIFF_FWD_SELF);
-  }
-
-  // Subscript spelling of the same thing.  operator[] has no template-argument
-  // syntax, so the index arrives as an empty idx_t value (see idx<N>()).
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](DIFF_SELF, idx_t<N>) noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(DIFF_FWD_SELF);
-  }
-#else
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get() & noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(*this);
-  }
-
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get() const & noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(*this);
-  }
-
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get() && noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(std::move(*this));
-  }
-
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) get() const && noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(std::move(*this));
-  }
-
-  // Subscript spelling of the same thing.  operator[] has no template-argument
-  // syntax, so the index arrives as an empty idx_t value (see idx<N>()).
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) & noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(*this);
-  }
-
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) const & noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(*this);
-  }
-
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto) operator[](idx_t<N>) && noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(std::move(*this));
-  }
-
-  template <std::size_t N>
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](idx_t<N>) const && noexcept
-    requires(output_dim == 1 && N <= input_dim)
-  {
-    return slot<N>(std::move(*this));
-  }
-#endif
+  // Subscript spelling of the same thing; the index arrives as an empty idx_t
+  // value (see idx<N>()).  See DIFF_KEYED_ACCESSORS in util/config.hpp.
+  DIFF_KEYED_ACCESSORS(std::size_t N, std::size_t N, N, idx_t<N>,
+                       requires(output_dim == 1 && N <= input_dim))
 
   template <DiffMode Mode>
   [[nodiscard]] constexpr auto jacobian(const point_t &values) const noexcept
@@ -343,7 +261,6 @@ public:
   {
     return equation_derivative_tensor_impl<Order>(std::move(values));
   }
-
 };
 
 template <CExpression T, CExpression... Ts>
