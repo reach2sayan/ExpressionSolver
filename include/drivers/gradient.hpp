@@ -482,7 +482,9 @@ template <std::size_t Order, CExpression Expr,
   TD result =
       expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
 
-  constexpr S factorial = compile_time_factorial(Order);
+  // Computed in size_t (exact) and converted once, rather than folded in S:
+  // the cast is explicit so it does not read as an accidental narrowing.
+  constexpr S factorial = static_cast<S>(compile_time_factorial(Order));
   return result.c[Order] * factorial;
 }
 

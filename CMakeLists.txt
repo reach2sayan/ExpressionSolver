@@ -329,8 +329,11 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         #   C4626 copy assignment implicitly deleted
         #   C5026 move ctor implicitly deleted
         #   C5027 move assignment implicitly deleted
-        #   C4625/C4626/C5026/C5027  implicit copy/move member deleted -- by
-        #       design: Expression and Equation hold const/reference members.
+        #   C4623/C4625/C4626/C5026/C5027  implicit default/copy/move member
+        #       deleted -- by design: Expression and Equation hold const members
+        #       and have no default state (an expression node without operands
+        #       is not a thing).  C4623 alone accounts for a few hundred lines
+        #       of a /Wall log, one per instantiated node type.
         #   C4710/C4711  "function not inlined" / "selected for automatic inline
         #       expansion".  These are inlining *diagnostics*, not defects, and a
         #       header-only expression-template library emits thousands of them:
@@ -343,8 +346,23 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         #       independent element computations.
         #   C4820  trailing padding inserted after a member.
         #   C5045  Spectre mitigation would be inserted for a load.
-        set(DIFF_MSVC_WALL_NOISE /Wall /wd4625 /wd4626 /wd5026 /wd5027
-                                 /wd4710 /wd4711 /wd4868 /wd4820 /wd5045)
+        #   C5246  "the initialization of a subobject should be wrapped in
+        #       braces".  Fires on every `std::array{a, b}` in the library.
+        #       Brace elision in aggregate initialization is standard and
+        #       intended; MSVC is asking for the inner braces back.
+        #   C4514  unreferenced inline function removed -- the expected fate of
+        #       most of a header-only library in any one TU.
+        #   C4324  structure padded due to an alignment specifier.  That is the
+        #       whole point of VectorDual's alignas(32) on its partial pack.
+        #   C5266  'const' on a return type has no effect -- from the vendored
+        #       mdspan in include/md/third_party, not our code to change.
+        #
+        # Deliberately NOT suppressed: C4365 (signed/unsigned mismatch) and
+        # C5219 (implicit integer->float conversion).  Both fire only a handful
+        # of times, and both are the kind of warning that can catch a real bug.
+        set(DIFF_MSVC_WALL_NOISE /Wall /wd4623 /wd4625 /wd4626 /wd5026 /wd5027
+                                 /wd4710 /wd4711 /wd4868 /wd4820 /wd5045
+                                 /wd5246 /wd4514 /wd4324 /wd5266)
         target_compile_options(main PRIVATE ${DIFF_MSVC_WALL_NOISE})
         target_compile_options(tests PRIVATE ${DIFF_MSVC_WALL_NOISE})
         if (DIFF_BUILD_BENCHMARKS)
