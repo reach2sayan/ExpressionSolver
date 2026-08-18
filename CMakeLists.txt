@@ -329,7 +329,22 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         #   C4626 copy assignment implicitly deleted
         #   C5026 move ctor implicitly deleted
         #   C5027 move assignment implicitly deleted
-        set(DIFF_MSVC_WALL_NOISE /Wall /wd4625 /wd4626 /wd5026 /wd5027)
+        #   C4625/C4626/C5026/C5027  implicit copy/move member deleted -- by
+        #       design: Expression and Equation hold const/reference members.
+        #   C4710/C4711  "function not inlined" / "selected for automatic inline
+        #       expansion".  These are inlining *diagnostics*, not defects, and a
+        #       header-only expression-template library emits thousands of them:
+        #       every operator, every sweep, every std::array copy.  They say
+        #       nothing a reader can act on.
+        #   C4868  "may not enforce left-to-right evaluation order in a brace
+        #       enclosed initializer list".  The standard does guarantee that
+        #       order; this warns that MSVC may not.  Nothing here depends on
+        #       evaluation order inside a braced list -- the initializers are
+        #       independent element computations.
+        #   C4820  trailing padding inserted after a member.
+        #   C5045  Spectre mitigation would be inserted for a load.
+        set(DIFF_MSVC_WALL_NOISE /Wall /wd4625 /wd4626 /wd5026 /wd5027
+                                 /wd4710 /wd4711 /wd4868 /wd4820 /wd5045)
         target_compile_options(main PRIVATE ${DIFF_MSVC_WALL_NOISE})
         target_compile_options(tests PRIVATE ${DIFF_MSVC_WALL_NOISE})
         if (DIFF_BUILD_BENCHMARKS)
