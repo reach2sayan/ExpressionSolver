@@ -2,9 +2,10 @@
 
 #include "expr/expressions.hpp"
 #include "expr/unary_math.hpp"
+#include "util/fmt.hpp"
+#include <array>
 #include <cmath>
 #include <format>
-#include <ostream>
 #include <tuple>
 #include <type_traits>
 
@@ -38,13 +39,6 @@ public:
     return *this;
   }
 
-  // Text lives in std::formatter<Dual> (below); this is the iostream spelling
-  // of it.  A Dual has to be formattable for its own sake, but also because a
-  // dual-valued Constant is a leaf the expression printer has to render.
-  friend std::ostream &operator<<(std::ostream &out, const Dual &d) {
-    return out << std::format("{}", d);
-  }
-
   [[nodiscard]] constexpr const T &value() const noexcept { return val_; }
   [[nodiscard]] constexpr T &value() noexcept { return val_; }
   [[nodiscard]] constexpr const T &deriv() const noexcept { return deriv_; }
@@ -71,6 +65,10 @@ public:
 
 template <typename T> inline constexpr bool is_dual_v = false;
 template <Numeric T> inline constexpr bool is_dual_v<Dual<T>> = true;
+
+namespace detail {
+template <Numeric T> inline constexpr bool is_dual_family_v<Dual<T>> = true;
+} // namespace detail
 
 template <typename X>
 concept DualLike = is_dual_v<std::remove_cvref_t<X>>;
@@ -446,20 +444,14 @@ using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 
 } // namespace diff
 
-// `v+de`, with any spec forwarded to both parts -- so "{:.3f}" reaches the
-// value and the derivative alike, and a nested Dual keeps forwarding it down.
-template <diff::Numeric T> struct std::formatter<diff::Dual<T>, char> {
-  constexpr auto parse(std::format_parse_context &ctx) {
-    return part_.parse(ctx);
-  }
+// `v+de` — the two-term case of the shared series renderer.  A Dual has to be
+// formattable for its own sake, but also because a dual-valued Constant is a
+// leaf the expression printer has to render.
+template <diff::Numeric T>
+struct std::formatter<diff::Dual<T>, char>
+    : diff::detail::dual_formatter_base<T> {
   auto format(const diff::Dual<T> &d, std::format_context &ctx) const {
-    ctx.advance_to(part_.format(d.value(), ctx));
-    *ctx.out()++ = '+';
-    ctx.advance_to(part_.format(d.deriv(), ctx));
-    *ctx.out()++ = 'e';
+    this->series(ctx, std::array{d.value(), d.deriv()});
     return ctx.out();
   }
-
-private:
-  std::formatter<T, char> part_{};
 };

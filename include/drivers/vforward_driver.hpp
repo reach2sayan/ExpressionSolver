@@ -113,7 +113,7 @@ HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
 // with each sweep is the only thing that differs, so that is the parameter:
 // harvest(colour, root, grads).
 template <CExpression Expr, typename Colors, typename Harvest>
-void color_sweeps(const Expr &expr, std::span<const double> x,
+DIFF_ALWAYS_INLINE void color_sweeps(const Expr &expr, std::span<const double> x,
                   const Colors &colors, Harvest &&harvest) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
@@ -131,7 +131,8 @@ void color_sweeps(const Expr &expr, std::span<const double> x,
     for (auto &&[seed, color] : std::views::zip(seeds, colors.color)) {
       seed.deriv() = (color == c) ? S{1} : S{};
     }
-    const auto [root, grads] = reverse_sweep<Syms>(expr, seeds);
+    std::array<T, N> grads{};
+    const T root = reverse_sweep<Syms>(expr, seeds, grads);
     harvest(c, root, grads);
   }
 }

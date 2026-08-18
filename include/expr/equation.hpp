@@ -87,8 +87,8 @@ private:
     static_for<output_dim>([&]<std::size_t I>() {
       // reverse_sweep fills a plain array (backward() writes through a
       // CNumericBuffer); the row lands in the tensor afterwards.
-      const auto row = reverse_sweep<symbols>(std::get<I>(expressions),
-                                              vals).grads;
+      std::array<value_type, input_dim> row{};
+      reverse_sweep<symbols>(std::get<I>(expressions), vals, row);
       assign_row(J, I, row);
     });
     return J;
@@ -111,8 +111,8 @@ private:
       // Seed column j; one reverse sweep per output yields that column.
       const auto seed = scoped_seed<1>(seeds[j].deriv());
       static_for<output_dim>([&]<std::size_t K>() {
-        const auto grads =
-            reverse_sweep<symbols>(std::get<K>(expressions), seeds).grads;
+        point_t grads{};
+        reverse_sweep<symbols>(std::get<K>(expressions), seeds, grads);
 
         const auto column =
             grads | std::views::transform([](const value_type &g) {

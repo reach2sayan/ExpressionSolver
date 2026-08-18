@@ -2,10 +2,12 @@
 
 #include "expr/expressions.hpp" // Numeric
 #include "expr/unary_math.hpp"  // detail::<Op>Fn descriptors, DIFF_UNARY_MATH_TABLE
+#include "util/fmt.hpp"         // dual_formatter_base
 
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <type_traits>
 
 namespace diff {
@@ -202,4 +204,26 @@ static_assert(Numeric<VectorDual<8>>);
 inline constexpr std::size_t kVForwardN = DIFF_VFORWARD_CAPACITY;
 static_assert(kVForwardN > 0, "DIFF_VFORWARD_CAPACITY must be positive");
 
+namespace detail {
+template <std::size_t N>
+inline constexpr bool is_dual_family_v<VectorDual<N>> = true;
+} // namespace detail
+
 } // namespace diff
+
+// `v+[g0, g1, ...]e` -- Dual's `v+de` with the derivative slot widened to the
+// whole pack, since that is exactly what VectorDual is.  All N lanes print,
+// including the unused tail: the capacity is bucketed to a power of two by
+// vforward_pick, so a short pack that printed only its live lanes would hide
+// which bucket a sweep actually ran in.
+template <std::size_t N>
+struct std::formatter<diff::VectorDual<N>, char>
+    : diff::detail::dual_formatter_base<double> {
+  auto format(const diff::VectorDual<N> &d, std::format_context &ctx) const {
+    this->num(ctx, d.value);
+    this->put(ctx, "+");
+    this->pack(ctx, d.grad);
+    this->put(ctx, "e");
+    return ctx.out();
+  }
+};

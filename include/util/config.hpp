@@ -19,6 +19,22 @@
 #define DIFF_FWD_SELF std::forward<decltype(self)>(self)
 #endif
 
+// The sweep helpers in the drivers (reverse_sweep, color_sweeps) exist to stop
+// the same four lines being written six times -- they are not meant to be
+// function calls.  Left to itself GCC inlines them in a small translation unit
+// and stops once a TU has enough heavy template instantiations to exhaust its
+// inlining budget, at which point a Hessian sweep pays a real call per colour.
+// Measured with perf on an 11-benchmark TU: reverse_sweep and color_sweeps
+// showed up as separate out-of-line symbols and the reverse Hessian lost ~30%.
+// So the decision is stated rather than left to a budget.
+#if defined(__GNUC__) || defined(__clang__)
+#define DIFF_ALWAYS_INLINE [[gnu::always_inline]] inline
+#elif defined(_MSC_VER)
+#define DIFF_ALWAYS_INLINE __forceinline
+#else
+#define DIFF_ALWAYS_INLINE inline
+#endif
+
 // DIFF_KEYED_ACCESSORS -- both spellings of a keyed accessor, in whichever form
 // this toolchain takes.
 //

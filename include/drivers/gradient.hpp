@@ -7,6 +7,7 @@
 #include "expr/named_value.hpp"
 #include "expr/traits.hpp"
 #include "md/tensor.hpp"
+#include "util/config.hpp"
 #include "util/mpl.hpp"
 #include "util/scope_guard.hpp"
 #include <algorithm>
@@ -61,24 +62,16 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 // one Hessian column, scatter into a sparse buffer, stack a Jacobian row.
 // Writing it once is also what fixes the convention (Syms{}, T{1}) in one
 // place rather than six.
-template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds>
-[[nodiscard]] constexpr auto reverse_sweep(const Expr &expr,
-                                           const Seeds &seeds) noexcept {
+template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds,
+          CNumericBuffer Grads>
+DIFF_ALWAYS_INLINE constexpr auto reverse_sweep(const Expr &expr,
+                                                const Seeds &seeds,
+                             Grads &grads) noexcept {
   using T = typename std::remove_cvref_t<Expr>::value_type;
-  // Sized by Syms, NOT by the expression's own arity: backward() indexes grads
-  // by a symbol's position in Syms, and the two differ whenever the caller
-  // sweeps a sub-expression against a wider list -- an Equation row, whose
-  // symbols are the union over all outputs.
-  constexpr std::size_t N = mp::mp_size(Syms{});
-  struct result {
-    T root;
-    std::array<T, N> grads;
-  };
-  std::array<T, N> grads{};
   node_cache_t<Expr> cache{};
   const T root = fill_cache<0, Syms>(expr, seeds, cache);
   expr.backward(Syms{}, T{1}, grads, cache);
-  return result{root, grads};
+  return root;
 }
 
 // ===========================================================================
@@ -160,7 +153,8 @@ template <CExpression Expr, Numeric T = typename Expr::value_type,
 reverse_mode_gradient(const Expr &expr,
                       const std::array<T, N> &vals) noexcept {
   using Syms = detail::expr_symbols_t<Expr>;
-  const auto grads = reverse_sweep<Syms>(expr, vals).grads;
+  std::array<T, N> grads{};
+  reverse_sweep<Syms>(expr, vals, grads);
   if constexpr (DualLike<T>) {
     std::array<dual_scalar_t<T>, N> result{};
     std::ranges::transform(grads, result.begin(),
@@ -190,7 +184,8 @@ reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
   for (std::size_t j = 0; j < N; j++) {
     // Seed column j, then one reverse sweep gives that column of the Hessian.
     const auto seed = scoped_seed<1>(seeds[j].deriv());
-    const auto grads = reverse_sweep<symbols>(expr, seeds).grads;
+    std::array<T, N> grads{};
+    reverse_sweep<symbols>(expr, seeds, grads);
 
     const auto column = grads | std::views::transform([](const T &g) {
                           return g.template get<1>();

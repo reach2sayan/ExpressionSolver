@@ -16,8 +16,8 @@
 #include "expr/expressions.hpp"
 #include "expr/operations.hpp"
 #include "expr/traits.hpp" // CVariable
+#include "util/fmt.hpp"    // detail::fmt_put
 
-#include <algorithm>
 #include <cstddef>
 #include <format>
 #include <ostream>
@@ -85,9 +85,7 @@ template <typename Ctx, typename ValueFmt> struct printer {
   const ValueFmt &value_fmt;
   PrintStyle style;
 
-  void put(std::string_view s) const {
-    ctx.advance_to(std::ranges::copy(s, ctx.out()).out);
-  }
+  void put(std::string_view s) const { fmt_put(ctx, s); }
   void put(char c) const { put(std::string_view{&c, 1}); }
 
   // Values go through the nested formatter, so a value-spec supplied by the

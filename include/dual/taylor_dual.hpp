@@ -384,4 +384,22 @@ template <Numeric S, std::size_t N> struct ConstantEmbedder<TaylorDual<S, N>> {
   }
 };
 
+namespace detail {
+template <Numeric S, std::size_t N>
+inline constexpr bool is_dual_family_v<TaylorDual<S, N>> = true;
+} // namespace detail
+
 } // namespace diff
+
+// TaylorDual is the general case of the series Dual prints two terms of, so it
+// is the shared renderer applied to the coefficient array and nothing else.
+// Note these are the *normalized* coefficients f^(k)/k!, not the derivatives --
+// the factorial is put back by univariate_derivative, not here.
+template <diff::Numeric S, std::size_t N>
+struct std::formatter<diff::TaylorDual<S, N>, char>
+    : diff::detail::dual_formatter_base<S> {
+  auto format(const diff::TaylorDual<S, N> &t, std::format_context &ctx) const {
+    this->series(ctx, t.c);
+    return ctx.out();
+  }
+};
