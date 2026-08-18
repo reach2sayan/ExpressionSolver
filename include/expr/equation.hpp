@@ -1,6 +1,7 @@
 #pragma once
 #include "drivers/gradient.hpp"
 #include "dual/dual.hpp"
+#include "expr/format.hpp"
 #include "util/config.hpp"
 #include "util/mpl.hpp"
 #include "util/scope_guard.hpp"
@@ -20,23 +21,6 @@ constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
   return std::array{es.template eval_seeded<Syms>(vals)...};
 }
 } // namespace detail
-
-template <CExpression... Ts>
-constexpr std::ostream &print_tup(std::ostream &out,
-                                  const std::tuple<Ts...> &tup) {
-  out << "(\n";
-  bool first = true;
-
-  static_for<sizeof...(Ts)>([&]<std::size_t I>() {
-    if (!first) {
-      out << "\n";
-    }
-    out << std::get<I>(tup);
-    first = false;
-  });
-  out << "\n)";
-  return out;
-}
 
 template <CSymbol... Syms, CExpression Expr>
 constexpr auto make_derivatives(mp::mp_list<Syms...>,
@@ -76,16 +60,6 @@ private:
   using jacobian_t = decltype(make_jac_rows(std::declval<Exprs>(), symbols{}));
   Exprs expressions;
   jacobian_t jacobian_data;
-
-  friend std::ostream &operator<<(std::ostream &out, const Equation &ve) {
-    static_for<output_dim>([&]<std::size_t I>() {
-      out << "f" << I << ": " << std::get<I>(ve.expressions);
-      out << " grad: ";
-      print_tup(out, std::get<I>(ve.jacobian_data));
-      out << '\n';
-    });
-    return out;
-  }
 
   using point_t = std::array<value_type, input_dim>;
 
@@ -194,6 +168,16 @@ public:
       : expressions{std::move(first), std::move(rest)...},
         jacobian_data{make_jac_rows(expressions, symbols{})} {}
 
+  // The symbolic trees themselves.  Every other member reduces them to numbers
+  // at a point; these hand them over intact, which is what the formatter below
+  // needs and what makes the built Jacobian inspectable at all.
+  [[nodiscard]] constexpr const Exprs &functions() const noexcept {
+    return expressions;
+  }
+  [[nodiscard]] constexpr const jacobian_t &jacobian_rows() const noexcept {
+    return jacobian_data;
+  }
+
   [[nodiscard]] constexpr auto evaluate(const point_t &vals) const noexcept {
     if constexpr (output_dim == 1) {
       return std::get<0>(expressions).template eval_seeded<symbols>(vals);
@@ -261,7 +245,52 @@ public:
 template <CExpression T, CExpression... Ts>
 Equation(T, Ts...) -> Equation<T, Ts...>;
 
+template <CExpression... Ts>
+std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
+  return out << std::format("{}", eq);
+}
+
 } // namespace diff
+
+// One block per output function: the function itself, then its gradient row in
+// canonical symbol order.  The spec is whatever expr/format.hpp accepts and is
+// forwarded to every expression printed, so "{:d}" annotates the leaves of a
+// whole system and "{:t}" dumps each one as a tree.
+template <diff::CExpression... Ts>
+struct std::formatter<diff::Equation<Ts...>, char> {
+  constexpr auto parse(std::format_parse_context &ctx) {
+    spec_ = {ctx.begin(), static_cast<std::size_t>(ctx.end() - ctx.begin())};
+    if (const auto close = spec_.find('}'); close != std::string_view::npos) {
+      spec_ = spec_.substr(0, close);
+    }
+    return ctx.begin() + spec_.size();
+  }
+
+  auto format(const diff::Equation<Ts...> &eq, std::format_context &ctx) const {
+    using Eq = diff::Equation<Ts...>;
+    const std::string one = std::format("{{:{}}}", spec_);
+    auto out = ctx.out();
+
+    diff::static_for<Eq::output_dim>([&]<std::size_t I>() {
+      out = std::format_to(out, "f{}: ", I);
+      out = std::vformat_to(out, one,
+                            std::make_format_args(std::get<I>(eq.functions())));
+      out = std::format_to(out, "\n  grad: ");
+      const auto &row = std::get<I>(eq.jacobian_rows());
+      diff::static_for<Eq::input_dim>([&]<std::size_t J>() {
+        if constexpr (J > 0) {
+          out = std::format_to(out, ", ");
+        }
+        out = std::vformat_to(out, one, std::make_format_args(std::get<J>(row)));
+      });
+      out = std::format_to(out, "\n");
+    });
+    return out;
+  }
+
+private:
+  std::string_view spec_{};
+};
 
 #define reverse_mode_jac jacobian<diff::DiffMode::Reverse>
 #define symbolic_mode_jac jacobian<diff::DiffMode::Symbolic>

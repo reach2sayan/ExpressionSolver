@@ -15,6 +15,7 @@
 #include "expr/bound.hpp"
 #include "expr/equation.hpp"
 #include "expr/expressions.hpp"
+#include "expr/format.hpp"
 #include "expr/named_value.hpp"
 #include "expr/values.hpp"
 #include "util/fixed_string.hpp"

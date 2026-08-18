@@ -8,6 +8,7 @@
 #include "drivers/seeded_energy.hpp"
 #include "drivers/vforward_driver.hpp"
 #include "expr/equation.hpp"
+#include "expr/format.hpp"
 #include "expr/operations.hpp"
 #include "expr/traits.hpp"
 #include "expr/values.hpp"
@@ -16,10 +17,13 @@
 #include "util/scope_guard.hpp"
 #include <array>
 #include <cmath>
+#include <format>
 #include <gtest/gtest.h>
 #include <numbers>
 #include <random>
+#include <ranges>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 
 using namespace diff;
@@ -3941,4 +3945,117 @@ TEST(ConstexprContract, MdspanLayerIsConstantEvaluated) {
   static_assert(stacked == 3.0);
 
   SUCCEED(); // the static_asserts above are the test
+}
+
+// ===========================================================================
+// Expression printing.
+//
+// Every one of these was unverifiable before expr/format.hpp: printing had no
+// test at all, which is how a unary node that printed only its child (sin(x)
+// as "x") survived.  The assertions are on std::format, since operator<< is a
+// forward to it.
+// ===========================================================================
+
+namespace {
+constexpr auto px = diff::var<"x">;
+constexpr auto py = diff::var<"y">;
+constexpr auto pz = diff::var<"z">;
+} // namespace
+
+// Unary nodes used to print as their bare child -- the operator itself was
+// dropped on the floor.  These three are the regression gate.
+TEST(ExpressionPrinting, UnaryNodesNameTheirOperator) {
+  EXPECT_EQ(std::format("{}", sin(px)), "sin(x)");
+  EXPECT_EQ(std::format("{}", -px), "-x");
+  EXPECT_EQ(std::format("{}", abs(px)), "abs(x)");
+  EXPECT_EQ(std::format("{}", exp(px * py)), "exp(x * y)");
+}
+
+TEST(ExpressionPrinting, ParenthesesOnlyWherePrecedenceDemands) {
+  EXPECT_EQ(std::format("{}", px * py + sin(px)), "x * y + sin(x)");
+  EXPECT_EQ(std::format("{}", (px + py) * pz), "(x + y) * z");
+  EXPECT_EQ(std::format("{}", px / (py / pz)), "x / (y / z)");
+  EXPECT_EQ(std::format("{}", px / py / pz), "x / y / z");
+  EXPECT_EQ(std::format("{}", -(px + py)), "-(x + y)");
+  EXPECT_EQ(std::format("{}", -px * py), "-x * y");
+}
+
+// a - b is built as a + (-b); without the peephole every subtraction in the
+// library would read "x + -y".
+TEST(ExpressionPrinting, SubtractionSurvivesItsLowering) {
+  EXPECT_EQ(std::format("{}", px - py), "x - y");
+  EXPECT_EQ(std::format("{}", px - (py + pz)), "x - (y + z)");
+  EXPECT_EQ(std::format("{}", px - py * pz), "x - y * z");
+  EXPECT_EQ(std::format("{}", 2.0 * px * py + sin(px) - pz),
+            "2 * x * y + sin(x) - z");
+  // Debug style deliberately shows the real a + (-b) structure instead.
+  EXPECT_EQ(std::format("{:d}", px - py), "x_var + -y_var");
+}
+
+TEST(ExpressionPrinting, FunctionStyleOps) {
+  EXPECT_EQ(std::format("{}", pow(px, 2.0)), "pow(x, 2)");
+  EXPECT_EQ(std::format("{}", atan2(py, px)), "atan2(y, x)");
+  EXPECT_EQ(std::format("{}", hypot(px, py)), "hypot(x, y)");
+  EXPECT_EQ(std::format("{}", max(px, py + pz)), "max(x, y + z)");
+}
+
+TEST(ExpressionPrinting, DebugStyleAnnotatesEveryLeafKind) {
+  EXPECT_EQ(std::format("{:d}", 2.0 * px), "2_c * x_var");
+  // Lit carries its value in the type; Constant stores it.  Only debug style
+  // tells them apart, and derivative() manufactures the Lits.
+  EXPECT_EQ(std::format("{:d}", px.derivative()), "1_lit");
+  EXPECT_EQ(std::format("{:d}",
+                        make_all_constant_except<diff::FixedString{"x"}>(px *
+                                                                         py)),
+            "x_var * y_frozen");
+}
+
+TEST(ExpressionPrinting, ValueSpecReachesEveryNumber) {
+  EXPECT_EQ(std::format("{::.3f}", 2.0 * px), "2.000 * x");
+  EXPECT_EQ(std::format("{:m:.1e}", 2.0 * px + 3.0), "2.0e+00 * x + 3.0e+00");
+}
+
+TEST(ExpressionPrinting, TreeStyleIsPreorderIndexed) {
+  const auto tree = std::format("{:t}", px * py + sin(px));
+  EXPECT_EQ(tree, "[0] +\n"
+                  "├── [1] *\n"
+                  "│   ├── [2] x\n"
+                  "│   └── [3] y\n"
+                  "└── [4] sin\n"
+                  "    └── [5] x");
+
+  // One line per node, and the indices are exactly the cache slots the sweeps
+  // address -- that correspondence is the reason to print a tree.
+  const auto lines =
+      1 + static_cast<std::size_t>(std::ranges::count(tree, '\n'));
+  EXPECT_EQ(lines, diff::node_count_v<decltype(px * py + sin(px))>);
+}
+
+TEST(ExpressionPrinting, StreamInserterMatchesFormat) {
+  const auto e = px * py + sin(px) - pz;
+  std::ostringstream oss;
+  oss << e;
+  EXPECT_EQ(oss.str(), std::format("{}", e));
+}
+
+// A dual-valued constant is reachable through PDV, so the leaf printer has to
+// cope with a value_type that is not an arithmetic type.
+TEST(ExpressionPrinting, DualValuedLeavesPrint) {
+  const diff::Constant<diff::Dual<double>> c{diff::Dual<double>{1.5, 2.0}};
+  EXPECT_EQ(std::format("{}", c), "1.5+2e");
+  EXPECT_EQ(std::format("{::.2f}", c), "1.50+2.00e");
+}
+
+TEST(ExpressionPrinting, RejectsUnknownStyle) {
+  // The spec is parsed at compile time for literals, so an invalid style has
+  // to be reached through vformat to be observable as a throw.
+  EXPECT_THROW((void)std::vformat("{:q}", std::make_format_args(px)),
+               std::format_error);
+}
+
+TEST(ExpressionPrinting, EquationPrintsFunctionsAndGradientRows) {
+  auto eq = diff::Equation{px * py};
+  const auto text = std::format("{}", eq);
+  EXPECT_TRUE(text.starts_with("f0: x * y\n"));
+  EXPECT_NE(text.find("grad: "), std::string::npos);
 }

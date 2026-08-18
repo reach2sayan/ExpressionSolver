@@ -4,7 +4,6 @@
 #include "util/mpl.hpp"          // CSymbol, CSymbolList
 
 #include <concepts>
-#include <ostream>
 #include <ranges>
 #include <string_view>
 #include <tuple>
@@ -210,26 +209,6 @@ class ExpressionOps : public BaseExpression<Op> {
 public:
   using op_type = Op;
   using value_type = typename BaseExpression<Op>::value_type;
-
-  // Printing reads children through the public expressions(), which both
-  // ExpressionImpl specialisations provide -- the stateless one materialises
-  // them (they are empty) and the storing one returns its tuple.  That is what
-  // lets one definition serve both, instead of a copy per specialisation
-  // differing only in how it names the children.
-  //
-  // Hidden friend on Derived rather than on this base: ADL finds it either way,
-  // since a class's associated entities include its bases.
-  friend std::ostream &operator<<(std::ostream &out, const Derived &e) {
-    if constexpr (std::tuple_size_v<typename Derived::children_t> == 1) {
-      out << std::get<0>(e.expressions());
-    } else {
-      out << '(';
-      std::apply([&out](const auto &...c) { Op::print(out, c...); },
-                 e.expressions());
-      out << ')';
-    }
-    return out;
-  }
 
   // Evaluation always takes a point: the tree stores no values.  Op::eval is
   // reached only through the seeded sweeps below, where every child has

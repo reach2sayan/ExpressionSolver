@@ -3,7 +3,6 @@
 #include "expr/expressions.hpp"
 #include "expr/operations.hpp"
 #include "util/mpl.hpp"
-#include <format>
 
 namespace diff {
 
@@ -142,13 +141,6 @@ template <typename Derived, Numeric T> class ConstantOps {
     return static_cast<const Derived &>(*this);
   }
 
-  // Hidden friend on Derived, not on this base: ADL still finds it (a class's
-  // associated entities include its bases), and taking the leaf type exactly
-  // keeps it clear of the operator T() conversion below.
-  friend std::ostream &operator<<(std::ostream &out, const Derived &c) {
-    return out << std::format("{}", c.get());
-  }
-
 public:
   using value_type = T;
 
@@ -245,12 +237,6 @@ template <Numeric T> Lit(T) -> Lit<T>;
 // partial differentiation: it still reads its value from the seed array like
 // any other symbol, but its derivative is zero.
 template <Numeric T, CFixedString auto symbol, bool Frozen> class Variable {
-  // A Variable is stateless, so the label is all there is to print.
-  friend std::ostream &operator<<(std::ostream &out,
-                                  const Variable<T, symbol, Frozen> &) {
-    return out << symbol.view();
-  }
-
 public:
   static constexpr auto label = symbol;
   static constexpr bool frozen = Frozen;

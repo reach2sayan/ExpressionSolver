@@ -4,7 +4,9 @@
 #include "expr/unary_math.hpp"
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <functional>
+#include <string_view>
 #include <utility>
 
 namespace diff {
@@ -18,14 +20,27 @@ concept CBinaryOp =
     std::regular_invocable<F, const T &, const T &> &&
     std::convertible_to<std::invoke_result_t<F, const T &, const T &>, T>;
 
-template <Numeric T, CUnaryOp<T> func, CFixedString auto symbol>
+// How an op is written down.  This is data on the op rather than code in it:
+// the printer in expr/format.hpp is the only thing that reads it.
+//
+//   Prefix    -a          the operator leads its single operand
+//   Infix     a + b       the operator sits between its two operands
+//   Function  pow(a, b)   name and parentheses, any arity
+enum class Notation : std::uint8_t { Prefix, Infix, Function };
+
+// Binding strength; higher binds tighter.  A function call brings its own
+// parentheses and a leaf has nothing to split, so both are atomic — there is no
+// context in which either needs wrapping.
+inline constexpr int precedence_atom = 100;
+
+template <Numeric T, CUnaryOp<T> func, CFixedString auto symbol,
+          Notation note = Notation::Function, int prec = precedence_atom>
 struct UnaryOp {
   using value_type = T;
   using func_type = func;
-  static constexpr void print(std::ostream &out,
-                              const CExpression auto &lhs) noexcept {
-    out << symbol.view() << '(' << lhs << ')';
-  }
+  static constexpr std::string_view label = symbol.view();
+  static constexpr Notation notation = note;
+  static constexpr int precedence = prec;
   [[nodiscard]] static constexpr auto
   eval(const CExpression auto &lhs) noexcept {
     using VT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
@@ -34,19 +49,13 @@ struct UnaryOp {
 };
 
 template <Numeric T, CBinaryOp<T> func, CFixedString auto symbol,
-          bool prefix = false>
+          Notation note = Notation::Infix, int prec = precedence_atom>
 struct BinaryOp {
   using value_type = T;
   using func_type = func;
-  // Infix style for operators ("a+b"); prefix=true gives function notation
-  // ("pow(a, b)") for math functions like pow/atan2/hypot/min/max.
-  static constexpr void print(std::ostream &out, const CExpression auto &lhs,
-                              const CExpression auto &rhs) noexcept {
-    if constexpr (prefix)
-      out << symbol.view() << '(' << lhs << ", " << rhs << ')';
-    else
-      out << lhs << symbol.view() << rhs;
-  }
+  static constexpr std::string_view label = symbol.view();
+  static constexpr Notation notation = note;
+  static constexpr int precedence = prec;
   [[nodiscard]] static constexpr auto
   eval(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
     using LT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
@@ -56,7 +65,8 @@ struct BinaryOp {
 };
 
 template <Numeric T>
-struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+"}> {
+struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+"}, Notation::Infix,
+                        10> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -70,7 +80,8 @@ struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+"}> {
 };
 
 template <Numeric T>
-struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"}> {
+struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"},
+                             Notation::Infix, 20> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -87,7 +98,8 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"}> {
 };
 
 template <Numeric T>
-struct NegateOp : UnaryOp<T, std::negate<void>, FixedString{"-"}> {
+struct NegateOp : UnaryOp<T, std::negate<void>, FixedString{"-"},
+                          Notation::Prefix, 30> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept {
     auto d = lhs.derivative();
@@ -101,7 +113,8 @@ struct NegateOp : UnaryOp<T, std::negate<void>, FixedString{"-"}> {
 };
 
 template <Numeric T>
-struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"}> {
+struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"},
+                           Notation::Infix, 20> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -214,7 +227,7 @@ struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
 
 // pow(a, b) = a^b.  d(a^b) = a^b * (b' ln a + b a'/a).
 template <Numeric T>
-struct PowOp : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, true> {
+struct PowOp : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, Notation::Function> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
   template <std::size_t Base, std::size_t... CB>
@@ -231,7 +244,7 @@ struct PowOp : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, true> {
 
 // atan2(y, x): lhs is y, rhs is x.  d = (x y' - y x') / (x² + y²).
 template <Numeric T>
-struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}, true> {
+struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}, Notation::Function> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
   template <std::size_t Base, std::size_t... CB>
@@ -247,7 +260,7 @@ struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}, true> {
 
 // hypot(x, y) = sqrt(x² + y²).  d = (x x' + y y') / hypot.
 template <Numeric T>
-struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, true> {
+struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, Notation::Function> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
   template <std::size_t Base, std::size_t... CB>
@@ -263,7 +276,7 @@ struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, true> {
 };
 
 template <Numeric T>
-struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, true> {
+struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, Notation::Function> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -280,7 +293,7 @@ struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, true> {
 };
 
 template <Numeric T>
-struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, true> {
+struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, Notation::Function> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
