@@ -31,9 +31,18 @@ template <std::size_t N> struct VectorDual {
   // Over-align the partial pack so the elementwise lane loops below vectorize
   // without a scalar peel prologue: under -march=x86-64-v3 (AVX2, 32-byte
   // vectors) an 8-byte-aligned array forces the compiler to emit an alignment
-  // peel + remainder.  The Hessian driver buckets N to powers of two >= 4
-  // (vforward_pick), so a 32-byte start makes each loop a clean run of whole
+  // peel + remainder.  A 32-byte start makes each loop a clean run of whole
   // 256-bit stores.  std::vector uses aligned new for the over-aligned element.
+  //
+  // Confirmed with -fopt-info-vec on GCC 15 at -O3 -march=native: at N = 32
+  // every lane loop in this file vectorizes to 32-byte vectors.  It buys
+  // nothing at the bottom of the ladder, though -- vforward_pick starts at
+  // N = 1 and doubles, and at N = 1 or 2 the pack is smaller than one vector,
+  // so no loop vectorizes and the alignas is pure padding there.  That is
+  // accepted: those buckets are for tiny problems where it does not matter.
+  //
+  // Hand-written intrinsics were measured against this and rejected -- there is
+  // nothing for them to win here, and no AVX-512 on the targets to reach for.
   alignas(32) std::array<double, N> grad{}; // partials, lanes [0, N)
 
   constexpr VectorDual() noexcept = default;
@@ -128,6 +137,38 @@ template <std::size_t N> struct VectorDual {
     r.value = p;
     for (std::size_t k = 0; k < N; ++k) {
       r.grad[k] = p * (b.grad[k] * la + b.value * a.grad[k] * inva);
+    }
+    return r;
+  }
+
+  // atan2(y, x): the first operand is the numerator y.
+  //   d atan2 = (x*dy - y*dx) / (x^2 + y^2)
+  // Same formula as Dual's (dual.hpp), applied per lane with the scalar
+  // denominator hoisted out of the loop.  Without these two, an expression
+  // using atan2 or hypot compiles at two variables and fails at three, where
+  // derivative_tensor<1> switches to the VectorDual fast path.
+  [[nodiscard]] friend constexpr VectorDual atan2(const VectorDual &y,
+                                                  const VectorDual &x) noexcept {
+    using std::atan2;
+    const double inv = double{1} / (x.value * x.value + y.value * y.value);
+    VectorDual r;
+    r.value = atan2(y.value, x.value);
+    for (std::size_t k = 0; k < N; ++k) {
+      r.grad[k] = (x.value * y.grad[k] - y.value * x.grad[k]) * inv;
+    }
+    return r;
+  }
+
+  // hypot(x, y) = sqrt(x^2 + y^2).  d hypot = (x*dx + y*dy) / hypot.
+  [[nodiscard]] friend constexpr VectorDual hypot(const VectorDual &x,
+                                                  const VectorDual &y) noexcept {
+    using std::hypot;
+    const double h = hypot(x.value, y.value);
+    const double inv = double{1} / h;
+    VectorDual r;
+    r.value = h;
+    for (std::size_t k = 0; k < N; ++k) {
+      r.grad[k] = (x.value * x.grad[k] + y.value * y.grad[k]) * inv;
     }
     return r;
   }

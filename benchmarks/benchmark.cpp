@@ -301,6 +301,13 @@ static void BM_Footprint_F4(benchmark::State &state) {
 }
 BENCHMARK(BM_Footprint_F4);
 
+// Batched point coordinates ramp for this many steps and then repeat, so every
+// batch size samples the same range of values. An unbounded ramp would grow the
+// arguments to sin/exp with the batch size and push libm into progressively
+// more expensive argument reduction, which shows up as a per-point cost that
+// climbs with the batch and makes the sizes incomparable.
+static constexpr std::size_t kRampPeriod = 256;
+
 static void BM_Symbolic_Batched_F4(benchmark::State &state) {
   const auto count = static_cast<std::size_t>(state.range(0));
 
@@ -315,17 +322,16 @@ static void BM_Symbolic_Batched_F4(benchmark::State &state) {
   using point_type = std::array<double, 4>; // canonical order: w, x, y, z
   std::vector<point_type> points;
   points.reserve(count);
-  for (std::size_t i = 0; i < count; ++i)
-    points.push_back({M_PI / 6.0 + 0.001 * i, 1.0 + 0.001 * i,
-                      0.5 + 0.001 * i, 1.7 + 0.001 * i});
+  for (std::size_t i = 0; i < count; ++i) {
+    const double t = 0.001 * static_cast<double>(i % kRampPeriod);
+    points.push_back({M_PI / 6.0 + t, 1.0 + t, 0.5 + t, 1.7 + t});
+  }
 
   for (auto _ : state) {
-    double sink = 0.0;
     for (const auto &pt : points) {
       auto grads = eq.eval_derivatives(pt);
-      sink += grads[0];
+      benchmark::DoNotOptimize(grads);
     }
-    benchmark::DoNotOptimize(sink);
     benchmark::ClobberMemory();
   }
 
@@ -349,17 +355,16 @@ static void BM_Reverse_Batched_F4(benchmark::State &state) {
   using point_type = std::array<double, 4>; // canonical order: w, x, y, z
   std::vector<point_type> points;
   points.reserve(count);
-  for (std::size_t i = 0; i < count; ++i)
-    points.push_back({M_PI / 6.0 + 0.001 * i, 1.0 + 0.001 * i,
-                      0.5 + 0.001 * i, 1.7 + 0.001 * i});
+  for (std::size_t i = 0; i < count; ++i) {
+    const double t = 0.001 * static_cast<double>(i % kRampPeriod);
+    points.push_back({M_PI / 6.0 + t, 1.0 + t, 0.5 + t, 1.7 + t});
+  }
 
   for (auto _ : state) {
-    double sink = 0.0;
     for (const auto &pt : points) {
       auto grads = gradient<DiffMode::Reverse>(expr, pt);
-      sink += grads[0];
+      benchmark::DoNotOptimize(grads);
     }
-    benchmark::DoNotOptimize(sink);
     benchmark::ClobberMemory();
   }
 
@@ -394,17 +399,15 @@ static void BM_Forward_Batched_F4(benchmark::State &state) {
     Variable<double, FixedString{"w"}> w;
     expressions.emplace_back((x + y) * (z - w) + exp(x * z) + sin(y * w) +
                              x * y * z * w);
-    points.push_back({1.0 + 0.001 * i, 0.5 + 0.001 * i, 1.7 + 0.001 * i,
-                      M_PI / 6.0 + 0.001 * i});
+    const double t = 0.001 * static_cast<double>(i % kRampPeriod);
+    points.push_back({1.0 + t, 0.5 + t, 1.7 + t, M_PI / 6.0 + t});
   }
 
   for (auto _ : state) {
-    double sink = 0.0;
     for (std::size_t i = 0; i < count; ++i) {
       auto grads = derivative_tensor<1>(expressions[i], points[i]);
-      sink += grads[0];
+      benchmark::DoNotOptimize(grads);
     }
-    benchmark::DoNotOptimize(sink);
     benchmark::ClobberMemory();
   }
 
@@ -467,17 +470,16 @@ static void BM_Reverse_Dual_Batched_F4(benchmark::State &state) {
   using point_type = std::array<D, 4>; // canonical order: w, x, y, z
   std::vector<point_type> points;
   points.reserve(count);
-  for (std::size_t i = 0; i < count; ++i)
-    points.push_back({D{M_PI / 6.0 + 0.001 * i}, D{1.0 + 0.001 * i},
-                      D{0.5 + 0.001 * i}, D{1.7 + 0.001 * i}});
+  for (std::size_t i = 0; i < count; ++i) {
+    const double t = 0.001 * static_cast<double>(i % kRampPeriod);
+    points.push_back({D{M_PI / 6.0 + t}, D{1.0 + t}, D{0.5 + t}, D{1.7 + t}});
+  }
 
   for (auto _ : state) {
-    double sink = 0.0;
     for (const auto &pt : points) {
       auto grads = reverse_mode_grad(expr, pt);
-      sink += grads[0];
+      benchmark::DoNotOptimize(grads);
     }
-    benchmark::DoNotOptimize(sink);
     benchmark::ClobberMemory();
   }
 

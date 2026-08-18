@@ -19,6 +19,9 @@
 #include "util/scope_guard.hpp"
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <format>
 #include <gtest/gtest.h>
 #include <numbers>
@@ -3669,7 +3672,120 @@ TEST(VectorDualFastPath, CoversEveryUnaryMathFunction) {
     const auto rev_ = diff::gradient<DiffMode::Reverse>(e_, hi);
     EXPECT_NEAR(fwd_.data()[0], rev_[0], 1e-12);
   }
+  // The BINARY math functions on the same fast path.  hypot and atan2 used to
+  // be missing from VectorDual entirely, so an expression using either
+  // compiled at two variables and failed to compile at three -- the same shape
+  // of gap as the unary one above.  pow/max/min already worked (pow is
+  // hand-written, max/min go through the comparison operators).
+  {
+    auto a = PV(1.3, "a");
+    auto b = PV(0.7, "b");
+    auto c = PV(0.5, "c");
+    const std::array<double, 3> q{1.3, 0.7, 0.5};
+#define EXPECT_BINARY_FASTPATH(expr_)                                          \
+  do {                                                                         \
+    const auto e_ = (expr_);                                                   \
+    const auto fwd_ = diff::derivative_tensor<1>(e_, q);                       \
+    const auto rev_ = diff::gradient<DiffMode::Reverse>(e_, q);                \
+    for (std::size_t k_ = 0; k_ < 3; ++k_) {                                   \
+      EXPECT_NEAR(fwd_.data()[k_], rev_[k_], 1e-12);                           \
+    }                                                                          \
+  } while (0)
+    EXPECT_BINARY_FASTPATH(hypot(a, b) + c * c);
+    EXPECT_BINARY_FASTPATH(atan2(a, b) + c * c);
+    EXPECT_BINARY_FASTPATH(pow(a, b) + c * c);
+    EXPECT_BINARY_FASTPATH(max(a, b) + c * c);
+    EXPECT_BINARY_FASTPATH(min(a, b) + c * c);
+#undef EXPECT_BINARY_FASTPATH
+  }
 #undef EXPECT_FASTPATH_MATCHES_REVERSE
+}
+
+// ---------------------------------------------------------------------------
+// Bit-exactness gate.
+//
+// This library's contract is exact answers, so a build flag or a kernel rewrite
+// is only acceptable if it leaves every derivative bit-for-bit unchanged.  That
+// is not something EXPECT_DOUBLE_EQ can check -- it allows 4 ULP, which is
+// exactly the room a "harmless" reassociation needs.
+//
+// So: run every driver over a sweep of points, fold the raw IEEE bits of every
+// result into one hash, and pin it.  Two builds agree iff the hash agrees.
+// Recompute and update the constant deliberately, never to make a red test
+// green -- a change here means results moved, and that needs a reason.
+//
+// The pinned value is necessarily per-toolchain: where a compiler forms an FMA
+// changes the last bit, so GCC, clang and MSVC each have their own answer and
+// none of them is wrong.  Pinning one of them in CI would just mean the other
+// two fail for no defect.  So the constant is checked only when the build asks
+// for it with -DDIFF_PIN_BIT_HASH=<value>, and the hash is always reported.
+//
+// The way to use it is a same-compiler A/B, which is the question it answers:
+//
+//     ctest -R BitExactness --output-on-failure     # note the hash
+//     ...change a flag or a kernel...
+//     ctest -R BitExactness --output-on-failure     # it must not have moved
+//
+// The value for GCC 15 on x86-64 with -ffp-contract=fast is
+// 0x10bbe21b2157d028.
+// ---------------------------------------------------------------------------
+namespace {
+struct BitHash {
+  std::uint64_t h = 1469598103934665603ull;
+  void operator()(double d) noexcept {
+    std::uint64_t b;
+    std::memcpy(&b, &d, sizeof b);
+    for (int i = 0; i < 8; ++i) {
+      h ^= (b >> (i * 8)) & 0xff;
+      h *= 1099511628211ull;
+    }
+  }
+};
+} // namespace
+
+TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
+  Variable<double, FixedString{"x"}> x;
+  Variable<double, FixedString{"y"}> y;
+  Variable<double, FixedString{"z"}> z;
+  const auto e = sin(x * y) * exp(x + y) + log(y * y + 1.0) / (x + 2.0) -
+                 tanh(x) + sqrt(z * z + 1.0) + atan(x * z) + erf(y) +
+                 cbrt(z + 3.0) + pow(z, 2.5);
+  BitHash feed;
+  for (int i = 1; i <= 120; ++i) {
+    const double a = 0.01 * i, b = 0.02 * i + 0.3, c = 0.015 * i + 0.5;
+    const std::array<double, 3> p{a, b, c};
+    for (double v : gradient<DiffMode::Reverse>(e, p)) feed(v);
+    const auto g1 = derivative_tensor<1>(e, p);
+    for (std::size_t k = 0; k < 3; ++k) feed(g1.data()[k]);
+    const auto g2 = derivative_tensor<2>(e, p);
+    for (std::size_t k = 0; k < 9; ++k) feed(g2.data()[k]);
+    feed(e.eval(a, b, c));
+    feed(e.eval_with_tangent<"x">(a, b, c).deriv());
+
+    const std::vector<double> xs{a, b, c};
+    auto fn = [](const auto *q) {
+      using std::exp, std::sin;
+      return sin(q[0] * q[1]) * exp(q[0]) + q[2] * q[2] * q[1];
+    };
+    const auto H = diff::hessian(fn, std::span<const double>{xs});
+    feed(H.value);
+    for (auto v : H.gradient) feed(v);
+    for (std::size_t r = 0; r < 3; ++r)
+      for (std::size_t cc = 0; cc < 3; ++cc) feed(H.h(r, cc));
+    for (auto v : diff::gradient(fn, std::span<const double>{xs})) feed(v);
+
+    const auto u = sin(x * x) + exp(x) + atan(x) + asinh(x);
+    feed(univariate_derivative<1>(u, a));
+    feed(univariate_derivative<2>(u, a));
+    feed(univariate_derivative<4>(u, a));
+  }
+  // Always reported, so an A/B is a matter of reading two runs.
+  std::printf("[ BIT HASH ] %016llx\n",
+              static_cast<unsigned long long>(feed.h));
+#ifdef DIFF_PIN_BIT_HASH
+  EXPECT_EQ(feed.h, static_cast<std::uint64_t>(DIFF_PIN_BIT_HASH))
+      << "a derivative moved in the last bit -- see the note above this test";
+#endif
 }
 
 // TaylorDual had no comparison operators, so detail::max_impl/min_impl -- which

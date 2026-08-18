@@ -131,14 +131,65 @@ option(DIFF_BUILD_COMPARE "Build comparison benchmarks against autodiff" OFF)
 option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
 option(DIFF_USE_EIGEN "Build the Eigen interop boundary (include/interop/eigen_interop.hpp)" ON)
 
+# Codegen flags for OUR targets only.
+#
+# These used to be add_compile_options(), i.e. global, which meant -march=native
+# also landed on gtest, Google Benchmark and autodiff.  That is not just untidy:
+# Google Benchmark builds itself with -Werror, and on a CI runner whose native
+# arch resolves to something clang only half-supports it turns clang's
+#   "invalid feature combination: +avx10.1-256; will be promoted to avx10.1-512"
+# into a hard build failure in a dependency we do not control.  Our flags belong
+# on our targets.
+#
+# Not put on the `diff` INTERFACE target either: diff is header-only, so it
+# compiles nothing, and pushing -march=native onto a downstream consumer would
+# decide their deployment target for them.
 if (MSVC)
-   add_compile_options(/arch:AVX2)
+    set(DIFF_CODEGEN_FLAGS /arch:AVX2)
+elseif (ENABLE_NATIVE_ARCH)
+    set(DIFF_CODEGEN_FLAGS -march=native)
 else ()
-    if (ENABLE_NATIVE_ARCH)
-        add_compile_options(-march=native)
-    else ()
-        add_compile_options(-march=x86-64-v3)
-    endif ()
+    set(DIFF_CODEGEN_FLAGS -march=x86-64-v3)
+endif ()
+
+# Floating-point contract.  Two flags, and neither of them trades accuracy for
+# speed -- this library's results are exact answers, so nothing here is allowed
+# to be lossy.  In particular -ffast-math and its parts (-ffinite-math-only,
+# -fno-signed-zeros, -fassociative-math, -freciprocal-math) are deliberately
+# NOT used, and neither is glibc's vector math: libmvec is 4 ULP against 0.5
+# for the scalar calls.  Measured, -ffast-math is worth about -19% on the
+# benchmark suite; it is still refused, and it would break the bitwise
+# agreement the suite asserts between the seeded and leaf-storage engines.
+#
+#   -ffp-contract=fast   is already GCC's default under -std=gnu++.  Naming it
+#       changes nothing today and is not a speed flag: it pins the one
+#       remaining source of result variation.  Contraction placement decides
+#       where a*b+c becomes a single FMA, and the same source compiles to three
+#       different bit patterns under fast/on/off.  FMA is one rounding instead
+#       of two, so `fast` is both the quickest and the most accurate of the
+#       three -- but left unstated, a compiler default change would silently
+#       move every derivative in the last bit.
+#
+#   -fno-math-errno      says nothing in here reads errno after a libm call,
+#       which is true.  It lets sqrt() become the sqrtsd instruction (bitwise
+#       identical -- IEEE requires sqrt to be correctly rounded) instead of a
+#       library call.  Measured at -1.7% on the benchmark suite, and with
+#       contraction pinned as above the results are byte-for-byte unchanged.
+#
+# Not used, on measurement rather than principle: -fno-plt was +0.8% (slower,
+# despite PLT stubs showing at 3.2% of the profile) and LTO was -0.2%, inside
+# noise and one more input to inlining, hence to contraction placement.
+#
+# MSVC gets nothing here, and wants nothing: /fp:precise is already its default
+# and already forbids the reassociations refused above, and it does not contract
+# unless asked (/fp:contract).  There is no /fp: spelling of -fno-math-errno.
+# So the conservative behaviour is the default there and the flags below would
+# have no equivalent to express -- MSVC results are its own, and the
+# bit-exactness test in tests.cpp is a same-compiler A/B for exactly that
+# reason.  Do NOT add /fp:fast: it is MSVC's -ffast-math.
+option(DIFF_FP_FLAGS "Pin FP contraction and drop errno on libm calls" ON)
+if (DIFF_FP_FLAGS AND NOT MSVC)
+    list(APPEND DIFF_CODEGEN_FLAGS -ffp-contract=fast -fno-math-errno)
 endif ()
 
 # Eigen backs include/interop/eigen_interop.hpp — the boundary where a Hessian leaves
@@ -158,7 +209,16 @@ endif ()
 # ever linking Eigen3::Eigen to its target, so <Eigen/Core> resolved through a
 # /usr/include/Eigen symlink rather than through any include path CMake set.
 if (DIFF_USE_EIGEN)
-    find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+    # No version in the request, then checked by hand.  Eigen's config file is
+    # generated with SameMajorVersion compatibility, so asking for "3.4" is
+    # asking for "some 3.x" -- and vcpkg now ships Eigen 5, which can never
+    # satisfy that however compatible it actually is.  The interop boundary only
+    # uses Eigen::Map, Matrix, Vector and SparseMatrix, none of which changed.
+    find_package(Eigen3 REQUIRED NO_MODULE)
+    if (DEFINED Eigen3_VERSION AND Eigen3_VERSION VERSION_LESS 3.4)
+        message(FATAL_ERROR "Eigen 3.4 or newer is required (found ${Eigen3_VERSION})")
+    endif ()
+    message(STATUS "Eigen: ${Eigen3_VERSION}")
 endif ()
 
 include(FetchContent)
@@ -227,9 +287,11 @@ endif ()
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     add_executable(main src/main.cpp)
     target_link_libraries(main PUBLIC diff)
+    target_compile_options(main PRIVATE ${DIFF_CODEGEN_FLAGS})
 
     add_executable(tests tests.cpp)
     target_link_libraries(tests gtest_main diff)
+    target_compile_options(tests PRIVATE ${DIFF_CODEGEN_FLAGS})
 
     enable_testing()
     gtest_discover_tests(tests)
@@ -237,6 +299,7 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     if (DIFF_BUILD_COMPARE)
         add_executable(benchmarks_compare benchmarks/benchmark_compare.cpp)
         target_link_libraries(benchmarks_compare PRIVATE benchmark::benchmark diff autodiff::autodiff)
+        target_compile_options(benchmarks_compare PRIVATE ${DIFF_CODEGEN_FLAGS})
         if (NOT MSVC)
             target_compile_options(benchmarks_compare PRIVATE -Wall -Wextra)
         endif ()
@@ -245,6 +308,7 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     if (DIFF_BUILD_BENCHMARKS)
         add_executable(benchmarks benchmarks/benchmark.cpp)
         target_link_libraries(benchmarks PRIVATE benchmark::benchmark diff)
+        target_compile_options(benchmarks PRIVATE ${DIFF_CODEGEN_FLAGS})
         set(BENCHMARK_RESULTS_DIR "${CMAKE_BINARY_DIR}/benchmark-results")
         add_custom_target(benchmark_json
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${BENCHMARK_RESULTS_DIR}"
