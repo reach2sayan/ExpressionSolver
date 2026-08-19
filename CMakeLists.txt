@@ -145,7 +145,12 @@ option(DIFF_USE_EIGEN "Build the Eigen interop boundary (include/interop/eigen_i
 # compiles nothing, and pushing -march=native onto a downstream consumer would
 # decide their deployment target for them.
 if (MSVC)
-    set(DIFF_CODEGEN_FLAGS /arch:AVX2)
+    # /bigobj raises the COFF section limit from 2^16 to 2^32.  A header-only
+    # expression-template library hits the 2^16 ceiling in one TU: every
+    # instantiated node type is its own COMDAT section, and tests.cpp alone
+    # instantiates enough of them to fail the link-time object write with
+    # C1128.  GCC and Clang have no such limit and need no equivalent flag.
+    set(DIFF_CODEGEN_FLAGS /arch:AVX2 /bigobj)
 elseif (ENABLE_NATIVE_ARCH)
     set(DIFF_CODEGEN_FLAGS -march=native)
 else ()

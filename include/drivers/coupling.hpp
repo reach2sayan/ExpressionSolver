@@ -56,7 +56,9 @@ template <std::size_t N>
 consteval void couple(coupling_rows<N> &rows, const symbol_set<N> &a,
                       const symbol_set<N> &b) noexcept {
 
-  for (auto &&[i, row] : rows | std::views::enumerate) {
+  // enumerate hands out a signed difference_type; bitset indexes by size_t.
+  for (auto &&[n, row] : rows | std::views::enumerate) {
+    const auto i = static_cast<std::size_t>(n);
     if (a[i]) {
       row |= b;
     }

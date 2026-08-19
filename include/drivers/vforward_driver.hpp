@@ -184,7 +184,9 @@ HessianResult hessian_expr_reverse(const Expr &expr,
          std::views::zip(res.hessian | std::views::chunk(N), grads,
                          kScatter[c])) {
       if (target != no_column) {
-        row[target] = static_cast<double>(grad.template get<1>());
+        // A chunk view indexes by its signed difference_type, not by size_t.
+        row[static_cast<std::ranges::range_difference_t<decltype(row)>>(
+            target)] = static_cast<double>(grad.template get<1>());
       }
     }
   });
