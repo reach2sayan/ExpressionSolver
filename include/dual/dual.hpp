@@ -11,6 +11,13 @@
 
 namespace diff {
 
+// (a+be)(c+de) = ac + (ad+bc)e, so a dual commutes exactly when the scalar
+// underneath it does.
+template <Numeric T> class Dual;
+template <Numeric T>
+inline constexpr bool is_commutative_multiply_v<Dual<T>> =
+    is_commutative_multiply_v<T>;
+
 template <Numeric T> class Dual {
 private:
   T val_{};

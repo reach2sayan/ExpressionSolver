@@ -1,4 +1,5 @@
 #include "expr/bound.hpp"
+#include "expr/equation.hpp" // Equation: every derivative entry point
 // Apples-to-apples comparison: this library vs. autodiff v1.1.2.
 //
 // Three scalar functions of increasing arity:
@@ -48,7 +49,7 @@ run_our_forward(benchmark::State &state, Expr &expr,
                 std::array<dual_scalar_t<typename Expr::value_type>, N> vals) {
   for (auto _ : state) {
     benchmark::DoNotOptimize(vals);
-    auto g = derivative_tensor<1>(expr, vals);
+    auto g = Equation{expr}.template derivative_tensor<1>(vals);
     benchmark::DoNotOptimize(g);
     benchmark::ClobberMemory();
   }
@@ -83,7 +84,7 @@ static void run_ours_reverse_scratch(benchmark::State &state,
     using T = typename std::remove_cvref_t<decltype(expr)>::value_type;
     std::array<T, N> pt{};
     std::ranges::transform(xs, pt.begin(), [](double v) { return T{v}; });
-    auto g = reverse_mode_grad(expr, pt);
+    auto g = Equation{expr}.gradient(pt);
     benchmark::DoNotOptimize(g);
     benchmark::ClobberMemory();
   }
@@ -101,7 +102,7 @@ static void run_ours_reverse_reuse(benchmark::State &state, Expr &expr,
     benchmark::DoNotOptimize(v);
     std::array<T, N> pt{};
     std::ranges::transform(v, pt.begin(), [](double s) { return T{s}; });
-    auto g = reverse_mode_grad(expr, pt);
+    auto g = Equation{expr}.gradient(pt);
     benchmark::DoNotOptimize(g);
     benchmark::ClobberMemory();
   }
@@ -609,7 +610,7 @@ static void BM_Ours_Forward_T4th(benchmark::State &state) {
   for (auto _ : state) {
     auto vals = std::array{T4_X0};
     benchmark::DoNotOptimize(vals);
-    auto t4 = derivative_tensor<4>(expr, vals);
+    auto t4 = Equation{expr}.template derivative_tensor<4>(vals);
     benchmark::DoNotOptimize(t4);
     benchmark::ClobberMemory();
   }
@@ -639,7 +640,7 @@ static void BM_Ours_Taylor_T4th(benchmark::State &state) {
   auto expr = sin(x);
   for (auto _ : state) {
     benchmark::DoNotOptimize(x0);
-    double d4 = univariate_derivative<4>(expr, x0);
+    double d4 = Equation{expr}.template univariate_derivative<4>(x0);
     benchmark::DoNotOptimize(d4);
     benchmark::ClobberMemory();
   }
@@ -660,7 +661,7 @@ static void BM_Ours_Forward_THess(benchmark::State &state) {
   for (auto _ : state) {
     auto vals = std::array{xv, yv};
     benchmark::DoNotOptimize(vals);
-    auto H = derivative_tensor<2>(expr, vals);
+    auto H = Equation{expr}.template derivative_tensor<2>(vals);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -678,7 +679,7 @@ static void BM_Ours_Reverse_THess(benchmark::State &state) {
   for (auto _ : state) {
     auto vals = std::array{xv, yv};
     benchmark::DoNotOptimize(vals);
-    auto H = reverse_mode_hess(expr, vals);
+    auto H = Equation{expr}.hessian(vals);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -719,12 +720,16 @@ static void BM_Ours_Forward_TDir(benchmark::State &state) {
   // Seed dual parts directly with direction components — single evaluation
   using D = Dual<double>;
   double xv = 1.0, yv = 0.5;
-  benchmark::DoNotOptimize(xv);
-  benchmark::DoNotOptimize(yv);
   Variable<D, FixedString{"x"}> x;
   Variable<D, FixedString{"y"}> y;
   auto expr = exp(x) * sin(y);
   for (auto _ : state) {
+    // Re-fenced inside the loop, not outside it.  Fenced only once, the whole
+    // evaluation is loop-invariant and the compiler hoists it: the row then
+    // times a store and reads ~0.25 ns, a quarter of one call's worth of work.
+    // Every other cell in this file already fences its point per iteration.
+    benchmark::DoNotOptimize(xv);
+    benchmark::DoNotOptimize(yv);
     auto val = expr.eval(D{xv, DIR_UXY}, D{yv, DIR_UXY});
     double dir = val.template get<1>();
     benchmark::DoNotOptimize(dir);
@@ -1140,7 +1145,7 @@ static void ours_revhess_expr(benchmark::State &state, MakeExpr make) {
   std::copy_n(x.begin(), Nv, xa.begin());
   for (auto _ : state) {
     benchmark::DoNotOptimize(xa);
-    auto H = diff::hessian<diff::DiffMode::Reverse>(E, xa);
+    auto H = Equation{E}.hessian(xa);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -1337,7 +1342,7 @@ double ours_partial(const Expr &expr, std::string_view sym,
   using T = typename std::remove_cvref_t<Expr>::value_type;
   std::array<T, N> seed{};
   std::ranges::transform(pt, seed.begin(), [](double v) { return T{v}; });
-  const auto g = reverse_mode_grad(expr, seed);
+  const auto g = Equation{expr}.gradient(seed);
   const auto order = symbol_order<std::remove_cvref_t<Expr>>();
   for (std::size_t i = 0; i < order.size(); ++i)
     if (order[i] == sym)

@@ -29,8 +29,20 @@ using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
 // Leaves hold no value, so the point is threaded through the sweep: a leaf
 // reads its slot out of `vals` (in canonical symbol order) instead of out of
 // itself.
-template <std::size_t Base = 0, CSymbolList Syms, CExpression E,
-          CNumericBuffer Vals, CNumericBuffer Cache>
+//
+// `Store` says whether this node's value has to be written to its slot at all.
+// A slot is only ever read back by a *parent's* adjoint rule -- every cache[]
+// in operations.hpp is cache[cb[...]], a child index, so no rule reads its own
+// slot -- which makes the answer entirely the parent's `reads_primals`.  A sum
+// or a negation reads neither operand, so everything directly beneath one is
+// computed, handed upward, and never written down.  The root is likewise never
+// stored: its value is the return value, and nothing looks it up.
+//
+// The array keeps one slot per node either way; what goes away is the store.
+// A slot that is written by nobody and read by nobody is dead, which is the
+// form the optimiser can actually drop.
+template <std::size_t Base = 0, CSymbolList Syms, bool Store = true,
+          CExpression E, CNumericBuffer Vals, CNumericBuffer Cache>
 constexpr auto fill_cache(const E &node, const Vals &vals,
                           Cache &cache) noexcept {
   using U = std::remove_cvref_t<E>;
@@ -41,14 +53,19 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
     // this node's operator into this node's slot.
     VT v = [&]<std::size_t... I>(std::index_sequence<I...>) {
       return typename U::op_type::func_type{}(
-          fill_cache<child_base_at<Base, Kids, I>(), Syms>(
+          fill_cache<child_base_at<Base, Kids, I>(), Syms,
+                     U::op_type::reads_primals>(
               std::get<I>(node.expressions()), vals, cache)...);
     }(std::make_index_sequence<std::tuple_size_v<Kids>>{});
-    cache[Base] = v;
+    if constexpr (Store) {
+      cache[Base] = v;
+    }
     return v;
   } else { // leaf (Variable / Constant / Lit)
     VT v = node.template eval_seeded<Syms>(vals);
-    cache[Base] = v;
+    if constexpr (Store) {
+      cache[Base] = v;
+    }
     return v;
   }
 }
@@ -69,7 +86,9 @@ DIFF_ALWAYS_INLINE constexpr auto reverse_sweep(const Expr &expr,
                              Grads &grads) noexcept {
   using T = typename std::remove_cvref_t<Expr>::value_type;
   node_cache_t<Expr> cache{};
-  const T root = fill_cache<0, Syms>(expr, seeds, cache);
+  // Store=false: the root's value is what this function returns, and no
+  // adjoint rule looks up its slot, so writing it would be a dead store.
+  const T root = fill_cache<0, Syms, false>(expr, seeds, cache);
   expr.backward(Syms{}, T{1}, grads, cache);
   return root;
 }
@@ -144,6 +163,22 @@ enum class DiffMode { Symbolic, Reverse };
 
 namespace detail {
 
+// A gradient of a dual-valued expression comes back carrying the seed in its
+// dual part; the gradient proper is the real part.  Both gradient modes go
+// through here so they cannot disagree about it.
+template <Numeric T, std::size_t N>
+[[nodiscard]] constexpr auto strip_seed(const std::array<T, N> &grads) noexcept {
+  if constexpr (DualLike<T>) {
+    std::array<dual_scalar_t<T>, N> result{};
+    std::ranges::transform(grads, result.begin(),
+                           [](const T &g) { return g.template get<0>(); });
+    return result;
+  } else {
+    return grads;
+  }
+}
+
+
 // Reverse-mode gradient.  A dual-valued expression differentiates the same way
 // -- the sweep is identical -- and then hands back only the value level of each
 // gradient entry, which is the scalar derivative.
@@ -155,14 +190,7 @@ reverse_mode_gradient(const Expr &expr,
   using Syms = detail::expr_symbols_t<Expr>;
   std::array<T, N> grads{};
   reverse_sweep<Syms>(expr, vals, grads);
-  if constexpr (DualLike<T>) {
-    std::array<dual_scalar_t<T>, N> result{};
-    std::ranges::transform(grads, result.begin(),
-                           [](const T &g) { return g.template get<0>(); });
-    return result;
-  } else {
-    return grads;
-  }
+  return detail::strip_seed(grads);
 }
 
 template <CExpression Expr,
@@ -239,6 +267,7 @@ template <std::size_t N, std::size_t Order>
 // N=2/Order=2, where one evaluation is saved and four tuples are still visited.
 // Advancing to the next non-decreasing tuple directly makes the traversal
 // O(C(N + Order - 1, Order)) too.
+//
 // It is a consteval *table* rather than a lazy iterator, and that is the whole
 // point.  An iterator that stops on a data-dependent flag hides the trip count
 // from the optimiser, which costs far more than the traversal it saves: the
@@ -377,79 +406,6 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
 
 } // namespace detail
 
-template <DiffMode Mode, CExpression Expr,
-          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
-          std::size_t N = detail::expr_arity_v<Expr>>
-  requires(Mode == DiffMode::Reverse)
-[[nodiscard]] constexpr auto gradient(const Expr &expr,
-                                      const std::array<T, N> &values) noexcept {
-  return detail::reverse_mode_gradient(expr, values);
-}
-
-// Order-safe named form: values bind by symbol name (see make_values).
-template <DiffMode Mode, CExpression Expr, FixedString... Syms, Numeric... Vs,
-          Numeric T = typename std::remove_cvref_t<Expr>::value_type>
-  requires(Mode == DiffMode::Reverse && sizeof...(Syms) > 0)
-[[nodiscard]] constexpr auto gradient(const Expr &expr,
-                                      NamedValue<Syms, Vs>... nv) noexcept {
-  return detail::reverse_mode_gradient(expr, make_values<Expr, T>(nv...));
-}
-
-// Positional scalars, in canonical symbol order.
-template <DiffMode Mode, CExpression Expr, Numeric... Args,
-          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
-          std::size_t N = detail::expr_arity_v<Expr>>
-  requires(Mode == DiffMode::Reverse && sizeof...(Args) > 0 &&
-           (std::convertible_to<Args, T> && ...))
-[[nodiscard]] constexpr auto gradient(const Expr &expr,
-                                      const Args &...xs) noexcept {
-  static_assert(sizeof...(Args) == N,
-                "gradient: supply exactly one value per symbol, in canonical "
-                "order (see symbol_order<Expr>())");
-  return detail::reverse_mode_gradient(expr, std::array<T, N>{
-                                                 static_cast<T>(xs)...});
-}
-
-template <DiffMode Mode, CExpression Expr,
-          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
-          Numeric S = dual_scalar_t<T>,
-          std::size_t N = detail::expr_arity_v<Expr>>
-  requires(Mode == DiffMode::Reverse && DualLike<T>)
-[[nodiscard]] constexpr auto hessian(const Expr &expr,
-                                     std::array<S, N> values) noexcept {
-  return detail::reverse_mode_hessian(expr, values);
-}
-
-// Order-safe named form: values bind by symbol name (see make_values).
-template <DiffMode Mode, CExpression Expr, FixedString... Syms, Numeric... Vs,
-          Numeric T = typename std::remove_cvref_t<Expr>::value_type>
-  requires(Mode == DiffMode::Reverse && DualLike<T>)
-[[nodiscard]] constexpr auto hessian(const Expr &expr,
-                                     NamedValue<Syms, Vs>... nv) noexcept {
-  return detail::reverse_mode_hessian(
-      expr, make_values<Expr, dual_scalar_t<T>>(nv...));
-}
-
-
-template <std::size_t Order, CExpression Expr,
-          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
-          Numeric S = scalar_base_t<T>,
-          std::size_t N = detail::expr_arity_v<Expr>>
-  requires(Order > 0 && N > 0)
-[[nodiscard]] constexpr auto derivative_tensor(const Expr &expr,
-                                               std::array<S, N> values) noexcept {
-  return detail::derivative_tensor_impl<Order>(expr, values);
-}
-
-// Order-safe named form: values bind by symbol name (see make_values).
-template <std::size_t Order, CExpression Expr, FixedString... Syms,
-          Numeric... Vs>
-  requires(Order > 0 && sizeof...(Syms) > 0)
-[[nodiscard]] constexpr auto derivative_tensor(const Expr &expr,
-                                               NamedValue<Syms, Vs>... nv) noexcept {
-  return detail::derivative_tensor_impl<Order>(expr, make_values<Expr>(nv...));
-}
-
 
 namespace detail {
 
@@ -490,17 +446,13 @@ template <std::size_t Order, CExpression Expr,
 
 } // namespace detail
 
-template <std::size_t Order, CExpression Expr,
-          Numeric T = typename std::remove_cvref_t<Expr>::value_type,
-          Numeric S = scalar_base_t<T>,
-          std::size_t NVars = detail::expr_arity_v<Expr>>
-  requires(Order > 0 && NVars == 1)
-[[nodiscard]] constexpr S univariate_derivative(const Expr &expr,
-                                                S x0) noexcept {
-  return detail::univariate_derivative_impl<Order>(expr, x0);
-}
+
+// The expression-taking entry points that used to live here -- gradient<Mode>,
+// hessian<Mode>, derivative_tensor<Order>, univariate_derivative<Order>, and
+// the reverse_mode_grad / reverse_mode_hess macros -- are now members of
+// Equation (expr/equation.hpp).  A bare expression converts to a one-output
+// Equation implicitly, so `Equation{expr}.gradient(pt)` is the one spelling.
+// Everything above stays here as the engine those members call.
 
 } // namespace diff
 
-#define reverse_mode_grad gradient<diff::DiffMode::Reverse>
-#define reverse_mode_hess hessian<diff::DiffMode::Reverse>

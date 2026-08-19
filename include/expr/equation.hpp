@@ -2,6 +2,7 @@
 #include "drivers/gradient.hpp"
 #include "dual/dual.hpp"
 #include "expr/format.hpp"
+#include "expr/simplify.hpp"
 #include "util/config.hpp"
 #include "util/mpl.hpp"
 #include "util/scope_guard.hpp"
@@ -24,14 +25,23 @@ constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
 }
 } // namespace detail
 
+namespace detail {
+
+// The expressions are final by the time an Equation is built, so this is where
+// the symbolic partials get their canonical form.  Folding already happened as
+// the trees were built (simplify.hpp, called from the operator factories); what
+// is left to do here is order the commutative operands.
+//
+// Nothing outside Equation builds a Jacobian this way, so none of it is public.
+template <CExpression E>
+using canonical_t = decltype(canonicalise(std::declval<const E &>()));
+
 template <CSymbol... Syms, CExpression Expr>
 constexpr auto make_derivatives(mp::mp_list<Syms...>,
                                 const Expr &expr) noexcept {
   return std::tuple(
-      make_all_constant_except<Syms::value>(expr).derivative()...);
+      canonicalise(make_all_constant_except<Syms::value>(expr).derivative())...);
 }
-
-template <CExpression... Ts> class Equation;
 
 template <CSymbol... Syms, CExpression... Exprs>
 constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
@@ -43,6 +53,8 @@ constexpr auto make_jac_rows(const std::tuple<Exprs...> &es,
       },
       es);
 }
+
+} // namespace detail
 
 template <CExpression TFirst, CExpression... TRest>
   requires((CSameValueType<TFirst, TRest> && ...))
@@ -58,10 +70,11 @@ public:
   static constexpr std::size_t number_of_derivatives = input_dim;
 
 private:
-  using Exprs = std::tuple<TFirst, TRest...>;
-  using jacobian_t = decltype(make_jac_rows(std::declval<Exprs>(), symbols{}));
+  // Stored canonical: symbols and input_dim above stay derived from what the
+  // user wrote, so a partial that folds away a symbol cannot shrink the point.
+  using Exprs =
+      std::tuple<detail::canonical_t<TFirst>, detail::canonical_t<TRest>...>;
   Exprs expressions;
-  jacobian_t jacobian_data;
 
   using point_t = std::array<value_type, input_dim>;
 
@@ -70,13 +83,14 @@ private:
     requires(input_dim > 0)
   {
     md_tensor<value_type, md::extents<std::size_t, output_dim, input_dim>> J{};
+    const auto rows = jacobian_rows();
     static_for<output_dim>([&]<std::size_t I>() {
       assign_row(J, I,
                  std::apply(
                      [&](const auto &...ds) {
                        return detail::eval_all<symbols>(vals, ds...);
                      },
-                     std::get<I>(jacobian_data)));
+                     std::get<I>(rows)));
     });
     return J;
   }
@@ -160,15 +174,22 @@ private:
     if constexpr (N == 0) {
       return std::get<0>(std::forward<decltype(self)>(self).expressions);
     } else {
-      return std::get<N - 1>(
-          std::get<0>(std::forward<decltype(self)>(self).jacobian_data));
+      // The rows are built on demand, so this hands back a value rather than a
+      // reference into a temporary.  The trees are empty types, so it is free.
+      auto row = std::get<0>(self.jacobian_rows());
+      std::tuple_element_t<N - 1, decltype(row)> d = std::get<N - 1>(row);
+      return d;
     }
   }
 
 public:
-  constexpr Equation(TFirst first, TRest... rest) noexcept
-      : expressions{std::move(first), std::move(rest)...},
-        jacobian_data{make_jac_rows(expressions, symbols{})} {}
+  // explicit: without it, `Equation<E> eq = expr;` would be ambiguous between
+  // this constructor and EquationConvertible's conversion operator.  A
+  // multi-argument constructor was never an implicit-conversion candidate
+  // anyway, and CTAD is direct-initialisation, so nothing else changes.
+  constexpr explicit Equation(TFirst first, TRest... rest) noexcept
+      : expressions{detail::canonicalise(first),
+                    detail::canonicalise(rest)...} {}
 
   // The symbolic trees themselves.  Every other member reduces them to numbers
   // at a point; these hand them over intact, which is what the formatter below
@@ -176,11 +197,25 @@ public:
   [[nodiscard]] constexpr const Exprs &functions() const noexcept {
     return expressions;
   }
-  [[nodiscard]] constexpr const jacobian_t &jacobian_rows() const noexcept {
-    return jacobian_data;
+  // Built on demand rather than stored.  Naming Equation<E> would otherwise
+  // instantiate the whole symbolic Jacobian, which the reverse-mode members and
+  // derivative_tensor never touch -- and with the implicit conversion from a
+  // bare expression, naming it is something callers now do constantly.
+  [[nodiscard]] constexpr auto jacobian_rows() const noexcept {
+    return detail::make_jac_rows(expressions, symbols{});
   }
 
-  [[nodiscard]] constexpr auto evaluate(const point_t &vals) const noexcept {
+  // Every numeric member takes a point in any of the spellings eval() accepts
+  // -- an array, positional scalars in canonical order, named<"x">(v) pack, a
+  // ValueMap, or a range -- because they all go through one normaliser.  The
+  // element type is the only thing that differs between them.
+  template <Numeric U = value_type>
+  [[nodiscard]] static constexpr auto point(const CEvalArg auto &...args) noexcept {
+    return detail::make_point<symbols, U, input_dim>(args...);
+  }
+
+  [[nodiscard]] constexpr auto evaluate(const CEvalArg auto &...args) const noexcept {
+    const auto vals = point(args...);
     if constexpr (output_dim == 1) {
       return std::get<0>(expressions).template eval_seeded<symbols>(vals);
     } else {
@@ -192,16 +227,25 @@ public:
     }
   }
 
-  [[nodiscard]] constexpr auto
-  eval_derivatives(const point_t &vals) const noexcept
-    requires(output_dim == 1)
+  // The single-output row of the Jacobian.  Symbolic evaluates the stored
+  // partial trees; Reverse runs one reverse sweep and never builds them.
+  template <DiffMode Mode = DiffMode::Reverse>
+  [[nodiscard]] constexpr auto gradient(const CEvalArg auto &...args) const noexcept
+    requires(output_dim == 1 && input_dim > 0)
   {
-    const auto &row = std::get<0>(jacobian_data);
-    std::array<value_type, input_dim> result{};
-    static_for<input_dim>([&]<std::size_t I>() {
-      result[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
-    });
-    return result;
+    const auto vals = point(args...);
+    if constexpr (Mode == DiffMode::Symbolic) {
+      const auto rows = jacobian_rows();
+      const auto &row = std::get<0>(rows);
+      std::array<value_type, input_dim> grads{};
+      static_for<input_dim>([&]<std::size_t I>() {
+        grads[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
+      });
+      return detail::strip_seed(grads);
+    } else {
+      // The reverse engine already strips the seed, so both modes agree.
+      return detail::reverse_mode_gradient(std::get<0>(expressions), vals);
+    }
   }
 
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
@@ -212,40 +256,68 @@ public:
   DIFF_KEYED_ACCESSORS(std::size_t N, std::size_t N, N, idx_t<N>,
                        requires(output_dim == 1 && N <= input_dim))
 
-  template <DiffMode Mode>
-  [[nodiscard]] constexpr auto jacobian(const point_t &values) const noexcept
-    requires(Mode == DiffMode::Symbolic && input_dim > 0)
+  template <DiffMode Mode = DiffMode::Reverse>
+  [[nodiscard]] constexpr auto jacobian(const CEvalArg auto &...args) const noexcept
+    requires(input_dim > 0)
   {
-    return jacobian_symbolic(values);
+    if constexpr (Mode == DiffMode::Symbolic) {
+      return jacobian_symbolic(point(args...));
+    } else {
+      return jacobian_reverse_mode(point(args...));
+    }
   }
 
-  template <DiffMode Mode>
-  [[nodiscard]] constexpr auto jacobian(const point_t &values) const noexcept
-    requires(Mode == DiffMode::Reverse && input_dim > 0)
-  {
-    return jacobian_reverse_mode(values);
-  }
-
-  template <DiffMode Mode>
-  [[nodiscard]] constexpr auto
-  hessian(const std::array<dual_scalar_t<value_type>, input_dim> &values)
-      const noexcept
+  // A scalar function's Hessian is a matrix, not a 1 x n x n stack, so the
+  // leading output axis only appears when there is more than one output.  Same
+  // for derivative_tensor below.
+  template <DiffMode Mode = DiffMode::Reverse>
+  [[nodiscard]] constexpr auto hessian(const CEvalArg auto &...args) const noexcept
     requires(Mode == DiffMode::Reverse && DualLike<value_type> && input_dim > 0)
   {
-    return hessian_forward_over_reverse(values);
+    const auto vals = point<dual_scalar_t<value_type>>(args...);
+    if constexpr (output_dim == 1) {
+      return detail::reverse_mode_hessian(std::get<0>(expressions), vals);
+    } else {
+      return hessian_forward_over_reverse(vals);
+    }
   }
 
   template <std::size_t Order>
-  [[nodiscard]] constexpr auto derivative_tensor(
-      std::array<scalar_base_t<value_type>, input_dim> values) const noexcept
+  [[nodiscard]] constexpr auto
+  derivative_tensor(const CEvalArg auto &...args) const noexcept
     requires(input_dim > 0 && Order > 0)
   {
-    return equation_derivative_tensor_impl<Order>(std::move(values));
+    const auto vals = point<scalar_base_t<value_type>>(args...);
+    if constexpr (output_dim == 1) {
+      return detail::derivative_tensor_impl<Order>(std::get<0>(expressions),
+                                                   vals);
+    } else {
+      return equation_derivative_tensor_impl<Order>(vals);
+    }
+  }
+
+  // One variable, one Taylor sweep: the Order-th derivative as a plain number
+  // rather than a rank-Order tensor with one entry.
+  template <std::size_t Order>
+  [[nodiscard]] constexpr auto
+  univariate_derivative(scalar_base_t<value_type> x0) const noexcept
+    requires(input_dim == 1 && output_dim == 1 && Order > 0)
+  {
+    return detail::univariate_derivative_impl<Order>(std::get<0>(expressions),
+                                                     x0);
   }
 };
 
 template <CExpression T, CExpression... Ts>
 Equation(T, Ts...) -> Equation<T, Ts...>;
+
+// Declared back in expr/expressions.hpp, where Equation was still incomplete.
+template <typename Derived>
+template <typename Eq>
+  requires std::same_as<Eq, Equation<Derived>>
+constexpr EquationConvertible<Derived>::operator Eq() const noexcept {
+  return Equation<Derived>{static_cast<const Derived &>(*this)};
+}
 
 template <CExpression... Ts>
 std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
@@ -276,12 +348,13 @@ struct std::formatter<diff::Equation<Ts...>, char> {
     const std::string one = std::format("{{:{}}}", spec_);
     auto out = ctx.out();
 
+    const auto rows = eq.jacobian_rows();
     diff::static_for<Eq::output_dim>([&]<std::size_t I>() {
       out = std::format_to(out, "f{}: ", I);
       out = std::vformat_to(out, one,
                             std::make_format_args(std::get<I>(eq.functions())));
       out = std::format_to(out, "\n  grad: ");
-      const auto &row = std::get<I>(eq.jacobian_rows());
+      const auto &row = std::get<I>(rows);
       diff::static_for<Eq::input_dim>([&]<std::size_t J>() {
         if constexpr (J > 0) {
           out = std::format_to(out, ", ");
@@ -297,5 +370,4 @@ private:
   std::string_view spec_{};
 };
 
-#define reverse_mode_jac jacobian<diff::DiffMode::Reverse>
-#define symbolic_mode_jac jacobian<diff::DiffMode::Symbolic>
+

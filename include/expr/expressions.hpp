@@ -22,7 +22,15 @@ concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
 // Closed under the four arithmetic operators and negation (Dual, TaylorDual,
 // VectorDual, ...).
 template <typename T>
-concept CFieldLike = std::default_initializable<T> && requires(T a, T b) {
+// constructible_from<T, int> is the multiplicative identity, and it is not
+// decoration: differentiation manufactures exactly 0 and 1, the reverse sweep
+// seeds its root adjoint with T{1}, and the int spelling of Lit<T, V> -- the
+// thing that keeps dual-valued trees empty -- is `T(V)` for an int V.  A type
+// closed under the five operators but unable to spell one cannot be
+// differentiated at all, so the concept says so rather than letting it fail
+// deep inside a sweep.
+concept CFieldLike = std::default_initializable<T> &&
+                     std::constructible_from<T, int> && requires(T a, T b) {
   { a + b } -> std::convertible_to<T>;
   { a - b } -> std::convertible_to<T>;
   { a * b } -> std::convertible_to<T>;
@@ -32,6 +40,35 @@ concept CFieldLike = std::default_initializable<T> && requires(T a, T b) {
 
 template <typename T>
 concept Numeric = CArithmetic<T> || CFieldLike<T>;
+
+// Does multiplication commute for this scalar?
+//
+// Numeric asks only for closure under + - * / and negation, so it admits
+// matrices, quaternions, and anything else whose product depends on the order
+// of its operands.  Nothing detects that structurally, so it is declared rather
+// than deduced.  Built-in arithmetic commutes and says so here; every other
+// type opts in for itself.
+//
+// The default is the safe answer: a type that says nothing is treated as
+// non-commutative, which costs a canonicalisation share and never a wrong
+// result.  Only expr/simplify.hpp reads it -- to decide whether the operands of
+// a product may be put in a canonical order, which is what lets x*y and y*x
+// become the same type.
+//
+// Specialise it directly for a class template, propagating from the scalar
+// underneath:
+//
+//   template <Numeric T>
+//   inline constexpr bool is_commutative_multiply_v<MyDual<T>> =
+//       is_commutative_multiply_v<T>;
+//
+// or reach for DIFF_COMMUTATIVE_MULTIPLY(MyScalar) below for a concrete type.
+template <typename T>
+inline constexpr bool is_commutative_multiply_v = CArithmetic<T>;
+
+template <typename T>
+concept CCommutativeMultiply =
+    is_commutative_multiply_v<std::remove_cvref_t<T>>;
 
 // Decomposable into {value, derivative} via std::tuple_size / get<I> — the
 // protocol Dual, Constant, Variable and Expression all opt into.
@@ -109,6 +146,33 @@ template <FixedString S> [[nodiscard]] consteval auto operator""_s() noexcept {
 } // namespace literals
 
 template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
+
+template <CExpression... Ts> class Equation;
+
+// Every derivative entry point is an Equation member, so a bare expression has
+// to be able to reach one.  The conversion is only declared here -- Equation is
+// still incomplete, and expr/equation.hpp cannot be included from this header
+// without a cycle -- and defined out of line once it is a complete type.  A
+// mixin rather than a member of ExpressionOps because leaves do not derive from
+// ExpressionOps: Variable and the constant leaves each pick it up separately.
+//
+// It buys implicit conversion at a non-deduced `const Equation<E>&` parameter.
+// Deduction never fires through a user-defined conversion, so it does not, and
+// cannot, shorten `Equation{expr}.gradient(pt)` at a call site.
+// A *constrained template* rather than a plain `operator Equation<Derived>()`.
+// A plain one is a candidate for every is_convertible query, and answering such
+// a query means completing its return type -- so std::tuple asking whether an
+// expression converts to itself would complete Equation<that expression>, which
+// in turn canonicalises, which std::applys over the children, which asks
+// is_convertible again.  That recursion is immediate and the cost, even where
+// it terminates, lands on every tuple operation in the library.  Deducing the
+// target and rejecting it with same_as answers those queries without ever
+// naming Equation's members.
+template <typename Derived> struct EquationConvertible {
+  template <typename Eq>
+    requires std::same_as<Eq, Equation<Derived>>
+  constexpr operator Eq() const noexcept;
+};
 
 template <Numeric T, auto... V>
 inline constexpr bool is_expression_type_v<Lit<T, V...>> = true;
@@ -201,7 +265,8 @@ template <auto Seed, CExpression Expr, CEvalArg... Args>
 } // namespace detail
 
 template <CExpression Derived, COperation Op>
-class ExpressionOps : public BaseExpression<Op> {
+class ExpressionOps : public BaseExpression<Op>,
+                      public EquationConvertible<Derived> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
     return static_cast<const Derived &>(*this);
   }
@@ -324,6 +389,23 @@ struct expression_element<V, I,
 } // namespace detail
 
 } // namespace diff
+
+// Declare a concrete user type's multiplication commutative, so that
+// canonicalisation may reorder the operands of a product of it.
+//
+// Write it at GLOBAL scope: the body opens namespace diff, so inside another
+// namespace it would declare that namespace's own nested `diff` instead.  The
+// argument is variadic so a template-id containing commas -- MyScalar<double,3>
+// -- survives the preprocessor, which splits macro arguments before it knows
+// anything about templates.
+//
+// For a class template, specialise is_commutative_multiply_v directly instead;
+// a macro cannot express a partial specialisation.
+#define DIFF_COMMUTATIVE_MULTIPLY(...)                                         \
+  namespace diff {                                                             \
+  template <>                                                                  \
+  inline constexpr bool is_commutative_multiply_v<__VA_ARGS__> = true;         \
+  }
 
 namespace std {
 template <diff::COperation Op, diff::CExpression... Children>

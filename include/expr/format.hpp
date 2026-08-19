@@ -130,8 +130,6 @@ void print_infix(const P &p, const E &e, int min_prec) {
     }
   } else if constexpr (CVariable<U>) {
     p.put(U::label.view());
-    // A frozen variable differentiates to zero, so it is a constant wearing a
-    // name -- the one leaf whose kind the text cannot otherwise give away.
     if constexpr (U::frozen) {
       p.put("_c");
     }

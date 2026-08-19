@@ -26,6 +26,11 @@ namespace diff {
 // plain `for (k < N)` over a contiguous std::array so the compiler
 // auto-vectorizes them to SIMD under -O2/-O3 (no Eigen dependency is pulled
 // into this otherwise dependency-free, constexpr header library).
+// Lanewise over a fixed double, so there is no scalar to defer to: it commutes.
+template <std::size_t N> struct VectorDual;
+template <std::size_t N>
+inline constexpr bool is_commutative_multiply_v<VectorDual<N>> = true;
+
 template <std::size_t N> struct VectorDual {
   double value{};
   // Over-align the partial pack so the elementwise lane loops below vectorize

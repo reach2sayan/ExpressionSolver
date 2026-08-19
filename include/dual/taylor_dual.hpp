@@ -19,6 +19,13 @@ namespace diff {
 //
 // Use univariate_derivative<N>(expr [, x0]) for a clean public API.
 
+// The coefficient product is a convolution, sum_i a_i b_(k-i), so it commutes
+// exactly when the scalar underneath does.
+template <Numeric S, std::size_t N> struct TaylorDual;
+template <Numeric S, std::size_t N>
+inline constexpr bool is_commutative_multiply_v<TaylorDual<S, N>> =
+    is_commutative_multiply_v<S>;
+
 template <Numeric S, std::size_t N> struct TaylorDual {
   std::array<S, N + 1> c{};
   constexpr TaylorDual() noexcept = default;

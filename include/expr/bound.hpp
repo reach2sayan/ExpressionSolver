@@ -185,31 +185,39 @@ template <CExpression Expr>
 // expr.eval(...), so the two can never drift apart.
 namespace detail {
 
-template <CExpression Expr, CEvalArg... Args>
-[[nodiscard]] constexpr auto eval_dispatch(const Expr &e, const Args &...args) {
-  using VT = typename std::remove_cvref_t<Expr>::value_type;
-  using Syms = expr_symbols_t<Expr>;
-  constexpr std::size_t N = expr_arity_v<Expr>;
-
+// Every spelling of "a point" reduced to the one thing the sweeps take: an
+// array of N values in canonical symbol order.  Written against a symbol list
+// rather than an expression, because Equation supplies its own -- its rows are
+// evaluated with the system's symbols, not each row's.
+template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
+[[nodiscard]] constexpr std::array<U, N> make_point(const Args &...args) {
   // clang-format off
   if constexpr (sizeof...(Args) == 0) { // constant-folded: no free symbols
     static_assert(N == 0,
                   "eval: this expression has free symbols, so it needs a point "
                   "(see symbol_order<Expr>())");
-    return e.template eval_seeded<Syms>(std::array<VT, 0>{});
+    return {};
   }
 
-  // eval(map)
-  else if constexpr (sizeof...(Args) == 1 && (CValueMap<Args> && ...)) {
-    return bind(e, args...).eval();
+  // point(map) / point(named<"x">(..), ..) -- both read by name, so neither
+  // depends on the order they were written in.
+  else if constexpr ((CValueMap<Args> && ...) || (CNamedValue<Args> && ...)) {
+    const auto map = [&] {
+      if constexpr ((CValueMap<Args> && ...)) {
+        static_assert(sizeof...(Args) == 1, "eval: pass a single ValueMap");
+        return std::get<0>(std::tuple{args...});
+      } else {
+        return values(args...);
+      }
+    }();
+    std::array<U, N> vals{};
+    static_for<N>([&]<std::size_t I>() {
+      vals[I] = static_cast<U>(map.template get<mp::mp_at_c<Syms, I>::value>());
+    });
+    return vals;
   }
 
-  // eval(named<"x">(..), ..)
-  else if constexpr ((CNamedValue<Args> && ...)) {
-    return bind(e, args...).eval();
-  }
-
-  // eval(range)
+  // point(range)
   else if constexpr (sizeof...(Args) == 1 && (std::ranges::input_range<Args> && ...)) {
     return [&](const auto &r) {
       if constexpr (CTupleLike<decltype(r)>) {
@@ -218,28 +226,35 @@ template <CExpression Expr, CEvalArg... Args>
             "eval: range size must equal the expression's symbol count "
             "(see symbol_order<Expr>())");
       }
-      std::array<VT, N> vals{};
+      std::array<U, N> vals{};
       std::size_t i = 0;
       std::ranges::for_each(r | std::views::take(N), [&](const auto &v) {
-        vals[i++] = static_cast<VT>(v);
+        vals[i++] = static_cast<U>(v);
       });
       if (i != N) {
         throw std::out_of_range("eval: range supplied fewer values than the "
                                 "expression has symbols");
       }
-      return e.template eval_seeded<Syms>(vals);
+      return vals;
     }(args...);
   }
 
-  // eval(x, y, z) — positional
+  // point(x, y, z) -- positional, in canonical order
   else {
     static_assert(sizeof...(Args) == N,
                   "eval: supply exactly one value per symbol, in canonical "
                   "order (see symbol_order<Expr>())");
-    const std::array<VT, N> vals{static_cast<VT>(args)...};
-    return e.template eval_seeded<Syms>(vals);
+    return std::array<U, N>{static_cast<U>(args)...};
   }
   // clang-format on
+}
+
+template <CExpression Expr, CEvalArg... Args>
+[[nodiscard]] constexpr auto eval_dispatch(const Expr &e, const Args &...args) {
+  using VT = typename std::remove_cvref_t<Expr>::value_type;
+  using Syms = expr_symbols_t<Expr>;
+  return e.template eval_seeded<Syms>(
+      make_point<Syms, VT, expr_arity_v<Expr>>(args...));
 }
 
 // Forward-mode sweep seeded on the variable named `Seed`.

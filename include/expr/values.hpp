@@ -2,7 +2,9 @@
 #include "dual/dual.hpp"
 #include "expr/expressions.hpp"
 #include "expr/operations.hpp"
+#include "expr/simplify.hpp"
 #include "util/mpl.hpp"
+#include <utility>
 
 namespace diff {
 
@@ -40,15 +42,30 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
 //
 // Folding is what keeps a literal-only subtree from ever becoming a node: two
 // Lits fold to a Lit at compile time, two Constants to a Constant.
+//
+// A T-valued template argument only exists for structural T, so for a dual
+// scalar the folded value cannot go back into the type in general -- but 0 and
+// 1 can, via the int spelling, and those are the only values differentiation
+// manufactures.  Checking for them keeps a literal-only dual subtree empty.
+// Without that check the pair falls to the Constant branch below, which stores,
+// and the whole spine above it leaves the stateless node form.
 #define DIFF_EXPR_BINOP(OP, ...)                                               \
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
   constexpr auto operator OP(const LHS &a, const RHS &b) noexcept {            \
     using value_type = typename LHS::value_type;                               \
     if constexpr (CLit<LHS> && CLit<RHS>) {                                    \
-      return Lit<value_type,                                                   \
-                 static_cast<value_type>(std::remove_cvref_t<LHS>::value OP    \
-                                         std::remove_cvref_t<RHS>::value)>{};  \
+      constexpr auto folded = std::remove_cvref_t<LHS>::value OP               \
+                              std::remove_cvref_t<RHS>::value;                 \
+      if constexpr (CArithmetic<value_type>) {                                 \
+        return Lit<value_type, static_cast<value_type>(folded)>{};             \
+      } else if constexpr (folded == value_type(0)) {                          \
+        return Lit<value_type, 0>{};                                           \
+      } else if constexpr (folded == value_type(1)) {                          \
+        return Lit<value_type, 1>{};                                           \
+      } else {                                                                 \
+        return Constant<value_type>{folded};                                   \
+      }                                                                        \
     } else if constexpr (CConstant<LHS> && CConstant<RHS>) {                   \
       return Constant<value_type>{a.get() OP b.get()};                         \
     } else {                                                                   \
@@ -64,24 +81,23 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
     return a OP promote_scalar<typename LHS::value_type>(s);                   \
   }
 
-DIFF_EXPR_BINOP(+, return Expression<SumOp<value_type>, LHS, RHS>{a, b};)
-DIFF_EXPR_BINOP(*, return Expression<MultiplyOp<value_type>, LHS, RHS>{a, b};)
-DIFF_EXPR_BINOP(/, return Expression<DivideOp<value_type>, LHS, RHS>{a, b};)
+DIFF_EXPR_BINOP(+, return detail::simplify_node<SumOp<value_type>>(a, b);)
+DIFF_EXPR_BINOP(*, return detail::simplify_node<MultiplyOp<value_type>>(a, b);)
+DIFF_EXPR_BINOP(/, return detail::simplify_node<DivideOp<value_type>>(a, b);)
 // Subtraction has no node of its own: a - b is a + (-b), which is what keeps
-// the reverse sweep down to one adjoint rule instead of two.
-DIFF_EXPR_BINOP(-,
-                auto neg = MonoExpression<NegateOp<value_type>, RHS>{b};
-                return Expression<SumOp<value_type>, LHS, decltype(neg)>{
-                    a, std::move(neg)};)
+// the reverse sweep down to one adjoint rule instead of two.  Spelling it with
+// the operators rather than by hand means both of them get to apply their
+// rules, so a - 0 is a and a - (-b) is a + b.
+DIFF_EXPR_BINOP(-, return detail::simplify_node<SumOp<value_type>>(a, -b);)
 #undef DIFF_EXPR_BINOP
 
 template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
-  if constexpr (CLit<Expr>) {
+  if constexpr (CLit<Expr> && CArithmetic<value_type>) {
     return Lit<value_type,
                static_cast<value_type>(-std::remove_cvref_t<Expr>::value)>{};
   } else {
-    return MonoExpression<NegateOp<value_type>, Expr>{a};
+    return detail::simplify_mono<NegateOp<value_type>>(a);
   }
 }
 
@@ -136,7 +152,8 @@ namespace detail {
 // if the member were itself empty and marked [[no_unique_address]] — occupying
 // no bytes and being no member are different things, and only the second one
 // satisfies is_empty_v.
-template <typename Derived, Numeric T> class ConstantOps {
+template <typename Derived, Numeric T>
+class ConstantOps : public EquationConvertible<Derived> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
     return static_cast<const Derived &>(*this);
   }
@@ -148,14 +165,10 @@ public:
   [[nodiscard]] constexpr T eval() const noexcept { return get(); }
   constexpr operator T() const noexcept { return get(); }
 
-  // Lit carries its value as a template argument, so it is only available for
-  // structural types; a dual-valued constant falls back to a stored zero.
+  // The int spelling of Lit works for every Numeric T, dual types included, so
+  // a constant's derivative is empty no matter what it is a constant of.
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    if constexpr (CArithmetic<T>) {
-      return Lit<T, T{0}>{};
-    } else {
-      return Constant<T>{T{0}};
-    }
+    return Lit<T, 0>{};
   }
 
   // Reverse sweep leaf: no symbol underneath, so nothing to accumulate into.
@@ -219,6 +232,24 @@ public:
   static constexpr T value = V;
 };
 
+// The same thing keyed on an int, for a T that could never be a template
+// argument itself: Dual and friends are not structural, so Lit<Dual<double>,
+// V> above is unspellable.  0 and 1 -- the only values differentiation
+// manufactures -- are exact in every Numeric T, so this covers the whole
+// dual-valued path and keeps those trees empty too.  Disjoint from the
+// specialisation above by construction: that one requires decltype(V) to be T,
+// this one requires it to be int and T to be something else.
+template <Numeric T, auto V>
+  requires(std::same_as<std::remove_cv_t<decltype(V)>, int> &&
+           !std::same_as<T, int>)
+class Lit<T, V> : public detail::ConstantOps<Lit<T, V>, T> {
+  friend detail::ConstantOps<Lit<T, V>, T>;
+  [[nodiscard]] constexpr T read() const noexcept { return T(V); }
+
+public:
+  static constexpr T value = T(V);
+};
+
 // The storing form.  One type per value_type rather than one per value, which
 // is what lets it hold a number that only exists at run time — and a T that
 // could never be a template argument in the first place.
@@ -236,24 +267,17 @@ template <Numeric T> Lit(T) -> Lit<T>;
 // `Frozen` marks a variable that has been held constant for the purpose of
 // partial differentiation: it still reads its value from the seed array like
 // any other symbol, but its derivative is zero.
-template <Numeric T, CFixedString auto symbol, bool Frozen> class Variable {
+template <Numeric T, CFixedString auto symbol, bool Frozen>
+class Variable : public EquationConvertible<Variable<T, symbol, Frozen>> {
 public:
   static constexpr auto label = symbol;
   static constexpr bool frozen = Frozen;
   using value_type = T;
 
-  // Lit carries its value as a template argument, so it is only available for
-  // structural types; a dual-valued variable falls back to a stored Constant.
+  // The int spelling of Lit is available for every Numeric T, so this is one
+  // line rather than a structural/non-structural fork.
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    if constexpr (CArithmetic<T>) {
-      if constexpr (Frozen) {
-        return Lit<T, T{0}>{};
-      } else {
-        return Lit<T, T{1}>{};
-      }
-    } else {
-      return Constant<T>{Frozen ? T{0} : T{1}};
-    }
+    return Lit<T, Frozen ? 0 : 1>{};
   }
 
   template <std::size_t Base = 0>
@@ -262,7 +286,19 @@ public:
     if constexpr (!Frozen) {
       using Syms = std::decay_t<decltype(syms)>;
       constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-      grads[idx] += adj;
+      // Spelled with + and assignment rather than +=, because that is all
+      // CFieldLike actually asks of a scalar -- it requires a + b and says
+      // nothing about compound assignment, so a += here quietly demanded more
+      // than the concept advertised and a conforming scalar could fail to
+      // compile through this line.
+      //
+      // std::move needs no is_move_constructible guard: on a type without a
+      // move constructor the rvalue simply binds to operator+'s const& or
+      // selects its copy constructor, so this degrades to a copy on its own.
+      // It buys nothing for the scalars shipped today -- Dual, TaylorDual and
+      // VectorDual are trivially copyable arrays -- and costs nothing either;
+      // it is here for a scalar that owns storage.
+      grads[idx] = std::move(grads[idx]) + adj;
     }
   }
 

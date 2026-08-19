@@ -188,14 +188,12 @@ int main() {
   row("lambda  gradient(f, xs)           [0]", diff::gradient(lambda, xs)[0],
       bench_ns([&] { return diff::gradient(lambda, xs)[0]; }, 2000));
   row("graph   gradient<Reverse>(expr,p) [0]",
-      diff::gradient<DiffMode::Reverse>(gplain, p)[0],
-      bench_ns([&] { return diff::gradient<DiffMode::Reverse>(gplain, p)[0]; }));
+      Equation{gplain}.gradient(p)[0],
+      bench_ns([&] { return Equation{gplain}.gradient(p)[0]; }));
   row("graph   ...bound by name          [0]",
-      diff::gradient<DiffMode::Reverse>(gplain, named<"x">(p[0]),
-                                        named<"y">(p[1]), named<"z">(p[2]))[0],
+      Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]), named<"z">(p[2]))[0],
       bench_ns([&] {
-        return diff::gradient<DiffMode::Reverse>(
-            gplain, named<"x">(p[0]), named<"y">(p[1]), named<"z">(p[2]))[0];
+        return Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]), named<"z">(p[2]))[0];
       }));
 
   // =====================================================================
@@ -212,9 +210,9 @@ int main() {
   row("graph   hessian(expr, xs)", diff::hessian(graph, xs).h(0, 2),
       bench_ns([&] { return diff::hessian(graph, xs).h(0, 2); }, 1000));
   {
-    const auto Hs = diff::hessian<DiffMode::Reverse>(graph, p);
+    const auto Hs = Equation{graph}.hessian(p);
     row("graph   hessian<Reverse>(expr, p)", (Hs[0, 2]), bench_ns([&] {
-          const auto H = diff::hessian<DiffMode::Reverse>(graph, p);
+          const auto H = Equation{graph}.hessian(p);
           return (H[0, 2]);
         }));
     println("          packed: stores {} cells, not {}", Hs.size(), 3 * 3);
@@ -225,10 +223,10 @@ int main() {
   // =====================================================================
   println("\nHIGHER ORDER  (graph only)");
   {
-    const auto T = diff::derivative_tensor<3>(gplain, p);
+    const auto T = Equation{gplain}.template derivative_tensor<3>(p);
     row("graph   derivative_tensor<3>  d3f/dx dz dz", (T[0, 2, 2]),
         bench_ns([&] {
-          const auto t = diff::derivative_tensor<3>(gplain, p);
+          const auto t = Equation{gplain}.template derivative_tensor<3>(p);
           return (t[0, 2, 2]);
         }, 1000));
     println("          same cell, chained spelling t[0][2][2] = {:.4f}",
@@ -315,7 +313,7 @@ int main() {
   constexpr auto ct = [] {
     Variable<double, FixedString{"a"}> a;
     Variable<double, FixedString{"b"}> b;
-    return diff::gradient<DiffMode::Reverse>(a * b, std::array{3.0, 4.0});
+    return Equation{a * b}.gradient(std::array{3.0, 4.0});
   }();
   static_assert(ct[0] == 4.0 && ct[1] == 3.0,
                 "the symbolic path must be constant-evaluable");

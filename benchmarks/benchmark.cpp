@@ -17,7 +17,7 @@ static void run_symbolic(benchmark::State &state, Eq &eq, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto gradients = eq.eval_derivatives(pt);
+    auto gradients = eq.template gradient<diff::DiffMode::Symbolic>(pt);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
   }
@@ -28,7 +28,7 @@ static void run_reverse(benchmark::State &state, Expr &expr, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto gradients = gradient<DiffMode::Reverse>(expr, pt);
+    auto gradients = Equation{expr}.gradient(pt);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
   }
@@ -41,7 +41,7 @@ run_forward(benchmark::State &state, Expr &expr,
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(values);
-    auto gradients = derivative_tensor<1>(expr, values);
+    auto gradients = Equation{expr}.template derivative_tensor<1>(values);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
   }
@@ -52,7 +52,7 @@ static void run_symbolic_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto J = ve.template symbolic_mode_jac(pt);
+    auto J = ve.template jacobian<diff::DiffMode::Symbolic>(pt);
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
   }
@@ -63,7 +63,7 @@ static void run_reverse_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto J = ve.template reverse_mode_jac(pt);
+    auto J = ve.jacobian(pt);
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
   }
@@ -329,7 +329,7 @@ static void BM_Symbolic_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (const auto &pt : points) {
-      auto grads = eq.eval_derivatives(pt);
+      auto grads = eq.template gradient<diff::DiffMode::Symbolic>(pt);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();
@@ -362,7 +362,7 @@ static void BM_Reverse_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (const auto &pt : points) {
-      auto grads = gradient<DiffMode::Reverse>(expr, pt);
+      auto grads = Equation{expr}.gradient(pt);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();
@@ -405,7 +405,7 @@ static void BM_Forward_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (std::size_t i = 0; i < count; ++i) {
-      auto grads = derivative_tensor<1>(expressions[i], points[i]);
+      auto grads = Equation{expressions[i]}.template derivative_tensor<1>(points[i]);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();
@@ -477,7 +477,7 @@ static void BM_Reverse_Dual_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (const auto &pt : points) {
-      auto grads = reverse_mode_grad(expr, pt);
+      auto grads = Equation{expr}.gradient(pt);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();
