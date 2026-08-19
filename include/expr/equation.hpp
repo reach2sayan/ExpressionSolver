@@ -256,8 +256,8 @@ std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
 
 // One block per output function: the function itself, then its gradient row in
 // canonical symbol order.  The spec is whatever expr/format.hpp accepts and is
-// forwarded to every expression printed, so "{:d}" annotates the leaves of a
-// whole system and "{:t}" dumps each one as a tree.
+// forwarded to every expression printed, so "{::.3f}" fixes the precision of
+// every number in a whole system.
 template <diff::CExpression... Ts>
 struct std::formatter<diff::Equation<Ts...>, char> {
   constexpr auto parse(std::format_parse_context &ctx) {

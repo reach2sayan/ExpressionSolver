@@ -4109,8 +4109,6 @@ TEST(ExpressionPrinting, SubtractionSurvivesItsLowering) {
   EXPECT_EQ(std::format("{}", px - py * pz), "x - y * z");
   EXPECT_EQ(std::format("{}", 2.0 * px * py + sin(px) - pz),
             "2 * x * y + sin(x) - z");
-  // Debug style deliberately shows the real a + (-b) structure instead.
-  EXPECT_EQ(std::format("{:d}", px - py), "x_var + -y_var");
 }
 
 TEST(ExpressionPrinting, FunctionStyleOps) {
@@ -4120,36 +4118,22 @@ TEST(ExpressionPrinting, FunctionStyleOps) {
   EXPECT_EQ(std::format("{}", max(px, py + pz)), "max(x, y + z)");
 }
 
-TEST(ExpressionPrinting, DebugStyleAnnotatesEveryLeafKind) {
-  EXPECT_EQ(std::format("{:d}", 2.0 * px), "2_c * x_var");
-  // Lit carries its value in the type; Constant stores it.  Only debug style
-  // tells them apart, and derivative() manufactures the Lits.
-  EXPECT_EQ(std::format("{:d}", px.derivative()), "1_lit");
-  EXPECT_EQ(std::format("{:d}",
-                        make_all_constant_except<diff::FixedString{"x"}>(px *
-                                                                         py)),
-            "x_var * y_frozen");
+// Names are variables and numbers are constants, so the only leaf that needs
+// marking is the frozen variable: it prints as a name but differentiates to
+// zero, which is what "_c" says.
+TEST(ExpressionPrinting, FrozenVariablesPrintAsConstants) {
+  EXPECT_EQ(std::format("{}", px * py), "x * y");
+  EXPECT_EQ(
+      std::format("{}",
+                  make_all_constant_except<diff::FixedString{"x"}>(px * py)),
+      "x * y_c");
 }
 
 TEST(ExpressionPrinting, ValueSpecReachesEveryNumber) {
   EXPECT_EQ(std::format("{::.3f}", 2.0 * px), "2.000 * x");
-  EXPECT_EQ(std::format("{:m:.1e}", 2.0 * px + 3.0), "2.0e+00 * x + 3.0e+00");
-}
-
-TEST(ExpressionPrinting, TreeStyleIsPreorderIndexed) {
-  const auto tree = std::format("{:t}", px * py + sin(px));
-  EXPECT_EQ(tree, "[0] +\n"
-                  "├── [1] *\n"
-                  "│   ├── [2] x\n"
-                  "│   └── [3] y\n"
-                  "└── [4] sin\n"
-                  "    └── [5] x");
-
-  // One line per node, and the indices are exactly the cache slots the sweeps
-  // address -- that correspondence is the reason to print a tree.
-  const auto lines =
-      1 + static_cast<std::size_t>(std::ranges::count(tree, '\n'));
-  EXPECT_EQ(lines, diff::node_count_v<decltype(px * py + sin(px))>);
+  EXPECT_EQ(std::format("{::.1e}", 2.0 * px + 3.0), "2.0e+00 * x + 3.0e+00");
+  // The leading ':' is optional -- the whole spec is the value-spec.
+  EXPECT_EQ(std::format("{:.3f}", 2.0 * px), "2.000 * x");
 }
 
 TEST(ExpressionPrinting, StreamInserterMatchesFormat) {
@@ -4167,9 +4151,10 @@ TEST(ExpressionPrinting, DualValuedLeavesPrint) {
   EXPECT_EQ(std::format("{::.2f}", c), "1.50+2.00e");
 }
 
-TEST(ExpressionPrinting, RejectsUnknownStyle) {
-  // The spec is parsed at compile time for literals, so an invalid style has
-  // to be reached through vformat to be observable as a throw.
+TEST(ExpressionPrinting, RejectsUnparseableValueSpec) {
+  // The spec is parsed at compile time for literals, so a bad one has to be
+  // reached through vformat to be observable as a throw.  It is rejected by
+  // the value_type's own formatter, which is the whole grammar there is.
   EXPECT_THROW((void)std::vformat("{:q}", std::make_format_args(px)),
                std::format_error);
 }
