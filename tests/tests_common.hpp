@@ -3,9 +3,6 @@
 #include "dual/dual.hpp"
 #include "dual/taylor_dual.hpp"
 #include "expr/bound.hpp"
-#ifdef DIFF_USE_EIGEN
-#include "interop/eigen_interop.hpp"
-#endif
 #include "drivers/numeric.hpp"
 #include "drivers/symbolic.hpp"
 #include "drivers/seeded_energy.hpp"

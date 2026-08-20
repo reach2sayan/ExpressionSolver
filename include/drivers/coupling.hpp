@@ -219,8 +219,9 @@ template <std::size_t N, std::size_t NNZ> struct sparse_layout_t {
 };
 
 // Column-major, row indices ascending within each column — the sorted,
-// compressed form Eigen expects.  The pattern is symmetric, so reading it by
-// column or by row gives the same structure.
+// compressed-column (CSC) form every sparse linear-algebra library consumes.
+// The pattern is symmetric, so reading it by column or by row gives the same
+// structure.
 template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>,
           std::size_t NNZ = hessian_nnz<Expr>()>

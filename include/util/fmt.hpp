@@ -21,6 +21,11 @@
 
 namespace diff::detail {
 
+// The infinitesimal unit, U+03B5 GREEK SMALL LETTER EPSILON, spelled as UTF-8
+// bytes rather than "\u03b5" so the literal does not depend on the source
+// encoding the translation unit happens to be compiled under.
+inline constexpr std::string_view eps = "\xce\xb5";
+
 // Append literal text, keeping the context's iterator in step.
 inline void fmt_put(std::format_context &ctx, std::string_view s) {
   ctx.advance_to(std::ranges::copy(s, ctx.out()).out);
@@ -48,7 +53,7 @@ protected:
   }
 
   // A coefficient that is itself a series has to be bracketed, or the two
-  // levels run together: Dual<Dual<double>> printed 1+2e+3+4ee, which reads as
+  // levels run together: Dual<Dual<double>> printed 1+2ε+3+4εε, which reads as
   // four terms of one series rather than two of two.
   void term(std::format_context &ctx, const S &v) const {
     if constexpr (std::is_arithmetic_v<S>) {
@@ -60,7 +65,7 @@ protected:
     }
   }
 
-  // c0+c1e+c2e^2+... -- the perturbation series that both Dual (two terms) and
+  // c0+c1ε+c2ε^2+... -- the perturbation series that both Dual (two terms) and
   // TaylorDual (N+1 of them) are.  Every coefficient is printed, zeros
   // included, so the order of the series is legible in the text.
   void series(std::format_context &ctx, const auto &coeffs) const {
@@ -70,9 +75,9 @@ protected:
       }
       term(ctx, coeffs[k]);
       if (k == 1) {
-        put(ctx, "e");
+        put(ctx, eps);
       } else if (k > 1) {
-        ctx.advance_to(std::format_to(ctx.out(), "e^{}", k));
+        ctx.advance_to(std::format_to(ctx.out(), "{}^{}", eps, k));
       }
     }
   }

@@ -149,7 +149,7 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 }
 
 // The two modes an entry point can be asked for.  Forward mode is reached
-// through the drivers (forward_driver.hpp / hessian.hpp), which take a
+// through the drivers (numeric.hpp / hessian.hpp), which take a
 // callable rather than a Mode, so it is not a value here.
 enum class DiffMode { Symbolic, Reverse };
 
@@ -527,7 +527,7 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
 
   // One cell past the nonzeros: layout_sparse_pattern maps every structural
   // zero onto that last slot, so H[i, j] answers for indices the pattern
-  // excludes without the caller checking first.  Eigen reads exactly nnz
+  // excludes without the caller checking first.  A CSC consumer reads exactly nnz
   // entries from values.data(), so the extra cell is invisible to it.
   //
   // Value-initialised, which zeroes it: the sweeps below only write the slots
@@ -551,5 +551,78 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
 // first-order tangent to seed — that is what makes one backward sweep yield a
 
 } // namespace detail
+
+
+// ---------------------------------------------------------------------------
+// A sparse Hessian whose sparsity is a property of the expression TYPE.
+//
+// The structure comes from the compile-time coupling pass, so `outer` and
+// `inner` are `static constexpr` and cost nothing at run time; only the nnz
+// values are computed and stored.  Together they are a standard
+// compressed-column (CSC) triple, which is what every sparse linear-algebra
+// library consumes -- so handing the three of them over is all this needs to
+// do, and it deliberately does not name any of those libraries.  Building an
+// Eigen map from it is one line at the call site:
+//
+//   auto H = diff::sparse_hessian(expr, x);
+//   Eigen::Map<const Eigen::SparseMatrix<double>> m{
+//       H.rows, H.rows, H.nnz, H.outer().data(), H.inner().data(),
+//       H.values().data()};
+// ---------------------------------------------------------------------------
+template <CExpression Expr> class SparseHessian {
+  using E = std::remove_cvref_t<Expr>;
+  static constexpr std::size_t kN = detail::expr_arity_v<E>;
+  static constexpr auto kLayout = sparse_layout<E>();
+  static constexpr std::size_t kNnz = decltype(kLayout)::nnz;
+
+  // One past nnz: the dense view maps every structurally-absent (i, j) to a
+  // sink cell so that reading one is a load rather than a branch.
+  std::array<double, kNnz + 1> values_;
+
+public:
+  static constexpr std::size_t rows = kN;
+  static constexpr std::size_t nnz = kNnz;
+
+  explicit SparseHessian(std::array<double, kNnz + 1> values) noexcept
+      : values_(values) {}
+
+  // The CSC triple.  Column j occupies [outer()[j], outer()[j + 1]); inner()[k]
+  // is the row of stored value k.  Both are compile-time constants.
+  [[nodiscard]] static constexpr std::span<const int> outer() noexcept {
+    return kLayout.outer;
+  }
+  [[nodiscard]] static constexpr std::span<const int> inner() noexcept {
+    return kLayout.inner;
+  }
+  // The nnz values, without the sink cell.
+  [[nodiscard]] std::span<const double> values() const & noexcept {
+    return std::span<const double>{values_}.first(nnz);
+  }
+  auto values() const && = delete;
+
+  // The compressed buffer read as the dense matrix it stands for.
+  [[nodiscard]] auto view() const & noexcept {
+    return sparse_matrix_view<E>(values_);
+  }
+  auto view() const && = delete;
+  [[nodiscard]] double operator[](std::size_t i, std::size_t j) const noexcept {
+    return view()[i, j];
+  }
+  // Whether (i, j) is in the pattern at all, as opposed to reading 0.0 because
+  // the structure says it cannot be anything else.
+  [[nodiscard]] static constexpr bool structural(std::size_t i,
+                                                 std::size_t j) noexcept {
+    return typename layout_sparse_pattern<E>::template mapping<
+               md::extents<std::size_t, kN, kN>>{}
+        .contains(i, j);
+  }
+};
+
+// The sparse counterpart of hessian(graph, x).
+template <CExpression Expr>
+[[nodiscard]] SparseHessian<Expr> sparse_hessian(const Expr &expr,
+                                                 std::span<const double> x) {
+  return SparseHessian<Expr>{detail::hessian_values_sparse(expr, x)};
+}
 
 } // namespace diff

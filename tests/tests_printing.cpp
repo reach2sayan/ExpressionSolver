@@ -80,8 +80,8 @@ TEST(ExpressionPrinting, StreamInserterMatchesFormat) {
 // cope with a value_type that is not an arithmetic type.
 TEST(ExpressionPrinting, DualValuedLeavesPrint) {
   const diff::Constant<diff::Dual<double>> c{diff::Dual<double>{1.5, 2.0}};
-  EXPECT_EQ(std::format("{}", c), "1.5+2e");
-  EXPECT_EQ(std::format("{::.2f}", c), "1.50+2.00e");
+  EXPECT_EQ(std::format("{}", c), "1.5+2ε");
+  EXPECT_EQ(std::format("{::.2f}", c), "1.50+2.00ε");
 }
 
 TEST(ExpressionPrinting, RejectsUnparseableValueSpec) {
@@ -107,8 +107,8 @@ TEST(DualPrinting, EachDualRendersItsOwnShape) {
   diff::TaylorDual<double, 3> t;
   t.c = {1.0, 2.0, 3.0, 4.0};
 
-  EXPECT_EQ(std::format("{}", d), "1.5+2e");
-  EXPECT_EQ(std::format("{}", t), "1+2e+3e^2+4e^3");
+  EXPECT_EQ(std::format("{}", d), "1.5+2ε");
+  EXPECT_EQ(std::format("{}", t), "1+2ε+3ε^2+4ε^3");
 }
 
 TEST(DualPrinting, OneSpecReachesEveryPart) {
@@ -116,15 +116,15 @@ TEST(DualPrinting, OneSpecReachesEveryPart) {
   diff::TaylorDual<double, 2> t;
   t.c = {1.0, 2.0, 3.0};
 
-  EXPECT_EQ(std::format("{:.2f}", d), "1.50+2.00e");
-  EXPECT_EQ(std::format("{:.2f}", t), "1.00+2.00e+3.00e^2");
+  EXPECT_EQ(std::format("{:.2f}", d), "1.50+2.00ε");
+  EXPECT_EQ(std::format("{:.2f}", t), "1.00+2.00ε+3.00ε^2");
 }
 
 // Without bracketing, Dual<Dual<double>> reads as one four-term series.
 TEST(DualPrinting, NestedCoefficientsAreBracketed) {
   const diff::Dual<diff::Dual<double>> d{diff::Dual<double>{1.0, 2.0},
                                          diff::Dual<double>{3.0, 4.0}};
-  EXPECT_EQ(std::format("{}", d), "(1+2e)+(3+4e)e");
+  EXPECT_EQ(std::format("{}", d), "(1+2ε)+(3+4ε)ε");
 }
 
 TEST(DualPrinting, StreamInserterMatchesFormat) {
@@ -142,8 +142,8 @@ TEST(DualPrinting, StreamInserterMatchesFormat) {
 TEST(DualPrinting, AllThreeWorkAsExpressionLeaves) {
   EXPECT_EQ(std::format("{}", diff::Constant<diff::Dual<double>>{
                                   diff::Dual<double>{5.0, 1.0}}),
-            "5+1e");
+            "5+1ε");
   EXPECT_EQ(std::format("{}", diff::Constant<diff::TaylorDual<double, 2>>{
                                   diff::TaylorDual<double, 2>{5.0}}),
-            "5+0e+0e^2");
+            "5+0ε+0ε^2");
 }

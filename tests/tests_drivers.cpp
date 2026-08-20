@@ -355,44 +355,63 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnTrigProducts) {
   }
 }
 
-#ifdef DIFF_USE_EIGEN
 // ===========================================================================
-// Eigen boundary (eigen_interop.hpp).  The sparse path writes only the entries
-// the compile-time pattern predicts, so a pattern that is wrong shows up here
-// as a missing entry rather than as a wrong number — these compare it against
-// the structure-blind dense driver.
+// Sparse Hessian.  The sparsity is a property of the expression TYPE, so the
+// path writes only the entries the compile-time pattern predicts: a pattern
+// that is wrong shows up here as a missing entry rather than as a wrong number.
+// These compare it against the structure-blind dense driver.
+//
+// There is no linear-algebra library on this boundary.  What the library hands
+// over is a compressed-column triple (outer, inner, values) plus the extent,
+// and `densify` below is the whole of what a caller does with it -- it stands
+// in for the one-line Eigen::Map a client would write instead.
 // ===========================================================================
+namespace {
+// CSC triple -> dense row-major, exactly as a consumer would read it.
+template <typename Sparse>
+std::vector<double> densify(const Sparse &h) {
+  std::vector<double> dense(Sparse::rows * Sparse::rows, 0.0);
+  const auto outer = Sparse::outer();
+  const auto inner = Sparse::inner();
+  const auto values = h.values();
+  for (std::size_t j = 0; j < Sparse::rows; ++j) {
+    for (auto k = static_cast<std::size_t>(outer[j]);
+         k < static_cast<std::size_t>(outer[j + 1]); ++k) {
+      dense[static_cast<std::size_t>(inner[k]) * Sparse::rows + j] = values[k];
+    }
+  }
+  return dense;
+}
+} // namespace
 
-TEST(EigenInterop, DenseViewsAliasHessianResult) {
+// The dense Hessian buffer is row-major with the extent alongside it, and that
+// layout is the contract a caller maps its own matrix type onto.  Pinning it
+// here is what makes `H[i * n + j]` safe to write in client code.
+TEST(SparseHessian, DenseBufferIsRowMajorWithItsExtent) {
   using D = diff::Dual<double>;
   using diff::FixedString;
   Variable<D, FixedString{"x00"}> a;
   Variable<D, FixedString{"x01"}> b;
+  // Deliberately asymmetric in the SOURCE so a transposed read would be caught
+  // if the driver did not symmetrise: d2/da db of a*a*b is 2a, of b*b*a is 2b.
   auto expr = a * log(a) + b * log(b) + 0.5 * (a - b) * (a - b);
 
   const std::array<double, 2> x{0.3, 0.7};
   const std::span<const double> xs{x.data(), x.size()};
   const auto H = diff::hessian(expr, xs);
 
-  const auto M = diff::as_matrix(hess_ptr(H), hess_n(H));
-  const auto g = diff::as_vector(grad_ptr(H), hess_n(H));
-
-  // A view, not a copy: it must alias the result's own storage.
-  EXPECT_EQ(M.data(), hess_ptr(H));
-  EXPECT_EQ(g.data(), grad_ptr(H));
-  ASSERT_EQ(M.rows(), 2);
-  ASSERT_EQ(M.cols(), 2);
-  for (std::size_t i = 0; i < 2; ++i) {
-    EXPECT_DOUBLE_EQ(g[static_cast<Eigen::Index>(i)], grad_at(H, i));
-    for (std::size_t j = 0; j < 2; ++j) {
-      EXPECT_DOUBLE_EQ(M(static_cast<Eigen::Index>(i),
-                         static_cast<Eigen::Index>(j)),
-                       hess_at(H, i, j));
+  const double *const h = hess_ptr(H);
+  const std::size_t n = hess_n(H);
+  ASSERT_EQ(n, 2u);
+  for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t j = 0; j < n; ++j) {
+      EXPECT_DOUBLE_EQ(h[i * n + j], hess_at(H, i, j))
+          << "row-major H(" << i << "," << j << ")";
     }
   }
 }
 
-TEST(EigenInterop, SparseHessianMatchesDenseDriver) {
+TEST(SparseHessian, MatchesDenseDriver) {
   using D = diff::Dual<double>;
   using diff::FixedString;
   Variable<D, FixedString{"x00"}> a;
@@ -408,27 +427,28 @@ TEST(EigenInterop, SparseHessianMatchesDenseDriver) {
 
   const auto dense = diff::detail::hessian(diff::seeded_energy(expr), xs);
   const auto sparse = diff::sparse_hessian(expr, xs);
-  const Eigen::MatrixXd M = Eigen::MatrixXd(sparse.matrix());
 
   // Tridiagonal plus the (0,3) corner: 4 + 2*3 + 2 = 12 nonzeros, not 16.
   static_assert(decltype(sparse)::nnz == 12,
                 "chain energy stores 12 of 16 entries");
-  EXPECT_EQ(sparse.matrix().nonZeros(), 12);
+  EXPECT_EQ(sparse.values().size(), 12u);
+  // The CSC triple is self-consistent: outer ends at nnz, inner has that many.
+  EXPECT_EQ(decltype(sparse)::outer().back(), 12);
+  EXPECT_EQ(decltype(sparse)::inner().size(), 12u);
 
+  const auto M = densify(sparse);
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = 0; j < 4; ++j) {
-      const auto ei = static_cast<Eigen::Index>(i);
-      const auto ej = static_cast<Eigen::Index>(j);
-      EXPECT_NEAR(M(ei, ej), hess_at(dense, i, j), 1e-9)
+      EXPECT_NEAR(M[i * 4 + j], hess_at(dense, i, j), 1e-9)
           << "H(" << i << "," << j << ")";
     }
   }
   // Everything the pattern excludes must be an exact structural zero.
-  EXPECT_DOUBLE_EQ(M(0, 2), 0.0);
-  EXPECT_DOUBLE_EQ(M(1, 3), 0.0);
+  EXPECT_DOUBLE_EQ(M[0 * 4 + 2], 0.0);
+  EXPECT_DOUBLE_EQ(M[1 * 4 + 3], 0.0);
 }
 
-TEST(EigenInterop, SparseHessianIndexesLikeADenseMatrix) {
+TEST(SparseHessian, IndexesLikeADenseMatrix) {
   using D = diff::Dual<double>;
   using diff::FixedString;
   Variable<D, FixedString{"x00"}> a;
@@ -461,7 +481,7 @@ TEST(EigenInterop, SparseHessianIndexesLikeADenseMatrix) {
   EXPECT_TRUE(decltype(sparse)::structural(0, 1));
 }
 
-TEST(EigenInterop, SparseHessianIsSymmetricAndCompressed) {
+TEST(SparseHessian, IsSymmetricAndSortedWithinEachColumn) {
   using D = diff::Dual<double>;
   using diff::FixedString;
   Variable<D, FixedString{"x00"}> a;
@@ -473,28 +493,38 @@ TEST(EigenInterop, SparseHessianIsSymmetricAndCompressed) {
   const std::span<const double> xs{x.data(), x.size()};
 
   const auto sparse = diff::sparse_hessian(expr, xs);
-  const auto M = sparse.matrix();
-  EXPECT_TRUE(M.isCompressed());
-
   const auto dense = diff::detail::hessian(diff::seeded_energy(expr), xs);
-  const Eigen::MatrixXd full = Eigen::MatrixXd(M);
+  const auto M = densify(sparse);
+
   for (std::size_t i = 0; i < 3; ++i) {
     for (std::size_t j = 0; j < 3; ++j) {
-      EXPECT_NEAR(full(static_cast<Eigen::Index>(i),
-                       static_cast<Eigen::Index>(j)),
-                  hess_at(dense, i, j), 1e-9);
+      EXPECT_NEAR(M[i * 3 + j], hess_at(dense, i, j), 1e-9);
     }
   }
   // No symmetrization pass runs on the sparse path, so symmetry has to come out
   // of the sweeps themselves.
-  EXPECT_NEAR((full - full.transpose()).cwiseAbs().maxCoeff(), 0.0, 1e-9);
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_NEAR(M[i * 3 + j], M[j * 3 + i], 1e-9);
+    }
+  }
+  // Compressed and sorted: every column's row indices strictly ascend, which is
+  // what a CSC consumer is entitled to assume without a re-sort.
+  const auto outer = decltype(sparse)::outer();
+  const auto inner = decltype(sparse)::inner();
+  for (std::size_t j = 0; j < 3; ++j) {
+    for (auto k = static_cast<std::size_t>(outer[j]) + 1;
+         k < static_cast<std::size_t>(outer[j + 1]); ++k) {
+      EXPECT_LT(inner[k - 1], inner[k]) << "column " << j << " is unsorted";
+    }
+  }
 }
 
 // The degenerate end of the storage range.  A linear expression has a
 // structurally empty Hessian, so nnz is 0 and the buffer collapses to nothing
 // but the sink cell — the one place an off-by-one in the sizing would show up
 // as a zero-length array rather than a wrong answer.
-TEST(EigenInterop, SparseHessianOfALinearExpressionIsEmpty) {
+TEST(SparseHessian, OfALinearExpressionIsEmpty) {
   using D = diff::Dual<double>;
   using diff::FixedString;
   Variable<D, FixedString{"x00"}> x;
@@ -508,7 +538,7 @@ TEST(EigenInterop, SparseHessianOfALinearExpressionIsEmpty) {
   static_assert(decltype(sparse)::nnz == 0,
                 "a linear expression couples nothing, so it stores nothing");
   EXPECT_EQ(sparse.values().size(), 0u);
-  EXPECT_EQ(sparse.matrix().nonZeros(), 0);
+  EXPECT_EQ(decltype(sparse)::outer().back(), 0);
 
   // Every entry is a structural zero, and each one still reads back as exactly
   // 0.0 through the shared sink cell rather than as garbage.
@@ -520,7 +550,6 @@ TEST(EigenInterop, SparseHessianOfALinearExpressionIsEmpty) {
   }
 }
 
-#endif // DIFF_USE_EIGEN
 
 // A plain arithmetic energy lambda carries no tag and is not a CExpression, so
 // it must keep routing to the raw-callable branch — the expr-graph path is

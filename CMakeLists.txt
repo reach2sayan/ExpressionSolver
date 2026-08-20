@@ -131,7 +131,6 @@ endif ()
 option(DIFF_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
 option(DIFF_BUILD_COMPARE "Build comparison benchmarks against autodiff" OFF)
 option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
-option(DIFF_USE_EIGEN "Build the Eigen interop boundary (include/interop/eigen_interop.hpp)" ON)
 
 # Codegen flags for OUR targets only.
 #
@@ -199,33 +198,30 @@ if (DIFF_FP_FLAGS AND NOT MSVC)
     list(APPEND DIFF_CODEGEN_FLAGS -ffp-contract=fast -fno-math-errno)
 endif ()
 
-# Eigen backs include/interop/eigen_interop.hpp — the boundary where a Hessian leaves
-# this library for whatever factorizes it downstream, including the sparse form
-# whose structure comes from the compile-time coupling pass and has no
-# Eigen-side equivalent.  Nothing in the AD core includes Eigen: the symbolic
-# path is constexpr and Eigen types cannot be constant-evaluated.
+# Eigen is NOT a dependency of this library.  It never was one of the AD core --
+# the symbolic path is constexpr and Eigen types cannot be constant-evaluated --
+# and as of 2026-08-20 it is not one of the boundary either: the drivers hand
+# back plain pointers, arrays and spans (a dense buffer with its extent, or a
+# compressed-column triple for the sparse Hessian), and a caller maps whatever
+# matrix type it likes onto those in one line.  There is nothing left for an
+# interop header to do.
 #
-# The dependency is OPTIONAL but ON by default, and REQUIRED once enabled — a
-# missing Eigen is then a clear configure-time error rather than a confusing
-# failure deep in a header.  With DIFF_USE_EIGEN=OFF the library goes back to
-# being header-only with no third-party dependencies, and eigen_interop.hpp is
-# the only thing that disappears.
+# Eigen is still needed for DIFF_BUILD_COMPARE, because autodiff is built on it.
+# Requesting it there rather than globally also keeps a real bug fixed: autodiff
+# calls find_package(Eigen3) without ever linking Eigen3::Eigen to its target,
+# so <Eigen/Core> would otherwise resolve through a /usr/include/Eigen symlink
+# rather than through any include path CMake set.
 #
-# Enabling it also fixes a latent bug on the compare path: DIFF_BUILD_COMPARE
-# used to reach Eigen only because autodiff calls find_package(Eigen3) without
-# ever linking Eigen3::Eigen to its target, so <Eigen/Core> resolved through a
-# /usr/include/Eigen symlink rather than through any include path CMake set.
-if (DIFF_USE_EIGEN)
-    # No version in the request, then checked by hand.  Eigen's config file is
-    # generated with SameMajorVersion compatibility, so asking for "3.4" is
-    # asking for "some 3.x" -- and vcpkg now ships Eigen 5, which can never
-    # satisfy that however compatible it actually is.  The interop boundary only
-    # uses Eigen::Map, Matrix, Vector and SparseMatrix, none of which changed.
+# No version in the request, then checked by hand.  Eigen's config file is
+# generated with SameMajorVersion compatibility, so asking for "3.4" is asking
+# for "some 3.x" -- and vcpkg now ships Eigen 5, which can never satisfy that
+# however compatible it actually is.
+if (DIFF_BUILD_COMPARE)
     find_package(Eigen3 REQUIRED NO_MODULE)
     if (DEFINED Eigen3_VERSION AND Eigen3_VERSION VERSION_LESS 3.4)
         message(FATAL_ERROR "Eigen 3.4 or newer is required (found ${Eigen3_VERSION})")
     endif ()
-    message(STATUS "Eigen: ${Eigen3_VERSION}")
+    message(STATUS "Eigen (for the autodiff comparison only): ${Eigen3_VERSION}")
 endif ()
 
 include(FetchContent)
@@ -279,10 +275,6 @@ target_include_directories(diff INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # INTERFACE library, so the lists exist to make the headers visible in IDEs and
 # to keep a directory's contents described next to the contents themselves.
 add_subdirectory(include)
-if (DIFF_USE_EIGEN)
-    target_link_libraries(diff INTERFACE Eigen3::Eigen)
-    target_compile_definitions(diff INTERFACE DIFF_USE_EIGEN)
-endif ()
 if (DIFF_MDSPAN_VENDORED)
     target_compile_definitions(diff INTERFACE DIFF_MDSPAN_FORCE_VENDORED)
 endif ()
@@ -312,7 +304,7 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 
     if (DIFF_BUILD_COMPARE)
         add_executable(benchmarks_compare benchmarks/benchmark_compare.cpp)
-        target_link_libraries(benchmarks_compare PRIVATE benchmark::benchmark diff autodiff::autodiff)
+        target_link_libraries(benchmarks_compare PRIVATE benchmark::benchmark diff autodiff::autodiff Eigen3::Eigen)
         target_compile_options(benchmarks_compare PRIVATE ${DIFF_CODEGEN_FLAGS})
         if (NOT MSVC)
             target_compile_options(benchmarks_compare PRIVATE -Wall -Wextra)

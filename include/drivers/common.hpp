@@ -87,8 +87,9 @@ namespace detail {
 //
 // There is deliberately no accessor type wrapping these.  The layout is part of
 // the contract rather than something a member function hides, and a caller that
-// wants matrix semantics maps Eigen onto the buffer (interop/eigen_interop.hpp)
-// without this header having to know Eigen exists.
+// wants matrix semantics maps its own linear-algebra type onto the buffer --
+// the pointer and the extent are all that takes, and this library never names
+// such a type.
 
 // Runtime extent: two owning buffers plus the extent they are sized by.
 using HessianOwned = std::tuple<double, std::unique_ptr<double[]>,
