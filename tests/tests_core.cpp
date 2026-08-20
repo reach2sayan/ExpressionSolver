@@ -1753,7 +1753,7 @@ TEST(DerivativeTensorTest, Equation_Order3_TrigPolynomial) {
 }
 
 // ===========================================================================
-// Tutorial tests — based on autodiff.github.io/tutorials/
+// Tutorial tests — the standard worked examples for a forward-mode AD library.
 // Each test section maps to one tutorial page.
 // ===========================================================================
 
@@ -2167,9 +2167,9 @@ TEST(TutorialReverseHigherOrder, ForwardReverseHessianAgree) {
 }
 
 // ===========================================================================
-// autodiff-compatible freestanding scalar contract + forward-mode drivers.
+// The freestanding scalar contract + forward-mode drivers.
 // These cover the surface a generic templated f(const Scalar*) needs to be
-// differentiated the way autodiff::dual2nd + hessian(...) is used downstream.
+// differentiated the way a second-order dual + hessian(...) is used downstream.
 // ===========================================================================
 
 TEST(DualScalarContract, ValAndToDouble) {

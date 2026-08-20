@@ -509,3 +509,8 @@ build/
 # but out of the index, alongside the already-ignored *.md docs.
 docs/ad_jacobian.tex
 docs/ad_jacobian.pdf
+
+# Local-only A/B harness against other AD libraries; never published.
+/compare/
+/build_compare/
+/cmake-build-compare/

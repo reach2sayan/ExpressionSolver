@@ -1,6 +1,5 @@
-# util/ — the layer with no knowledge of expressions or derivatives: language
-# configuration, version macros, compile-time strings, type-list
-# metaprogramming, and the RAII seed toggle every driver borrows.
+# util/ — language configuration, version macros, compile-time strings,
+# type-list metaprogramming, and the RAII seed toggle every driver borrows.
 target_sources(ddx INTERFACE
         ${CMAKE_CURRENT_LIST_DIR}/config.hpp
         ${CMAKE_CURRENT_LIST_DIR}/version.hpp

@@ -515,7 +515,6 @@ results, and `src/main.cpp` for a runnable tour of every entry point.
 | Option | Default | Meaning |
 |---|---|---|
 | `DDX_BUILD_BENCHMARKS` | `ON` | build the Google Benchmark targets |
-| `DDX_BUILD_COMPARE` | `OFF` | build comparison benchmarks against autodiff (needs Eigen) |
 | `ENABLE_NATIVE_ARCH` | `ON` | `-march=native` (falls back to `x86-64-v3`) |
 | `DDX_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
 | `DDX_MDSPAN_MODE` | `auto` | `auto` / `std` / `vendored` — which `mdspan` to bind to |

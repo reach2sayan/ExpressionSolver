@@ -2,7 +2,7 @@
 
 
 // ===========================================================================
-// New math functions (parity with autodiff): log10, cbrt, asinh, acosh,
+// New math functions: log10, cbrt, asinh, acosh,
 // atanh, erf (unary) and pow, atan2, hypot, min, max (binary), exercised
 // across all three mechanisms — expression templates, lazy dual, Taylor.
 // ===========================================================================

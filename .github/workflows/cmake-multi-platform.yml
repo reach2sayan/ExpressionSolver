@@ -39,20 +39,32 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y clang gcc-14 g++-14
 
-      # The library has no third-party dependencies, and the constexpr core
-      # could not use Eigen in constant evaluation anyway.  Eigen now appears
-      # only in benchmarks/benchmark_compare.cpp, which needs DDX_BUILD_COMPARE
-      # and is off by default.  The scan is recursive — the headers live in
-      # subdirectories.
+      # The library depends on nothing but the standard library, and the
+      # constexpr core could not use a matrix package in constant evaluation
+      # anyway.  Standard headers carry no '/', so any angle-include with a path
+      # is a third-party leak; the vendored mdspan copy is the one exception.
+      # Recursive — the headers live in subdirectories.
       - name: Headers stay dependency-free
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          offenders=$(grep -rlE '#[[:space:]]*include[[:space:]]*[<"]Eigen' include || true)
-          if [ -n "$offenders" ]; then
-            echo "Eigen leaked into the library headers:"; echo "$offenders"; exit 1
+          angled=$(grep -rnE '#[[:space:]]*include[[:space:]]*<[^>]*/' include --include='*.hpp' \
+                   | grep -v third_party || true)
+          # A quoted include is one of ours and must resolve inside include/;
+          # one that does not is a bundled dependency under another spelling.
+          quoted=$( { grep -rnE '#[[:space:]]*include[[:space:]]*"' include --include='*.hpp' \
+                       | grep -v third_party || true; } \
+                   | while IFS=: read -r f n rest; do
+                       h=${rest#*\"}; h=${h%%\"*}
+                       [ -e "$(dirname "$f")/$h" ] || [ -e "include/$h" ] || echo "$f:$n: $h"
+                     done)
+          if [ -n "$angled$quoted" ]; then
+            echo "a third-party header leaked into include/:"
+            [ -n "$angled" ] && echo "$angled"
+            [ -n "$quoted" ] && echo "$quoted"
+            exit 1
           fi
-          echo "No Eigen under include/"
+          echo "include/ depends on the standard library only"
 
       - name: Set build directory
         id: strings

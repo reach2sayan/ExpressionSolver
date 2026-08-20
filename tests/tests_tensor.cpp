@@ -101,7 +101,7 @@ TEST(UnivariateDerivative, MaxAndMinAreDifferentiable) {
 
 // README advertises "Everything is constexpr" — not just evaluation, but the
 // differentiation entry points — and nothing was asserting it.  This is the
-// guard for that claim, and the tripwire for anything (an Eigen type, a
+// guard for that claim, and the tripwire for anything (a foreign matrix type, a
 // std::vector, an allocation) leaking into the symbolic core: a leak makes
 // these static_asserts fail to compile rather than merely slow something down.
 TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {

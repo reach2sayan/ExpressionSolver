@@ -360,7 +360,7 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnTrigProducts) {
 // There is no linear-algebra library on this boundary.  What the library hands
 // over is a compressed-column triple (outer, inner, values) plus the extent,
 // and `densify` below is the whole of what a caller does with it -- it stands
-// in for the one-line Eigen::Map a client would write instead.
+// in for the one-line matrix map a client would write instead.
 // ===========================================================================
 namespace {
 // CSC triple -> dense row-major, exactly as a consumer would read it.
