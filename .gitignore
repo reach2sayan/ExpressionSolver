@@ -514,3 +514,4 @@ docs/ad_jacobian.pdf
 /compare/
 /build_compare/
 /cmake-build-compare/
+/cmake-build-bench/
