@@ -54,8 +54,8 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
     VT v = [&]<std::size_t... I>(std::index_sequence<I...>) {
       return typename U::op_type::func_type{}(
           fill_cache<child_base_at<Base, Kids, I>(), Syms,
-                     U::op_type::reads_primals>(
-              std::get<I>(node.expressions()), vals, cache)...);
+                     U::op_type::reads_primals>(std::get<I>(node.expressions()),
+                                                vals, cache)...);
     }(std::make_index_sequence<std::tuple_size_v<Kids>>{});
     if constexpr (Store) {
       cache[Base] = v;
@@ -81,9 +81,8 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 // place rather than six.
 template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds,
           CNumericBuffer Grads>
-DIFF_ALWAYS_INLINE constexpr auto reverse_sweep(const Expr &expr,
-                                                const Seeds &seeds,
-                             Grads &grads) noexcept {
+DIFF_ALWAYS_INLINE constexpr auto
+reverse_sweep(const Expr &expr, const Seeds &seeds, Grads &grads) noexcept {
   using T = typename std::remove_cvref_t<Expr>::value_type;
   node_cache_t<Expr> cache{};
   // Store=false: the root's value is what this function returns, and no
@@ -126,9 +125,7 @@ template <CExpression Expr,
           Numeric Scalar =
               scalar_base_t<typename std::remove_cvref_t<Expr>::value_type>,
           FixedString... Syms, Numeric... Vs>
-[[nodiscard]] constexpr std::array<
-    Scalar,
-    detail::expr_arity_v<Expr>>
+[[nodiscard]] constexpr std::array<Scalar, detail::expr_arity_v<Expr>>
 make_values(NamedValue<Syms, Vs>... nv) noexcept {
   using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   constexpr std::size_t N = mp::mp_size(SymList{});
@@ -149,13 +146,6 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
   return out;
 }
 
-// nd_array_t and nd_index used to live here: a recursively nested std::array
-// plus a recursive operator[] walk over a span of indices.  Both are now
-// md_tensor (include/md/tensor.hpp), which puts the rank in an md::extents
-// instead of in the type nesting and gets the index walk from a layout
-// mapping.  nd_tensor_t<S, N, Order> is the direct replacement, and the
-// t[i][j][k] spelling those callers used still works.
-
 // The two modes an entry point can be asked for.  Forward mode is reached
 // through the drivers (forward_driver.hpp / vforward_driver.hpp), which take a
 // callable rather than a Mode, so it is not a value here.
@@ -167,7 +157,8 @@ namespace detail {
 // dual part; the gradient proper is the real part.  Both gradient modes go
 // through here so they cannot disagree about it.
 template <Numeric T, std::size_t N>
-[[nodiscard]] constexpr auto strip_seed(const std::array<T, N> &grads) noexcept {
+[[nodiscard]] constexpr auto
+strip_seed(const std::array<T, N> &grads) noexcept {
   if constexpr (DualLike<T>) {
     std::array<dual_scalar_t<T>, N> result{};
     std::ranges::transform(grads, result.begin(),
@@ -178,15 +169,13 @@ template <Numeric T, std::size_t N>
   }
 }
 
-
 // Reverse-mode gradient.  A dual-valued expression differentiates the same way
 // -- the sweep is identical -- and then hands back only the value level of each
 // gradient entry, which is the scalar derivative.
 template <CExpression Expr, Numeric T = typename Expr::value_type,
           std::size_t N = detail::expr_arity_v<Expr>>
 [[nodiscard]] constexpr auto
-reverse_mode_gradient(const Expr &expr,
-                      const std::array<T, N> &vals) noexcept {
+reverse_mode_gradient(const Expr &expr, const std::array<T, N> &vals) noexcept {
   using Syms = detail::expr_symbols_t<Expr>;
   std::array<T, N> grads{};
   reverse_sweep<Syms>(expr, vals, grads);
@@ -219,7 +208,8 @@ reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
                           return g.template get<1>();
                         });
 
-    for (auto &&[i, entry] : std::views::zip(std::views::iota(0uz, N), column)) {
+    for (auto &&[i, entry] :
+         std::views::zip(std::views::iota(0uz, N), column)) {
       H[i, j] = entry;
     }
   }
@@ -254,29 +244,10 @@ template <std::size_t N, std::size_t Order>
   }(std::make_index_sequence<Order>{});
 }
 
-// The multi-indices a symmetric rank-Order tensor actually has to evaluate:
-// the non-decreasing ones, C(N + Order - 1, Order) of them rather than
-// N^Order.  Mixed partials commute (Clairaut/Schwarz), so each of those is the
-// canonical representative of a permutation class whose members all name the
-// same packed cell.
-//
-// Enumerated directly rather than as `index_grid | views::filter(is_sorted)`.
-// That spelling was shorter and wrong on cost: filtering still *walks* all
-// N^Order tuples and throws most away, so it saved the evaluations but not the
-// traversal — measured 4x SLOWER than the dense loop on a cheap expression at
-// N=2/Order=2, where one evaluation is saved and four tuples are still visited.
-// Advancing to the next non-decreasing tuple directly makes the traversal
-// O(C(N + Order - 1, Order)) too.
-//
-// It is a consteval *table* rather than a lazy iterator, and that is the whole
-// point.  An iterator that stops on a data-dependent flag hides the trip count
-// from the optimiser, which costs far more than the traversal it saves: the
-// generic loop below then stops unrolling, and a derivative tensor that used to
-// fold to constants (the Hessian of x^2 + xy + y^2 does not depend on the
-// point) stops folding.  Measured 4x slower that way.  A table has a
-// compile-time size, so the loop over it unrolls exactly as the old flat
-// counter loop did, and the traversal is C(N + Order - 1, Order) rather than
-// N^Order.
+// The non-decreasing multi-indices: C(N + Order - 1, Order) of them rather than
+// N^Order, one canonical representative per permutation class (mixed partials
+// commute).  A consteval table, not a filtered view and not a lazy iterator --
+// both alternatives measured 4x slower, for two different reasons.
 template <std::size_t N, std::size_t Order>
   requires(N > 0 && Order > 0)
 consteval auto simplex_index_table() noexcept {
@@ -406,7 +377,6 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
 
 } // namespace detail
 
-
 namespace detail {
 
 // Same fold as binomial() in md/layouts.hpp, which is the idiom this file
@@ -435,8 +405,7 @@ template <std::size_t Order, CExpression Expr,
   seed.c[0] = x0;
   seed.c[1] = S{1};
 
-  TD result =
-      expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
+  TD result = expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
 
   // Computed in size_t (exact) and converted once, rather than folded in S:
   // the cast is explicit so it does not read as an accidental narrowing.
@@ -446,7 +415,6 @@ template <std::size_t Order, CExpression Expr,
 
 } // namespace detail
 
-
 // The expression-taking entry points that used to live here -- gradient<Mode>,
 // hessian<Mode>, derivative_tensor<Order>, univariate_derivative<Order>, and
 // the reverse_mode_grad / reverse_mode_hess macros -- are now members of
@@ -455,4 +423,3 @@ template <std::size_t Order, CExpression Expr,
 // Everything above stays here as the engine those members call.
 
 } // namespace diff
-

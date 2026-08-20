@@ -32,7 +32,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang linux-tools-common linux-tools-generic
+          sudo apt-get install -y clang g++-14 linux-tools-common linux-tools-generic
 
       - name: Set build directory
         id: strings

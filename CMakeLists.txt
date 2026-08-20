@@ -5,12 +5,14 @@ cmake_minimum_required(VERSION 3.20)
 # (include/util/config.hpp): one definition using deducing this (P0847), and an
 # explicit overload set for toolchains without it.  Each pair shares a single
 # static slot() body, so they compile and behave identically and nothing here
-# is a hard requirement -- but our own builds should exercise the deducing-this
-# path, and the default /usr/bin/c++ is still GCC 13, which lacks it.  Pick the
-# newest GCC on PATH when the caller has not chosen a compiler; a caller who
-# passes -DCMAKE_CXX_COMPILER or sets $CXX always wins, and a consumer pulling
-# this in via add_subdirectory already has the variable set, so the block is a
-# no-op there.  CMAKE_CXX_COMPILER must be set before project().
+# is a hard requirement (Clang 17, inside the supported range, has no P0847) --
+# but our own builds should exercise the deducing-this path, and a box's default
+# /usr/bin/c++ is often older than the GCC 14 floor the README states, so it may
+# have neither that nor std::ranges::to.  Pick the newest GCC on PATH when the
+# caller has not chosen a compiler; a caller who passes -DCMAKE_CXX_COMPILER or
+# sets $CXX always wins, and a consumer pulling this in via add_subdirectory
+# already has the variable set, so the block is a no-op there.
+# CMAKE_CXX_COMPILER must be set before project().
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
         AND NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
     find_program(DIFF_PREFERRED_CXX NAMES g++-15 g++-14)
@@ -294,7 +296,14 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     target_link_libraries(main PUBLIC diff)
     target_compile_options(main PRIVATE ${DIFF_CODEGEN_FLAGS})
 
-    add_executable(tests tests.cpp)
+    # Split across several translation units so `-j` can build them at once:
+    # as one 4.5k-line file this was a ~54 s serial compile and the critical
+    # path of every build.  The cut points are the anonymous-namespace helper
+    # blocks, so each file owns the helpers its tests use.
+    file(GLOB DIFF_TEST_SOURCES CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
+    add_executable(tests ${DIFF_TEST_SOURCES})
+    target_include_directories(tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     target_link_libraries(tests gtest_main diff)
     target_compile_options(tests PRIVATE ${DIFF_CODEGEN_FLAGS})
 

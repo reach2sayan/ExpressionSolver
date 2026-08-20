@@ -20,8 +20,8 @@ jobs:
             cpp_compiler: clang++
           - os: ubuntu-latest
             build_type: Release
-            c_compiler: gcc
-            cpp_compiler: g++
+            c_compiler: gcc-14
+            cpp_compiler: g++-14
           - os: windows-latest
             build_type: Release
             c_compiler: cl
@@ -30,11 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # g++-14, not the image's default g++/libstdc++: the library floor is
+      # libstdc++ 14 (std::ranges::to), and clang on Linux compiles against the
+      # newest libstdc++ installed, so this line is what feeds both Linux jobs.
       - name: Install compilers and Eigen (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang gcc libeigen3-dev
+          sudo apt-get install -y clang gcc-14 g++-14 libeigen3-dev
 
       - name: Install Eigen (Windows)
         if: runner.os == 'Windows'
@@ -60,7 +63,7 @@ jobs:
       # header is #error-guarded and its tests are #ifdef-guarded, both of which
       # rot silently if nothing exercises them.
       - name: Build and test without Eigen
-        if: runner.os == 'Linux' && matrix.cpp_compiler == 'g++'
+        if: runner.os == 'Linux' && matrix.cpp_compiler == 'g++-14'
         shell: bash
         run: |
           cmake -S . -B build-no-eigen -DDIFF_USE_EIGEN=OFF \

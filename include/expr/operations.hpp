@@ -270,6 +270,8 @@ struct min_impl {
 // repeated here.
 #define DIFF_UNARY_MATH_OP(FN, NAME, LABEL)                                    \
   template <Numeric T>                                                         \
+    requires(!detail::needs_real_constants_v<detail::NAME##Fn<T>> ||           \
+             std::constructible_from<T, double>)                               \
   struct NAME : UnaryOp<T, detail::NAME##Fn<T>, FixedString{LABEL}> {          \
     [[nodiscard]] static constexpr auto                                        \
     derivative(const CExpression auto &lhs) noexcept {                         \

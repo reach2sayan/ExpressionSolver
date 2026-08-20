@@ -67,6 +67,31 @@ DIFF_UNARY_MATH_DESC(ErfOpFn,     erf(u),   static_cast<T>(2.0 * std::numbers::i
 #undef DIFF_UNARY_MATH_FNS
 // clang-format on
 
+// What a descriptor asks of T, which is NOT what its value asks.
+//
+// The value path is already guarded: UnaryOp takes its func as `CUnaryOp<T>`,
+// so `sin(T)` is checked before an op exists.  `deriv` has no such guard and
+// needs strictly MORE than the value does -- sin's derivative calls cos,
+// asin/acos/asinh/acosh call sqrt, tan and tanh call cos/cosh, and erf calls
+// exp.  A scalar with sin but no cos is therefore accepted by SineOp and only
+// fails when something differentiates it.  That cannot be turned into a clean
+// constraint here: `deriv` returns `auto`, so a failure is inside the body,
+// outside the immediate context, and hard-errors rather than SFINAE-ing.  It is
+// documented instead -- the failure does at least name the missing function and
+// the line it is called from.
+//
+// Two descriptors need something the concepts genuinely do not imply: log10 and
+// erf carry irrational constants (ln10, 2/sqrt(pi)) and so need
+// `static_cast<T>(double)`.  CFieldLike requires constructible_from<T, int>,
+// which does NOT give that, so this one IS expressible as a constraint and the
+// generator below applies it.  Every other descriptor builds its constants from
+// int literals -- T{1}, T{2}, T{3} -- and needs nothing beyond the concept.
+template <typename Fn> inline constexpr bool needs_real_constants_v = false;
+template <Numeric T>
+inline constexpr bool needs_real_constants_v<Log10OpFn<T>> = true;
+template <Numeric T>
+inline constexpr bool needs_real_constants_v<ErfOpFn<T>> = true;
+
 template <typename Fn, Numeric T>
 inline constexpr bool has_deriv_from_value_v =
     requires(const T &u, const T &fu) { Fn::deriv_from_value(u, fu); };

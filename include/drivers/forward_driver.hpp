@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
-#include <numeric>
 #include <ranges>
 #include <span>
 #include <type_traits>
@@ -32,12 +31,10 @@ concept CEnergyOf =
     std::convertible_to<std::invoke_result_t<F &, const D *>, D>;
 
 namespace detail {
-// Spelled out rather than piped: the one-line range form needs a library
-// feature libstdc++ only ships from 14, and we still build on 13.
+// std::ranges::to is C++23 but libstdc++ only ships it from 14, which is the
+// floor this project builds against (README, Requirements).
 inline std::vector<std::size_t> iota_indices(std::size_t n) {
-  std::vector<std::size_t> v(n);
-  std::iota(v.begin(), v.end(), std::size_t{0});
-  return v;
+  return std::views::iota(std::size_t{0}, n) | std::ranges::to<std::vector>();
 }
 } // namespace detail
 
