@@ -293,7 +293,7 @@ public:
   // One variable, one Taylor sweep: the Order-th derivative as a plain number
   // rather than a rank-Order tensor with one entry.
   template <std::size_t Order>
-  [[nodiscard]] constexpr auto
+  [[nodiscard]] DIFF_ALWAYS_INLINE constexpr auto
   univariate_derivative(scalar_base_t<value_type> x0) const noexcept
     requires(input_dim == 1 && output_dim == 1 && Order > 0)
   {

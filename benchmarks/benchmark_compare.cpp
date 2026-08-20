@@ -620,13 +620,15 @@ BENCHMARK(BM_Ours_Forward_T4th);
 static void BM_AD_Forward_T4th(benchmark::State &state) {
   using autodiff::dual4th;
   using autodiff::detail::at;
-  using autodiff::detail::derivative;
+  using autodiff::detail::derivatives;
   using autodiff::detail::wrt;
   auto f = [](dual4th x) -> dual4th { return sin(x); };
   dual4th x = T4_X0;
   for (auto _ : state) {
     benchmark::DoNotOptimize(x);
-    double d4 = derivative(f, wrt(x, x, x, x), at(x));
+    // derivatives() returns the whole jet [f, f', f'', f''', f''''].  The
+    // derivative(f, wrt(x,x,x,x), at(x)) spelling returns f', not f''''.
+    double d4 = derivatives(f, wrt(x), at(x))[4];
     benchmark::DoNotOptimize(d4);
     benchmark::ClobberMemory();
   }
@@ -646,6 +648,58 @@ static void BM_Ours_Taylor_T4th(benchmark::State &state) {
   }
 }
 BENCHMARK(BM_Ours_Taylor_T4th);
+
+// ---------------------------------------------------------------------------
+// Taylor K-sweep.  Our TaylorDual holds K+1 coefficients and its recurrences
+// are O(K^2); autodiff's HigherOrderDual is a nested Dual<Dual<...>> binary
+// tree of 2^K doubles whose multiply costs 3^K.  The two cross over around
+// K = 6 -- below it the nested form is small enough for the compiler to fold
+// flat, above it nothing can save it.  One row per K so the shape is visible
+// rather than inferred from a single point.
+//
+// Both arms are fenced identically.  That matters more than usual here:
+// autodiff's cost is very sensitive to how much the inliner gets to see (the
+// same K=4 row measures ~10 ns isolated and ~50 ns sharing a function with
+// other work), so an asymmetric harness measures the inliner, not the library.
+// ---------------------------------------------------------------------------
+
+template <std::size_t K>
+static void BM_Ours_Taylor_Sweep(benchmark::State &state) {
+  double x0 = T4_X0;
+  benchmark::DoNotOptimize(x0);
+  auto x = PV(x0, "x");
+  auto expr = sin(x);
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(x0);
+    double d = Equation{expr}.template univariate_derivative<K>(x0);
+    benchmark::DoNotOptimize(d);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_Ours_Taylor_Sweep<2>);
+BENCHMARK(BM_Ours_Taylor_Sweep<4>);
+BENCHMARK(BM_Ours_Taylor_Sweep<6>);
+BENCHMARK(BM_Ours_Taylor_Sweep<8>);
+
+template <std::size_t K>
+static void BM_AD_Taylor_Sweep(benchmark::State &state) {
+  using autodiff::detail::at;
+  using autodiff::detail::derivatives;
+  using autodiff::detail::wrt;
+  using HOD = autodiff::HigherOrderDual<K, double>;
+  auto f = [](HOD t) -> HOD { return sin(t); };
+  HOD t = T4_X0;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(t);
+    double d = derivatives(f, wrt(t), at(t))[K];
+    benchmark::DoNotOptimize(d);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_AD_Taylor_Sweep<2>);
+BENCHMARK(BM_AD_Taylor_Sweep<4>);
+BENCHMARK(BM_AD_Taylor_Sweep<6>);
+BENCHMARK(BM_AD_Taylor_Sweep<8>);
 
 // ===========================================================================
 // Tutorial T_Hess  f(x,y) = x² + xy + y²  — Hessian at (2.0, 3.0)
@@ -689,7 +743,7 @@ BENCHMARK(BM_Ours_Reverse_THess);
 static void BM_AD_Forward_THess(benchmark::State &state) {
   using autodiff::dual2nd;
   using autodiff::detail::at;
-  using autodiff::detail::derivative;
+  using autodiff::detail::derivatives;
   using autodiff::detail::wrt;
   auto f = [](dual2nd x, dual2nd y) -> dual2nd {
     return x * x + x * y + y * y;
@@ -698,9 +752,11 @@ static void BM_AD_Forward_THess(benchmark::State &state) {
   for (auto _ : state) {
     benchmark::DoNotOptimize(x);
     benchmark::DoNotOptimize(y);
-    double hxx = derivative(f, wrt(x, x), at(x, y));
-    double hxy = derivative(f, wrt(x, y), at(x, y));
-    double hyy = derivative(f, wrt(y, y), at(x, y));
+    // Element [2] is the second derivative; derivative(f, wrt(x,x), at(x,y))
+    // returns the first, so that spelling times a gradient, not a Hessian.
+    double hxx = derivatives(f, wrt(x, x), at(x, y))[2];
+    double hxy = derivatives(f, wrt(x, y), at(x, y))[2];
+    double hyy = derivatives(f, wrt(y, y), at(x, y))[2];
     benchmark::DoNotOptimize(hxx);
     benchmark::DoNotOptimize(hxy);
     benchmark::DoNotOptimize(hyy);
@@ -1373,6 +1429,38 @@ double ours_partial(const Expr &expr, std::string_view sym,
     reverse_check("G4 d/dx03", ours_partial(e, "x03", g4pt), dd);
   }
   // Routed raw-callable Hessian: whichever driver diff::hessian() picks at each
+  // T4th / THess: the two forward tutorial rows.  Both AD arms used to spell
+  // derivative(f, wrt(x,...,x), at(...)), which returns the FIRST derivative
+  // however many wrt args it is handed -- so each row timed our K-th
+  // derivative against autodiff's 1st.  Gated here so it cannot come back.
+  {
+    using autodiff::dual4th;
+    using autodiff::detail::at;
+    using autodiff::detail::derivatives;
+    using autodiff::detail::wrt;
+    auto f = [](dual4th t) -> dual4th { return sin(t); };
+    dual4th t = T4_X0;
+    const double ad4 = derivatives(f, wrt(t), at(t))[4];
+    const auto e = sin(PV(T4_X0, "x"));
+    reverse_check("T4th d4/dx4",
+                  Equation{e}.template univariate_derivative<4>(T4_X0), ad4);
+    reverse_check("T4th d4/dx4 vs closed form", std::sin(T4_X0), ad4);
+  }
+  {
+    using autodiff::dual2nd;
+    using autodiff::detail::at;
+    using autodiff::detail::derivatives;
+    using autodiff::detail::wrt;
+    auto f = [](dual2nd a, dual2nd b) -> dual2nd { return a * a + a * b + b * b; };
+    dual2nd ax = 2.0, ay = 3.0;
+    const auto e = PV(2.0, "x") * PV(2.0, "x") + PV(2.0, "x") * PV(3.0, "y") +
+                   PV(3.0, "y") * PV(3.0, "y");
+    const auto H = Equation{e}.template derivative_tensor<2>(std::array{2.0, 3.0});
+    reverse_check("THess hxx", H[0, 0], derivatives(f, wrt(ax, ax), at(ax, ay))[2]);
+    reverse_check("THess hxy", H[0, 1], derivatives(f, wrt(ax, ay), at(ax, ay))[2]);
+    reverse_check("THess hyy", H[1, 1], derivatives(f, wrt(ay, ay), at(ax, ay))[2]);
+  }
+
   // m must agree with the scalar probe driver, which is the reference.  This is
   // the correctness half of BM_Ours_Hessian_HessSparse -- that row shows which
   // driver was chosen, this shows the choice did not change the answer.  m = 8

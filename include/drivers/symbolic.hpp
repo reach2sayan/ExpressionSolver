@@ -348,8 +348,8 @@ template <std::size_t Order, CExpression Expr,
           Numeric S = scalar_base_t<T>,
           std::size_t NVars = detail::expr_arity_v<Expr>>
   requires(Order > 0 && NVars == 1)
-[[nodiscard]] constexpr S univariate_derivative_impl(const Expr &expr,
-                                                     S x0) noexcept {
+[[nodiscard]] DIFF_ALWAYS_INLINE constexpr S
+univariate_derivative_impl(const Expr &expr, S x0) noexcept {
   using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   using TD = TaylorDual<S, Order>;
 
