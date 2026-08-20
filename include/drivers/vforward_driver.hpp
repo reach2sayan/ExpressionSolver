@@ -56,55 +56,58 @@ namespace detail {
 // r.value() : value-level VectorDual -> value = f(x), grad[t] = df/dx_t
 // r.deriv() : outer-deriv VectorDual -> grad[t] = d2f/dx_i dx_t (Hessian row i)
 
-template <std::size_t N, CEnergyOf<Dual<VectorDual<N>>> F>
-HessianResult hessian_vforward_impl(F &&f, std::span<const double> x,
-                                    std::span<const std::size_t> active) {
+template <std::size_t N, CEnergyOf<Dual<VectorDual<N>>> F, CIndexRange R>
+HessianOwned hessian_vforward_impl(F &&f, std::span<const double> x,
+                                   R &&active) {
   const std::size_t n = x.size();
-  const std::size_t m = active.size(); // caller guarantees 0 < m <= N
+  const std::size_t m = std::ranges::size(active); // caller guarantees 0 < m <= N
   using V = VectorDual<N>;
   using D = Dual<V>;
 
-  HessianResult res;
-  res.resize(m);
-
-  // Value-level seeds: identity tangents over `active`, identical every sweep.
-  std::vector<V> base(n);
-  std::ranges::transform(x, base.begin(), [](double v) { return V{v}; });
-  for (std::size_t t = 0; t < m; ++t) {
-    base[active[t]].grad[t] = 1.0;
-  }
+  // Every cell of both buffers is written below -- row i is copied whole, for
+  // every i -- so they are handed over uninitialised.
+  auto grad = detail::raw_buffer(m);
+  auto hess = detail::raw_buffer(m * m);
+  double value{};
 
   // Build dof once: value level = the identity tangent pack (constant across
   // sweeps), outer-derivative level = all zero.
-  std::vector<D> dof(n);
-  std::ranges::transform(base, dof.begin(),
-                         [](const V &v) { return D{v, V{}}; });
+  //
+  // Written straight into dof.  This used to stage the value-level pack in a
+  // separate `std::vector<V> base(n)` and then transform that into dof, which
+  // bought nothing -- base was read exactly once, by the transform -- and cost a
+  // second heap allocation on every call.  The identity tangents are seeded in
+  // place afterwards, which is what base existed to do.
+  SweepWorkspace<D> ws;
+  D *const dof = ws.seed_with(x, [](const double v) { return D{V{v}, V{}}; });
+  for (std::size_t t = 0; t < m; ++t) {
+    dof[active[t]].value().grad[t] = 1.0;
+  }
   for (std::size_t i = 0; i < m; ++i) {
     const std::size_t ai = active[i];
     // Outer-deriv seed e_i, cleared when the guard leaves this body.  Only the
     // outer level is guarded: the value-level pack above is deliberately
     // sticky.
     const auto seed = scoped_seed<1.0>(dof[ai].deriv().value);
-    const D r = f(dof.data());
+    const D r = f(dof);
 
     const auto &[A, B] = r; // value & outer-derivative component (no copy)
     if (i == 0) {
-      res.value = A.value;
-      std::ranges::copy(A.grad | std::views::take(m), res.gradient.begin());
+      value = A.value;
+      std::ranges::copy(A.grad | std::views::take(m), grad.get());
     }
     // This sweep produced row i whole.  Written through the buffer directly:
     // submdspan(H, i, full_extent) says the same thing and reads better, but it
     // measured 8-16% slower across the HessExpr benchmarks and this is the
-    // driver's hot loop.  HessianResult::matrix() is still there for callers,
-    // where the cost does not land in a sweep.
-    std::ranges::copy(B.grad | std::views::take(m),
-                      res.hessian.begin() + static_cast<std::ptrdiff_t>(i * m));
+    // driver's hot loop.  A caller wanting matrix semantics maps Eigen onto the
+    // buffer, where the cost does not land in a sweep.
+    std::ranges::copy(B.grad | std::views::take(m), hess.get() + i * m);
   }
 
   // Each row was computed by an independent sweep, so mirrored entries can
   // differ in the last ULP.
-  res.symmetrize();
-  return res;
+  detail::symmetrize(hess.get(), m);
+  return {value, std::move(grad), std::move(hess), m};
 }
 
 // The colour-compressed reverse sweeps, shared by the dense and the sparse
@@ -145,8 +148,8 @@ DIFF_ALWAYS_INLINE void color_sweeps(const Expr &expr, std::span<const double> x
 // Only a graph can take this path: a runtime lambda has no tree to sweep
 // backward.  The seed array is sized by the symbol set, so N is compile-time.
 template <CExpression Expr>
-HessianResult hessian_expr_reverse(const Expr &expr,
-                                   std::span<const double> x) {
+HessianStatic<mpl::mp_size(detail::expr_symbols_t<std::remove_cvref_t<Expr>>{})>
+hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using Syms = detail::expr_symbols_t<E>;
@@ -161,8 +164,12 @@ HessianResult hessian_expr_reverse(const Expr &expr,
   // degenerates to one sweep per column, i.e. never worse.
   static constexpr auto kPattern = hessian_pattern<E>();
   static constexpr auto kColors = color_columns<N>(kPattern);
-  HessianResult res;
-  res.resize(N);
+  // Value-initialised, and that is load-bearing: the scatter below writes only
+  // structurally non-zero entries and relies on everything outside the pattern
+  // already being zero.
+  HessianStatic<N> res{};
+  auto &res_gradient = std::get<1>(res);
+  auto &res_hessian = std::get<2>(res);
 
   color_sweeps(expr, x, kColors, [&](std::size_t c, const T &root,
                                      const auto &grads) {
@@ -170,8 +177,8 @@ HessianResult hessian_expr_reverse(const Expr &expr,
     if (c == 0) {
       // The value and the first-order adjoints do not depend on the tangent
       // seeding, so any one sweep yields both.
-      res.value = static_cast<double>(root.template get<0>());
-      std::ranges::transform(grads, res.gradient.begin(), [](const T &g) {
+      std::get<0>(res) = static_cast<double>(root.template get<0>());
+      std::ranges::transform(grads, res_gradient.begin(), [](const T &g) {
         return static_cast<double>(g.template get<0>());
       });
     }
@@ -181,7 +188,7 @@ HessianResult hessian_expr_reverse(const Expr &expr,
     // sum IS that entry, and which column it belongs to was resolved at compile
     // time.  Entries outside the pattern are never written and stay zero.
     for (auto &&[row, grad, target] :
-         std::views::zip(res.hessian | std::views::chunk(N), grads,
+         std::views::zip(res_hessian | std::views::chunk(N), grads,
                          kScatter[c])) {
       if (target != no_column) {
         // A chunk view indexes by its signed difference_type, not by size_t.
@@ -193,7 +200,7 @@ HessianResult hessian_expr_reverse(const Expr &expr,
 
   // Columns come from independent sweeps, so mirrored entries can differ in
   // the last ULP.
-  res.symmetrize();
+  detail::symmetrize(res_hessian.data(), N);
   return res;
 }
 
@@ -264,7 +271,7 @@ concept CGraphReverseHessian =
 // (bound.hpp): silently differentiating at the wrong point is worse than
 // throwing.
 constexpr void check_graph_point(std::size_t arity, std::span<const double> x,
-                                 std::span<const std::size_t> active) {
+                                 CIndexRange auto &&active) {
   if (x.size() < arity) {
     throw std::out_of_range(
         "hessian: an expression graph needs one value per symbol; the point is "
@@ -295,8 +302,8 @@ constexpr void check_graph_point(std::size_t arity,
 // symbol) keeps the probe-based driver, which can honour `active`.
 [[nodiscard]] constexpr bool
 reverse_hessian_applies(std::size_t n, std::span<const double> x,
-                        std::span<const std::size_t> active) noexcept {
-  if (x.size() != n || active.size() != n) {
+                        CIndexRange auto &&active) noexcept {
+  if (x.size() != n || std::ranges::size(active) != n) {
     return false;
   }
 
@@ -308,9 +315,9 @@ reverse_hessian_applies(std::size_t n, std::span<const double> x,
 // dispatch the smallest capacity N >= m, so a small active set runs narrow
 // lanes instead of always paying for the full kVForwardN-wide pack.  Only the
 // buckets on this ladder are instantiated (log2(kVForwardN)+1 of them).
-template <std::size_t N, CVForwardEnergy F>
-HessianResult vforward_pick(std::size_t m, F &&f, std::span<const double> x,
-                            std::span<const std::size_t> active) {
+template <std::size_t N, CVForwardEnergy F, CIndexRange R>
+HessianOwned vforward_pick(std::size_t m, F &&f, std::span<const double> x,
+                            R &&active) {
   if constexpr (N >= kVForwardN) {
     // Top of the ladder: caller already guaranteed m <= kVForwardN.
     return hessian_vforward_impl<kVForwardN>(static_cast<F &&>(f), x, active);
@@ -331,10 +338,9 @@ HessianResult vforward_pick(std::size_t m, F &&f, std::span<const double> x,
 // O(m^2).  The lane capacity is bucketed to the smallest power of two >= m
 // (capped at kVForwardN); m > kVForwardN falls back to the scalar O(m^2)
 // driver.
-template <CVForwardEnergy F>
-HessianResult hessian_vforward(F &&f, std::span<const double> x,
-                               std::span<const std::size_t> active) {
-  const std::size_t m = active.size();
+template <CVForwardEnergy F, CIndexRange R>
+HessianOwned hessian_vforward(F &&f, std::span<const double> x, R &&active) {
+  const std::size_t m = std::ranges::size(active);
   if (m == 0 || m > kVForwardN) {
     // scalar O(m^2) fallback
     return detail::hessian_scalar(static_cast<F &&>(f), x, active);
@@ -344,8 +350,8 @@ HessianResult hessian_vforward(F &&f, std::span<const double> x,
 
 // Convenience: differentiate every variable.
 template <CVForwardEnergy F>
-HessianResult hessian_vforward(F &&f, std::span<const double> x) {
-  const auto all = detail::iota_indices(x.size());
+HessianOwned hessian_vforward(F &&f, std::span<const double> x) {
+  const auto all = detail::all_indices(x.size());
   return hessian_vforward(static_cast<F &&>(f), x, all);
 }
 
@@ -372,14 +378,15 @@ inline constexpr std::size_t kVForwardCrossover = DIFF_VFORWARD_CROSSOVER;
 //   seeded_energy tag -> scalar forward-over-forward (the graph already bridged
 //                        by the caller, so no tree is left to sweep).
 //   raw callable      -> vector-forward, the small-m winner.
-template <CHessianTarget F>
-HessianResult hessian(F &&f, std::span<const double> x,
-                      std::span<const std::size_t> active) {
+template <CHessianTarget F, CIndexRange R>
+auto hessian(F &&f, std::span<const double> x, R &&active) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
       constexpr std::size_t N = detail::expr_arity_v<F>;
       if (detail::reverse_hessian_applies(N, x, active)) {
-        return detail::hessian_expr_reverse(f, x);
+        // This overload can also reach the runtime-extent probe driver below,
+        // and a function has one return type, so the static result is widened.
+        return detail::to_owned(detail::hessian_expr_reverse(f, x));
       }
     }
     detail::check_graph_point(
@@ -397,7 +404,7 @@ HessianResult hessian(F &&f, std::span<const double> x,
   }
 }
 template <CHessianTarget F>
-HessianResult hessian(F &&f, std::span<const double> x) {
+auto hessian(F &&f, std::span<const double> x) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
       constexpr std::size_t N = detail::expr_arity_v<F>;
@@ -405,17 +412,42 @@ HessianResult hessian(F &&f, std::span<const double> x) {
         return detail::hessian_expr_reverse(f, x);
       }
     }
-    detail::check_graph_point(
-        detail::expr_arity_v<F>, x);
-    return detail::hessian_scalar(seeded_energy(static_cast<F &&>(f)), x);
+    detail::check_graph_point(detail::expr_arity_v<F>, x);
+    // Arity is a compile-time constant here and the sweep covers every symbol,
+    // so the seeded-variable array is a std::array and this path allocates
+    // nothing but the result itself.
+    return detail::hessian_scalar_static<detail::expr_arity_v<F>>(
+        seeded_energy(static_cast<F &&>(f)), x);
   } else if constexpr (CSeededExprEnergy<F>) {
     detail::check_graph_point(std::remove_cvref_t<F>::arity, x);
-    return detail::hessian_scalar(static_cast<F &&>(f), x);
+    return detail::hessian_scalar_static<std::remove_cvref_t<F>::arity>(
+        static_cast<F &&>(f), x);
   } else if (x.size() > kVForwardCrossover) {
     return detail::hessian_scalar(static_cast<F &&>(f), x);
   } else {
     return hessian_vforward(static_cast<F &&>(f), x);
   }
+}
+
+// Any contiguous sized range of doubles -- vector, array, C array, span.  One
+// conversion, then the span form; no driver is re-instantiated per container.
+template <CHessianTarget F, CPointRange P>
+  requires(!std::same_as<std::remove_cvref_t<P>, std::span<const double>>)
+auto hessian(F &&f, const P &x) {
+  return hessian(static_cast<F &&>(f), as_point(x));
+}
+
+template <CHessianTarget F, CPointRange P, CIndexRange R>
+  requires(!std::same_as<std::remove_cvref_t<P>, std::span<const double>>)
+auto hessian(F &&f, const P &x, R &&active) {
+  return hessian(static_cast<F &&>(f), as_point(x),
+                 static_cast<R &&>(active));
+}
+
+template <CVForwardEnergy F, CPointRange P>
+  requires(!std::same_as<std::remove_cvref_t<P>, std::span<const double>>)
+HessianOwned hessian_vforward(F &&f, const P &x) {
+  return hessian_vforward(static_cast<F &&>(f), as_point(x));
 }
 
 } // namespace diff

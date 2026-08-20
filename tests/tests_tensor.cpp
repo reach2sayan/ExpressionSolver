@@ -79,10 +79,10 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
       return sin(q[0] * q[1]) * exp(q[0]) + q[2] * q[2] * q[1];
     };
     const auto H = diff::hessian(fn, std::span<const double>{xs});
-    feed(H.value);
-    for (auto v : H.gradient) feed(v);
+    feed(val_of(H));
+    for (std::size_t k = 0; k < hess_n(H); ++k) feed(grad_at(H, k));
     for (std::size_t r = 0; r < 3; ++r)
-      for (std::size_t cc = 0; cc < 3; ++cc) feed(H.h(r, cc));
+      for (std::size_t cc = 0; cc < 3; ++cc) feed(hess_at(H, r, cc));
     for (auto v : diff::gradient(fn, std::span<const double>{xs})) feed(v);
 
     const auto u = sin(x * x) + exp(x) + atan(x) + asinh(x);
@@ -265,35 +265,34 @@ TEST(DerivativeTensorTest, ForwardAndReverseHessiansAgree) {
     for (std::size_t i = 0; i < 5; ++i) {
       for (std::size_t j = 0; j < 5; ++j) {
         EXPECT_NEAR((T[i, j]), (R[i, j]), 1e-12) << "N=5 at (" << i << "," << j << ")";
-        EXPECT_NEAR((T[i, j]), (H[i, j]), 1e-9) << "N=5 vs driver at (" << i << "," << j << ")";
+        EXPECT_NEAR((T[i, j]), hess_at(H, i, j), 1e-9) << "N=5 vs driver at (" << i << "," << j << ")";
       }
     }
   }
 }
 
-TEST(ForwardDriver, HessianResultSubscriptMatchesH) {
-  // hessian() and Equation{}.hessian() return different types; the
-  // subscript spelling should not depend on which one a caller picked.
+TEST(ForwardDriver, DriverHessianAgreesWithEquationHessian) {
+  // Two routes to the same Hessian, with two different return shapes: the
+  // driver hands back a plain tuple of owning buffers (row-major), Equation
+  // hands back an md_tensor.  What must agree is the numbers, not the spelling.
   Variable<diff::Dual<double>, diff::FixedString{"x"}> x;
   Variable<diff::Dual<double>, diff::FixedString{"y"}> y;
   auto expr = x * y + x * x + sin(y);
   const std::array<double, 2> p{0.7, 1.3};
   const std::span<const double> xs{p.data(), p.size()};
 
-  auto H = diff::hessian(expr, xs);        // -> HessianResult
-  auto T = Equation{expr}.hessian(p); // -> md_tensor
+  const auto H = diff::hessian(expr, xs);   // tuple {value, grad, hess}
+  const auto T = Equation{expr}.hessian(p); // md_tensor
 
   for (std::size_t i = 0; i < 2; ++i) {
     for (std::size_t j = 0; j < 2; ++j) {
-      EXPECT_DOUBLE_EQ((H[i, j]), H.h(i, j));      // same as the old accessor
-      EXPECT_NEAR((H[i, j]), (T[i, j]), 1e-9);     // ...and as the md_tensor
+      EXPECT_NEAR(hess_at(H, i, j), (T[i, j]), 1e-9)
+          << "driver vs Equation at (" << i << "," << j << ")";
     }
   }
-  // The mutable overload writes through.
-  H[0, 1] = 42.0;
-  EXPECT_DOUBLE_EQ(H.h(0, 1), 42.0);
-  // On a temporary the const&& overload copies out rather than dangling.
-  EXPECT_DOUBLE_EQ((diff::hessian(expr, xs)[0, 0]), H.h(0, 0));
+  // Row-major is part of the driver's contract, so state it as a test rather
+  // than only as a comment: (0,1) is element 1 of the flat buffer.
+  EXPECT_DOUBLE_EQ(hess_ptr(H)[1], hess_at(H, 0, 1));
 }
 
 TEST(MdTensor, BothIndexSpellingsAgree) {

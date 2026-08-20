@@ -40,15 +40,15 @@ TEST(VectorForwardHessian, MatchesScalarDriver) {
     const auto Hs = diff::detail::hessian_scalar(f, xs);
     const auto Hv = diff::hessian_vforward(f, xs);
 
-    ASSERT_EQ(Hs.gradient.size(), Hv.gradient.size());
-    EXPECT_NEAR(Hs.value, Hv.value, 1e-9) << "n=" << n;
+    ASSERT_EQ(hess_n(Hs), hess_n(Hv));
+    EXPECT_NEAR(val_of(Hs), val_of(Hv), 1e-9) << "n=" << n;
     for (std::size_t i = 0; i < n; ++i) {
-      EXPECT_NEAR(Hs.gradient[i], Hv.gradient[i], 1e-9)
+      EXPECT_NEAR(grad_at(Hs, i), grad_at(Hv, i), 1e-9)
           << "grad i=" << i << " n=" << n;
     }
     for (std::size_t i = 0; i < n; ++i) {
       for (std::size_t j = 0; j < n; ++j) {
-        EXPECT_NEAR(Hs.h(i, j), Hv.h(i, j), 1e-7)
+        EXPECT_NEAR(hess_at(Hs, i, j), hess_at(Hv, i, j), 1e-7)
             << "H(" << i << "," << j << ") n=" << n;
       }
     }
@@ -84,13 +84,13 @@ TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
   const auto Hscalar = diff::detail::hessian_scalar(f, xs);
   const auto Hvf = diff::hessian_vforward(f, xs);
 
-  EXPECT_NEAR(Hrouted.value, Hscalar.value, 1e-12);
+  EXPECT_NEAR(val_of(Hrouted), val_of(Hscalar), 1e-12);
   for (std::size_t i = 0; i < 4; ++i) {
-    EXPECT_NEAR(Hrouted.gradient[i], Hscalar.gradient[i], 1e-12) << "grad " << i;
+    EXPECT_NEAR(grad_at(Hrouted, i), grad_at(Hscalar, i), 1e-12) << "grad " << i;
     for (std::size_t j = 0; j < 4; ++j) {
-      EXPECT_NEAR(Hrouted.h(i, j), Hscalar.h(i, j), 1e-12)
+      EXPECT_NEAR(hess_at(Hrouted, i, j), hess_at(Hscalar, i, j), 1e-12)
           << "scalar H(" << i << "," << j << ")";
-      EXPECT_NEAR(Hrouted.h(i, j), Hvf.h(i, j), 1e-7)
+      EXPECT_NEAR(hess_at(Hrouted, i, j), hess_at(Hvf, i, j), 1e-7)
           << "vforward H(" << i << "," << j << ")";
     }
   }
@@ -121,9 +121,9 @@ TEST(SeededExprEnergy, ForwardOverReverseAgreesWithNumericDrivers) {
 
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = 0; j < 4; ++j) {
-      EXPECT_NEAR(Hrev[i][j], Hscalar.h(i, j), 1e-9)
+      EXPECT_NEAR(Hrev[i][j], hess_at(Hscalar, i, j), 1e-9)
           << "scalar H(" << i << "," << j << ")";
-      EXPECT_NEAR(Hrev[i][j], Hvf.h(i, j), 1e-7)
+      EXPECT_NEAR(Hrev[i][j], hess_at(Hvf, i, j), 1e-7)
           << "vforward H(" << i << "," << j << ")";
     }
   }
@@ -183,17 +183,28 @@ TEST(Ownership, GraphHessianRejectsAnActiveIndexThatNamesNoSymbol) {
                                 std::span<const std::size_t>{ok}));
 }
 
-TEST(Ownership, ResultAccessorsWorkOnTemporariesByCopyingOut) {
-  // h() on a prvalue HessianResult selects the const overload, which returns
-  // by value — no reference into a buffer that is already gone.
+TEST(Ownership, ResultOwnsItsBuffersAndTransfersThem) {
+  // The drivers hand back plain owning std types, so ownership is the tuple's.
+  // What used to be guarded here -- an accessor on a prvalue result returning a
+  // dangling reference -- cannot arise, because there is no accessor: the
+  // buffers move with the tuple and die with it.
   auto f = [](const auto *d) { return d[0] * d[0] * d[1]; };
   const std::array<double, 2> x{2.0, 3.0};
-  EXPECT_DOUBLE_EQ(diff::hessian(f, std::span<const double>{x}).h(0, 1), 4.0);
-  static_assert(
-      std::is_same_v<decltype(diff::hessian(f, std::span<const double>{x}).h(
-                         0, 0)),
-                     double>,
-      "h() on a temporary must return by value");
+
+  auto H = diff::hessian(f, std::span<const double>{x});
+  EXPECT_DOUBLE_EQ(hess_at(H, 0, 1), 4.0); // d2/dx0dx1 of x0^2 x1 = 2 x0
+
+  // Moving the result moves the buffers: the destination is intact and the
+  // source has released them, which is what "the caller owns this" means.
+  const double *const before = hess_ptr(H);
+  auto moved = std::move(H);
+  EXPECT_EQ(hess_ptr(moved), before) << "move must not copy the buffer";
+  EXPECT_DOUBLE_EQ(hess_at(moved, 0, 1), 4.0);
+  EXPECT_EQ(std::get<2>(H).get(), nullptr) << "moved-from must have released";
+
+  // The extent travels with the buffers rather than being recoverable from
+  // them -- a unique_ptr<double[]> does not know its own length.
+  EXPECT_EQ(hess_n(moved), 2u);
 
   // Same for the value maps: lvalue borrows, rvalue copies.
   const auto m = values(named<"x">(2.0), named<"y">(3.0));
@@ -263,7 +274,7 @@ TEST(HessianCoupling, ChainPatternIsTridiagonalPlusCorner) {
     for (std::size_t j = 0; j < 4; ++j) {
       const bool predicted = P[i][j];
       if (!predicted) {
-        EXPECT_NEAR(Hscalar.h(i, j), 0.0, 1e-12)
+        EXPECT_NEAR(hess_at(Hscalar, i, j), 0.0, 1e-12)
             << "pattern says (" << i << "," << j << ") is structurally zero";
       }
     }
@@ -314,11 +325,11 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnQuotients) {
   const auto Hprobe =
       diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
 
-  EXPECT_NEAR(Hcompressed.value, Hprobe.value, 1e-12);
+  EXPECT_NEAR(val_of(Hcompressed), val_of(Hprobe), 1e-12);
   for (std::size_t i = 0; i < 3; ++i) {
-    EXPECT_NEAR(Hcompressed.gradient[i], Hprobe.gradient[i], 1e-9) << i;
+    EXPECT_NEAR(grad_at(Hcompressed, i), grad_at(Hprobe, i), 1e-9) << i;
     for (std::size_t j = 0; j < 3; ++j) {
-      EXPECT_NEAR(Hcompressed.h(i, j), Hprobe.h(i, j), 1e-9)
+      EXPECT_NEAR(hess_at(Hcompressed, i, j), hess_at(Hprobe, i, j), 1e-9)
           << "H(" << i << "," << j << ")";
     }
   }
@@ -342,7 +353,7 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnTrigProducts) {
   const auto Hp = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = 0; j < 4; ++j) {
-      EXPECT_NEAR(Hc.h(i, j), Hp.h(i, j), 1e-9)
+      EXPECT_NEAR(hess_at(Hc, i, j), hess_at(Hp, i, j), 1e-9)
           << "H(" << i << "," << j << ")";
     }
   }
@@ -367,20 +378,20 @@ TEST(EigenInterop, DenseViewsAliasHessianResult) {
   const std::span<const double> xs{x.data(), x.size()};
   const auto H = diff::hessian(expr, xs);
 
-  const auto M = diff::as_matrix(H);
-  const auto g = diff::as_vector(H);
+  const auto M = diff::as_matrix(hess_ptr(H), hess_n(H));
+  const auto g = diff::as_vector(grad_ptr(H), hess_n(H));
 
   // A view, not a copy: it must alias the result's own storage.
-  EXPECT_EQ(M.data(), H.hessian.data());
-  EXPECT_EQ(g.data(), H.gradient.data());
+  EXPECT_EQ(M.data(), hess_ptr(H));
+  EXPECT_EQ(g.data(), grad_ptr(H));
   ASSERT_EQ(M.rows(), 2);
   ASSERT_EQ(M.cols(), 2);
   for (std::size_t i = 0; i < 2; ++i) {
-    EXPECT_DOUBLE_EQ(g[static_cast<Eigen::Index>(i)], H.gradient[i]);
+    EXPECT_DOUBLE_EQ(g[static_cast<Eigen::Index>(i)], grad_at(H, i));
     for (std::size_t j = 0; j < 2; ++j) {
       EXPECT_DOUBLE_EQ(M(static_cast<Eigen::Index>(i),
                          static_cast<Eigen::Index>(j)),
-                       H.h(i, j));
+                       hess_at(H, i, j));
     }
   }
 }
@@ -412,7 +423,7 @@ TEST(EigenInterop, SparseHessianMatchesDenseDriver) {
     for (std::size_t j = 0; j < 4; ++j) {
       const auto ei = static_cast<Eigen::Index>(i);
       const auto ej = static_cast<Eigen::Index>(j);
-      EXPECT_NEAR(M(ei, ej), dense.h(i, j), 1e-9)
+      EXPECT_NEAR(M(ei, ej), hess_at(dense, i, j), 1e-9)
           << "H(" << i << "," << j << ")";
     }
   }
@@ -441,7 +452,7 @@ TEST(EigenInterop, SparseHessianIndexesLikeADenseMatrix) {
   EXPECT_EQ(sparse.values().size(), decltype(sparse)::nnz);
   for (std::size_t i = 0; i < 3; ++i) {
     for (std::size_t j = 0; j < 3; ++j) {
-      EXPECT_NEAR((sparse[i, j]), dense.h(i, j), 1e-9)
+      EXPECT_NEAR((sparse[i, j]), hess_at(dense, i, j), 1e-9)
           << "H(" << i << "," << j << ")";
     }
   }
@@ -475,7 +486,7 @@ TEST(EigenInterop, SparseHessianIsSymmetricAndCompressed) {
     for (std::size_t j = 0; j < 3; ++j) {
       EXPECT_NEAR(full(static_cast<Eigen::Index>(i),
                        static_cast<Eigen::Index>(j)),
-                  dense.h(i, j), 1e-9);
+                  hess_at(dense, i, j), 1e-9);
     }
   }
   // No symmetrization pass runs on the sparse path, so symmetry has to come out
@@ -538,11 +549,153 @@ TEST(VectorForwardHessian, IdealMixingClosedForm) {
   const std::array<double, 2> y{0.3, 0.7};
   const auto H =
       diff::hessian_vforward(f, std::span<const double>{y.data(), y.size()});
-  EXPECT_NEAR(H.value, R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
+  EXPECT_NEAR(val_of(H), R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
               1e-6);
-  EXPECT_NEAR(H.gradient[0], R * T * (std::log(0.3) + 1.0), 1e-6);
-  EXPECT_NEAR(H.gradient[1], R * T * (std::log(0.7) + 1.0), 1e-6);
-  EXPECT_NEAR(H.h(0, 0), R * T / 0.3, 1e-3);
-  EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
-  EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6);
+  EXPECT_NEAR(grad_at(H, 0), R * T * (std::log(0.3) + 1.0), 1e-6);
+  EXPECT_NEAR(grad_at(H, 1), R * T * (std::log(0.7) + 1.0), 1e-6);
+  EXPECT_NEAR(hess_at(H, 0, 0), R * T / 0.3, 1e-3);
+  EXPECT_NEAR(hess_at(H, 1, 1), R * T / 0.7, 1e-3);
+  EXPECT_NEAR(hess_at(H, 0, 1), 0.0, 1e-6);
+}
+
+// ===========================================================================
+// Reusing driver overloads.  The point of these is that a caller sweeping many
+// points allocates once rather than once per call; the tests here are about the
+// buffers staying *correct* under that reuse, which is the part a benchmark
+// cannot see.
+// ===========================================================================
+
+namespace {
+// Deliberately not separable and not symmetric in the variables, so a stale
+// cell from a previous call cannot coincidentally be the right answer.
+auto reuse_energy = [](const auto *q) {
+  using std::exp, std::log;
+  return q[0] * q[0] * q[1] + exp(q[0] * q[2]) + q[1] * log(q[1] + 2.0);
+};
+} // namespace
+
+TEST(ForwardDriverReuse, WritingOverloadMatchesOwningOverload) {
+  const std::array<double, 3> pt{0.4, 0.9, 1.3};
+  const std::span<const double> x{pt};
+
+  const auto owned = diff::detail::hessian_scalar(reuse_energy, x);
+
+  // Caller-owned output: the library writes into memory it did not create.
+  diff::HessianWorkspace ws;
+  std::array<double, 3> grad{};
+  std::array<double, 9> hess{};
+  const double value = diff::detail::hessian_scalar(
+      reuse_energy, x, diff::detail::all_indices(3), ws,
+      std::span<double>{grad}, std::span<double>{hess});
+
+  EXPECT_DOUBLE_EQ(value, val_of(owned));
+  for (std::size_t i = 0; i < 3; ++i) {
+    EXPECT_DOUBLE_EQ(grad[i], grad_at(owned, i));
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_DOUBLE_EQ(hess[i * 3 + j], hess_at(owned, i, j));
+    }
+  }
+}
+
+TEST(ForwardDriverReuse, WorkspaceSurvivesAShrinkingExtent) {
+  // The scratch workspace is grow-only.  A second call with a SMALLER point must
+  // seed only that point's slots and read only those -- if the sweep were to run
+  // over the stale tail from the larger call it would read another problem's
+  // numbers, which is silently wrong rather than a crash.
+  diff::HessianWorkspace ws;
+
+  const std::array<double, 3> big{0.4, 0.9, 1.3};
+  std::array<double, 3> g3{};
+  std::array<double, 9> h3{};
+  diff::detail::hessian_scalar(reuse_energy, std::span<const double>{big},
+                               diff::detail::all_indices(3), ws,
+                               std::span<double>{g3}, std::span<double>{h3});
+
+  auto planar = [](const auto *q) { return q[0] * q[0] * q[1]; };
+  const std::array<double, 2> small{0.4, 0.9};
+  std::array<double, 2> g2{};
+  std::array<double, 4> h2{};
+  diff::detail::hessian_scalar(planar, std::span<const double>{small},
+                               diff::detail::all_indices(2), ws,
+                               std::span<double>{g2}, std::span<double>{h2});
+
+  // f = x0^2 x1 at (0.4, 0.9): d2/dx0^2 = 2 x1, d2/dx0dx1 = 2 x0, d2/dx1^2 = 0
+  EXPECT_DOUBLE_EQ(h2[0 * 2 + 0], 2.0 * 0.9);
+  EXPECT_DOUBLE_EQ(h2[0 * 2 + 1], 2.0 * 0.4);
+  EXPECT_DOUBLE_EQ(h2[1 * 2 + 0], 2.0 * 0.4);
+  EXPECT_DOUBLE_EQ(h2[1 * 2 + 1], 0.0);
+}
+
+TEST(ForwardDriverReuse, AllIndicesMatchesAnExplicitSubset) {
+  // all_indices() is a view, not a container; it must behave identically to the
+  // materialised span it replaced.
+  const std::array<double, 3> pt{0.4, 0.9, 1.3};
+  const std::span<const double> x{pt};
+  const std::array<std::size_t, 3> idx{0, 1, 2};
+
+  const auto viewed = diff::detail::hessian_scalar(
+      reuse_energy, x, diff::detail::all_indices(3));
+  const auto spanned = diff::detail::hessian_scalar(
+      reuse_energy, x, std::span<const std::size_t>{idx});
+
+  ASSERT_EQ(hess_n(viewed), hess_n(spanned));
+  for (std::size_t i = 0; i < hess_n(viewed); ++i) {
+    EXPECT_DOUBLE_EQ(grad_at(viewed, i), grad_at(spanned, i));
+    for (std::size_t j = 0; j < hess_n(viewed); ++j) {
+      EXPECT_DOUBLE_EQ(hess_at(viewed, i, j), hess_at(spanned, i, j));
+    }
+  }
+}
+
+TEST(ForwardDriverReuse, GradientReusingOverloadMatchesOwning) {
+  const std::array<double, 3> pt{0.4, 0.9, 1.3};
+  const std::span<const double> x{pt};
+
+  const auto owned = diff::gradient(reuse_energy, x);
+
+  diff::GradientWorkspace ws;
+  std::array<double, 3> out{};
+  diff::gradient(reuse_energy, x, diff::detail::all_indices(3), ws,
+                 std::span<double>{out});
+
+  ASSERT_EQ(out.size(), owned.size());
+  for (std::size_t i = 0; i < owned.size(); ++i) {
+    EXPECT_DOUBLE_EQ(out[i], owned[i]);
+  }
+}
+
+TEST(ForwardDriverReuse, PointAcceptsAnyContiguousSizedRange) {
+  // The point used to have to be spelled as a std::span at every call site even
+  // though the conversion is lossless.  vector, array, C array and span must all
+  // bind and agree to the last bit -- they are the same numbers by construction,
+  // so anything other than exact equality means a conversion is doing work.
+  auto f = [](const auto *q) { return q[0] * q[0] * q[1] + q[2]; };
+
+  const std::vector<double> v{0.4, 0.9, 1.3};
+  const std::array<double, 3> a{0.4, 0.9, 1.3};
+  const double c[3]{0.4, 0.9, 1.3};
+  const std::span<const double> sp{a};
+
+  const auto Hv = diff::hessian(f, v);
+  const auto Ha = diff::hessian(f, a);
+  const auto Hc = diff::hessian(f, c);
+  const auto Hs = diff::hessian(f, sp);
+
+  ASSERT_EQ(hess_n(Hv), 3u);
+  for (std::size_t i = 0; i < 3; ++i) {
+    EXPECT_DOUBLE_EQ(grad_at(Hv, i), grad_at(Ha, i));
+    EXPECT_DOUBLE_EQ(grad_at(Hv, i), grad_at(Hc, i));
+    EXPECT_DOUBLE_EQ(grad_at(Hv, i), grad_at(Hs, i));
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_DOUBLE_EQ(hess_at(Hv, i, j), hess_at(Ha, i, j));
+      EXPECT_DOUBLE_EQ(hess_at(Hv, i, j), hess_at(Hc, i, j));
+      EXPECT_DOUBLE_EQ(hess_at(Hv, i, j), hess_at(Hs, i, j));
+    }
+  }
+
+  // gradient() takes the same range set.
+  const auto gv = diff::gradient(f, v);
+  const auto ga = diff::gradient(f, a);
+  ASSERT_EQ(gv.size(), ga.size());
+  for (std::size_t i = 0; i < gv.size(); ++i) EXPECT_DOUBLE_EQ(gv[i], ga[i]);
 }

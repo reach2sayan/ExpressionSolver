@@ -16,6 +16,7 @@
 // structured problem, a much better Hessian — see the last two sections.
 
 #include "drivers/coupling.hpp"        // hessian_pattern(), color_columns()
+#include <tuple>
 #include "drivers/vforward_driver.hpp" // hessian(), hessian_vforward(), gradient()
 #include "expr/bound.hpp"              // eval(), bind(), named<>()
 #include "expr/equation.hpp"           // Equation: vector-valued f, Jacobians
@@ -202,13 +203,13 @@ int main() {
   // packed md_tensor on the stack, which is most of why it is quicker here.
   // =====================================================================
   println("\nHESSIAN            H(0,2)");
-  row("lambda  hessian(f, xs)", diff::hessian(lambda, xs).h(0, 2),
-      bench_ns([&] { return diff::hessian(lambda, xs).h(0, 2); }, 1000));
+  row("lambda  hessian(f, xs)", std::get<2>(diff::hessian(lambda, xs))[0 * xs.size() + 2],
+      bench_ns([&] { return std::get<2>(diff::hessian(lambda, xs))[0 * xs.size() + 2]; }, 1000));
   row("lambda  hessian_vforward(f, xs)",
-      diff::hessian_vforward(lambda, xs).h(0, 2),
-      bench_ns([&] { return diff::hessian_vforward(lambda, xs).h(0, 2); }, 1000));
-  row("graph   hessian(expr, xs)", diff::hessian(graph, xs).h(0, 2),
-      bench_ns([&] { return diff::hessian(graph, xs).h(0, 2); }, 1000));
+      std::get<2>(diff::hessian_vforward(lambda, xs))[0 * xs.size() + 2],
+      bench_ns([&] { return std::get<2>(diff::hessian_vforward(lambda, xs))[0 * xs.size() + 2]; }, 1000));
+  row("graph   hessian(expr, xs)", std::get<2>(diff::hessian(graph, xs))[0 * xs.size() + 2],
+      bench_ns([&] { return std::get<2>(diff::hessian(graph, xs))[0 * xs.size() + 2]; }, 1000));
   {
     const auto Hs = Equation{graph}.hessian(p);
     row("graph   hessian<Reverse>(expr, p)", (Hs[0, 2]), bench_ns([&] {
@@ -281,9 +282,9 @@ int main() {
     const auto chain_graph = make_chain8();
 
     const double t_lambda =
-        bench_ns([&] { return diff::hessian(chain_lambda, qs).h(0, 7); }, 400);
+        bench_ns([&] { return std::get<2>(diff::hessian(chain_lambda, qs))[0 * qs.size() + 7]; }, 400);
     const double t_graph =
-        bench_ns([&] { return diff::hessian(chain_graph, qs).h(0, 7); }, 400);
+        bench_ns([&] { return std::get<2>(diff::hessian(chain_graph, qs))[0 * qs.size() + 7]; }, 400);
 
     using G = std::remove_cvref_t<decltype(chain_graph)>;
     constexpr auto pattern = hessian_pattern<G>();

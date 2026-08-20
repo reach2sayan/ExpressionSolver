@@ -22,20 +22,24 @@ namespace diff {
 using EigenDenseMatrix =
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
+// Non-owning views onto buffers the CALLER owns.
+//
+// A pointer and an extent rather than a result type, so these work with either
+// shape the drivers return -- the unique_ptr one and the std::array one -- and
+// so the ownership is unambiguous: the map borrows, the caller holds. The
+// buffer must outlive the map, which is now visible in the signature instead of
+// being a property of a struct that had to be kept alive.
+//
+// The drivers document their Hessian buffer as row-major, and Eigen::RowMajor
+// here is that same statement; the two have to be changed together.
 [[nodiscard]] inline Eigen::Map<const EigenDenseMatrix>
-as_matrix(const HessianResult &h) noexcept {
-  const auto m = h.matrix();
-  static_assert(
-      std::same_as<typename decltype(m)::layout_type, md::layout_right>,
-      "as_matrix maps Eigen::RowMajor onto the Hessian's own view; "
-      "if that view stops being row-major this mapping is wrong");
-  return {m.data_handle(), static_cast<Eigen::Index>(m.extent(0)),
-          static_cast<Eigen::Index>(m.extent(1))};
+as_matrix(const double *const hess, const std::size_t n) noexcept {
+  return {hess, static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n)};
 }
 
 [[nodiscard]] inline Eigen::Map<const Eigen::VectorXd>
-as_vector(const HessianResult &h) noexcept {
-  return {h.gradient.data(), static_cast<Eigen::Index>(h.gradient.size())};
+as_vector(const double *const grad, const std::size_t n) noexcept {
+  return {grad, static_cast<Eigen::Index>(n)};
 }
 
 // A sparse Hessian whose sparsity is a property of the expression TYPE.

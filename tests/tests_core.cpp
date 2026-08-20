@@ -2226,14 +2226,14 @@ TEST(ForwardDriver, GradientAndHessianCrossTerm) {
   const std::span<const double> xs{x.data(), x.size()};
 
   const auto H = diff::hessian(f, xs);
-  EXPECT_DOUBLE_EQ(H.value, 39.0); // 4*3 + 27
-  ASSERT_EQ(H.gradient.size(), 2u);
-  EXPECT_DOUBLE_EQ(H.gradient[0], 12.0); // 2 x0 x1
-  EXPECT_DOUBLE_EQ(H.gradient[1], 31.0); // x0^2 + 3 x1^2
-  EXPECT_DOUBLE_EQ(H.h(0, 0), 6.0);      // 2 x1
-  EXPECT_DOUBLE_EQ(H.h(0, 1), 4.0);      // 2 x0
-  EXPECT_DOUBLE_EQ(H.h(1, 0), 4.0);
-  EXPECT_DOUBLE_EQ(H.h(1, 1), 18.0); // 6 x1
+  EXPECT_DOUBLE_EQ(val_of(H), 39.0); // 4*3 + 27
+  ASSERT_EQ(hess_n(H), 2u);
+  EXPECT_DOUBLE_EQ(grad_at(H, 0), 12.0); // 2 x0 x1
+  EXPECT_DOUBLE_EQ(grad_at(H, 1), 31.0); // x0^2 + 3 x1^2
+  EXPECT_DOUBLE_EQ(hess_at(H, 0, 0), 6.0);      // 2 x1
+  EXPECT_DOUBLE_EQ(hess_at(H, 0, 1), 4.0);      // 2 x0
+  EXPECT_DOUBLE_EQ(hess_at(H, 1, 0), 4.0);
+  EXPECT_DOUBLE_EQ(hess_at(H, 1, 1), 18.0); // 6 x1
 
   const auto g = diff::gradient(f, xs);
   EXPECT_DOUBLE_EQ(g[0], 12.0);
@@ -2251,13 +2251,13 @@ TEST(ForwardDriver, IdealMixingHessianMatchesClosedForm) {
   const std::array<double, 2> y{0.3, 0.7};
   const auto H = diff::hessian(f, std::span<const double>{y.data(), y.size()});
 
-  EXPECT_NEAR(H.value, R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
+  EXPECT_NEAR(val_of(H), R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
               1e-6);
-  EXPECT_NEAR(H.gradient[0], R * T * (std::log(0.3) + 1.0), 1e-6);
-  EXPECT_NEAR(H.gradient[1], R * T * (std::log(0.7) + 1.0), 1e-6);
-  EXPECT_NEAR(H.h(0, 0), R * T / 0.3, 1e-3);
-  EXPECT_NEAR(H.h(1, 1), R * T / 0.7, 1e-3);
-  EXPECT_NEAR(H.h(0, 1), 0.0, 1e-6); // no cross term
+  EXPECT_NEAR(grad_at(H, 0), R * T * (std::log(0.3) + 1.0), 1e-6);
+  EXPECT_NEAR(grad_at(H, 1), R * T * (std::log(0.7) + 1.0), 1e-6);
+  EXPECT_NEAR(hess_at(H, 0, 0), R * T / 0.3, 1e-3);
+  EXPECT_NEAR(hess_at(H, 1, 1), R * T / 0.7, 1e-3);
+  EXPECT_NEAR(hess_at(H, 0, 1), 0.0, 1e-6); // no cross term
 }
 
 // ===========================================================================
@@ -2358,11 +2358,11 @@ TEST(ForwardDriver, RepeatedCallsDoNotLeakSeeds) {
 
   const auto H1 = diff::hessian(f, xs);
   const auto H2 = diff::hessian(f, xs);
-  EXPECT_DOUBLE_EQ(H1.value, H2.value);
-  for (std::size_t i = 0; i < H1.n(); ++i) {
-    EXPECT_DOUBLE_EQ(H1.gradient[i], H2.gradient[i]);
-    for (std::size_t j = 0; j < H1.n(); ++j) {
-      EXPECT_DOUBLE_EQ(H1.h(i, j), H2.h(i, j));
+  EXPECT_DOUBLE_EQ(val_of(H1), val_of(H2));
+  for (std::size_t i = 0; i < hess_n(H1); ++i) {
+    EXPECT_DOUBLE_EQ(grad_at(H1, i), grad_at(H2, i));
+    for (std::size_t j = 0; j < hess_n(H1); ++j) {
+      EXPECT_DOUBLE_EQ(hess_at(H1, i, j), hess_at(H2, i, j));
     }
   }
 }
