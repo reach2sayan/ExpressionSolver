@@ -910,8 +910,14 @@ BENCHMARK(BM_AD_Forward_Hess)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
 // vector-forward Hessian is built for.
 // ===========================================================================
 
+// Force-inlined, and that is a fairness fix rather than a tuning knob.  With the
+// energy left to GCC's discretion this instantiation had several call sites and
+// stayed out of line for our arm, while autodiff's instantiation had one and was
+// inlined wholesale into the benchmark body -- so the two arms were running the
+// same maths through differently-optimised code.  Pinning it costs autodiff
+// nothing (it was already inlined) and is worth 5% to us at n = 4.
 template <typename Vec>
-static auto vf_energy_sparse(const Vec &y, std::size_t n) {
+DIFF_ALWAYS_INLINE static auto vf_energy_sparse(const Vec &y, std::size_t n) {
   using std::exp, std::log;
   using Scalar = std::remove_cvref_t<decltype(y[0])>;
   Scalar g{0};
@@ -939,7 +945,7 @@ static void BM_Ours_VForward_HessSparse(benchmark::State &state) {
     benchmark::ClobberMemory();
   }
 }
-BENCHMARK(BM_Ours_VForward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+BENCHMARK(BM_Ours_VForward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(17)->Arg(32);
 
 static void BM_Ours_Forward_HessSparse(benchmark::State &state) {
   const std::size_t n = static_cast<std::size_t>(state.range(0));
@@ -953,7 +959,7 @@ static void BM_Ours_Forward_HessSparse(benchmark::State &state) {
     benchmark::ClobberMemory();
   }
 }
-BENCHMARK(BM_Ours_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+BENCHMARK(BM_Ours_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(17)->Arg(32);
 
 static void BM_AD_Forward_HessSparse(benchmark::State &state) {
   using autodiff::dual2nd;
@@ -979,7 +985,44 @@ static void BM_AD_Forward_HessSparse(benchmark::State &state) {
     benchmark::ClobberMemory();
   }
 }
-BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
+BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(17)->Arg(32);
+
+// The public router, not a driver.  Every other Hess row in this file calls a
+// driver directly, so until this row existed nothing here exercised what
+// diff::hessian() *picks* for a raw callable -- which is where
+// kVForwardCrossover lives, and is why that constant was tuned on instruction
+// counts that turned out not to predict time at all (see vforward_driver.hpp).
+//
+// The arguments straddle the crossover: at the default of 8, m = 8 lands on
+// vector-forward and m = 17 on the scalar probe driver.  Read each row against
+// BM_Ours_VForward_HessSparse and BM_Ours_Forward_HessSparse at the same m --
+// the router row sits on top of whichever one it chose, and a routing
+// regression shows up as it jumping to the other driver's number while both
+// drivers stay put.  Measured that way (ns, best-of-6 pinned):
+//
+//   m      routed   vector-forward   scalar   -> picked
+//   8       4,041            4,016    2,541      vector-forward
+//   17     23,232           70,170   23,229      scalar
+//
+// m = 16 is carried as the boundary case but does NOT discriminate on this box:
+// the two drivers happen to tie there (18,715 vs 18,712), so the row only earns
+// its place if the crossover moves or the drivers diverge.
+//
+// The m = 8 row is also the standing evidence that the crossover is too high --
+// the router is picking the driver that is 1.6x slower.
+static void BM_Ours_Hessian_HessSparse(benchmark::State &state) {
+  const std::size_t n = static_cast<std::size_t>(state.range(0));
+  auto x = vf_point(n);
+  const std::span<const double> xs{x.data(), x.size()};
+  auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(xs);
+    auto H = diff::hessian(f, xs);
+    benchmark::DoNotOptimize(H);
+    benchmark::ClobberMemory();
+  }
+}
+BENCHMARK(BM_Ours_Hessian_HessSparse)->Arg(8)->Arg(16)->Arg(17);
 
 // ===========================================================================
 // Expression-template energy  — same sparse-chain math, but the energy is now
@@ -1403,6 +1446,27 @@ double ours_partial(const Expr &expr, std::string_view sym,
     reverse_check("G4 d/dx01", ours_partial(e, "x01", g4pt), db);
     reverse_check("G4 d/dx02", ours_partial(e, "x02", g4pt), dc);
     reverse_check("G4 d/dx03", ours_partial(e, "x03", g4pt), dd);
+  }
+  // Routed raw-callable Hessian: whichever driver diff::hessian() picks at each
+  // m must agree with the scalar probe driver, which is the reference.  This is
+  // the correctness half of BM_Ours_Hessian_HessSparse -- that row shows which
+  // driver was chosen, this shows the choice did not change the answer.  m = 8
+  // and 16 exercise vector-forward, 17 the scalar fallback (which makes that
+  // one a self-comparison, and it is kept so the boundary stays covered if the
+  // crossover moves again).
+  for (const std::size_t n : {std::size_t{8}, std::size_t{16}, std::size_t{17}}) {
+    const auto pt = vf_point(n);
+    const std::span<const double> xs{pt.data(), pt.size()};
+    auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
+    const auto [rv, rg, rh, rn] = diff::hessian(f, xs);
+    const auto [sv, sg, sh, sn] = diff::detail::hessian_scalar(f, xs);
+    reverse_check("routed hessian value", rv, sv);
+    for (std::size_t i = 0; i < n; ++i) {
+      reverse_check("routed hessian gradient", rg[i], sg[i]);
+      for (std::size_t j = 0; j < n; ++j) {
+        reverse_check("routed hessian cell", rh[i * n + j], sh[i * n + j]);
+      }
+    }
   }
   return true;
 }();

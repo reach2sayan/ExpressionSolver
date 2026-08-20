@@ -4,7 +4,9 @@
 #include "dual/taylor_dual.hpp"
 #include "dual/vector_dual.hpp"
 #include "expr/bound.hpp"
+#ifdef DIFF_USE_EIGEN
 #include "interop/eigen_interop.hpp"
+#endif
 #include "drivers/forward_driver.hpp"
 #include "drivers/gradient.hpp"
 #include "drivers/seeded_energy.hpp"

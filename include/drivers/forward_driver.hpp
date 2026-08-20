@@ -156,37 +156,85 @@ template <std::size_t N>
 // The dof array is pure working storage: it is written at the top of every
 // sweep and never read afterwards, so there is no reason for each call to buy
 // its own.  Handing one of these to a loop over many points allocates on the
-// first call and never again.  It grows and does not shrink, for the same
-// reason HessianResult does.
+// first call and never again.
 //
-// `D{v}` is the uniform lift of a plain scalar to a zero-derivative dual at any
-// nesting depth: Dual's converting constructor sets the value component and
-// value-initialises the derivative, recursively.
-// Deliberately heap-backed, with no inline std::array fast path.  An inline
-// buffer was tried and measured *worse*: Dual's members carry {} initialisers,
-// so std::array<dual2nd, K> is value-initialised on every construction, and a
-// 2 KB inline buffer traded one 2 KB allocation for a 2 KB zero-fill on every
-// call -- 7,920 -> 9,581 Ir at n = 4.  There is no way to have the storage
-// without constructing it, so the allocation is the cheaper of the two.
+// Small points -- which is nearly all of them -- are seeded into an inline
+// block and never touch the allocator at all.  The block is *raw storage*, and
+// that is the whole point: a plain `std::array<D, K>` member was tried first
+// and measured worse (7,920 -> 9,581 Ir at n = 4), because Dual's members carry
+// `{}` initialisers, so the array is value-initialised on every construction
+// and the call trades one allocation for a full zero-fill of the block.  Here
+// nothing is constructed until `seed_with` places a seed in a slot, so the
+// unused tail costs exactly nothing.  D is required to be trivially
+// destructible, which is what makes reusing the block between calls -- and
+// simply abandoning it -- well defined.
+
+namespace detail {
+// The inline block, or nothing at all.
 //
-// The win here is reuse, not stack residency: the buffer is grow-only, so a
-// workspace handed to a loop over many points allocates once and never again.
+// `alignas(D) std::byte[N]` is an array member, and -fstack-protector-strong
+// (on by default on this toolchain) gives a canary to every function holding
+// one.  For a D wide enough that the block could never hold a whole point that
+// canary -- plus the stack it reserves -- is pure loss, so the block is not
+// declared at all there and [[no_unique_address]] gives the empty stand-in no
+// footprint.  Measured: carrying an unusable block cost the vector-forward
+// driver 3.8% at Dual<VectorDual<8>>, whose element is 192 bytes wide.
+template <typename D, std::size_t Bytes> struct inline_block {
+  alignas(D) std::byte storage[Bytes];
+};
+struct no_inline_block {};
+} // namespace detail
+
 template <Numeric D> struct SweepWorkspace {
-  std::vector<D> dof;
+  static_assert(std::is_trivially_destructible_v<D>,
+                "the inline block is reused and abandoned without destruction");
+
+  // A byte budget, not an element count: this template is instantiated at
+  // dual2nd (32 B) and at the vector-forward driver's Dual<VectorDual<N>>
+  // (hundreds).  A block that cannot hold `inline_floor` seeds is not worth its
+  // stack, and for the wide instantiations it never could -- the vector-forward
+  // sweep's point size *is* the pack width, so it outgrows any fixed budget by
+  // construction.
+  static constexpr std::size_t inline_bytes = 512;
+  static constexpr std::size_t inline_floor = 8;
+  static constexpr std::size_t inline_capacity =
+      (inline_bytes / sizeof(D) >= inline_floor) ? inline_bytes / sizeof(D) : 0;
+
+  [[no_unique_address]] std::conditional_t<
+      (inline_capacity > 0), detail::inline_block<D, inline_bytes>,
+      detail::no_inline_block> block;
+  std::vector<D> heap;
 
   // Seed each slot from the point via `make`.  Returns storage valid until the
   // next seed on this workspace.
   //
-  // Not const: this fills the scratch.  Not noexcept: growth allocates.
+  // Not const: this fills the scratch.  Not noexcept: growth may allocate.
   template <typename Make>
   [[nodiscard]] D *seed_with(const std::span<const double> x, Make make) {
-    if (dof.size() < x.size()) {
-      dof.resize(x.size());
+    if constexpr (inline_capacity > 0) {
+      if (x.size() <= inline_capacity) {
+        // Raw storage, so a slot may hold no object yet: each seed is a
+        // construction rather than an assignment.  D is trivially destructible,
+        // so whatever a previous call left in the block simply ends.
+        D *const dof = reinterpret_cast<D *>(block.storage);
+        for (std::size_t k = 0; k < x.size(); ++k) {
+          std::construct_at(dof + k, make(x[k]));
+        }
+        return dof;
+      }
     }
-    std::ranges::transform(x, dof.begin(), make);
-    return dof.data();
+    // Grow-only, and resize() rather than a capacity check: the vector's size
+    // is what a later .data() read is entitled to, and resize keeps capacity on
+    // shrink anyway.  These slots already hold live objects, so seeding them is
+    // plain assignment, and the transform stays exactly what it was before the
+    // inline block existed -- the wide instantiations reach only this path and
+    // must not pay for a fast path they can never take.
+    if (heap.size() < x.size()) {
+      heap.resize(x.size());
+    }
+    std::ranges::transform(x, heap.begin(), make);
+    return heap.data();
   }
-
   // `D{v}` is the uniform lift of a plain scalar to a zero-derivative dual at
   // any nesting depth: Dual's converting constructor sets the value component
   // and value-initialises the derivative, recursively.

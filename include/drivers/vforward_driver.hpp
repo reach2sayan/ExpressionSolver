@@ -59,7 +59,6 @@ namespace detail {
 template <std::size_t N, CEnergyOf<Dual<VectorDual<N>>> F, CIndexRange R>
 HessianOwned hessian_vforward_impl(F &&f, std::span<const double> x,
                                    R &&active) {
-  const std::size_t n = x.size();
   const std::size_t m = std::ranges::size(active); // caller guarantees 0 < m <= N
   using V = VectorDual<N>;
   using D = Dual<V>;
@@ -356,14 +355,40 @@ HessianOwned hessian_vforward(F &&f, std::span<const double> x) {
 }
 
 // Above this many active variables the scalar probe driver beats vector-forward
-// for a raw callable, so hessian() stops widening the pack and switches.  Each
-// vector-forward sweep carries a Dual<VectorDual<N>> per node — 576 bytes at
-// N=32 — and that per-node width eventually outweighs running O(m) sweeps
-// instead of O(m^2) probes.  Measured on this box: at m=32 the scalar driver is
-// ~1.7x faster on the sparse energy and ~3.3x on the dense one, while at m=8
-// vector-forward still wins both.  8 is the value that gets the most regimes
-// right; the true crossover depends on how expensive the energy is per node,
-// which the router cannot see, so it is overridable.
+// for a raw callable, so hessian() stops widening the pack and switches.
+//
+// MEASURE THIS WITH WALL CLOCK, NOT INSTRUCTION COUNTS.  Retired instructions
+// say vector-forward wins by 1.2-1.8x up to m=16; the hardware says it loses
+// everywhere.  Both are true, and the reason is IPC.  perf on m=16, sparse:
+//
+//                       instructions    cycles     IPC      ns
+//   vector-forward        14.15e9      7.14e9    1.98    18,709
+//   scalar probe          27.01e9      6.94e9    3.89    18,161
+//
+// The scalar driver retires 1.9x more instructions at 2.0x the IPC and the two
+// cancel.  A Dual<VectorDual<N>> node is 320 bytes at N=16, so the vector sweep
+// is store- and dependency-bound (2.2x the data writes of the scalar sweep at
+// m=16) while the scalar probe sweep is almost perfectly superscalar.  Neither
+// callgrind nor cachegrind models issue width, and there are no cache misses to
+// find here -- the whole working set is in L1 on both sides.
+//
+// Wall clock, best-of-6 interleaved under taskset, ratio = scalar / vector, so
+// > 1 would mean vector-forward wins:
+//
+//   m           4       8      16      17
+//   sparse   0.45    0.63    0.98    0.32
+//   dense    0.48    0.72    0.71      --
+//
+// Vector-forward does not win anywhere on this AVX2 box; the m=17 collapse is
+// the pack bucketing up to N=32.  On that evidence the right default is 0 --
+// never route a raw callable here -- and 8 is retained only because retiring a
+// driver from the router is a larger decision than this constant.  An AVX-512
+// machine would halve the vector arm's instruction count and could flip it,
+// which is what the override is for.
+//
+// (Briefly raised to 16 on 2026-08-19 on the strength of the instruction counts
+// alone, and reverted on 2026-08-20 when perf contradicted them.  Do not redo
+// that experiment with callgrind.)
 #ifndef DIFF_VFORWARD_CROSSOVER
 #define DIFF_VFORWARD_CROSSOVER 8
 #endif
