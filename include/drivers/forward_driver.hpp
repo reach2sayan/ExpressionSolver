@@ -24,9 +24,8 @@ namespace diff {
 //
 // D is the number the driver seeds with, and it is what distinguishes the
 // drivers from each other: `dual` for the gradient sweep, `dual2nd` for the
-// scalar forward-over-forward Hessian, Dual<VectorDual<N>> for the
-// vector-forward one.  Naming it here is what lets an energy that is not
-// generic enough fail at its call site rather than inside a sweep.
+// forward-over-forward Hessian.  Naming it here is what lets an energy that is
+// not generic enough fail at its call site rather than inside a sweep.
 template <typename F, typename D>
 concept CEnergyOf =
     std::invocable<F &, const D *> &&
@@ -178,7 +177,9 @@ namespace detail {
 // canary -- plus the stack it reserves -- is pure loss, so the block is not
 // declared at all there and [[no_unique_address]] gives the empty stand-in no
 // footprint.  Measured: carrying an unusable block cost the vector-forward
-// driver 3.8% at Dual<VectorDual<8>>, whose element is 192 bytes wide.
+// driver 3.8% at Dual<VectorDual<8>>, a 192-byte element (that driver has since
+// been deleted, but the rule -- do not declare a block a type can never use --
+// is what the static_assert-free `inline_floor` gate below encodes).
 template <typename D, std::size_t Bytes> struct inline_block {
   alignas(D) std::byte storage[Bytes];
 };
@@ -190,11 +191,9 @@ template <Numeric D> struct SweepWorkspace {
                 "the inline block is reused and abandoned without destruction");
 
   // A byte budget, not an element count: this template is instantiated at
-  // dual2nd (32 B) and at the vector-forward driver's Dual<VectorDual<N>>
-  // (hundreds).  A block that cannot hold `inline_floor` seeds is not worth its
-  // stack, and for the wide instantiations it never could -- the vector-forward
-  // sweep's point size *is* the pack width, so it outgrows any fixed budget by
-  // construction.
+  // dual2nd (32 B) and could be instantiated at a much wider D.  A block that
+  // cannot hold `inline_floor` seeds is not worth its stack, so it is not
+  // declared at all there.
   static constexpr std::size_t inline_bytes = 512;
   static constexpr std::size_t inline_floor = 8;
   static constexpr std::size_t inline_capacity =
@@ -328,7 +327,7 @@ namespace detail {
 // name two different scalars of the same number, and a guard over the number
 // would clobber its sibling.
 template <CEnergyOf<dual2nd> F, CIndexRange R>
-constexpr double hessian_scalar_into(F &&f, dual2nd *const dof, R &&active,
+constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
                                      double *const grad_out,
                                      double *const hess_out) {
   const std::size_t m = std::ranges::size(active);
@@ -363,11 +362,11 @@ constexpr double hessian_scalar_into(F &&f, dual2nd *const dof, R &&active,
 // that writes into memory the library did not create, and it says so in the
 // signature.  Returns f(x).
 template <CEnergyOf<dual2nd> F>
-double hessian_scalar(F &&f, const std::span<const double> x,
+double hessian(F &&f, const std::span<const double> x,
                       CIndexRange auto &&active, HessianWorkspace &ws,
                       const std::span<double> grad_out,
                       const std::span<double> hess_out) {
-  return hessian_scalar_into(static_cast<F &&>(f), ws.seed(x),
+  return hessian_into(static_cast<F &&>(f), ws.seed(x),
                              static_cast<decltype(active) &&>(active),
                              grad_out.data(), hess_out.data());
 }
@@ -377,26 +376,26 @@ double hessian_scalar(F &&f, const std::span<const double> x,
 // path allocates nothing at all.  N is the arity, which is also the extent -- an
 // expression is differentiated with respect to all of its own symbols.
 template <std::size_t N, CEnergyOf<dual2nd> F>
-HessianStatic<N> hessian_scalar_static(F &&f, const std::span<const double> x) {
+HessianStatic<N> hessian_static(F &&f, const std::span<const double> x) {
   std::array<dual2nd, N> dof{};
   std::ranges::transform(x | std::views::take(N), dof.begin(),
                          [](const double v) { return dual2nd{v}; });
   HessianStatic<N> out{};
   std::get<0>(out) =
-      hessian_scalar_into(static_cast<F &&>(f), dof.data(), all_indices(N),
+      hessian_into(static_cast<F &&>(f), dof.data(), all_indices(N),
                           std::get<1>(out).data(), std::get<2>(out).data());
   return out;
 }
 
 // Owning form: allocates the two result buffers, fills them, and hands them over.
 template <CEnergyOf<dual2nd> F>
-HessianOwned hessian_scalar(F &&f, const std::span<const double> x,
+HessianOwned hessian(F &&f, const std::span<const double> x,
                             CIndexRange auto &&active) {
   const std::size_t m = std::ranges::size(active);
   HessianWorkspace ws;
   auto grad = raw_buffer(m);
   auto hess = raw_buffer(m * m);
-  const double value = hessian_scalar_into(
+  const double value = hessian_into(
       static_cast<F &&>(f), ws.seed(x),
       static_cast<decltype(active) &&>(active), grad.get(), hess.get());
   return {value, std::move(grad), std::move(hess), m};
@@ -404,14 +403,14 @@ HessianOwned hessian_scalar(F &&f, const std::span<const double> x,
 
 // Convenience: differentiate every variable.
 template <CEnergyOf<dual2nd> F>
-HessianOwned hessian_scalar(F &&f, const std::span<const double> x) {
-  return hessian_scalar(static_cast<F &&>(f), x, all_indices(x.size()));
+HessianOwned hessian(F &&f, const std::span<const double> x) {
+  return hessian(static_cast<F &&>(f), x, all_indices(x.size()));
 }
 
 template <CEnergyOf<dual2nd> F, CPointRange P>
   requires(!std::same_as<std::remove_cvref_t<P>, std::span<const double>>)
-HessianOwned hessian_scalar(F &&f, const P &x) {
-  return hessian_scalar(static_cast<F &&>(f), as_point(x));
+HessianOwned hessian(F &&f, const P &x) {
+  return hessian(static_cast<F &&>(f), as_point(x));
 }
 
 } // namespace detail

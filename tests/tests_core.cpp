@@ -2287,7 +2287,7 @@ TEST(ScopedValue, RestoreIsBitExactFromAnyBase) {
 }
 
 TEST(ScopedValue, NestedGuardsOverSiblingScalarsOfOneDual) {
-  // The hessian_scalar shape: the inner- and outer-derivative seeds of the
+  // The hessian shape: the inner- and outer-derivative seeds of the
   // SAME dual2nd are held by two independently scoped guards.
   dual2nd d{Dual<double>{2.0, 0.0}, Dual<double>{0.0, 0.0}};
   {

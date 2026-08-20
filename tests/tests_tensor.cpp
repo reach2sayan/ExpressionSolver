@@ -131,13 +131,13 @@ TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
   constexpr auto d2 = Equation{x * x * x}.template univariate_derivative<2>(2.0);
   static_assert(d2 == 12.0, "d2(x^3)/dx2 at x=2");
 
-  // N >= 3 takes the VectorDual fast path, which therefore also has to be
-  // usable in constant evaluation.
+  // A three-variable gradient, which also has to be usable in constant
+  // evaluation.
   constexpr Variable<double, FixedString{"z"}> z;
   constexpr auto g3 =
       Equation{x * y * z}.template derivative_tensor<1>(std::array{2.0, 3.0, 4.0});
   static_assert(g3[0] == 12.0 && g3[1] == 8.0 && g3[2] == 6.0,
-                "VectorDual gradient path is constexpr");
+                "forward gradient path is constexpr");
 
   // Forward-over-reverse Hessian — the driver the public router now prefers.
   // It seeds tangents, so its expression carries Dual<double> numbers.

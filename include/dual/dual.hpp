@@ -253,7 +253,7 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a, const C &s) noex
 }
 template <Numeric T, ScalarOperand<T> C>
 DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
-  const auto &[av, ad] = a; // s / a; inner kept T-on-left (VectorDual-safe)
+  const auto &[av, ad] = a; // s / a; inner kept T-on-left (wide-scalar-safe)
   const T inv = T{1} / av;
   const T q = T{s} * inv; // value = s / a
   return Dual<T>{q, -(q * ad) * inv};
@@ -268,8 +268,9 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noex
 //
 // The scalar shapes are separate kernels rather than a promotion of the scalar
 // to a zero-derivative Dual, and deliberately so: promotion leaves an `ad + 0`
-// that IEEE will not let the compiler fold (-0.0 + 0.0 is +0.0), which at
-// Dual<VectorDual<32>> turns a one-instruction add into thirteen.
+// that IEEE will not let the compiler fold (-0.0 + 0.0 is +0.0).  This used to
+// be measured on a 32-lane pack scalar, where it turned a one-instruction add
+// into thirteen; the principle outlives that type.
 #define DIFF_DUAL_BINOP(OP, COMB, LEFT)                                        \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \

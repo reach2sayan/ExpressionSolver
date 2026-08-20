@@ -266,7 +266,7 @@ TEST(Concepts, NumericDemandsWhatTheSweepsActuallyUse) {
   static_assert(diff::Numeric<double> && std::totally_ordered<double>);
   static_assert(std::totally_ordered<diff::Dual<double>>);
   static_assert(std::totally_ordered<diff::TaylorDual<double, 3>>);
-  static_assert(std::totally_ordered<diff::VectorDual<4>>);
+  static_assert(std::totally_ordered<diff::TaylorDual<double, 3>>);
 }
 
 TEST(Simplify, MultiplicationCommutesOnlyWhenTheScalarSaysSo) {
@@ -279,7 +279,7 @@ TEST(Simplify, MultiplicationCommutesOnlyWhenTheScalarSaysSo) {
   static_assert(diff::CCommutativeMultiply<double>);
   static_assert(diff::CCommutativeMultiply<diff::Dual<double>>);
   static_assert(diff::CCommutativeMultiply<diff::TaylorDual<double, 3>>);
-  static_assert(diff::CCommutativeMultiply<diff::VectorDual<4>>);
+  static_assert(diff::CCommutativeMultiply<diff::TaylorDual<double, 3>>);
   // The dual wrappers defer to the scalar underneath rather than asserting for
   // themselves, so an undeclared scalar stays undeclared through a Dual.
   static_assert(!diff::CCommutativeMultiply<diff::Dual<Undeclared>>);

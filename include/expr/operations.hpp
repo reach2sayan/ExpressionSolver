@@ -120,7 +120,7 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"},
   // lhs.derivative() * rhs and lhs * rhs.derivative().
   //
   // Exact wherever multiplication commutes, so this is bit-identical for
-  // double, Dual, TaylorDual and VectorDual.  It is the correctly *sided* rule
+  // double, Dual and TaylorDual.  It is the correctly *sided* rule
   // rather than a complete one for a genuinely non-commutative scalar: a matrix
   // would additionally need a transpose here, and Numeric provides none.
   template <std::size_t Base, std::size_t... CB>
@@ -231,7 +231,7 @@ struct abs_impl {
   }
 };
 // Binary impls.  ADL resolves pow/atan2/hypot for diff::Dual, TaylorDual and
-// VectorDual (each defines its own) when T is one of those, and to std::* for
+// TaylorDual (each defines its own) when T is one of those, and to std::* for
 // plain arithmetic T.  The `using std::` + unqualified call is the whole
 // mechanism, so it is written once.
 #define DIFF_ADL_BINARY_IMPL(NAME, FN)                                         \

@@ -2,9 +2,11 @@
 
 
 // ===========================================================================
-// Vector-forward Hessian (hessian_vforward) — the O(m) vector-forward driver
-// must reproduce the scalar O(m^2) hessian() bit-close, across every dispatch
-// bucket (m<=8,16,32) and the scalar fallback (m>32).
+// The public hessian() router on a raw callable.  It has one answer now — the
+// scalar O(m^2) probe driver — and this pins that, across a spread of m, on an
+// energy exercising +,-,*,/,log,exp and scalar*dual.  A second arm, the
+// vector-forward driver, was compared here until it was deleted on 2026-08-20
+// for losing to the scalar driver at every m.
 // ===========================================================================
 namespace {
 // Non-trivial multivariate function exercising +,-,*,/,log,exp and
@@ -27,7 +29,7 @@ template <typename T> T vf_sample(const T *y, std::size_t n) {
 }
 } // namespace
 
-TEST(VectorForwardHessian, MatchesScalarDriver) {
+TEST(HessianRouter, RawCallableTakesTheScalarDriver) {
   for (std::size_t n : {std::size_t{2}, std::size_t{5}, std::size_t{9},
                         std::size_t{12}, std::size_t{20}, std::size_t{40}}) {
     std::vector<double> x(n);
@@ -37,8 +39,8 @@ TEST(VectorForwardHessian, MatchesScalarDriver) {
     auto f = [n](const auto *dof) { return vf_sample(dof, n); };
     const std::span<const double> xs{x.data(), x.size()};
 
-    const auto Hs = diff::detail::hessian_scalar(f, xs);
-    const auto Hv = diff::hessian_vforward(f, xs);
+    const auto Hs = diff::detail::hessian(f, xs);
+    const auto Hv = diff::hessian(f, xs);
 
     ASSERT_EQ(hess_n(Hs), hess_n(Hv));
     EXPECT_NEAR(val_of(Hs), val_of(Hv), 1e-9) << "n=" << n;
@@ -81,8 +83,7 @@ TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
   static_assert(diff::CSeededExprEnergy<decltype(f)>,
                 "seeded_energy() must advertise the routing tag");
   static_assert(decltype(f)::arity == 4, "arity deduced from symbol set");
-  const auto Hscalar = diff::detail::hessian_scalar(f, xs);
-  const auto Hvf = diff::hessian_vforward(f, xs);
+  const auto Hscalar = diff::detail::hessian(f, xs);
 
   EXPECT_NEAR(val_of(Hrouted), val_of(Hscalar), 1e-12);
   for (std::size_t i = 0; i < 4; ++i) {
@@ -90,15 +91,13 @@ TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
     for (std::size_t j = 0; j < 4; ++j) {
       EXPECT_NEAR(hess_at(Hrouted, i, j), hess_at(Hscalar, i, j), 1e-12)
           << "scalar H(" << i << "," << j << ")";
-      EXPECT_NEAR(hess_at(Hrouted, i, j), hess_at(Hvf, i, j), 1e-7)
-          << "vforward H(" << i << "," << j << ")";
     }
   }
 }
 
 // Forward-over-reverse is the third driver for the same Hessian, and the only
 // one that is O(N) sweeps rather than O(N^2) probes.  Before the router may
-// prefer it, it has to agree with both forward-over-forward drivers on a real
+// prefer it, it has to agree with the forward-over-forward driver on a real
 // graph energy — not just the two-variable cases in HessianTest.
 TEST(SeededExprEnergy, ForwardOverReverseAgreesWithNumericDrivers) {
   using D = diff::Dual<double>;
@@ -115,16 +114,13 @@ TEST(SeededExprEnergy, ForwardOverReverseAgreesWithNumericDrivers) {
   const std::span<const double> xs{x.data(), x.size()};
 
   auto f = diff::seeded_energy(expr);
-  const auto Hscalar = diff::detail::hessian_scalar(f, xs);
-  const auto Hvf = diff::hessian_vforward(f, xs);
+  const auto Hscalar = diff::detail::hessian(f, xs);
   const auto Hrev = Equation{expr}.hessian(x);
 
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = 0; j < 4; ++j) {
       EXPECT_NEAR(Hrev[i][j], hess_at(Hscalar, i, j), 1e-9)
           << "scalar H(" << i << "," << j << ")";
-      EXPECT_NEAR(Hrev[i][j], hess_at(Hvf, i, j), 1e-7)
-          << "vforward H(" << i << "," << j << ")";
     }
   }
 }
@@ -269,7 +265,7 @@ TEST(HessianCoupling, ChainPatternIsTridiagonalPlusCorner) {
   const std::array<double, 4> x{0.2, 0.4, 0.6, 0.8};
   const std::span<const double> xs{x.data(), x.size()};
   const auto Hscalar =
-      diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+      diff::detail::hessian(diff::seeded_energy(expr), xs);
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = 0; j < 4; ++j) {
       const bool predicted = P[i][j];
@@ -323,7 +319,7 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnQuotients) {
 
   const auto Hcompressed = diff::hessian(expr, xs); // routed: compressed
   const auto Hprobe =
-      diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+      diff::detail::hessian(diff::seeded_energy(expr), xs);
 
   EXPECT_NEAR(val_of(Hcompressed), val_of(Hprobe), 1e-12);
   for (std::size_t i = 0; i < 3; ++i) {
@@ -350,7 +346,7 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnTrigProducts) {
   const std::span<const double> xs{x.data(), x.size()};
 
   const auto Hc = diff::hessian(expr, xs);
-  const auto Hp = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  const auto Hp = diff::detail::hessian(diff::seeded_energy(expr), xs);
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = 0; j < 4; ++j) {
       EXPECT_NEAR(hess_at(Hc, i, j), hess_at(Hp, i, j), 1e-9)
@@ -410,7 +406,7 @@ TEST(EigenInterop, SparseHessianMatchesDenseDriver) {
   const std::array<double, 4> x{0.2, 0.4, 0.6, 0.8};
   const std::span<const double> xs{x.data(), x.size()};
 
-  const auto dense = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  const auto dense = diff::detail::hessian(diff::seeded_energy(expr), xs);
   const auto sparse = diff::sparse_hessian(expr, xs);
   const Eigen::MatrixXd M = Eigen::MatrixXd(sparse.matrix());
 
@@ -445,7 +441,7 @@ TEST(EigenInterop, SparseHessianIndexesLikeADenseMatrix) {
   const std::span<const double> xs{x.data(), x.size()};
 
   const auto sparse = diff::sparse_hessian(expr, xs);
-  const auto dense = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  const auto dense = diff::detail::hessian(diff::seeded_energy(expr), xs);
 
   // Indexed as if dense, while storing only the nonzeros.
   EXPECT_LT(decltype(sparse)::nnz, 9u);
@@ -480,7 +476,7 @@ TEST(EigenInterop, SparseHessianIsSymmetricAndCompressed) {
   const auto M = sparse.matrix();
   EXPECT_TRUE(M.isCompressed());
 
-  const auto dense = diff::detail::hessian_scalar(diff::seeded_energy(expr), xs);
+  const auto dense = diff::detail::hessian(diff::seeded_energy(expr), xs);
   const Eigen::MatrixXd full = Eigen::MatrixXd(M);
   for (std::size_t i = 0; i < 3; ++i) {
     for (std::size_t j = 0; j < 3; ++j) {
@@ -527,9 +523,9 @@ TEST(EigenInterop, SparseHessianOfALinearExpressionIsEmpty) {
 #endif // DIFF_USE_EIGEN
 
 // A plain arithmetic energy lambda carries no tag and is not a CExpression, so
-// it must keep routing to vector-forward (the small-n winner) — the expr-graph
-// path is auto-detected, never forced onto raw callables.
-TEST(SeededExprEnergy, RawLambdaStaysVectorForward) {
+// it must keep routing to the raw-callable branch — the expr-graph path is
+// auto-detected, never forced onto a lambda that merely looks numeric.
+TEST(SeededExprEnergy, RawLambdaIsNotMistakenForAGraph) {
   auto f = [](const auto *y) {
     using std::log;
     return y[0] * log(y[0]) + y[1] * log(y[1]);
@@ -540,7 +536,7 @@ TEST(SeededExprEnergy, RawLambdaStaysVectorForward) {
                 "a lambda is not an expression graph");
 }
 
-TEST(VectorForwardHessian, IdealMixingClosedForm) {
+TEST(HessianRouter, IdealMixingClosedForm) {
   constexpr double R = 8.31446261815324, T = 1000.0;
   auto f = [](const auto *y) {
     using std::log;
@@ -548,7 +544,7 @@ TEST(VectorForwardHessian, IdealMixingClosedForm) {
   };
   const std::array<double, 2> y{0.3, 0.7};
   const auto H =
-      diff::hessian_vforward(f, std::span<const double>{y.data(), y.size()});
+      diff::hessian(f, std::span<const double>{y.data(), y.size()});
   EXPECT_NEAR(val_of(H), R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
               1e-6);
   EXPECT_NEAR(grad_at(H, 0), R * T * (std::log(0.3) + 1.0), 1e-6);
@@ -578,13 +574,13 @@ TEST(ForwardDriverReuse, WritingOverloadMatchesOwningOverload) {
   const std::array<double, 3> pt{0.4, 0.9, 1.3};
   const std::span<const double> x{pt};
 
-  const auto owned = diff::detail::hessian_scalar(reuse_energy, x);
+  const auto owned = diff::detail::hessian(reuse_energy, x);
 
   // Caller-owned output: the library writes into memory it did not create.
   diff::HessianWorkspace ws;
   std::array<double, 3> grad{};
   std::array<double, 9> hess{};
-  const double value = diff::detail::hessian_scalar(
+  const double value = diff::detail::hessian(
       reuse_energy, x, diff::detail::all_indices(3), ws,
       std::span<double>{grad}, std::span<double>{hess});
 
@@ -607,7 +603,7 @@ TEST(ForwardDriverReuse, WorkspaceSurvivesAShrinkingExtent) {
   const std::array<double, 3> big{0.4, 0.9, 1.3};
   std::array<double, 3> g3{};
   std::array<double, 9> h3{};
-  diff::detail::hessian_scalar(reuse_energy, std::span<const double>{big},
+  diff::detail::hessian(reuse_energy, std::span<const double>{big},
                                diff::detail::all_indices(3), ws,
                                std::span<double>{g3}, std::span<double>{h3});
 
@@ -615,7 +611,7 @@ TEST(ForwardDriverReuse, WorkspaceSurvivesAShrinkingExtent) {
   const std::array<double, 2> small{0.4, 0.9};
   std::array<double, 2> g2{};
   std::array<double, 4> h2{};
-  diff::detail::hessian_scalar(planar, std::span<const double>{small},
+  diff::detail::hessian(planar, std::span<const double>{small},
                                diff::detail::all_indices(2), ws,
                                std::span<double>{g2}, std::span<double>{h2});
 
@@ -633,9 +629,9 @@ TEST(ForwardDriverReuse, AllIndicesMatchesAnExplicitSubset) {
   const std::span<const double> x{pt};
   const std::array<std::size_t, 3> idx{0, 1, 2};
 
-  const auto viewed = diff::detail::hessian_scalar(
+  const auto viewed = diff::detail::hessian(
       reuse_energy, x, diff::detail::all_indices(3));
-  const auto spanned = diff::detail::hessian_scalar(
+  const auto spanned = diff::detail::hessian(
       reuse_energy, x, std::span<const std::size_t>{idx});
 
   ASSERT_EQ(hess_n(viewed), hess_n(spanned));

@@ -138,7 +138,7 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     return expr.template eval_seeded<symbols>(point());
   }
 
-  // Evaluate with a deeper numeric type (Dual, TaylorDual, VectorDual, ...).
+  // Evaluate with a deeper numeric type (Dual, TaylorDual, ...).
   template <Numeric U>
   [[nodiscard]] constexpr U
   eval_as(const std::array<U, arity> &seed) const noexcept {

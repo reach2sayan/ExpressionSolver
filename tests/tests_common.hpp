@@ -2,7 +2,6 @@
 
 #include "dual/dual.hpp"
 #include "dual/taylor_dual.hpp"
-#include "dual/vector_dual.hpp"
 #include "expr/bound.hpp"
 #ifdef DIFF_USE_EIGEN
 #include "interop/eigen_interop.hpp"
@@ -10,7 +9,7 @@
 #include "drivers/forward_driver.hpp"
 #include "drivers/gradient.hpp"
 #include "drivers/seeded_energy.hpp"
-#include "drivers/vforward_driver.hpp"
+#include "drivers/hessian.hpp"
 #include "expr/equation.hpp"
 #include "expr/format.hpp"
 #include "expr/operations.hpp"

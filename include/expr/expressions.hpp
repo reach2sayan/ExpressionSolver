@@ -20,7 +20,7 @@ concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
                       std::floating_point<std::remove_cvref_t<T>>;
 
 // Closed under the four arithmetic operators and negation (Dual, TaylorDual,
-// VectorDual, ...).
+// TaylorDual, ...).
 template <typename T>
 // constructible_from<T, int> is the multiplicative identity, and it is not
 // decoration: differentiation manufactures exactly 0 and 1, the reverse sweep
@@ -297,7 +297,7 @@ public:
 
   // The one seeded sweep.  The seed type U is deduced from the point, so the
   // same call evaluates in the expression's own scalar type or in a deeper
-  // dual type (Dual, TaylorDual, VectorDual, ...) — the arithmetic follows
+  // dual type (Dual, TaylorDual, ...) — the arithmetic follows
   // whatever was handed in, and only the leaves care about the difference.
   template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U

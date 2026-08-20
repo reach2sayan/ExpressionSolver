@@ -296,7 +296,7 @@ public:
       // move constructor the rvalue simply binds to operator+'s const& or
       // selects its copy constructor, so this degrades to a copy on its own.
       // It buys nothing for the scalars shipped today -- Dual, TaylorDual and
-      // VectorDual are trivially copyable arrays -- and costs nothing either;
+      // TaylorDual are trivially copyable -- and costs nothing either;
       // it is here for a scalar that owns storage.
       grads[idx] = std::move(grads[idx]) + adj;
     }

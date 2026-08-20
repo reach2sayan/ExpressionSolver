@@ -101,27 +101,23 @@ TEST(ExpressionPrinting, EquationPrintsFunctionsAndGradientRows) {
 
 // The dual family shares one formatter base (util/fmt.hpp): parse() and the
 // number/punctuation primitives are written once, so a spec means the same
-// thing in all three and the iostream spelling cannot drift from std::format.
+// thing in both and the iostream spelling cannot drift from std::format.
 TEST(DualPrinting, EachDualRendersItsOwnShape) {
   const diff::Dual<double> d{1.5, 2.0};
   diff::TaylorDual<double, 3> t;
   t.c = {1.0, 2.0, 3.0, 4.0};
-  const diff::VectorDual<4> v{1.5, {2.0, 3.0, 4.0, 5.0}};
 
   EXPECT_EQ(std::format("{}", d), "1.5+2e");
   EXPECT_EQ(std::format("{}", t), "1+2e+3e^2+4e^3");
-  EXPECT_EQ(std::format("{}", v), "1.5+[2, 3, 4, 5]e");
 }
 
 TEST(DualPrinting, OneSpecReachesEveryPart) {
   const diff::Dual<double> d{1.5, 2.0};
   diff::TaylorDual<double, 2> t;
   t.c = {1.0, 2.0, 3.0};
-  const diff::VectorDual<2> v{1.5, {2.0, 3.0}};
 
   EXPECT_EQ(std::format("{:.2f}", d), "1.50+2.00e");
   EXPECT_EQ(std::format("{:.2f}", t), "1.00+2.00e+3.00e^2");
-  EXPECT_EQ(std::format("{:.2f}", v), "1.50+[2.00, 3.00]e");
 }
 
 // Without bracketing, Dual<Dual<double>> reads as one four-term series.
@@ -135,15 +131,14 @@ TEST(DualPrinting, StreamInserterMatchesFormat) {
   const diff::Dual<double> d{1.5, 2.0};
   diff::TaylorDual<double, 2> t;
   t.c = {1.0, 2.0, 3.0};
-  const diff::VectorDual<2> v{1.5, {2.0, 3.0}};
 
   std::ostringstream oss;
-  oss << d << '|' << t << '|' << v;
-  EXPECT_EQ(oss.str(), std::format("{}|{}|{}", d, t, v));
+  oss << d << '|' << t;
+  EXPECT_EQ(oss.str(), std::format("{}|{}", d, t));
 }
 
-// Every dual is reachable as an expression leaf, which is the reason all three
-// have to be formattable and not just Dual.
+// Every dual is reachable as an expression leaf, which is the reason both have
+// to be formattable and not just Dual.
 TEST(DualPrinting, AllThreeWorkAsExpressionLeaves) {
   EXPECT_EQ(std::format("{}", diff::Constant<diff::Dual<double>>{
                                   diff::Dual<double>{5.0, 1.0}}),
@@ -151,7 +146,4 @@ TEST(DualPrinting, AllThreeWorkAsExpressionLeaves) {
   EXPECT_EQ(std::format("{}", diff::Constant<diff::TaylorDual<double, 2>>{
                                   diff::TaylorDual<double, 2>{5.0}}),
             "5+0e+0e^2");
-  EXPECT_EQ(std::format("{}", diff::Constant<diff::VectorDual<2>>{
-                                  diff::VectorDual<2>{5.0}}),
-            "5+[0, 0]e");
 }

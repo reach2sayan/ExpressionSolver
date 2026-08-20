@@ -2,7 +2,6 @@
 
 #include "dual/dual.hpp"
 #include "dual/taylor_dual.hpp"
-#include "dual/vector_dual.hpp"
 #include "expr/expressions.hpp"
 #include "expr/named_value.hpp"
 #include "expr/traits.hpp"
@@ -147,7 +146,7 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 }
 
 // The two modes an entry point can be asked for.  Forward mode is reached
-// through the drivers (forward_driver.hpp / vforward_driver.hpp), which take a
+// through the drivers (forward_driver.hpp / hessian.hpp), which take a
 // callable rather than a Mode, so it is not a value here.
 enum class DiffMode { Symbolic, Reverse };
 
@@ -318,32 +317,6 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
   using U = nth_dual_t<S, Order>;
 
   nd_tensor_t<S, N, Order> result{};
-
-  // First-order gradient fast path (N >= 3): one vector-forward pass instead of
-  // N scalar Dual passes.  Seeding identity tangents into a VectorDual<N>
-  // carries every partial as a lane, so the value-level work — transcendentals
-  // and shared subexpressions — is computed once rather than recomputed per
-  // variable. The scalar passes evaluate e.g. sin(x)/exp(x*y) once *per
-  // variable*; this shares them, a win that grows with N (TMulti3 N=3 reaches
-  // parity with autodiff, F4 N=4 overtakes it ~2x).  N <= 2 keeps the leaner
-  // scalar path: at N=2 the single shared evaluation barely offsets the
-  // VectorDual lane overhead (and N==1 is one plain Dual pass).  VectorDual
-  // lanes are double, so this is gated to double-scalar expressions.
-  if constexpr (Order == 1 && N >= 3 && std::same_as<S, double>) {
-    using V = VectorDual<N>;
-    std::array<V, N> seeds{};
-    std::ranges::transform(values, seeds.begin(),
-                           [](double v) { return V{v}; });
-    // Identity tangents: variable k owns lane k.
-    for (std::size_t k = 0; k < N; ++k) {
-      seeds[k].grad[k] = double{1};
-    }
-    const V r = expr.template eval_seeded<symbols>(seeds);
-    // Rank 1 under layout_right: storage order is index order, so the lane
-    // pack copies straight into the tensor's cells.
-    std::ranges::copy_n(r.grad.begin(), N, result.data());
-    return result;
-  }
 
   // First-order, low arity: one plain Dual pass per variable.  The generic
   // tensor loop below can do this, but only through machinery that is pure

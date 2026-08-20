@@ -17,7 +17,7 @@
 
 #include "drivers/coupling.hpp"        // hessian_pattern(), color_columns()
 #include <tuple>
-#include "drivers/vforward_driver.hpp" // hessian(), hessian_vforward(), gradient()
+#include "drivers/hessian.hpp" // hessian(), gradient()
 #include "expr/bound.hpp"              // eval(), bind(), named<>()
 #include "expr/equation.hpp"           // Equation: vector-valued f, Jacobians
 
@@ -205,9 +205,6 @@ int main() {
   println("\nHESSIAN            H(0,2)");
   row("lambda  hessian(f, xs)", std::get<2>(diff::hessian(lambda, xs))[0 * xs.size() + 2],
       bench_ns([&] { return std::get<2>(diff::hessian(lambda, xs))[0 * xs.size() + 2]; }, 1000));
-  row("lambda  hessian_vforward(f, xs)",
-      std::get<2>(diff::hessian_vforward(lambda, xs))[0 * xs.size() + 2],
-      bench_ns([&] { return std::get<2>(diff::hessian_vforward(lambda, xs))[0 * xs.size() + 2]; }, 1000));
   row("graph   hessian(expr, xs)", std::get<2>(diff::hessian(graph, xs))[0 * xs.size() + 2],
       bench_ns([&] { return std::get<2>(diff::hessian(graph, xs))[0 * xs.size() + 2]; }, 1000));
   {

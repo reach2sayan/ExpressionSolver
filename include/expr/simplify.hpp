@@ -124,7 +124,7 @@ template <COperation Op, CExpression A>
 // algebra.  Commuting a product is a property of the scalar plugged in, not of
 // the expression type, so it is asked rather than assumed:
 // CCommutativeMultiply (expressions.hpp) is opt-in, and double, Dual,
-// TaylorDual and VectorDual all opt in.  Addition needs no such guard -- a
+// TaylorDual both opt in.  Addition needs no such guard -- a
 // ring's addition commutes by definition.
 //
 // The library assumes exactly the algebra of a (possibly non-commutative) ring:

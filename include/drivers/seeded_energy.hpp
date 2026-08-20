@@ -19,13 +19,11 @@ namespace diff {
 // driver and lets the resulting callable be stored or returned safely.
 //
 // The wrapper carries a static tag (kSeededExprEnergy) that the public
-// hessian() router keys on: an expression-template energy is dispatched to the
-// *scalar* O(n^2) forward-over-forward driver instead of vector-forward.  A
-// graph node carries wide Dual<VectorDual<N>> intermediates whose per-node cost
-// scales with pack width and dwarfs the fewer-sweeps saving the vector-forward
-// driver is built for.  Raw arithmetic energy lambdas
-// carry no tag, so the router keeps routing those to vector-forward, where they
-// win at small n.
+// hessian() router keys on: it says "this callable is a graph that has already
+// been bridged, so there is no tree left to sweep backward", which takes the
+// forward-over-reverse branch out of contention and lands on the scalar
+// O(n^2) forward-over-forward driver.  A raw arithmetic energy lambda carries
+// no tag and reaches the same driver by the other route.
 template <CExpression Expr> class SeededExprEnergy {
   static_assert(!std::is_reference_v<Expr>,
                 "SeededExprEnergy stores the expression by value on purpose — a "
@@ -37,7 +35,7 @@ public:
   using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   static constexpr std::size_t arity = mp::mp_size(symbols{});
 
-  // Marker the hessian() router dispatches on (see vforward_driver.hpp).
+  // Marker the hessian() router dispatches on (see hessian.hpp).
   static constexpr bool kSeededExprEnergy = true;
 
   explicit constexpr SeededExprEnergy(Expr expr) noexcept

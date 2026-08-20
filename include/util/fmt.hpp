@@ -2,7 +2,7 @@
 
 // The pieces every std::formatter in the library is built out of.
 //
-// Four types are formattable here -- Dual, TaylorDual, VectorDual and the
+// Three types are formattable here -- Dual, TaylorDual and the
 // expression tree -- and all four do the same two things: emit fixed
 // punctuation, and emit numbers through a nested formatter that was handed the
 // caller's spec.  Writing those two once is what keeps "{:.3f}" meaning the
@@ -77,18 +77,6 @@ protected:
     }
   }
 
-  // A bracketed run of numbers: VectorDual's partial pack.
-  void pack(std::format_context &ctx, const auto &values) const {
-    put(ctx, "[");
-    for (std::size_t k = 0; k != std::ranges::size(values); ++k) {
-      if (k > 0) {
-        put(ctx, ", ");
-      }
-      num(ctx, values[k]);
-    }
-    put(ctx, "]");
-  }
-
 private:
   std::formatter<S, char> part_{};
 };
@@ -100,9 +88,8 @@ template <typename T> inline constexpr bool is_dual_family_v = false;
 
 namespace diff {
 
-// Anything in the dual family: Dual, TaylorDual, VectorDual.  One inserter
-// serves all three, so the iostream spelling can never drift from the
-// std::format one.
+// Anything in the dual family: Dual, TaylorDual.  One inserter serves both, so
+// the iostream spelling can never drift from the std::format one.
 template <typename T>
 concept CDualFamily = detail::is_dual_family_v<std::remove_cvref_t<T>>;
 

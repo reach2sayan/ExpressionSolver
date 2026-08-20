@@ -23,7 +23,7 @@
 
 #include "drivers/gradient.hpp"
 #include "drivers/seeded_energy.hpp"
-#include "drivers/vforward_driver.hpp"
+#include "drivers/hessian.hpp"
 #include "dual/dual.hpp"
 #include "expr/values.hpp"
 
@@ -802,14 +802,14 @@ BENCHMARK(BM_AD_Reverse_TDir_Reuse);
 //        + Σ_{i<j} c_ij · (y_i·y_j)/(1 + y_i)        c_ij = 0.1(i+1) - 0.05 j
 //        + exp(y_0 · y_{n-1})
 //
-// This is the workload the new vector-forward driver targets: one templated
-// energy, three ways to get its Hessian —
-//   Ours_VForward — hessian_vforward(): O(n) sweeps, inner pack = identity
+// One templated energy, two ways to get its Hessian —
 //   Ours_Forward  — hessian():          O(n^2) scalar forward-over-forward
 //   AD_Forward    — autodiff::hessian(): Eigen VectorXdual2nd, O(n^2)
 //
-// n is swept up to kVForwardN (=32 by default) so the vector-forward path
-// stays engaged rather than falling back to the scalar O(n^2) driver.
+// A third arm, a vector-forward driver sweeping Dual<VectorDual<N>>, was
+// carried here until 2026-08-20 and deleted: it lost to the scalar driver at
+// every n on both energies (0.45-0.98x), and the instruction counts that had
+// said otherwise were reading 2x fewer instructions at 2x worse IPC.
 // ===========================================================================
 
 // Single templated energy shared by every implementation — `y` is anything
@@ -841,20 +841,6 @@ static std::vector<double> vf_point(std::size_t n) {
   return x;
 }
 
-static void BM_Ours_VForward_Hess(benchmark::State &state) {
-  const std::size_t n = static_cast<std::size_t>(state.range(0));
-  auto x = vf_point(n);
-  const std::span<const double> xs{x.data(), x.size()};
-  auto f = [n](const auto *dof) { return vf_energy(dof, n); };
-  for (auto _ : state) {
-    benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian_vforward(f, xs);
-    benchmark::DoNotOptimize(H);
-    benchmark::ClobberMemory();
-  }
-}
-BENCHMARK(BM_Ours_VForward_Hess)->Arg(4)->Arg(8)->Arg(16)->Arg(32);
-
 static void BM_Ours_Forward_Hess(benchmark::State &state) {
   const std::size_t n = static_cast<std::size_t>(state.range(0));
   auto x = vf_point(n);
@@ -862,7 +848,7 @@ static void BM_Ours_Forward_Hess(benchmark::State &state) {
   auto f = [n](const auto *dof) { return vf_energy(dof, n); };
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::detail::hessian_scalar(f, xs);
+    auto H = diff::detail::hessian(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -933,20 +919,6 @@ DIFF_ALWAYS_INLINE static auto vf_energy_sparse(const Vec &y, std::size_t n) {
   return g;
 }
 
-static void BM_Ours_VForward_HessSparse(benchmark::State &state) {
-  const std::size_t n = static_cast<std::size_t>(state.range(0));
-  auto x = vf_point(n);
-  const std::span<const double> xs{x.data(), x.size()};
-  auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
-  for (auto _ : state) {
-    benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian_vforward(f, xs);
-    benchmark::DoNotOptimize(H);
-    benchmark::ClobberMemory();
-  }
-}
-BENCHMARK(BM_Ours_VForward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(17)->Arg(32);
-
 static void BM_Ours_Forward_HessSparse(benchmark::State &state) {
   const std::size_t n = static_cast<std::size_t>(state.range(0));
   auto x = vf_point(n);
@@ -954,7 +926,7 @@ static void BM_Ours_Forward_HessSparse(benchmark::State &state) {
   auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::detail::hessian_scalar(f, xs);
+    auto H = diff::detail::hessian(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -988,28 +960,12 @@ static void BM_AD_Forward_HessSparse(benchmark::State &state) {
 BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(17)->Arg(32);
 
 // The public router, not a driver.  Every other Hess row in this file calls a
-// driver directly, so until this row existed nothing here exercised what
-// diff::hessian() *picks* for a raw callable -- which is where
-// kVForwardCrossover lives, and is why that constant was tuned on instruction
-// counts that turned out not to predict time at all (see vforward_driver.hpp).
-//
-// The arguments straddle the crossover: at the default of 8, m = 8 lands on
-// vector-forward and m = 17 on the scalar probe driver.  Read each row against
-// BM_Ours_VForward_HessSparse and BM_Ours_Forward_HessSparse at the same m --
-// the router row sits on top of whichever one it chose, and a routing
-// regression shows up as it jumping to the other driver's number while both
-// drivers stay put.  Measured that way (ns, best-of-6 pinned):
-//
-//   m      routed   vector-forward   scalar   -> picked
-//   8       4,041            4,016    2,541      vector-forward
-//   17     23,232           70,170   23,229      scalar
-//
-// m = 16 is carried as the boundary case but does NOT discriminate on this box:
-// the two drivers happen to tie there (18,715 vs 18,712), so the row only earns
-// its place if the crossover moves or the drivers diverge.
-//
-// The m = 8 row is also the standing evidence that the crossover is too high --
-// the router is picking the driver that is 1.6x slower.
+// driver directly, so nothing here would otherwise exercise what
+// diff::hessian() picks for a raw callable.  That choice used to be a tuned
+// constant (kVForwardCrossover) selecting between the scalar probe driver and a
+// vector-forward one; the vector-forward driver was deleted on 2026-08-20 after
+// it measured slower at every m, so the router now has one answer and this row
+// guards that it stays the right one.
 static void BM_Ours_Hessian_HessSparse(benchmark::State &state) {
   const std::size_t n = static_cast<std::size_t>(state.range(0));
   auto x = vf_point(n);
@@ -1112,20 +1068,6 @@ static auto expr_energy(const Expr &E) {
 }
 
 template <std::size_t Nv, typename MakeExpr>
-static void ours_vforward_expr(benchmark::State &state, MakeExpr make) {
-  auto E = make();
-  auto f = expr_energy<Nv>(E);
-  auto x = vf_point(Nv);
-  const std::span<const double> xs{x.data(), x.size()};
-  for (auto _ : state) {
-    benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian_vforward(f, xs);
-    benchmark::DoNotOptimize(H);
-    benchmark::ClobberMemory();
-  }
-}
-
-template <std::size_t Nv, typename MakeExpr>
 static void ours_forward_expr(benchmark::State &state, MakeExpr make) {
   auto E = make();
   auto f = expr_energy<Nv>(E);
@@ -1133,7 +1075,7 @@ static void ours_forward_expr(benchmark::State &state, MakeExpr make) {
   const std::span<const double> xs{x.data(), x.size()};
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::detail::hessian_scalar(f, xs);
+    auto H = diff::detail::hessian(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -1142,8 +1084,8 @@ static void ours_forward_expr(benchmark::State &state, MakeExpr make) {
 // Public router: handing the raw expression *graph* to diff::hessian() must
 // auto-detect CExpression, bridge it internally, and pick the scalar driver —
 // no seeded_energy() at the call site.  Should track the explicit Ours_Forward
-// (scalar) numbers, not the slower Ours_VForward, proving the routing works
-// end-to-end from the client's point of view.
+// (scalar) numbers, proving the routing works end-to-end from the client's
+// point of view.
 template <std::size_t Nv, typename MakeExpr>
 static void ours_hessian_expr(benchmark::State &state, MakeExpr make) {
   auto E = make();
@@ -1157,10 +1099,6 @@ static void ours_hessian_expr(benchmark::State &state, MakeExpr make) {
   }
 }
 
-static void BM_Ours_VForward_HessExpr4(benchmark::State &state) {
-  ours_vforward_expr<4>(state, make_chain_expr4);
-}
-BENCHMARK(BM_Ours_VForward_HessExpr4);
 static void BM_Ours_Forward_HessExpr4(benchmark::State &state) {
   ours_forward_expr<4>(state, make_chain_expr4);
 }
@@ -1168,10 +1106,6 @@ BENCHMARK(BM_Ours_Forward_HessExpr4);
 // autodiff baseline for n=4/8 is BM_AD_Forward_HessSparse/{4,8} — identical
 // closed form (autodiff has no expression-template layer to mirror).
 
-static void BM_Ours_VForward_HessExpr8(benchmark::State &state) {
-  ours_vforward_expr<8>(state, make_chain_expr8);
-}
-BENCHMARK(BM_Ours_VForward_HessExpr8);
 static void BM_Ours_Forward_HessExpr8(benchmark::State &state) {
   ours_forward_expr<8>(state, make_chain_expr8);
 }
@@ -1459,7 +1393,7 @@ double ours_partial(const Expr &expr, std::string_view sym,
     const std::span<const double> xs{pt.data(), pt.size()};
     auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
     const auto [rv, rg, rh, rn] = diff::hessian(f, xs);
-    const auto [sv, sg, sh, sn] = diff::detail::hessian_scalar(f, xs);
+    const auto [sv, sg, sh, sn] = diff::detail::hessian(f, xs);
     reverse_check("routed hessian value", rv, sv);
     for (std::size_t i = 0; i < n; ++i) {
       reverse_check("routed hessian gradient", rg[i], sg[i]);
