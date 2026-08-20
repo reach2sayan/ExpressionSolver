@@ -1,15 +1,11 @@
 #pragma once
 
-// The drivers that differentiate a *runtime callable* -- an energy lambda the
-// library cannot see inside.  Both seed a dual into a scratch buffer, hand the
-// callable a pointer to it, and read the derivative back out: `gradient` seeds
-// `dual` and sweeps once per active variable, `hessian` seeds `dual2nd` and
-// sweeps once per probe pair.
-//
-// The graph drivers are in `symbolic.hpp`; `hessian.hpp` chooses between them.
+// The drivers for a runtime callable: seed a dual into a scratch buffer, hand
+// the callable a pointer to it, read the derivative back out.  gradient sweeps
+// once per active variable, hessian once per probe pair.
 
 #include "drivers/common.hpp"
-#include "util/scope_guard.hpp" // scoped_value — RAII for the per-probe seed toggle
+#include "util/scope_guard.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -19,14 +15,13 @@
 #include <tuple>
 #include <vector>
 
-namespace diff {
+namespace diff::impl {
 
 namespace detail {
-// The gradient sweep itself, over storage the caller has already seeded.
+// Over storage the caller has already seeded.
 template <CEnergyOf<dual> F, CIndexRange R>
 constexpr void gradient_into(F &&f, dual *const dof, R &&active,
                              const std::span<double> out) {
-  // One seeded pass per active variable
   for (auto &&[slot, dof_index] : std::views::zip(out, active)) {
     const auto seed = scoped_seed<1.0>(dof[dof_index].deriv());
     slot = f(dof).deriv();
@@ -34,8 +29,7 @@ constexpr void gradient_into(F &&f, dual *const dof, R &&active,
 }
 } // namespace detail
 
-// Writing form: the caller owns the output.  Nothing here allocates once `ws`
-// has been used once.
+// Writing form: nothing allocates once `ws` has been used once.
 template <CEnergyOf<dual> F>
 void gradient(F &&f, const std::span<const double> x,
               CIndexRange auto &&active, GradientWorkspace &ws,
@@ -44,8 +38,7 @@ void gradient(F &&f, const std::span<const double> x,
                         static_cast<decltype(active) &&>(active), out);
 }
 
-// Owning forms: a local workspace, so a one-shot call costs one scratch
-// allocation plus the returned vector.
+// Owning form: a local workspace.
 template <CEnergyOf<dual> F>
 std::vector<double> gradient(F &&f, const std::span<const double> x,
                              CIndexRange auto &&active) {
@@ -64,26 +57,15 @@ std::vector<double> gradient(F &&f, const std::span<const double> x) {
 
 namespace detail {
 
-// Value, gradient, and (symmetric) Hessian of f at x, w.r.t. `active`.
+// Value, gradient and symmetric Hessian at x w.r.t. `active`: an O(m^2)
+// forward-over-forward sweep on dual2nd.  Probe (i, j) seeds active[i] in the
+// outer derivative slot and active[j] in the inner one, so f returns
+// ((f, df/dx_j), (df/dx_i, d2f/dx_i dx_j)).  Only those two scalars move per
+// probe, so they are toggled in place.  Writes every cell of both outputs.
 //
-// Scalar O(m^2) forward-over-forward driver on dual2nd (= Dual<Dual<double>>).
-// For a probe pair (i, j) we seed variable active[i] in the outer derivative
-// slot and active[j] in the inner derivative slot; evaluating f then yields, in
-// the result D = ((A0,A1),(B0,B1)):
-//   A0 = f(x),  B0 = df/dx_i,  A1 = df/dx_j,  B1 = d2f/dx_i dx_j.
-// Every entry point below funnels through this, so the probe loop -- and the
-// seeding convention it encodes -- exists exactly once.  It writes every cell of
-// both outputs, so callers may hand it uninitialised storage.  Returns f(x).
-//
-// Of a dual2nd's four scalars only the two first-order seed slots move per probe:
-// value.deriv carries e_j (inner, d/dx_j), deriv.value carries e_i (outer,
-// d/dx_i).  value.value == x[k] and deriv.deriv == 0 are loop-invariant, so the
-// sweep toggles the two derivative scalars in place.
-//
-// Each toggle is a scoped_value whose scope IS the span the seed covers.  Both
-// guards hold a bare double, never the enclosing dual2nd: when ai == aj they name
-// two different scalars of the same number, and a guard over the number would
-// clobber its sibling.
+// Each guard holds a bare double, never the enclosing dual2nd: when ai == aj
+// they name two scalars of the same number and a guard over it would clobber
+// the sibling.
 template <CEnergyOf<dual2nd> F, CIndexRange R>
 constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
                                      double *const grad_out,
@@ -92,12 +74,12 @@ constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
   double value{};
   for (std::size_t j = 0; j < m; ++j) {
     const std::size_t aj = active[j];
-    // Inner seed e_j is constant across the whole i-loop: held by this guard.
+    // Inner seed e_j is constant across the i-loop.
     const auto inner_seed = scoped_seed<1.0>(dof[aj].value().deriv());
     for (std::size_t i = 0; i <= j; ++i) {
       const std::size_t ai = active[i];
 
-      // Outer seed e_i on ai (when ai == aj this lands in aj's other slot).
+      // When ai == aj this lands in aj's other slot.
       const auto outer_seed = scoped_seed<1.0>(dof[ai].deriv().value());
 
       const dual2nd r = f(dof);
@@ -115,8 +97,7 @@ constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
   return value;
 }
 
-// Writing form: the caller owns both output buffers and the scratch, so nothing
-// here allocates once they have been used once.  Returns f(x).
+// Writing form: nothing allocates once the buffers and scratch are warm.
 template <CEnergyOf<dual2nd> F>
 double hessian(F &&f, const std::span<const double> x,
                       CIndexRange auto &&active, HessianWorkspace &ws,
@@ -127,9 +108,7 @@ double hessian(F &&f, const std::span<const double> x,
                              grad_out.data(), hess_out.data());
 }
 
-// Compile-time arity: both the seeded-variable array and the result are
-// std::array, so this path allocates nothing.  N is the arity and the extent --
-// an expression is differentiated w.r.t. all of its own symbols.
+// Compile-time arity: std::array throughout, so this path allocates nothing.
 template <std::size_t N, CEnergyOf<dual2nd> F>
 HessianStatic<N> hessian_static(F &&f, const std::span<const double> x) {
   std::array<dual2nd, N> dof{};
@@ -142,7 +121,7 @@ HessianStatic<N> hessian_static(F &&f, const std::span<const double> x) {
   return out;
 }
 
-// Owning form: allocates the two result buffers, fills them, and hands them over.
+// Owning form.
 template <CEnergyOf<dual2nd> F>
 HessianOwned hessian(F &&f, const std::span<const double> x,
                             CIndexRange auto &&active) {
@@ -164,4 +143,4 @@ HessianOwned hessian(F &&f, const std::span<const double> x) {
 
 } // namespace detail
 
-} // namespace diff
+} // namespace diff::impl

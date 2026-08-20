@@ -1,13 +1,10 @@
 #pragma once
 
-// The public `hessian()` entry point, and nothing else: it owns the choice
-// between the two Hessian drivers and the argument checks that choice needs.
-//
-//   drivers/numeric.hpp   detail::hessian  -- O(N^2) probes over a callable
-//   drivers/symbolic.hpp  detail::hessian_expr_reverse -- O(N) sweeps of a graph
+// The public hessian() entry point: it chooses between the O(N^2) probe driver
+// (numeric.hpp) and the O(N) reverse graph sweep (symbolic.hpp).
 
 #include "drivers/numeric.hpp"
-#include "drivers/seeded_energy.hpp" // seeded_energy() bridge for expression graphs
+#include "drivers/seeded_energy.hpp"
 #include "drivers/symbolic.hpp"
 #include "dual/dual.hpp"
 #include "expr/expressions.hpp" // CExpression
@@ -18,27 +15,18 @@
 #include <stdexcept>
 #include <type_traits>
 
-namespace diff {
+namespace diff::impl {
 
-// The tag seeded_energy() puts on a bridged expression graph; hessian() routes
-// such callables to the scalar driver.
+// The tag seeded_energy() puts on a bridged expression graph.
 template <typename F>
 concept CSeededExprEnergy =
     requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };
 
-// A raw energy callable the scalar probe driver can sweep.  dual2nd is the only
-// number hessian() ever seeds a non-graph callable with, so this is the whole
-// requirement.
-template <typename F>
-concept CRawEnergy = CEnergyOf<F, dual2nd>;
-
-// Everything hessian() knows how to differentiate:
-// 1. an expression graph (which it bridges or sweeps in reverse),
-// 2. a graph already bridged by seeded_energy(),
-// 3. a raw energy callable.
+// An expression graph, a graph already bridged by seeded_energy(), or a raw
+// energy callable.
 template <typename F>
 concept CHessianTarget =
-    CExpression<F> || CSeededExprEnergy<F> || CRawEnergy<F>;
+    CExpression<F> || CSeededExprEnergy<F> || CEnergyOf<F, dual2nd>;
 
 namespace detail {
 
@@ -46,11 +34,8 @@ template <typename F>
 concept CGraphReverseHessian =
     CExpression<F> && DualLike<typename std::remove_cvref_t<F>::value_type>;
 
-// Precondition for handing an expression graph to a probe-based driver.  The
-// bridge reads slots [0, arity) of a buffer sized from `x`, so a short `x` would
-// read off the end and an out-of-range `active` index would come back as a zero
-// row rather than an error.  Silently differentiating at the wrong point is
-// worse than throwing.
+// The bridge reads slots [0, arity) of a buffer sized from `x`, so a short `x`
+// reads off the end and a stray `active` index yields a zero row, not an error.
 constexpr void check_graph_point(std::size_t arity, std::span<const double> x,
                                  CIndexRange auto &&active) {
   if (x.size() < arity) {
@@ -66,8 +51,8 @@ constexpr void check_graph_point(std::size_t arity, std::span<const double> x,
   }
 }
 
-// All-variables form: every slot of x is differentiated, so a point LONGER than
-// the symbol set is as wrong as a short one -- the surplus rows would be zero.
+// All-variables form: a point longer than the symbol set is as wrong as a short
+// one.
 constexpr void check_graph_point(std::size_t arity,
                                  std::span<const double> x) {
   if (x.size() != arity) {
@@ -77,9 +62,8 @@ constexpr void check_graph_point(std::size_t arity,
   }
 }
 
-// The graph driver differentiates every symbol, in canonical order.  A caller
-// asking for a strict subset (or passing a point that is not one value per
-// symbol) keeps the probe-based driver, which can honour `active`.
+// The graph driver differentiates every symbol; a strict subset keeps the probe
+// driver, which can honour `active`.
 [[nodiscard]] constexpr bool
 reverse_hessian_applies(std::size_t n, std::span<const double> x,
                         CIndexRange auto &&active) noexcept {
@@ -92,20 +76,8 @@ reverse_hessian_applies(std::size_t n, std::span<const double> x,
 
 } // namespace detail
 
-// Driver selection.  Only one kind of input can choose:
-//
-//   expression graph  -> forward-over-reverse, O(N) backward sweeps.  A graph is
-//                        the only input carrying a tree to sweep backward.  When
-//                        that does not apply (a strict `active` subset, a
-//                        mismatched point, a non-dual graph) the graph is bridged
-//                        and falls through to the probes.
-//   anything else     -> the O(N^2) probe driver.
-//
-// A seeded_energy()-tagged callable is a graph already bridged, so it is
-// "anything else" -- it differs from a raw lambda only in advertising its arity,
-// which is worth an argument check.  That check is the rest of the dispatch.
 namespace detail {
-// The arity a bridged or raw callable advertises; 0 if it advertises none.
+// The arity a bridged callable advertises; 0 if it advertises none.
 template <CHessianTarget F> constexpr std::size_t declared_arity() noexcept {
   if constexpr (CSeededExprEnergy<F>) {
     return std::remove_cvref_t<F>::arity;
@@ -120,8 +92,7 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
       if (detail::reverse_hessian_applies(detail::expr_arity_v<F>, x, active)) {
-        // This overload can also reach the runtime-extent probe driver, and a
-        // function has one return type, so the static result is widened.
+        // One return type for both drivers, so widen the static result.
         return detail::to_owned(detail::hessian_expr_reverse(f, x));
       }
     }
@@ -135,9 +106,8 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
   }
 }
 
-// Every symbol, in canonical order.  Distinct from the overload above because
-// the extent is then compile-time for a graph, so the sweep runs out of a
-// std::array and allocates nothing but the result.
+// Every symbol, in canonical order: the extent is compile-time for a graph, so
+// this allocates nothing but the result.
 template <CHessianTarget F>
 auto hessian(F &&f, const std::span<const double> x) {
   if constexpr (CExpression<F>) {
@@ -158,4 +128,4 @@ auto hessian(F &&f, const std::span<const double> x) {
   }
 }
 
-} // namespace diff
+} // namespace diff::impl

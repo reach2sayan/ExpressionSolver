@@ -4,7 +4,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff {
+namespace diff::impl {
 
 template <typename T>
 concept CRestorable =
@@ -41,4 +41,4 @@ scoped_seed(T &slot) noexcept(noexcept(scoped_value<Seed, T>{slot})) {
   return scoped_value<Seed, T>{slot};
 }
 
-} // namespace diff
+} // namespace diff::impl

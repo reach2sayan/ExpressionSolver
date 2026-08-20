@@ -1,3 +1,4 @@
+#include "api.hpp"
 #include "drivers/symbolic.hpp"
 #include "dual/dual.hpp"
 #include "expr/bound.hpp"
@@ -10,7 +11,7 @@
 #include <math.h>
 #include <vector>
 
-using namespace diff;
+using namespace diff::impl;
 
 template <typename Eq, typename Pt>
 static void run_symbolic(benchmark::State &state, Eq &eq, Pt pt) {

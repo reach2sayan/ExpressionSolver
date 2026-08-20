@@ -15,9 +15,9 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff {
+namespace diff::impl {
 
-// A compile-time label-keyed map: one slot per symbol (NTTP friendly)
+// A compile-time label-keyed map: one slot per symbol.
 template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
   using symbols = SymList;
   using value_type = Scalar;
@@ -38,8 +38,7 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
     }
   }
 
-  // Subscript spelling: m["x"_s] = v.  See DIFF_KEYED_ACCESSORS in
-  // util/config.hpp for why both spellings are generated together.
+  // Subscript spelling: m["x"_s] = v.  See DIFF_KEYED_ACCESSORS.
   DIFF_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 
   template <FixedString S> constexpr void set(const Scalar &v) noexcept {
@@ -61,15 +60,13 @@ consteval std::array<std::size_t, N> arg_of_canonical() noexcept {
   const std::array<std::size_t, N> canonical_of_arg{
       find_index_of_symbol<ArgSyms::value, SymList>()...};
   std::array<std::size_t, N> out{};
-  // Scatter: invert canonical_of_arg.
   for (std::size_t j = 0; j < N; ++j) {
     out[canonical_of_arg[j]] = j;
   }
   return out;
 }
 
-// Permutation taking the expression's canonical symbol order to the map's.
-// The map may legitimately be a superset of the expression's symbols.
+// Canonical symbol order to the map's; the map may be a superset.
 template <CSymbolList ExprSyms, CSymbolList MapSyms, std::size_t N>
 consteval std::array<std::size_t, N> symbol_permutation() noexcept {
   std::array<std::size_t, N> p{};
@@ -99,8 +96,7 @@ template <FixedString... Syms, Numeric... Vs>
   }(std::make_index_sequence<N>{});
 }
 
-// An expression paired with a point.  The expression is empty, so this costs
-// exactly the map.
+// An expression paired with a point; the expression is empty.
 template <CExpression Expr, CValueMap Map> struct Bound {
   static_assert(!std::is_reference_v<Expr> && !std::is_reference_v<Map>,
                 "Bound stores the expression and the map by value");
@@ -124,7 +120,6 @@ template <CExpression Expr, CValueMap Map> struct Bound {
   [[no_unique_address]] expr_type expr{};
   map_type map{};
 
-  // The point, in the expression's canonical symbol order.
   template <Numeric U = value_type>
   [[nodiscard]] constexpr std::array<U, arity> point() const noexcept {
     std::array<U, arity> out{};
@@ -138,7 +133,6 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     return expr.template eval_seeded<symbols>(point());
   }
 
-  // Evaluate with a deeper numeric type (Dual, TaylorDual, ...).
   template <Numeric U>
   [[nodiscard]] constexpr U
   eval_as(const std::array<U, arity> &seed) const noexcept {
@@ -155,11 +149,9 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     return map_type::template slot<S>(std::forward<decltype(self)>(self).map);
   }
 
-  // Subscript spelling; b["x"_s] = v is the reason it exists.
   DIFF_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 };
 
-// Lets `Bound{expr, map}` work without naming either parameter.
 template <CExpression Expr, CValueMap Map> Bound(Expr, Map) -> Bound<Expr, Map>;
 
 template <CExpression Expr, CValueMap Map>
@@ -175,20 +167,16 @@ template <CExpression Expr, FixedString... Syms, Numeric... Vs>
   return bind(static_cast<Expr &&>(e), values(nv...));
 }
 
-// symbol_order(expr) — value-taking convenience over symbol_order<Expr>().
 template <CExpression Expr>
 [[nodiscard]] consteval auto symbol_order(const Expr &) noexcept {
   return symbol_order<std::remove_cvref_t<Expr>>();
 }
 
-// Single entry point behind both the free eval(expr, ...) and the member
-// expr.eval(...), so the two can never drift apart.
 namespace detail {
 
-// Every spelling of "a point" reduced to the one thing the sweeps take: an
-// array of N values in canonical symbol order.  Written against a symbol list
-// rather than an expression, because Equation supplies its own -- its rows are
-// evaluated with the system's symbols, not each row's.
+// Every spelling of "a point" reduced to an array of N values in canonical
+// symbol order.  Written against a symbol list, not an expression, because
+// Equation supplies its own.
 template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
 [[nodiscard]] constexpr std::array<U, N> make_point(const Args &...args) {
   // clang-format off
@@ -199,9 +187,8 @@ template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
     return {};
   }
 
-  // point(map) / point(named<"x">(..), ..) -- both read by name, so neither
-  // depends on the order they were written in.
-  else if constexpr ((CValueMap<Args> && ...) || (CNamedValue<Args> && ...)) {
+  // point(map) / point(named<"x">(..), ..) -- read by name.
+  else if constexpr ((CValueMap<Args> && ...) || (is_named_value_v<std::remove_cvref_t<Args>> && ...)) {
     const auto map = [&] {
       if constexpr ((CValueMap<Args> && ...)) {
         static_assert(sizeof...(Args) == 1, "eval: pass a single ValueMap");
@@ -257,15 +244,9 @@ template <CExpression Expr, CEvalArg... Args>
       make_point<Syms, VT, expr_arity_v<Expr>>(args...));
 }
 
-// Forward-mode sweep seeded on the variable named `Seed`.
-//
-// This is the ordinary seeded sweep with Dual<VT> as the seed type: Dual
-// already carries {value, tangent} and already implements every chain rule, so
-// there is no separate forward engine to keep in step with it.  Seeding is the
-// whole difference -- slot k gets a unit tangent exactly when symbol k is the
-// one being differentiated.
-//
-// Returns Dual<VT>: read the pair with .value() and .deriv().
+// Forward-mode sweep seeded on `Seed`: the ordinary seeded sweep with Dual<VT>,
+// so there is no separate forward engine.  Slot k gets a unit tangent exactly
+// when symbol k is the one being differentiated.
 template <auto Seed, CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto tangent_dispatch(const Expr &e,
                                               const Args &...args) {
@@ -286,11 +267,10 @@ template <auto Seed, CExpression Expr, CEvalArg... Args>
 
 } // namespace detail
 
-// eval(expr, ...) — same dispatcher the member uses.
 template <CExpression Expr, CEvalArg... Args>
   requires(sizeof...(Args) > 0)
 [[nodiscard]] constexpr auto eval(const Expr &e, const Args &...args) {
   return detail::eval_dispatch(e, args...);
 }
 
-} // namespace diff
+} // namespace diff::impl

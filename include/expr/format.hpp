@@ -11,13 +11,11 @@
 #include <tuple>
 #include <utility>
 
-namespace diff {
+namespace diff::impl {
 
 namespace detail {
 
-// Precedence of a whole node, as seen by its parent.  Leaves and function-call
-// nodes are atomic: neither can be split by a surrounding operator, so neither
-// ever needs parentheses.
+// Precedence as seen by the parent; leaves and function calls are atomic.
 template <CExpression E> consteval int node_precedence() {
   using U = std::remove_cvref_t<E>;
   if constexpr (CExpressionNode<U>) {
@@ -40,8 +38,7 @@ template <typename E> inline constexpr bool is_sum_v = false;
 template <Numeric T, CExpression... C>
 inline constexpr bool is_sum_v<Expression<SumOp<T>, C...>> = true;
 
-// True when `e` should render as a subtraction: a two-child sum whose right
-// operand is a negation.
+// Renders as a subtraction: a two-child sum whose right operand is a negation.
 template <CExpression E> consteval bool renders_as_subtraction() {
   using U = std::remove_cvref_t<E>;
   if constexpr (is_sum_v<U> && std::tuple_size_v<typename U::children_t> == 2) {
@@ -52,11 +49,8 @@ template <CExpression E> consteval bool renders_as_subtraction() {
   }
 }
 
-// The state a walk carries that is not per-node: where output goes and how
-// values are formatted.
-// Neither member was ever open -- fmt_put takes a std::format_context, and the
-// formatter is the one std::formatter<E> holds for E::value_type -- so both are
-// spelled outright instead of taken as parameters; V still deduces via CTAD.
+// What a walk carries that is not per-node: the output context and the value
+// formatter.
 template <Numeric V> struct printer {
   std::format_context &ctx;
   const std::formatter<V, char> &value_fmt;
@@ -64,22 +58,17 @@ template <Numeric V> struct printer {
   void put(std::string_view s) const { fmt_put(ctx, s); }
   void put(char c) const { put(std::string_view{&c, 1}); }
 
-  // Values go through the nested formatter, so a value-spec supplied by the
-  // caller ("{::.3f}") reaches every leaf.
-  // Generic in the value: a leaf may hand over something that merely converts
-  // to V, and the nested formatter is what decides whether that prints.
+  // Through the nested formatter, so a caller's "{::.3f}" reaches every leaf.
+  // Generic in the value: a leaf may hand over something that converts to V.
   template <Numeric U> void put_value(const U &v) const {
     ctx.advance_to(value_fmt.format(v, ctx));
   }
 };
 
-// --- infix walk -----------------------------------------------------------
-//
-// `min_prec` is the binding strength the parent demands of this subtree;
-// anything looser has to be parenthesised.  A left operand may be as loose as
-// its own operator (`a - b - c` is flat), a right operand must be one step
-// tighter -- which is exactly what keeps `x / (y / z)` and `x - (y + z)`
-// parenthesised while leaving `x - y * z` clean.
+// `min_prec` is the binding strength the parent demands; anything looser is
+// parenthesised.  A left operand may be as loose as its own operator, a right
+// operand must be one step tighter -- which is what parenthesises x / (y / z)
+// and x - (y + z) but leaves x - y * z clean.
 template <CExpression E, Numeric V>
 void print_infix(const printer<V> &p, const E &e, int min_prec) {
   using U = std::remove_cvref_t<E>;
@@ -151,14 +140,11 @@ std::ostream &operator<<(std::ostream &out, const CExpression auto &e) {
   return out << std::format("{}", e);
 }
 
-} // namespace diff
+} // namespace diff::impl
 
-// The whole spec is the value-spec: it is handed verbatim to the formatter for
-// the expression's value_type, so "{::.3f}" fixes the precision of every number
-// in the expression.  The leading ':' is optional and follows std::formatter
-// for ranges, which likewise uses one to introduce the spec for what it
-// contains -- "{:.3f}" means the same thing here.
-template <diff::CExpression E> struct std::formatter<E, char> {
+// The whole spec is the value-spec, handed verbatim to the formatter for
+// value_type.  The leading ':' is optional, as in std::formatter for ranges.
+template <diff::impl::CExpression E> struct std::formatter<E, char> {
   constexpr auto parse(std::format_parse_context &ctx) {
     auto it = ctx.begin();
     if (it != ctx.end() && *it == ':') {
@@ -169,8 +155,8 @@ template <diff::CExpression E> struct std::formatter<E, char> {
   }
 
   auto format(const E &e, std::format_context &ctx) const {
-    const diff::detail::printer p{ctx, value_fmt_};
-    diff::detail::print_infix(p, e, 0);
+    const diff::impl::detail::printer p{ctx, value_fmt_};
+    diff::impl::detail::print_infix(p, e, 0);
     return ctx.out();
   }
 

@@ -11,26 +11,17 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff {
+namespace diff::impl {
 
-// ===========================================================================
-// md_tensor — an owning, constant-evaluable tensor with compile-time extents.
-// Two spellings, on purpose:
-//
-//   t[i, j, k]     the mdspan spelling, one mapping call, no intermediates
-//   t[i][j][k]     the nested-array spelling every existing caller uses
-//
-// The second is not a slice.  A rank-reducing view would need the layout to
-// support submdspan, which the packed and sparse layouts do not -- so the proxy
-// accumulates the index prefix and calls the mapping once, at the last subscript.
-// That works over *any* layout and costs the same: a pointer plus a small index
-// array, all constexpr and none of it surviving -O2.
-// ===========================================================================
+// md_tensor: an owning, constant-evaluable tensor with compile-time extents.
+// Both t[i, j, k] and t[i][j][k] work.  The latter is not a slice -- a
+// rank-reducing view needs submdspan, which the packed and sparse layouts do
+// not support -- so the proxy accumulates the prefix and calls the mapping once
+// at the last subscript.  Works over any layout, and none of it survives -O2.
 
 namespace detail {
 
-// A pack of Order copies of N, as an md::extents.  The index_sequence element
-// is discarded -- always_v exists only so the pack has something to expand.
+// A pack of Order copies of N, as an md::extents.
 template <std::size_t, std::size_t V> inline constexpr std::size_t always_v = V;
 
 template <std::size_t N, std::size_t... I>
@@ -46,14 +37,13 @@ consteval auto stacked_extents_fn(std::index_sequence<I...>) noexcept {
 
 } // namespace detail
 
-// extents<size_t, N, N, ..., N> with Order repetitions — the shape of a
-// derivative tensor of order Order over N variables.
+// The shape of a derivative tensor of order Order over N variables.
 template <std::size_t N, std::size_t Order>
 using uniform_extents_t = typename decltype(detail::uniform_extents_fn<N>(
     std::make_index_sequence<Order>{}))::type;
 
-// The same, with one leading axis of a different size — a per-output stack of
-// derivative tensors, which is what a vector-valued Equation produces.
+// The same with one leading axis: a per-output stack, as a vector-valued
+// Equation produces.
 template <std::size_t Lead, std::size_t N, std::size_t Order>
 using stacked_extents_t = typename decltype(detail::stacked_extents_fn<Lead, N>(
     std::make_index_sequence<Order>{}))::type;
@@ -63,12 +53,9 @@ class md_tensor;
 
 namespace detail {
 
-// The index-prefix proxy behind t[i][j][k].  Depth indices have been supplied;
-// it resolves to a reference once Depth + 1 == rank.
-//
-// It holds a pointer to the tensor rather than to the data, so both the mapping
-// and the const-ness travel with it.  Like std::vector<bool>'s proxy, it exists
-// for the duration of the subscript chain and nothing else.
+// The index-prefix proxy behind t[i][j][k]; resolves to a reference once
+// Depth + 1 == rank.  It points at the tensor, not the data, so the mapping and
+// the const-ness travel with it.
 template <typename Tensor, std::size_t Depth> class md_index_proxy {
   using index_type = typename Tensor::index_type;
   static constexpr std::size_t kRank = Tensor::rank();
@@ -132,8 +119,7 @@ public:
   [[nodiscard]] static constexpr mapping_type mapping() noexcept {
     return kMapping;
   }
-  // The number of *stored* elements, which under a packed layout is fewer than
-  // the number of addressable ones.
+  // Stored, which under a packed layout is fewer than addressable.
   [[nodiscard]] static constexpr std::size_t size() noexcept { return kSize; }
   [[nodiscard]] static constexpr index_type extent(std::size_t r) noexcept {
     return Ext{}.extent(r);
@@ -144,7 +130,6 @@ public:
     return data_.data();
   }
 
-  // t[i, j, k] — the mdspan spelling.
   template <std::integral... I>
     requires(sizeof...(I) == Ext::rank())
   [[nodiscard]] constexpr reference operator[](I... idx) noexcept {
@@ -158,9 +143,8 @@ public:
         kMapping(static_cast<index_type>(idx)...))];
   }
 
-  // t[i][j][k] — the nested-array spelling.  Only reachable at rank >= 2; at
-  // rank 1 the variadic overload above already takes a single index, so there
-  // is no ambiguity to resolve.
+  // t[i][j][k].  Only at rank >= 2; at rank 1 the overload above already takes
+  // a single index.
   [[nodiscard]] constexpr auto operator[](index_type i) noexcept
     requires(Ext::rank() >= 2)
   {
@@ -174,8 +158,7 @@ public:
         *this, std::array<index_type, 1>{i});
   }
 
-  // The proxy's terminal step, and the array-of-indices spelling nd_index used
-  // to offer.
+  // The proxy's terminal step.
   [[nodiscard]] constexpr reference
   at_index(const std::array<index_type, Ext::rank()> &idx) noexcept {
     return [&]<std::size_t... K>(std::index_sequence<K...>) -> reference {
@@ -200,20 +183,15 @@ template <Numeric S, std::size_t N, std::size_t Order,
           typename Layout = layout_simplex_packed>
 using nd_tensor_t = md_tensor<S, uniform_extents_t<N, Order>, Layout>;
 
-// A per-output stack of them: Lead tensors of rank Order over N variables,
-// as one rank-(Order + 1) object.  The output axis is dense — it indexes
-// different functions, which have nothing to be symmetric about.
+// A per-output stack, as one rank-(Order + 1) object.  The output axis is
+// dense: it indexes different functions.
 template <Numeric S, std::size_t Lead, std::size_t N, std::size_t Order,
           typename Layout = layout_leading_simplex<1>>
 using nd_stack_t = md_tensor<S, stacked_extents_t<Lead, N, Order>, Layout>;
 
-// Write a rank-1 range into row `i` of a rank-2 tensor.
-//
-// Index-based rather than a pointer walk into data(), so it holds for any
-// layout — under a packed mapping a "row" is not contiguous and the two
-// spellings would disagree.  The sweeps still fill a plain std::array first:
-// backward() writes through a CNumericBuffer, and a rank-1 mdspan is not a
-// range, so the tensor cannot be the sweep's out-param directly.
+// Index-based rather than a pointer walk into data(): under a packed mapping a
+// row is not contiguous.  The sweeps still fill a plain array first, since a
+// rank-1 mdspan is not a range.
 template <Numeric S, md::CStaticExtents Ext, md::CLayoutFor<Ext> Layout,
           std::ranges::input_range R>
   requires(Ext::rank() == 2)
@@ -226,4 +204,4 @@ constexpr void assign_row(md_tensor<S, Ext, Layout> &t,
   }
 }
 
-} // namespace diff
+} // namespace diff::impl

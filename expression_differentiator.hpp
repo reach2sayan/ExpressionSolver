@@ -5,6 +5,7 @@
 #ifndef EXPRESSIONDIFFERENTIATOR_EXPRESSION_DIFFERENTIATOR_HPP
 #define EXPRESSIONDIFFERENTIATOR_EXPRESSION_DIFFERENTIATOR_HPP
 
+#include "api.hpp"
 #include "drivers/coupling.hpp"
 #include "drivers/numeric.hpp"
 #include "drivers/symbolic.hpp"

@@ -10,16 +10,11 @@
 
 #include "util/mpl.hpp" // mp_size
 
-namespace diff {
+namespace diff::impl {
 
-// Bridges a compile-time expression *graph* into the runtime numeric Hessian
-// driver.  The driver hands over seeded dual dofs in sorted symbol order; we
-// pack them and traverse the graph once via eval_seeded.  The expression is held
-// by value so the callable can be stored or returned safely.
-//
-// The static tag kSeededExprEnergy tells the public hessian() router that this
-// is a graph already bridged -- no tree left to sweep backward -- which takes
-// the forward-over-reverse branch out of contention.
+// Bridges an expression graph into the runtime numeric Hessian driver: seeded
+// dofs arrive in sorted symbol order and the graph is traversed once via
+// eval_seeded.
 template <CExpression Expr> class SeededExprEnergy {
   static_assert(!std::is_reference_v<Expr>,
                 "SeededExprEnergy stores the expression by value on purpose — a "
@@ -31,7 +26,6 @@ public:
   using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   static constexpr std::size_t arity = mp::mp_size(symbols{});
 
-  // Marker the hessian() router dispatches on (see hessian.hpp).
   static constexpr bool kSeededExprEnergy = true;
 
   explicit constexpr SeededExprEnergy(Expr expr) noexcept
@@ -40,8 +34,7 @@ public:
   template <Numeric Dof>
   [[nodiscard]] constexpr auto operator()(const Dof *dof) const noexcept {
     using T = std::remove_cvref_t<Dof>;
-    // Built by copy, not value-initialised then overwritten: this runs once per
-    // Hessian probe, and for a wide dof type zeroing first doubles the writes.
+    // Built by copy: zeroing first would double the writes per probe.
     const auto s = [&]<std::size_t... I>(std::index_sequence<I...>) {
       return std::array<T, arity>{dof[I]...};
     }(std::make_index_sequence<arity>{});
@@ -55,4 +48,4 @@ template <CExpression Expr>
       static_cast<Expr &&>(expr));
 }
 
-} // namespace diff
+} // namespace diff::impl

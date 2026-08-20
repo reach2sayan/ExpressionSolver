@@ -435,7 +435,7 @@ TEST(ForwardTangentSweep, IsConstexpr) {
 // Frozen guard the first of the three reported the *unfrozen* derivative, so
 // derivative_tensor and eval_with_tangent disagreed on the same expression.
 TEST(FrozenVariable, EveryEngineSeesZeroDerivative) {
-  auto e = make_const_variable<diff::FixedString{"x"}>(PV(2.0, "x") *
+  auto e = make_const_variable<diff::impl::FixedString{"x"}>(PV(2.0, "x") *
                                                        PV(3.0, "y"));
   const std::array<double, 2> pt{2.0, 3.0};
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "api.hpp"
 
 #include "dual/dual.hpp"
 #include "dual/taylor_dual.hpp"
@@ -30,28 +31,15 @@
 #include <sstream>
 #include <stdexcept>
 
-using namespace diff;
+using namespace diff::impl;
 using namespace diff::literals; // "x"_s
 
-// ===========================================================================
-// Math function tests — ported from autodiff's test suite
-// Covers: tan, log, sqrt, abs, asin, acos, atan, sinh, cosh, tanh,
-//         identity checks, and reverse/forward mode coverage for all.
-// ===========================================================================
-
-// ---------------------------------------------------------------------------
-// Test-side conveniences for the drivers' plain-tuple results.
-//
-// The drivers return a std::tuple of owning buffers rather than a library type,
-// so indexing is the caller's job.  These helpers live here, not in the library:
-// they are the kind of accessor the tuple return exists to keep out of it.
+// Test-side conveniences for the drivers' plain-tuple results.  They live here,
+// not in the library: they are the accessors the tuple return exists to avoid.
 //
 //   owning form: {value, gradient, hessian, extent}   (runtime arity)
 //   static form: {value, gradient, hessian}           (extent is the array size)
-// ---------------------------------------------------------------------------
-// Raw pointers, spelled once: std::array has .data(), std::unique_ptr<double[]>
-// has .get(), and callers should not have to care which shape they were handed.
-template <class T>
+template <CTupleLike T>
 [[nodiscard]] constexpr const double *grad_ptr(const T &H) noexcept {
   if constexpr (std::tuple_size_v<std::remove_cvref_t<T>> == 4) {
     return std::get<1>(H).get();
@@ -60,7 +48,7 @@ template <class T>
   }
 }
 
-template <class T>
+template <CTupleLike T>
 [[nodiscard]] constexpr const double *hess_ptr(const T &H) noexcept {
   if constexpr (std::tuple_size_v<std::remove_cvref_t<T>> == 4) {
     return std::get<2>(H).get();
@@ -69,7 +57,7 @@ template <class T>
   }
 }
 
-template <class T>
+template <CTupleLike T>
 [[nodiscard]] constexpr std::size_t hess_n(const T &H) noexcept {
   if constexpr (std::tuple_size_v<std::remove_cvref_t<T>> == 4) {
     return std::get<3>(H);
@@ -78,18 +66,18 @@ template <class T>
   }
 }
 
-template <class T>
+template <CTupleLike T>
 [[nodiscard]] constexpr double hess_at(const T &H, std::size_t i,
                                        std::size_t j) noexcept {
   return hess_ptr(H)[i * hess_n(H) + j]; // row-major, as the drivers document
 }
 
-template <class T>
+template <CTupleLike T>
 [[nodiscard]] constexpr double grad_at(const T &H, std::size_t i) noexcept {
   return grad_ptr(H)[i];
 }
 
-template <class T> [[nodiscard]] constexpr double val_of(const T &H) noexcept {
+template <CTupleLike T> [[nodiscard]] constexpr double val_of(const T &H) noexcept {
   return std::get<0>(H);
 }
 

@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <string_view>
 
-namespace diff {
+namespace diff::impl {
 
 template <std::size_t N> struct FixedString {
   static_assert(N > 0, "FixedString: N counts the terminating NUL, so N >= 1");
@@ -70,4 +70,4 @@ static_assert(!std::same_as<nttp_probe<"x">, nttp_probe<"xy">>);
 
 } // namespace detail
 
-} // namespace diff
+} // namespace diff::impl

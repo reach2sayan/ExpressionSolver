@@ -334,9 +334,9 @@ TEST(ConceptTest, NumericSatisfied) {
 
 TEST(ConceptTest, ExpressionConceptSatisfied) {
   static_assert(CExpression<Constant<double>>);
-  static_assert(CExpression<Variable<double, diff::FixedString{"x"}>>);
+  static_assert(CExpression<Variable<double, diff::impl::FixedString{"x"}>>);
   using SumExpr =
-      decltype(std::declval<Variable<double, diff::FixedString{"x"}>>() +
+      decltype(std::declval<Variable<double, diff::impl::FixedString{"x"}>>() +
                std::declval<Constant<double>>());
   static_assert(CExpression<SumExpr>);
   static_assert(!CExpression<int>);
@@ -358,31 +358,31 @@ TEST(ConceptTest, AnOpSatisfied) {
 // ===========================================================================
 
 TEST(SymbolTest, SingleVariable) {
-  using E = Variable<double, diff::FixedString{"x"}>;
+  using E = Variable<double, diff::impl::FixedString{"x"}>;
   using Syms = extract_symbols_from_expr_t<E>;
-  static_assert(diff::mpl::mp_size(Syms{}) == 1);
-  static_assert(std::is_same_v<diff::mpl::mp_at_c<Syms, 0>,
-                               diff::symbol_type<diff::FixedString{"x"}>>);
+  static_assert(diff::impl::mpl::mp_size(Syms{}) == 1);
+  static_assert(std::is_same_v<diff::impl::mpl::mp_at_c<Syms, 0>,
+                               diff::impl::symbol_type<diff::impl::FixedString{"x"}>>);
 }
 
 TEST(SymbolTest, TwoVariables) {
-  using E = decltype(std::declval<Variable<double, diff::FixedString{"x"}>>() *
-                     std::declval<Variable<double, diff::FixedString{"y"}>>());
+  using E = decltype(std::declval<Variable<double, diff::impl::FixedString{"x"}>>() *
+                     std::declval<Variable<double, diff::impl::FixedString{"y"}>>());
   using Syms = extract_symbols_from_expr_t<E>;
-  static_assert(diff::mpl::mp_size(Syms{}) == 2);
+  static_assert(diff::impl::mpl::mp_size(Syms{}) == 2);
   // Symbols are sorted lexicographically: "x" < "y"
-  static_assert(std::is_same_v<diff::mpl::mp_at_c<Syms, 0>,
-                               diff::symbol_type<diff::FixedString{"x"}>>);
-  static_assert(std::is_same_v<diff::mpl::mp_at_c<Syms, 1>,
-                               diff::symbol_type<diff::FixedString{"y"}>>);
+  static_assert(std::is_same_v<diff::impl::mpl::mp_at_c<Syms, 0>,
+                               diff::impl::symbol_type<diff::impl::FixedString{"x"}>>);
+  static_assert(std::is_same_v<diff::impl::mpl::mp_at_c<Syms, 1>,
+                               diff::impl::symbol_type<diff::impl::FixedString{"y"}>>);
 }
 
 TEST(SymbolTest, DuplicateSymbolsDeduplicated) {
   // x * x has only one distinct symbol
-  using E = decltype(std::declval<Variable<double, diff::FixedString{"x"}>>() *
-                     std::declval<Variable<double, diff::FixedString{"x"}>>());
+  using E = decltype(std::declval<Variable<double, diff::impl::FixedString{"x"}>>() *
+                     std::declval<Variable<double, diff::impl::FixedString{"x"}>>());
   using Syms = extract_symbols_from_expr_t<E>;
-  static_assert(diff::mpl::mp_size(Syms{}) == 1);
+  static_assert(diff::impl::mpl::mp_size(Syms{}) == 1);
 }
 
 TEST(SymbolTest, ThreeVariables) {
@@ -391,7 +391,7 @@ TEST(SymbolTest, ThreeVariables) {
   auto z = PV(3.0, "z");
   auto expr = x + y + z;
   using Syms = extract_symbols_from_expr_t<decltype(expr)>;
-  static_assert(diff::mpl::mp_size(Syms{}) == 3);
+  static_assert(diff::impl::mpl::mp_size(Syms{}) == 3);
 }
 
 // ===========================================================================
@@ -402,26 +402,26 @@ TEST(ExpressionTest, StaticTests) {
   static_assert(
       std::is_same_v<
           as_const_expression<
-              Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>,
+              Expression<MultiplyOp<int>, Variable<int, diff::impl::FixedString{"x"}>,
                          Constant<int>>>,
           Expression<MultiplyOp<int>,
-                     Variable<int, diff::FixedString{"x"}, true>,
+                     Variable<int, diff::impl::FixedString{"x"}, true>,
                      Constant<int>>>);
 
   static_assert(
       std::is_same_v<
           as_const_expression<
-              Expression<MultiplyOp<int>, Variable<int, diff::FixedString{"x"}>,
-                         Variable<int, diff::FixedString{"y"}>>>,
+              Expression<MultiplyOp<int>, Variable<int, diff::impl::FixedString{"x"}>,
+                         Variable<int, diff::impl::FixedString{"y"}>>>,
           Expression<MultiplyOp<int>,
-                     Variable<int, diff::FixedString{"x"}, true>,
-                     Variable<int, diff::FixedString{"y"}, true>>>);
+                     Variable<int, diff::impl::FixedString{"x"}, true>,
+                     Variable<int, diff::impl::FixedString{"y"}, true>>>);
 
   auto x = 4_vi;
   auto y = 2_vi;
   auto c = 2_ci;
   auto res = x * y + c;
-  auto res2 = make_const_variable<diff::FixedString{"c"}>(res);
+  auto res2 = make_const_variable<diff::impl::FixedString{"c"}>(res);
   // Freezing changes only the derivative, so the value is unchanged.
   ASSERT_EQ(res2.eval(4), res.eval(4));
 }
@@ -472,7 +472,7 @@ TEST(ExpressionTest, ExpSum) {
 
 TEST(ExpressionTest, ExpDerivative) {
   for (std::size_t i = 1; i < 1000; ++i) {
-    Variable<double, diff::FixedString{"x"}> xv;
+    Variable<double, diff::impl::FixedString{"x"}> xv;
     auto target = exp(xv);
     ASSERT_EQ(target.derivative().eval(i * 1.0), target.eval(i * 1.0));
   }
@@ -490,7 +490,7 @@ TEST(ExpressionTest, ConstantDerivative) {
 }
 
 TEST(ExpressionTest, VariableDerivative) {
-  Variable<int, diff::FixedString{"x"}> x;
+  Variable<int, diff::impl::FixedString{"x"}> x;
   ASSERT_EQ(x.derivative().eval(), 1);
   ASSERT_EQ(x.eval(5), 5);
 }
@@ -516,14 +516,14 @@ TEST(DerivativeRuleTest, SumRule) {
 
 TEST(DerivativeRuleTest, ProductRule) {
   // d/dx [x * x] = 2x  at x=4 => 8
-  Variable<int, diff::FixedString{"x"}> x;
+  Variable<int, diff::impl::FixedString{"x"}> x;
   auto expr = x * x;
   ASSERT_EQ(expr.derivative().eval(4), 8);
 }
 
 TEST(DerivativeRuleTest, QuotientRule) {
   // d/dx [x / c] = 1/c  at x=6, c=3 => 1/3
-  Variable<double, diff::FixedString{"x"}> x;
+  Variable<double, diff::impl::FixedString{"x"}> x;
   auto c = Constant<double>{3.0};
   auto expr = x / c;
   // 1/c is constant in x, so the folded derivative names no symbols.
@@ -532,7 +532,7 @@ TEST(DerivativeRuleTest, QuotientRule) {
 
 TEST(DerivativeRuleTest, ChainRule_ExpOfLinear) {
   // d/dx [e^(2x)] = 2*e^(2x)  at x=1
-  Variable<double, diff::FixedString{"x"}> x;
+  Variable<double, diff::impl::FixedString{"x"}> x;
   auto inner = PC(2.0) * x;
   auto expr = exp(inner);
   ASSERT_DOUBLE_EQ(expr.derivative().eval(1.0), 2.0 * std::exp(2.0));
@@ -540,7 +540,7 @@ TEST(DerivativeRuleTest, ChainRule_ExpOfLinear) {
 
 TEST(DerivativeRuleTest, ChainRule_SinOfLinear) {
   // d/dx [sin(3x)] = 3*cos(3x)  at x=0
-  Variable<double, diff::FixedString{"x"}> x;
+  Variable<double, diff::impl::FixedString{"x"}> x;
   auto inner = PC(3.0) * x;
   auto expr = sin(inner);
   ASSERT_DOUBLE_EQ(expr.derivative().eval(0.0), 3.0 * std::cos(0.0));
@@ -592,7 +592,7 @@ TEST(TrigTest, SinDerivative) {
 TEST(TrigTest, SinCosIdentity) {
   // sin^2(x) + cos^2(x) == 1
   for (double v : {0.0, 0.5, 1.0, std::numbers::pi / 4}) {
-    Variable<double, diff::FixedString{"x"}> x;
+    Variable<double, diff::impl::FixedString{"x"}> x;
     auto s = sin(x);
     auto c = cos(x);
     double lhs = (s * s).eval(v) + (c * c).eval(v);
@@ -603,7 +603,7 @@ TEST(TrigTest, SinCosIdentity) {
 TEST(TrigTest, CosDerivativeIsNegSin) {
   // d/dx cos(x) = -sin(x)  at several points
   for (double v : {0.0, 0.3, 1.0, 2.0}) {
-    Variable<double, diff::FixedString{"x"}> x;
+    Variable<double, diff::impl::FixedString{"x"}> x;
     ASSERT_DOUBLE_EQ(cos(x).derivative().eval(v), -std::sin(v));
   }
 }
@@ -611,7 +611,7 @@ TEST(TrigTest, CosDerivativeIsNegSin) {
 TEST(TrigTest, ExpDerivativeIsItself) {
   // d/dx e^x = e^x
   for (double v : {-1.0, 0.0, 0.5, 1.5}) {
-    Variable<double, diff::FixedString{"x"}> x;
+    Variable<double, diff::impl::FixedString{"x"}> x;
     ASSERT_DOUBLE_EQ(exp(x).derivative().eval(v), std::exp(v));
   }
 }
@@ -702,7 +702,7 @@ TEST(EquationTest, UpdateAndReevaluate) {
   // f(x) = x^2,  df/dx = 2x.
   // Both copies of x in the derivative are live variables, so update
   // propagates.
-  Variable<int, diff::FixedString{"x"}> x;
+  Variable<int, diff::impl::FixedString{"x"}> x;
   auto expr = x * x;
   auto eq = Equation(expr);
 
@@ -973,7 +973,7 @@ TEST(ForwardModeAD, ScalarPromotionDeepDual) {
   // single static_cast required two chained explicit-ctor conversions and was
   // a hard compile error here.
   using DD = Dual<Dual<double>>;
-  Variable<DD, diff::FixedString{"x"}> x;
+  Variable<DD, diff::impl::FixedString{"x"}> x;
   auto expr = x + 2.0;
   DD result = expr.eval(DD{Dual<double>{2.0, 0.0}, Dual<double>{0.0, 0.0}});
   EXPECT_DOUBLE_EQ(get_real_part<2>(result), 4.0); // peel both Dual<> layers
@@ -1078,7 +1078,7 @@ TEST(ReverseModeAD, SingleVariableLinear) {
 
 TEST(ReverseModeAD, ProductRule) {
   // f(x) = x*x  at x=4,  df/dx = 2x = 8
-  Variable<double, diff::FixedString{"x"}> x;
+  Variable<double, diff::impl::FixedString{"x"}> x;
   auto expr = x * x;
   auto g = Equation{expr}.gradient(std::array{4.0});
   EXPECT_DOUBLE_EQ(g[0], 8.0);
@@ -2225,7 +2225,7 @@ TEST(ForwardDriver, GradientAndHessianCrossTerm) {
   const std::array<double, 2> x{2.0, 3.0};
   const std::span<const double> xs{x.data(), x.size()};
 
-  const auto H = diff::hessian(f, xs);
+  const auto H = diff::impl::hessian(f, xs);
   EXPECT_DOUBLE_EQ(val_of(H), 39.0); // 4*3 + 27
   ASSERT_EQ(hess_n(H), 2u);
   EXPECT_DOUBLE_EQ(grad_at(H, 0), 12.0); // 2 x0 x1
@@ -2235,7 +2235,7 @@ TEST(ForwardDriver, GradientAndHessianCrossTerm) {
   EXPECT_DOUBLE_EQ(hess_at(H, 1, 0), 4.0);
   EXPECT_DOUBLE_EQ(hess_at(H, 1, 1), 18.0); // 6 x1
 
-  const auto g = diff::gradient(f, xs);
+  const auto g = diff::impl::gradient(f, xs);
   EXPECT_DOUBLE_EQ(g[0], 12.0);
   EXPECT_DOUBLE_EQ(g[1], 31.0);
 }
@@ -2245,11 +2245,11 @@ TEST(ForwardDriver, IdealMixingHessianMatchesClosedForm) {
   const double R = 8.31446261815324;
   const double T = 1000.0;
   auto f = [R, T](const auto *y) {
-    using std::log; // ADL still picks diff::log for the dual argument
+    using std::log; // ADL still picks diff::impl::log for the dual argument
     return R * T * (y[0] * log(y[0]) + y[1] * log(y[1]));
   };
   const std::array<double, 2> y{0.3, 0.7};
-  const auto H = diff::hessian(f, std::span<const double>{y.data(), y.size()});
+  const auto H = diff::impl::hessian(f, std::span<const double>{y.data(), y.size()});
 
   EXPECT_NEAR(val_of(H), R * T * (0.3 * std::log(0.3) + 0.7 * std::log(0.7)),
               1e-6);
@@ -2351,13 +2351,13 @@ TEST(ForwardDriver, RepeatedCallsDoNotLeakSeeds) {
   const std::array<double, 2> x{2.0, 3.0};
   const std::span<const double> xs{x.data(), x.size()};
 
-  const auto g1 = diff::gradient(f, xs);
-  const auto g2 = diff::gradient(f, xs);
+  const auto g1 = diff::impl::gradient(f, xs);
+  const auto g2 = diff::impl::gradient(f, xs);
   EXPECT_DOUBLE_EQ(g1[0], g2[0]);
   EXPECT_DOUBLE_EQ(g1[1], g2[1]);
 
-  const auto H1 = diff::hessian(f, xs);
-  const auto H2 = diff::hessian(f, xs);
+  const auto H1 = diff::impl::hessian(f, xs);
+  const auto H2 = diff::impl::hessian(f, xs);
   EXPECT_DOUBLE_EQ(val_of(H1), val_of(H2));
   for (std::size_t i = 0; i < hess_n(H1); ++i) {
     EXPECT_DOUBLE_EQ(grad_at(H1, i), grad_at(H2, i));

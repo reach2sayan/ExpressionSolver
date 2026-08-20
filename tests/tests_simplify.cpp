@@ -12,14 +12,14 @@
 // ===========================================================================
 
 namespace {
-using diff::detail::canonicalise;
+using diff::impl::detail::canonicalise;
 constexpr auto sx = diff::var<"x">;
 constexpr auto sy = diff::var<"y">;
 constexpr auto sz = diff::var<"z">;
 constexpr auto sw = diff::var<"w">;
 
-template <diff::FixedString S, class E> consteval std::size_t d_nodes() {
-  return diff::node_count_v<decltype(diff::make_all_constant_except<S>(E{})
+template <diff::impl::FixedString S, class E> consteval std::size_t d_nodes() {
+  return diff::impl::node_count_v<decltype(diff::impl::make_all_constant_except<S>(E{})
                                          .derivative())>;
 }
 constexpr auto F4 =
@@ -29,30 +29,30 @@ constexpr auto F4 =
 TEST(Simplify, IdentitiesCollapseDerivativeTrees) {
   // d(x*y)/dx was `1*y_c + x*0` -- seven nodes and seven cache slots for one
   // symbol lookup.
-  static_assert(d_nodes<diff::FixedString{"x"}, decltype(sx * sy)>() == 1);
+  static_assert(d_nodes<diff::impl::FixedString{"x"}, decltype(sx * sy)>() == 1);
 
   // The whole F4 Jacobian was 268 nodes across its four rows.
-  constexpr std::size_t rows = d_nodes<diff::FixedString{"w"}, decltype(F4)>() +
-                               d_nodes<diff::FixedString{"x"}, decltype(F4)>() +
-                               d_nodes<diff::FixedString{"y"}, decltype(F4)>() +
-                               d_nodes<diff::FixedString{"z"}, decltype(F4)>();
+  constexpr std::size_t rows = d_nodes<diff::impl::FixedString{"w"}, decltype(F4)>() +
+                               d_nodes<diff::impl::FixedString{"x"}, decltype(F4)>() +
+                               d_nodes<diff::impl::FixedString{"y"}, decltype(F4)>() +
+                               d_nodes<diff::impl::FixedString{"z"}, decltype(F4)>();
   static_assert(rows == 68);
-  static_assert(diff::node_count_v<decltype(F4)> == 26); // f itself is untouched
+  static_assert(diff::impl::node_count_v<decltype(F4)> == 26); // f itself is untouched
 }
 
 TEST(Simplify, OnlyCompileTimeLiteralsFold) {
   // Lit carries its value in the type, so it folds; a stored Constant holds a
   // number that only exists at run time, so it must not.
-  static_assert(diff::detail::is_zero_v<diff::Lit<double, 0>>);
-  static_assert(diff::detail::is_zero_v<diff::Lit<double, 0.0>>);
-  static_assert(diff::detail::is_one_v<diff::Lit<double, 1>>);
-  static_assert(!diff::detail::is_zero_v<diff::Constant<double>>);
-  static_assert(!diff::detail::is_one_v<diff::Constant<double>>);
+  static_assert(diff::impl::detail::is_zero_v<diff::impl::Lit<double, 0>>);
+  static_assert(diff::impl::detail::is_zero_v<diff::impl::Lit<double, 0.0>>);
+  static_assert(diff::impl::detail::is_one_v<diff::impl::Lit<double, 1>>);
+  static_assert(!diff::impl::detail::is_zero_v<diff::impl::Constant<double>>);
+  static_assert(!diff::impl::detail::is_one_v<diff::impl::Constant<double>>);
 
   using X = std::remove_cvref_t<decltype(sx)>;
-  auto folded = sx * diff::Lit<double, 1>{}; // x*1 -> x, no node built
+  auto folded = sx * diff::impl::Lit<double, 1>{}; // x*1 -> x, no node built
   static_assert(std::is_same_v<std::remove_cvref_t<decltype(folded)>, X>);
-  auto unfolded = sx * diff::Constant<double>{1.0}; // value unknown until run time
+  auto unfolded = sx * diff::impl::Constant<double>{1.0}; // value unknown until run time
   static_assert(!std::is_same_v<std::remove_cvref_t<decltype(unfolded)>, X>);
   EXPECT_DOUBLE_EQ(unfolded.eval(3.0), 3.0);
 }
@@ -63,13 +63,13 @@ TEST(Simplify, DualLiteralPairsStayEmpty) {
   // and those are the only values differentiation makes.  Without that check
   // the pair falls to the stored-Constant branch and the spine above it stops
   // being empty, which is the thing the int spelling exists to prevent.
-  using D = diff::Dual<double>;
-  static_assert(std::is_empty_v<decltype(diff::Lit<D, 0>{} + diff::Lit<D, 1>{})>);
-  static_assert(std::is_empty_v<decltype(diff::Lit<D, 0>{} * diff::Lit<D, 1>{})>);
-  static_assert(std::is_empty_v<decltype(diff::Lit<D, 1>{} + diff::Lit<D, 0>{})>);
-  static_assert(std::is_empty_v<decltype(diff::Lit<double, 0>{} + diff::Lit<double, 1>{})>);
+  using D = diff::impl::Dual<double>;
+  static_assert(std::is_empty_v<decltype(diff::impl::Lit<D, 0>{} + diff::impl::Lit<D, 1>{})>);
+  static_assert(std::is_empty_v<decltype(diff::impl::Lit<D, 0>{} * diff::impl::Lit<D, 1>{})>);
+  static_assert(std::is_empty_v<decltype(diff::impl::Lit<D, 1>{} + diff::impl::Lit<D, 0>{})>);
+  static_assert(std::is_empty_v<decltype(diff::impl::Lit<double, 0>{} + diff::impl::Lit<double, 1>{})>);
   // A value that is neither 0 nor 1 has nowhere to live but a stored Constant.
-  EXPECT_DOUBLE_EQ((diff::Lit<D, 1>{} + diff::Lit<D, 1>{}).get().value(), 2.0);
+  EXPECT_DOUBLE_EQ((diff::impl::Lit<D, 1>{} + diff::impl::Lit<D, 1>{}).get().value(), 2.0);
 }
 
 TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
@@ -78,8 +78,8 @@ TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
   // stays in the type.  Recorded rather than defended -- the rule it replaced
   // did not compile at all, so this is not a regression from anything that
   // worked, and it is the densest target in the codebase for a later CSE pass.
-  constexpr auto dmax = d_nodes<diff::FixedString{"x"}, decltype(max(sx, sy))>();
-  constexpr auto dmin = d_nodes<diff::FixedString{"x"}, decltype(min(sx, sy))>();
+  constexpr auto dmax = d_nodes<diff::impl::FixedString{"x"}, decltype(max(sx, sy))>();
+  constexpr auto dmin = d_nodes<diff::impl::FixedString{"x"}, decltype(min(sx, sy))>();
   static_assert(dmax == 14);
   static_assert(dmin == 15);
 }
@@ -88,9 +88,9 @@ TEST(Simplify, DualValuedTreesAreStatelessToo) {
   // The int spelling of Lit works for a T that can never be an NTTP itself, so
   // the dual-valued path never falls back to a stored Constant -- which would
   // drag the whole spine above it into the storing node form.
-  using D = diff::Dual<double>;
-  diff::Variable<D, diff::FixedString{"x"}> dx;
-  diff::Variable<D, diff::FixedString{"y"}> dy;
+  using D = diff::impl::Dual<double>;
+  diff::impl::Variable<D, diff::impl::FixedString{"x"}> dx;
+  diff::impl::Variable<D, diff::impl::FixedString{"y"}> dy;
   static_assert(std::is_empty_v<decltype(dx * dy)>);
   static_assert(std::is_empty_v<decltype((dx * dy).derivative())>);
   static_assert(sizeof(dx * dy) == 1);
@@ -167,11 +167,11 @@ TEST(ReverseMode, MultiplyAdjointRespectsOperandSide) {
   // multiplies on the RIGHT of a.  Every scalar the library ships commutes, so
   // the two spellings are bit-identical for all of them -- this is the only
   // test that can tell them apart, and without it a revert is invisible.
-  static_assert(diff::Numeric<Mat2> && !diff::CCommutativeMultiply<Mat2>);
+  static_assert(diff::impl::Numeric<Mat2> && !diff::impl::CCommutativeMultiply<Mat2>);
 
-  constexpr diff::Variable<Mat2, diff::FixedString{"x"}> mx;
-  constexpr diff::Variable<Mat2, diff::FixedString{"y"}> my;
-  constexpr diff::Variable<Mat2, diff::FixedString{"z"}> mz;
+  constexpr diff::impl::Variable<Mat2, diff::impl::FixedString{"x"}> mx;
+  constexpr diff::impl::Variable<Mat2, diff::impl::FixedString{"y"}> my;
+  constexpr diff::impl::Variable<Mat2, diff::impl::FixedString{"z"}> mz;
 
   // X and Z do not commute: X*Z = {2,1,1,1} but Z*X = {1,1,1,2}.
   constexpr Mat2 X{1, 1, 0, 1}, Y{1, 2, 3, 4}, Z{1, 0, 1, 1};
@@ -196,9 +196,9 @@ TEST(ReverseMode, DivideAdjointRespectsOperandSide) {
   // does not collapse to the -adj*a/(b*b) of the quotient rule.  As with
   // multiply, the two agree for every scalar that ships, so only a
   // non-commutative one can tell them apart.
-  constexpr diff::Variable<Mat2, diff::FixedString{"x"}> mx;
-  constexpr diff::Variable<Mat2, diff::FixedString{"y"}> my;
-  constexpr diff::Variable<Mat2, diff::FixedString{"z"}> mz;
+  constexpr diff::impl::Variable<Mat2, diff::impl::FixedString{"x"}> mx;
+  constexpr diff::impl::Variable<Mat2, diff::impl::FixedString{"y"}> my;
+  constexpr diff::impl::Variable<Mat2, diff::impl::FixedString{"z"}> mz;
 
   constexpr Mat2 X{1, 1, 0, 1}, Y{1, 0, 1, 1}, Z{1, 2, 3, 4}; // det Y == 1
 
@@ -245,28 +245,28 @@ TEST(Concepts, NumericDemandsWhatTheSweepsActuallyUse) {
   // somewhere inside a sweep.
   static_assert(std::default_initializable<NoIdentity>);
   static_assert(!std::constructible_from<NoIdentity, int>);
-  static_assert(!diff::Numeric<NoIdentity>);
+  static_assert(!diff::impl::Numeric<NoIdentity>);
 
   // Ordering is likewise a real requirement, but only of the three ops that
   // compare their operands -- abs branches on the sign, min and max on which
   // side is larger.  Ring is Numeric and defines no ordering, so those three
   // reject it while everything else in the library still accepts it.
-  static_assert(diff::Numeric<Undeclared>);
+  static_assert(diff::impl::Numeric<Undeclared>);
   static_assert(!std::totally_ordered<Undeclared>);
-  static_assert(!OpAccepts<diff::AbsOp, Undeclared>);
-  static_assert(!OpAccepts<diff::MaxOp, Undeclared>);
-  static_assert(!OpAccepts<diff::MinOp, Undeclared>);
-  static_assert(OpAccepts<diff::MultiplyOp, Undeclared>);
-  static_assert(OpAccepts<diff::SumOp, Undeclared>);
+  static_assert(!OpAccepts<diff::impl::AbsOp, Undeclared>);
+  static_assert(!OpAccepts<diff::impl::MaxOp, Undeclared>);
+  static_assert(!OpAccepts<diff::impl::MinOp, Undeclared>);
+  static_assert(OpAccepts<diff::impl::MultiplyOp, Undeclared>);
+  static_assert(OpAccepts<diff::impl::SumOp, Undeclared>);
   // Ordered scalars are accepted by all five, so the guard is narrow.
-  static_assert(OpAccepts<diff::AbsOp, double> && OpAccepts<diff::MinOp, double>);
+  static_assert(OpAccepts<diff::impl::AbsOp, double> && OpAccepts<diff::impl::MinOp, double>);
 
   // The scalars that ship satisfy both, so neither constraint narrows the
   // library's actual surface.
-  static_assert(diff::Numeric<double> && std::totally_ordered<double>);
-  static_assert(std::totally_ordered<diff::Dual<double>>);
-  static_assert(std::totally_ordered<diff::TaylorDual<double, 3>>);
-  static_assert(std::totally_ordered<diff::TaylorDual<double, 3>>);
+  static_assert(diff::impl::Numeric<double> && std::totally_ordered<double>);
+  static_assert(std::totally_ordered<diff::impl::Dual<double>>);
+  static_assert(std::totally_ordered<diff::impl::TaylorDual<double, 3>>);
+  static_assert(std::totally_ordered<diff::impl::TaylorDual<double, 3>>);
 }
 
 TEST(Simplify, MultiplicationCommutesOnlyWhenTheScalarSaysSo) {
@@ -274,22 +274,22 @@ TEST(Simplify, MultiplicationCommutesOnlyWhenTheScalarSaysSo) {
   // operand order, so commuting a product is asked rather than assumed.  The
   // default is the conservative answer: a type that says nothing does not
   // commute, which costs a CSE share and never a wrong result.
-  static_assert(diff::Numeric<Undeclared> && !diff::CCommutativeMultiply<Undeclared>);
-  static_assert(diff::Numeric<Declared>);
-  static_assert(diff::CCommutativeMultiply<double>);
-  static_assert(diff::CCommutativeMultiply<diff::Dual<double>>);
-  static_assert(diff::CCommutativeMultiply<diff::TaylorDual<double, 3>>);
-  static_assert(diff::CCommutativeMultiply<diff::TaylorDual<double, 3>>);
+  static_assert(diff::impl::Numeric<Undeclared> && !diff::impl::CCommutativeMultiply<Undeclared>);
+  static_assert(diff::impl::Numeric<Declared>);
+  static_assert(diff::impl::CCommutativeMultiply<double>);
+  static_assert(diff::impl::CCommutativeMultiply<diff::impl::Dual<double>>);
+  static_assert(diff::impl::CCommutativeMultiply<diff::impl::TaylorDual<double, 3>>);
+  static_assert(diff::impl::CCommutativeMultiply<diff::impl::TaylorDual<double, 3>>);
   // The dual wrappers defer to the scalar underneath rather than asserting for
   // themselves, so an undeclared scalar stays undeclared through a Dual.
-  static_assert(!diff::CCommutativeMultiply<diff::Dual<Undeclared>>);
+  static_assert(!diff::impl::CCommutativeMultiply<diff::impl::Dual<Undeclared>>);
   // DIFF_COMMUTATIVE_MULTIPLY is the spelling for a concrete user type.
-  static_assert(diff::CCommutativeMultiply<Declared>);
+  static_assert(diff::impl::CCommutativeMultiply<Declared>);
 
   // And the trait is what canonicalisation actually consults: same expression,
   // same shape, reordered for one scalar and left alone for the other.
-  diff::Variable<Undeclared, diff::FixedString{"x"}> ux;
-  diff::Variable<Undeclared, diff::FixedString{"y"}> uy;
+  diff::impl::Variable<Undeclared, diff::impl::FixedString{"x"}> ux;
+  diff::impl::Variable<Undeclared, diff::impl::FixedString{"y"}> uy;
   static_assert(
       !std::is_same_v<decltype(canonicalise(ux * uy)), decltype(canonicalise(uy * ux))>);
   // Addition needs no opt-in -- a ring's addition commutes by definition.
@@ -302,10 +302,10 @@ TEST(Simplify, MaxAndMinHaveASymbolicDerivative) {
   // between lhs.derivative() and rhs.derivative() with a runtime conditional,
   // and those are two different types.
   const auto dmax_dx =
-      diff::make_all_constant_except<diff::FixedString{"x"}>(max(sx, sy))
+      diff::impl::make_all_constant_except<diff::impl::FixedString{"x"}>(max(sx, sy))
           .derivative();
   const auto dmin_dx =
-      diff::make_all_constant_except<diff::FixedString{"x"}>(min(sx, sy))
+      diff::impl::make_all_constant_except<diff::impl::FixedString{"x"}>(min(sx, sy))
           .derivative();
   for (auto [a, b] : {std::pair{3.0, 1.0}, std::pair{1.0, 3.0}}) {
     const auto rmax = Equation{max(sx, sy)}.gradient(std::array{a, b});

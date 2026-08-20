@@ -1,17 +1,12 @@
 #pragma once
 
-// ===========================================================================
-// The one place the library says "mdspan".
+// The one place the library says "mdspan": it picks between the vendored
+// reference implementation (third_party/mdspan.hpp, Apache-2.0 WITH
+// LLVM-exception) and the standard one, and everything else spells the names
+// diff::impl::md::... without learning which it got.
 //
-// The reference implementation is vendored (third_party/mdspan.hpp, Apache-2.0
-// WITH LLVM-exception) into its own namespace, and this header picks between it
-// and the standard one at compile time.  Everything else spells these names
-// `diff::md::...` and never learns which it got; when a real <mdspan> is
-// everywhere, the only edit is deleting the vendored branch.
-//
-// The re-exports are explicit `using` declarations, not a namespace alias:
-// `namespace md = std` would make `diff::md::vector` compile.
-// ===========================================================================
+// Explicit `using` declarations, not a namespace alias: `namespace md = std`
+// would make diff::impl::md::vector compile.
 
 #include <version> // __cpp_lib_mdspan / __cpp_lib_submdspan
 
@@ -23,8 +18,7 @@
     __cpp_lib_mdspan >= 202207L && defined(__cpp_lib_submdspan) &&             \
     __cpp_lib_submdspan >= 202306L
 // Both halves or neither: a std::mdspan without std::submdspan leaves slicing
-// with no spelling at all, and falling back to hand-rolled offsets is exactly
-// the split this header exists to end.
+// with no spelling at all.
 #define DIFF_MDSPAN_USE_STD 1
 #else
 #define DIFF_MDSPAN_USE_STD 0
@@ -40,9 +34,8 @@
 #define DIFF_MDSPAN_HAS_PADDED 0
 #endif
 #else
-// Must be defined before the include: the vendored header guards this with
-// #ifndef and otherwise plants itself in ::std, which is UB and would collide
-// with a real <mdspan> in the same TU.
+// Before the include: otherwise the vendored header plants itself in ::std,
+// which is UB and collides with a real <mdspan> in the same TU.
 #ifndef MDSPAN_IMPL_STANDARD_NAMESPACE
 #define MDSPAN_IMPL_STANDARD_NAMESPACE diff_mdspan
 #endif
@@ -55,7 +48,7 @@
 #include <cstddef>
 #include <type_traits>
 
-namespace diff::md {
+namespace diff::impl::md {
 
 using DIFF_MDSPAN_NS::dextents;
 using DIFF_MDSPAN_NS::dynamic_extent;
@@ -72,9 +65,8 @@ using DIFF_MDSPAN_NS::full_extent_t;
 using DIFF_MDSPAN_NS::strided_slice;
 using DIFF_MDSPAN_NS::submdspan;
 using DIFF_MDSPAN_NS::submdspan_extents;
-// submdspan_mapping is not re-exported: it is the layout's own customization
-// hook, found by ADL on the mapping type, so a custom layout supplies it as a
-// hidden friend and submdspan() picks it up without any name here.
+// submdspan_mapping is not re-exported: it is found by ADL on the mapping type,
+// so a custom layout supplies it as a hidden friend.
 
 #if DIFF_MDSPAN_HAS_PADDED
 using DIFF_MDSPAN_NS::layout_left_padded;
@@ -86,16 +78,10 @@ template <typename T> inline constexpr bool is_extents_v = false;
 template <typename I, std::size_t... E>
 inline constexpr bool is_extents_v<extents<I, E...>> = true;
 
-template <typename T> inline constexpr bool is_mdspan_v = false;
-template <typename T, typename E, typename L, typename A>
-inline constexpr bool is_mdspan_v<mdspan<T, E, L, A>> = true;
 } // namespace detail
 
 template <typename E>
 concept CExtents = detail::is_extents_v<std::remove_cvref_t<E>>;
-
-template <typename M>
-concept CMdspan = detail::is_mdspan_v<std::remove_cvref_t<M>>;
 
 // Every extent is known at compile time, so a tensor over it can own a
 // std::array and stay usable in constant evaluation.
@@ -103,12 +89,9 @@ template <typename E>
 concept CStaticExtents =
     CExtents<E> && (std::remove_cvref_t<E>::rank_dynamic() == 0);
 
-// A layout mapping, checked against the extents it will actually carry.
-//
-// There is deliberately no unparameterised CLayoutPolicy: a policy is only a
-// template, and the interesting ones here are rank-constrained (the packed
-// symmetric layout static_asserts rank() == 2), so probing them with an
-// arbitrary extents type would hard-error rather than fail the concept.
+// A layout mapping, checked against the extents it will carry.  There is no
+// unparameterised CLayoutPolicy: the interesting layouts here are
+// rank-constrained, so probing them with arbitrary extents would hard-error.
 template <typename M, typename E>
 concept CLayoutMappingOf =
     CExtents<E> && std::copyable<M> && std::equality_comparable<M> &&
@@ -117,9 +100,7 @@ concept CLayoutMappingOf =
       typename M::index_type;
       typename M::rank_type;
       typename M::layout_type;
-      // Deliberately no `M(e)`: construction from bare extents is layout
-      // specific — layout_stride's mapping needs the strides too — so it is
-      // not part of what every mapping must provide.
+      // No `M(e)`: layout_stride's mapping needs the strides too.
       { m.extents() } -> std::convertible_to<E>;
       { m.required_span_size() } -> std::convertible_to<typename M::index_type>;
       { M::is_always_unique() } -> std::same_as<bool>;
@@ -135,28 +116,11 @@ concept CLayoutFor = CExtents<E> && requires {
   typename P::template mapping<E>;
 } && CLayoutMappingOf<typename P::template mapping<E>, E>;
 
-template <typename A>
-concept CAccessorPolicy =
-    std::copyable<A> && requires {
-      typename A::element_type;
-      typename A::reference;
-      typename A::data_handle_type;
-      typename A::offset_policy;
-    } && requires(const A a, const typename A::data_handle_type p,
-                  std::size_t i) {
-      { a.access(p, i) } -> std::same_as<typename A::reference>;
-      {
-        a.offset(p, i)
-      } -> std::same_as<typename A::offset_policy::data_handle_type>;
-    };
-
 static_assert(CExtents<extents<std::size_t, 2, 3>>);
 static_assert(CStaticExtents<extents<std::size_t, 2, 3>>);
 static_assert(!CStaticExtents<dextents<std::size_t, 2>>);
-static_assert(CMdspan<mdspan<double, dextents<std::size_t, 2>>>);
 static_assert(CLayoutFor<layout_right, extents<std::size_t, 2, 3>>);
 static_assert(CLayoutFor<layout_left, dextents<std::size_t, 2>>);
 static_assert(CLayoutFor<layout_stride, dextents<std::size_t, 2>>);
-static_assert(CAccessorPolicy<default_accessor<double>>);
 
-} // namespace diff::md
+} // namespace diff::impl::md

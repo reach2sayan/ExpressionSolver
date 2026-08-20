@@ -5,7 +5,7 @@
 
 #include <type_traits>
 
-namespace diff {
+namespace diff::impl {
 
 template <FixedString Sym, Numeric V> struct NamedValue {
   static constexpr auto symbol = Sym;
@@ -22,7 +22,4 @@ template <typename T> inline constexpr bool is_named_value_v = false;
 template <FixedString S, Numeric V>
 inline constexpr bool is_named_value_v<NamedValue<S, V>> = true;
 
-template <typename T>
-concept CNamedValue = is_named_value_v<std::remove_cvref_t<T>>;
-
-} // namespace diff
+} // namespace diff::impl

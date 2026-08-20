@@ -4,6 +4,8 @@
 #
 # Each subdirectory adds its own headers to the `diff` INTERFACE target defined
 # in the top-level CMakeLists.txt.
+target_sources(diff INTERFACE ${CMAKE_CURRENT_LIST_DIR}/api.hpp)
+
 add_subdirectory(util)
 add_subdirectory(expr)
 add_subdirectory(dual)

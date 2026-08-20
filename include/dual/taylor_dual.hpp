@@ -9,15 +9,11 @@
 #include <ranges>
 #include <utility>
 
-namespace diff {
+namespace diff::impl {
 
-// TaylorDual<S, N> — flat N+1-coefficient type for univariate higher-order AD.
-//
-// Stores normalized Taylor coefficients: c[k] = f^(k)(x) / k!
-// Multiply is truncated polynomial convolution — O(N²) vs the O(2^N) of
-// nested Dual<Dual<...<S>...>>.  Extract the N-th derivative as c[N] * N!.
-//
-// Use univariate_derivative<N>(expr [, x0]) for a clean public API.
+// TaylorDual<S, N>: flat N+1 normalized coefficients c[k] = f^(k)(x)/k! for
+// univariate higher-order AD.  Multiply is truncated convolution, O(N^2)
+// against the O(2^N) of nested Dual.  Reach it via univariate_derivative<N>().
 
 // The coefficient product is a convolution, sum_i a_i b_(k-i), so it commutes
 // exactly when the scalar underneath does.
@@ -29,9 +25,8 @@ inline constexpr bool is_commutative_multiply_v<TaylorDual<S, N>> =
 template <Numeric S, std::size_t N> struct TaylorDual {
   std::array<S, N + 1> c{};
 
-  // 1/k for the recurrence denominators below.  k runs to the compile-time
-  // bound N, so every one of those divisions is by a constant -- folded here
-  // once rather than issued as a ~13-cycle vdivsd on the dependency chain.
+  // 1/k for the recurrences below: folded once rather than issued as a
+  // ~13-cycle vdivsd on the dependency chain.
   static constexpr std::array<S, N + 1> inv_k = []() consteval {
     std::array<S, N + 1> r{};
     for (std::size_t k = 1; k <= N; ++k) {
@@ -105,10 +100,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return *this;
   }
 
-  // Comparisons run on the value coefficient — the whole series is ordered by
-  // where it sits, exactly as Dual's comparisons use val().  Needed by the
-  // branching kernels in operations.hpp (detail::max_impl/min_impl spell
-  // `a < b`), which otherwise cannot compile for a univariate_derivative sweep.
+  // On the value coefficient, as Dual's comparisons use val().  The branching
+  // kernels in operations.hpp need it.
   [[nodiscard]] friend constexpr auto
   operator<=>(const TaylorDual &a, const TaylorDual &b) noexcept {
     return a.c[0] <=> b.c[0];
@@ -122,10 +115,9 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   // coefficients gives, for k >= 1:
   //   g[0]·k·w[k] = k·u[k] − Σ_{j=1}^{k-1} (k-j)·g[j]·w[k-j]
   //
-  // This general form is composite-safe: it is stated in terms of the whole
-  // series g, so it stays correct when u is itself a composite rather than a
-  // bare seed.  Every inverse function below is this one recurrence with a
-  // different g, which is why it is written exactly once.
+  // Composite-safe: stated in terms of the whole series g, so it holds when u
+  // is a composite rather than a bare seed.  Every inverse function below is
+  // this recurrence with a different g.
   [[nodiscard]] static constexpr TaylorDual
   implicit_recurrence(const TaylorDual &u, S w0, const TaylorDual &g) noexcept {
     TaylorDual w;
@@ -173,11 +165,11 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // The coupled sine/cosine recurrence, shared by the circular and hyperbolic
-  // pairs — they differ in exactly one sign:
+  // The coupled sine/cosine recurrence; circular and hyperbolic differ in one
+  // sign:
   //   k*s[k] = Σ j*u[j]*c[k-j],   k*c[k] = ±Σ j*u[j]*s[k-j]
-  // Circular = -1 (cos' = -sin), hyperbolic = +1 (cosh' = +sinh).  Both series
-  // are needed to advance either one, so the pair is always computed together.
+  // Circular = -1, hyperbolic = +1.  Either series needs both, so they are
+  // computed together.
   template <int Sign>
   [[nodiscard]] static constexpr std::pair<TaylorDual, TaylorDual>
   coupled_pair(const TaylorDual &u, S s0, S c0) noexcept {
@@ -306,9 +298,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // pow(u, v) for two series:  u^v = exp(v·log u)  (requires u[0] > 0).
-  // A constant exponent carries no derivative, so powser integrates
-  // u·w' = p·u'·w directly -- no logarithm, and defined for u[0] < 0.
+  // pow(u, v) = exp(v·log u), requires u[0] > 0.  A constant exponent instead
+  // goes through powser, which needs no logarithm and allows u[0] < 0.
   [[nodiscard]] friend constexpr TaylorDual pow(const TaylorDual &u,
                                                 const TaylorDual &v) noexcept {
     using std::pow;
@@ -376,9 +367,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // atan2(y, x) shares all derivative coefficients with atan(y/x) (they differ
-  // only by a piecewise constant); atan is composite-safe, so this is exact.
-  // Only the value coefficient differs (quadrant-correct branch).
+  // atan2(y, x) and atan(y/x) differ by a piecewise constant, so only the value
+  // coefficient differs; atan is composite-safe, so this is exact.
   [[nodiscard]] friend constexpr TaylorDual atan2(const TaylorDual &y,
                                         const TaylorDual &x) noexcept {
     using std::atan2;
@@ -404,10 +394,7 @@ auto scalar_base_impl(std::type_identity<TaylorDual<T, N>>) -> T;
 template <Numeric S, std::size_t N>
 inline constexpr std::size_t dual_depth_v<TaylorDual<S, N>> = N;
 
-// ---------------------------------------------------------------------------
-// ConstantEmbedder specialization — lets Constant::eval_seeded produce
-// a zero-derivative TaylorDual for constant nodes.
-// ---------------------------------------------------------------------------
+// Lets Constant::eval_seeded produce a zero-derivative TaylorDual.
 
 template <Numeric S, std::size_t N> struct ConstantEmbedder<TaylorDual<S, N>> {
   static constexpr TaylorDual<S, N> embed(S val) noexcept {
@@ -422,16 +409,15 @@ template <Numeric S, std::size_t N>
 inline constexpr bool is_dual_family_v<TaylorDual<S, N>> = true;
 } // namespace detail
 
-} // namespace diff
+} // namespace diff::impl
 
-// TaylorDual is the general case of the series Dual prints two terms of, so it
-// is the shared renderer applied to the coefficient array and nothing else.
-// Note these are the *normalized* coefficients f^(k)/k!, not the derivatives --
-// the factorial is put back by univariate_derivative, not here.
-template <diff::Numeric S, std::size_t N>
-struct std::formatter<diff::TaylorDual<S, N>, char>
-    : diff::detail::dual_formatter_base<S> {
-  auto format(const diff::TaylorDual<S, N> &t, std::format_context &ctx) const {
+// The shared series renderer over the coefficient array.  These are the
+// normalized coefficients f^(k)/k!; univariate_derivative puts the factorial
+// back, not this.
+template <diff::impl::Numeric S, std::size_t N>
+struct std::formatter<diff::impl::TaylorDual<S, N>, char>
+    : diff::impl::detail::dual_formatter_base<S> {
+  auto format(const diff::impl::TaylorDual<S, N> &t, std::format_context &ctx) const {
     this->series(ctx, t.c);
     return ctx.out();
   }

@@ -19,10 +19,8 @@
 #define DIFF_FWD_SELF std::forward<decltype(self)>(self)
 #endif
 
-// The sweep helpers (reverse_sweep, color_sweeps) and the dual kernels exist to
-// stop the same lines being written six times; they are not meant to be calls.
-// GCC stops inlining them once a TU exhausts its inlining budget, so the
-// decision is stated here rather than left to one.
+// The sweep helpers and dual kernels are factored-out code, not calls; GCC
+// stops inlining them once a TU exhausts its inlining budget.
 #if defined(__GNUC__) || defined(__clang__)
 #define DIFF_ALWAYS_INLINE [[gnu::always_inline]] inline
 #elif defined(_MSC_VER)
@@ -31,24 +29,9 @@
 #define DIFF_ALWAYS_INLINE inline
 #endif
 
-// DIFF_KEYED_ACCESSORS -- both spellings of a keyed accessor, in whichever form
-// this toolchain takes.
-//
-// Three classes hand out a slot by a compile-time key: ValueMap and Bound by
-// symbol (bound.hpp), Equation by index (equation.hpp).  Each offers get<Key>()
-// and the subscript spelling in the value category of the object it was called
-// on, and each delegates to a private static slot(auto &&self).  Only how `self`
-// is passed and how the key is named vary, so both are parameters here and the
-// branch below is the only place the two forms are described.
-//
-//   GET_TPARAMS  template parameter list for get<...>()
-//   SUB_TPARAMS  template parameter list for operator[] -- not always the same,
-//                since operator[] deduces its key from an argument
-//   KEY          what to pass to slot<...>
-//   SUB_PARAM    the empty tag operator[] takes (symbol_type<S>, idx_t<N>);
-//                operator[] has no template-argument syntax, so the key has to
-//                arrive as a value
-//   ...          trailing requires-clause, if the class needs one
+// get<Key>() and operator[](tag) for a class with a private static
+// slot(auto &&self), in whichever form this toolchain takes.  SUB_PARAM is the
+// empty tag operator[] deduces its key from; ... is a trailing requires-clause.
 #if DIFF_DEDUCING_THIS
 #define DIFF_KEYED_ACCESSORS(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, ...)    \
   template <GET_TPARAMS>                                                       \
@@ -61,7 +44,7 @@
     return slot<KEY>(DIFF_FWD_SELF);                                           \
   }
 #else
-// One value category; DIFF_KEYED_ACCESSORS stamps it out four times.
+// One value category; stamped out four times below.
 #define DIFF_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM,     \
                                  QUAL, SELF, ...)                              \
   template <GET_TPARAMS>                                                       \

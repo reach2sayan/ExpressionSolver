@@ -10,21 +10,15 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff {
+namespace diff::impl {
 
-// The standard library has no `arithmetic` concept; this composes the two that
-// partition it.
 template <typename T>
 concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
                       std::floating_point<std::remove_cvref_t<T>>;
 
-// Closed under the four arithmetic operators and negation (Dual, TaylorDual,
-// TaylorDual, ...).
+// Closed under the four arithmetic operators and negation.
 template <typename T>
-// constructible_from<T, int> is not decoration: differentiation manufactures
-// exactly 0 and 1 -- the reverse sweep seeds T{1}, and the int spelling of
-// Lit<T, V> is `T(V)`.  A type that cannot spell them cannot be differentiated,
-// so the concept says so instead of failing deep inside a sweep.
+// constructible_from<T, int>: differentiation manufactures exactly 0 and 1.
 concept CFieldLike = std::default_initializable<T> &&
                      std::constructible_from<T, int> && requires(T a, T b) {
   { a + b } -> std::convertible_to<T>;
@@ -37,20 +31,9 @@ concept CFieldLike = std::default_initializable<T> &&
 template <typename T>
 concept Numeric = CArithmetic<T> || CFieldLike<T>;
 
-// Does multiplication commute for this scalar?  Numeric admits matrices and
-// quaternions, so this is declared rather than deduced; the default is the safe
-// answer (non-commutative costs a canonicalisation share, never a wrong result).
-// Only expr/simplify.hpp reads it, to decide whether a product's operands may be
-// put in canonical order.
-//
-// Specialise it directly for a class template, propagating from the scalar
-// underneath:
-//
-//   template <Numeric T>
-//   inline constexpr bool is_commutative_multiply_v<MyDual<T>> =
-//       is_commutative_multiply_v<T>;
-//
-// or reach for DIFF_COMMUTATIVE_MULTIPLY(MyScalar) below for a concrete type.
+// Declared, not deduced: Numeric admits matrices and quaternions, and the
+// default is the safe answer.  Only simplify.hpp reads it.  Specialise directly
+// for a class template; DIFF_COMMUTATIVE_MULTIPLY below covers concrete types.
 template <typename T>
 inline constexpr bool is_commutative_multiply_v = CArithmetic<T>;
 
@@ -58,14 +41,12 @@ template <typename T>
 concept CCommutativeMultiply =
     is_commutative_multiply_v<std::remove_cvref_t<T>>;
 
-// Decomposable into {value, derivative} via std::tuple_size / get<I> — the
-// protocol Dual, Constant, Variable and Expression all opt into.
+// Decomposable into {value, derivative} via std::tuple_size / get<I>.
 template <typename T>
 concept CTupleLike =
     requires { std::tuple_size<std::remove_cvref_t<T>>::value; };
 
-// A random-access buffer of numbers: every sweep threads two of these, the point
-// (in canonical symbol order) and the node-value cache.
+// Every sweep threads two of these: the point and the node-value cache.
 template <typename R>
 concept CNumericBuffer = std::ranges::random_access_range<R> &&
                          Numeric<std::ranges::range_value_t<R>>;
@@ -79,13 +60,6 @@ inline constexpr bool index_invocable_v<F, std::index_sequence<Is...>> =
      ...);
 } // namespace detail
 
-// Invocable as f.template operator()<I>() for every I in [0, N) — the shape
-// static_for folds over, and the reason those lambdas take their index as a
-// template parameter rather than an argument.
-template <typename F, std::size_t N>
-concept CIndexedCallable =
-    detail::index_invocable_v<F, std::make_index_sequence<N>>;
-
 template <typename O>
 concept COperation =
     requires { typename O::value_type; } && Numeric<typename O::value_type>;
@@ -96,8 +70,7 @@ concept CExpression = is_expression_type_v<std::remove_cvref_t<T>>;
 
 template <COperation Op, CExpression... Children> class Expression;
 
-// Expression's storage base; also the CRTP `Derived`, so it has to satisfy
-// CExpression in its own right.
+// Expression's storage base, and the CRTP `Derived`.
 template <bool Stateless, COperation Op, CExpression... Children>
 class ExpressionImpl;
 
@@ -107,18 +80,15 @@ using MonoExpression = Expression<Op, Exp>;
 template <Numeric T, auto... V> class Lit;
 template <Numeric T> using Constant = Lit<T>;
 
-// A symbol-list element: the label lifted to a type, with the name in a form
-// the ordering predicate can compare.  See fixed_string.hpp for the label type.
+// A symbol-list element: the label lifted to a type.
 template <auto S> struct symbol_type {
   static constexpr auto value = S;
   static constexpr std::string_view name = S.view();
 };
 
-// The same symbol carried as a *value*, for the one place that cannot take a
-// template argument: operator[].  Prefer m.get<"x">() except in the assignment
-// spelling m["x"_s] = v.  FixedString, not `CFixedString auto`: the placeholder
-// has to be the class template so CTAD turns the literal into a FixedString
-// rather than decaying it to const char*.
+// The same symbol as a value, for operator[], which takes no template argument.
+// FixedString, not `CFixedString auto`: CTAD has to turn the literal into a
+// FixedString rather than decay it to const char*.
 template <FixedString S> inline constexpr symbol_type<S> sym{};
 
 namespace literals {
@@ -133,16 +103,10 @@ template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 
 template <CExpression... Ts> class Equation;
 
-// Every derivative entry point is an Equation member, so a bare expression has
-// to reach one.  Declared here (Equation is still incomplete; including
-// expr/equation.hpp would be a cycle) and defined out of line.  A mixin rather
-// than part of ExpressionOps, because the leaves do not derive from it.
-//
-// Keep it a *constrained template*.  A plain `operator Equation<Derived>()` is a
-// candidate for every is_convertible query, and answering one completes its
-// return type -- which canonicalises, which std::applys over the children, which
-// asks is_convertible again.  Deducing the target and rejecting it with same_as
-// answers those queries without ever naming Equation's members.
+// Reaches Equation from a bare expression.  Declared here and defined out of
+// line, since Equation is still incomplete.  Keep it a constrained *template*:
+// a plain operator Equation<Derived>() is a candidate for every is_convertible
+// query, and answering one completes the return type, which asks again.
 template <typename Derived> struct EquationConvertible {
   template <typename Eq>
     requires std::same_as<Eq, Equation<Derived>>
@@ -162,7 +126,6 @@ template <bool S, COperation Op, CExpression... Children>
 inline constexpr bool is_expression_type_v<ExpressionImpl<S, Op, Children...>> =
     true;
 
-// Either form of constant leaf: a value with no symbols under it.
 template <typename T> inline constexpr bool is_constant_v = false;
 template <Numeric T, auto... V>
 inline constexpr bool is_constant_v<Lit<T, V...>> = true;
@@ -175,8 +138,7 @@ template <Numeric T, auto V> inline constexpr bool is_lit_v<Lit<T, V>> = true;
 template <typename T>
 concept CLit = is_lit_v<std::remove_cvref_t<T>>;
 
-// An internal node: Expression<Op, Children...> is the only node that carries
-// children, so `children_t` is exactly the branch/leaf discriminator.
+// `children_t` is exactly the branch/leaf discriminator.
 template <typename T>
 concept CExpressionNode =
     requires { typename std::remove_cvref_t<T>::children_t; };
@@ -220,11 +182,8 @@ consteval std::size_t child_base_at() {
   return off;
 }
 
-// One element of a point, in any of the spellings eval() accepts:
-// (a) a bare number (positional),
-// (b) a range of them,
-// (c) a ValueMap,
-// (d) or a named value.
+// One element of a point: a bare number, a range of them, a ValueMap, or a
+// named value.
 template <typename T>
 concept CEvalArg = Numeric<T> || std::ranges::input_range<T> ||
                    requires { typename std::remove_cvref_t<T>::symbols; } ||
@@ -250,9 +209,7 @@ public:
   using op_type = Op;
   using value_type = typename BaseExpression<Op>::value_type;
 
-  // Evaluation always takes a point: the tree stores no values.  Op::eval is
-  // reached only through the seeded sweeps below, where every child has
-  // already been reduced to an EvalResult.
+  // The tree stores no values, so evaluation always takes a point.
   [[nodiscard]] constexpr auto eval(const CEvalArg auto &...args) const {
     return detail::eval_dispatch(self(), args...);
   }
@@ -263,17 +220,14 @@ public:
         self().expressions());
   }
 
-  // Fused forward sweep at a point; the symbol list is deduced.
   template <FixedString Seed>
   [[nodiscard]] constexpr auto
   eval_with_tangent(const CEvalArg auto &...args) const {
     return detail::tangent_dispatch<Seed>(self(), args...);
   }
 
-  // The one seeded sweep.  The seed type U is deduced from the point, so the
-  // same call evaluates in the expression's own scalar type or in a deeper
-  // dual type (Dual, TaylorDual, ...) — the arithmetic follows
-  // whatever was handed in, and only the leaves care about the difference.
+  // The one seeded sweep.  U is deduced from the point, so the arithmetic
+  // follows whatever was handed in and only the leaves see the difference.
   template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded(const std::array<U, N> &vals) const noexcept {
@@ -301,8 +255,7 @@ public:
   }
 };
 
-// The CRTP parameter is the public Expression type, not this base, so every
-// type-level pattern match sees Expression<Op, C...>.
+// The CRTP parameter is the public Expression type, not this base.
 template <COperation Op, CExpression... Children>
 class ExpressionImpl<true, Op, Children...>
     : public ExpressionOps<Expression<Op, Children...>, Op> {
@@ -314,7 +267,6 @@ public:
   constexpr ExpressionImpl() noexcept = default;
   constexpr ExpressionImpl(Children...) noexcept {}
 
-  // Children are empty, so materialising them is free.
   [[nodiscard]] constexpr children_t expressions() const noexcept { return {}; }
 };
 
@@ -333,9 +285,8 @@ public:
   }
 };
 
-// The public node type.  It derives from the storage form rather than aliasing
-// it so Expression stays a class template and can be pattern-matched by partial
-// specialisations.  The base is empty whenever the children are.
+// Derives from the storage form rather than aliasing it, so Expression stays a
+// class template that partial specialisations can match.
 template <COperation Op, CExpression... Children>
 class Expression
     : public ExpressionImpl<(std::is_empty_v<Children> && ...), Op,
@@ -362,28 +313,24 @@ struct expression_element<V, I,
 };
 } // namespace detail
 
-} // namespace diff
+} // namespace diff::impl
 
-// Declare a concrete user type's multiplication commutative, so canonicalisation
-// may reorder the operands of a product of it.  Write it at GLOBAL scope -- the
-// body opens namespace diff.  Variadic, so a template-id containing commas
-// survives the preprocessor.  For a class template, specialise
-// is_commutative_multiply_v directly; a macro cannot express a partial
-// specialisation.
+// At GLOBAL scope: the body opens namespace diff::impl.  Variadic, so a
+// template-id containing commas survives the preprocessor.
 #define DIFF_COMMUTATIVE_MULTIPLY(...)                                         \
-  namespace diff {                                                             \
+  namespace diff::impl {                                                             \
   template <>                                                                  \
   inline constexpr bool is_commutative_multiply_v<__VA_ARGS__> = true;         \
   }
 
 namespace std {
-template <diff::COperation Op, diff::CExpression... Children>
-struct tuple_size<diff::Expression<Op, Children...>>
+template <diff::impl::COperation Op, diff::impl::CExpression... Children>
+struct tuple_size<diff::impl::Expression<Op, Children...>>
     : integral_constant<size_t, 2> {};
 
-template <size_t I, diff::COperation Op, diff::CExpression... Children>
-struct tuple_element<I, diff::Expression<Op, Children...>> {
-  using type = typename diff::detail::expression_element<
-      typename diff::Expression<Op, Children...>::value_type, I>::type;
+template <size_t I, diff::impl::COperation Op, diff::impl::CExpression... Children>
+struct tuple_element<I, diff::impl::Expression<Op, Children...>> {
+  using type = typename diff::impl::detail::expression_element<
+      typename diff::impl::Expression<Op, Children...>::value_type, I>::type;
 };
 } // namespace std

@@ -1,19 +1,17 @@
 #pragma once
 #include "expr/values.hpp"
-// CFixedString appears below only as a constrained-auto NTTP placeholder, which
-// include-cleaner does not count as a reference — hence the pragma.  The include
-// is real: without it this file would depend on expr/values.hpp to drag the
-// concept in transitively.
+// CFixedString appears only as a constrained-auto NTTP placeholder, which
+// include-cleaner does not count as a reference -- hence the pragma.
 #include "util/fixed_string.hpp" // IWYU pragma: keep
 #include "util/mpl.hpp"
 #include <type_traits>
 
-namespace diff {
+namespace diff::impl {
 
-namespace mp = diff::mpl;
+namespace mp = diff::impl::mpl;
 
-// Direct index_sequence fold — no Boost mp_for_each intermediate lambda.
-template <std::size_t N, CIndexedCallable<N> F>
+template <std::size_t N, typename F>
+  requires detail::index_invocable_v<F, std::make_index_sequence<N>>
 constexpr void static_for(F &&f) noexcept {
   [&]<std::size_t... Is>(std::index_sequence<Is...>) {
     (std::forward<F>(f).template operator()<Is>(), ...);
@@ -27,9 +25,8 @@ inline constexpr bool is_variable_v<Variable<T, C, F>> = true;
 template <typename T>
 concept CVariable = is_variable_v<std::remove_cvref_t<T>>;
 
-// Freezing a symbol: same leaf, same value lookup, zero derivative.  Leaves
-// carry no value, so this is a pure type transform — which is precisely what
-// lets the symbolic Jacobian be built out of empty types.
+// Freezing a symbol: same leaf, same value lookup, zero derivative.  A pure
+// type transform, which is what keeps the symbolic Jacobian made of empty types.
 template <CVariable T> struct frozen_variable;
 template <Numeric T, CFixedString auto C, bool F>
 struct frozen_variable<Variable<T, C, F>> {
@@ -94,7 +91,6 @@ make_const_variable(const Variable<T, othersymbol, F> &var) noexcept
   return var;
 }
 
-// Either form of constant — nothing to freeze, so it is already the answer.
 template <CFixedString auto symbol, Numeric T, auto... V>
 constexpr auto make_const_variable(const Lit<T, V...> &c) noexcept {
   return c;
@@ -167,9 +163,7 @@ make_all_constant_except(const Expression<Op, C...> &expr) noexcept
       expr.expressions());
 }
 
-// Canonical symbol order: alphabetical by name.  A consteval predicate rather
-// than an integral_constant metafunction — the ordering is spelled once, as the
-// comparison that actually decides it.
+// Canonical symbol order: alphabetical by name.
 inline constexpr auto symbol_less = []<CSymbol A, CSymbol B>() consteval {
   return A::name < B::name;
 };
@@ -202,11 +196,8 @@ using extract_symbols_from_expr_t =
 
 namespace detail {
 
-// The two things every driver asks of an expression: its symbol list in
-// canonical order, and how many symbols that is.  Spelled out, these are
-// `extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>` and an mp_size
-// around it -- a line and a half that appeared in twenty-odd template
-// parameter lists across the drivers and had to agree exactly in each.
+// The two things every driver asks of an expression: its canonical symbol list
+// and how long that is.
 template <CExpression Expr>
 using expr_symbols_t = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
 
@@ -223,4 +214,4 @@ template <std::size_t N> [[nodiscard]] consteval idx_t<N> idx() noexcept {
   return {};
 }
 
-} // namespace diff
+} // namespace diff::impl

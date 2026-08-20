@@ -10,7 +10,7 @@
 #include <tuple>
 #include <type_traits>
 
-namespace diff {
+namespace diff::impl {
 
 // (a+be)(c+de) = ac + (ad+bc)e, so a dual commutes exactly when the scalar
 // underneath it does.
@@ -98,24 +98,23 @@ template <Numeric T> struct dual_value_type<Dual<T>> {
 template <DualLike X>
 using dual_value_t = typename dual_value_type<std::remove_cvref_t<X>>::type;
 
-// Two duals over the same component type — the pairing every binary dual
-// operator and math function accepts.
+// Two duals over the same component type.
 template <typename A, typename B>
 concept DualCompatible = DualLike<A> && DualLike<B> &&
                          std::same_as<dual_value_t<A>, dual_value_t<B>>;
 
-} // namespace diff
+} // namespace diff::impl
 
 namespace std {
-template <diff::Numeric T>
-struct tuple_size<diff::Dual<T>> : integral_constant<std::size_t, 2> {};
-template <diff::Numeric T, std::size_t N>
-struct tuple_element<N, diff::Dual<T>> {
+template <diff::impl::Numeric T>
+struct tuple_size<diff::impl::Dual<T>> : integral_constant<std::size_t, 2> {};
+template <diff::impl::Numeric T, std::size_t N>
+struct tuple_element<N, diff::impl::Dual<T>> {
   using type = T;
 };
 } // namespace std
 
-namespace diff {
+namespace diff::impl {
 
 // nth_dual_t<T, N> = Dual<Dual<...<T>...>> nested N times
 template <Numeric T, std::size_t N> consteval auto nth_dual_impl() noexcept {
@@ -169,8 +168,6 @@ constexpr auto get_real_part(const T &x) noexcept {
   }
 }
 
-// X is a dual or a plain arithmetic scalar — the set of operands these
-// helpers accept.
 template <typename X>
 concept DualOrArithmetic = DualLike<X> || CArithmetic<X>;
 
@@ -184,14 +181,12 @@ template <Numeric X> constexpr double to_double(const X &x) noexcept {
   return static_cast<double>(val(x));
 }
 
-// C is a zero-derivative operand for the dual A: either a bare arithmetic
-// scalar or A's own component type.
+// A zero-derivative operand for the dual A.
 template <typename C, typename A>
 concept ConstOperand =
     CArithmetic<C> || std::same_as<std::remove_cvref_t<C>, dual_value_t<A>>;
 
-// C is anything *other* than Dual<T> — selects the (Dual, scalar) formulas
-// below without competing with their (Dual, Dual) siblings.
+// Anything other than Dual<T>: selects the (Dual, scalar) formulas below.
 template <typename C, typename T>
 concept ScalarOperand = !std::same_as<std::remove_cvref_t<C>, Dual<T>>;
 
@@ -235,8 +230,7 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noex
   return Dual<T>{av * s, ad * s};
 }
 
-// Division in reciprocal form: compute inv = 1/denominator once, then use
-// multiplies (one hardware division per nesting level instead of two).
+// Reciprocal form: one hardware division per nesting level instead of two.
 template <Numeric T>
 DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
@@ -259,15 +253,11 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noex
   return Dual<T>{q, -(q * ad) * inv};
 }
 
-// ---- binary operators (eager) ---------------------------------------------
-// All three shapes of each operator in one place: (Dual, Dual), (Dual, scalar)
-// and (scalar, Dual).  LEFT spells the last one, the only shape that differs
-// between operators -- + and * commute and reuse the (Dual, scalar) kernel;
-// - and / take the reversed kernel instead.
-//
-// The scalar shapes are separate kernels, never a promotion of the scalar to a
-// zero-derivative Dual: promotion leaves an `ad + 0` that IEEE will not let the
-// compiler fold (-0.0 + 0.0 is +0.0).
+// All three shapes of each operator: (Dual, Dual), (Dual, scalar) and
+// (scalar, Dual).  LEFT spells the last, the only shape that differs between
+// operators.  The scalar shapes are separate kernels, never a promotion to a
+// zero-derivative Dual: promotion leaves an `ad + 0` IEEE will not let the
+// compiler fold.
 #define DIFF_DUAL_BINOP(OP, COMB, LEFT)                                        \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
@@ -294,16 +284,15 @@ template <DualLike A> constexpr auto operator-(A &&a) noexcept {
   return DT{-v, -d};
 }
 
-// Chain rule for a unary math node.  When the descriptor can express its
-// derivative in terms of f(u), the primal is computed once and reused;
+// Chain rule for a unary math node; the primal is reused when the descriptor
+// can express its derivative in terms of f(u).
 template <template <Numeric> class Fn> struct unary_dual_combine {
   DIFF_ALWAYS_INLINE constexpr auto operator()(const DualLike auto &x) const noexcept {
     const auto &[v, d] = x;
-    // Two distinct roles.  Comp is the component type: it types the primal and
-    // the result, and must stay a Dual at depth >= 2 or fv truncates.  S is the
-    // base scalar, and the only thing the descriptor may be instantiated at --
-    // at the component type it would spell its constants as zero-derivative
-    // duals, binding the general kernels and leaving a `0.0 - x` behind.
+    // Comp types the primal and the result, and must stay a Dual at depth >= 2
+    // or fv truncates.  S is the base scalar, and the only thing the descriptor
+    // may be instantiated at -- at Comp its constants would become
+    // zero-derivative duals and leave a `0.0 - x` behind.
     using Comp = std::remove_cvref_t<decltype(v)>;
     using DT = std::remove_cvref_t<decltype(x)>;
     using S = scalar_base_t<Comp>;
@@ -315,9 +304,7 @@ template <template <Numeric> class Fn> struct unary_dual_combine {
     }
   }
 };
-// abs is the one unary that is not a unary_dual_combine: its derivative is a
-// sign, not a function of the primal, and it is only piecewise differentiable —
-// the derivative at 0 is taken as 0 rather than left undefined.
+// Not a unary_dual_combine: the derivative is a sign, and at 0 it is taken as 0.
 struct abs_combine {
   constexpr auto operator()(const DualLike auto &x) const noexcept {
     using std::abs;
@@ -328,9 +315,7 @@ struct abs_combine {
     return DT{abs(v), sign * d};
   }
 };
-// One chain-rule overload per unary math function, generated from the registry
-// in expr/unary_math.hpp: the descriptor is mechanically detail::<Op>Fn, so the
-// name list is not repeated here.
+// One chain-rule overload per unary math function, from the registry.
 #define DIFF_DUAL_UNARY(FN, OP, LABEL)                                         \
   template <DualLike A> constexpr auto FN(A &&a) noexcept {                    \
     return unary_dual_combine<detail::OP##Fn>{}(a);                            \
@@ -356,11 +341,9 @@ constexpr bool operator==(const A &a, const B &b) noexcept {
   return val(a) == val(b);
 }
 
-// ---- pow / max / min ------------------------------------------------------
-// Each all-dual form is followed by its scalar-mixed forms, written out for the
-// same reason as the operators above: a zero derivative is not free, and nothing
-// in a general rule is elided by one.  The inner call (std::pow on scalars,
-// diff::pow by ADL on nested duals) is what makes these work at any depth.
+// Each all-dual form is followed by its scalar-mixed forms, for the same reason
+// as the operators above.  The inner call is unqualified, so ADL makes these
+// work at any nesting depth.
 
 // pow(a, b) = a^b.  d(a^b) = a^b (b' ln a + b a'/a).
 template <DualLike A, DualCompatible<A> B>
@@ -375,10 +358,9 @@ constexpr auto pow(A &&a, B &&b) noexcept {
 }
 
 // pow(a, s), s a constant exponent.  d(a^s) = s a^(s-1) a' = a^s (s a'/a).
-// The b' ln a term is identically absent, not merely zero, so there is no `log`
-// here at any depth -- recursion through `pow` sheds one per level.  It is also
-// the better-defined form: at av < 0 with an integral exponent the derivative is
-// finite (d/dx x^2 at -2 is -4), where `0 * log(-2)` would be NaN.
+// The b' ln a term is identically absent, so there is no `log` at any depth,
+// and at av < 0 with an integral exponent the derivative stays finite where
+// `0 * log(-2)` would be NaN.
 template <DualLike A, CArithmetic U>
 constexpr auto pow(A &&a, U s) noexcept {
   using std::pow;
@@ -389,10 +371,8 @@ constexpr auto pow(A &&a, U s) noexcept {
   return DT{p, p * (s * ad / av)};
 }
 
-// pow(s, a), s a constant base.  d(s^a) = s^a ln(s) a'.
-// `ln(s)` is a *scalar* log of a constant, not a log of the dual, so it costs
-// one libm call at the base type however deeply the dual is nested -- and the
-// a'/a division of the general rule is gone with it.
+// pow(s, a), s a constant base.  d(s^a) = s^a ln(s) a'.  ln(s) is a scalar log
+// of a constant, so one libm call however deeply the dual is nested.
 template <DualLike A, CArithmetic U>
 constexpr auto pow(U s, A &&a) noexcept {
   using std::log, std::pow;
@@ -415,8 +395,7 @@ constexpr auto min(A &&a, B &&b) noexcept {
   return val(b) < val(a) ? DT{b} : DT{a};
 }
 
-// max/min against a constant.  These select an operand whole and never read a
-// derivative, so the bound stays a scalar and is compared as one.
+// max/min select an operand whole, so the bound stays a scalar.
 template <DualLike A, CArithmetic U>
 constexpr auto max(A &&a, U s) noexcept {
   using DT = std::remove_cvref_t<A>;
@@ -461,8 +440,7 @@ constexpr auto hypot(A &&a, B &&b) noexcept {
   return DT{h, (xv * xd + yv * yd) / h};
 }
 
-// 3-argument hypot(x, y, z) = sqrt(x² + y² + z²) (all-dual; scalar mixing for
-// the ternary form is not provided).  d hypot = (x*dx + y*dy + z*dz) / hypot.
+// 3-argument hypot, all-dual only.  d = (x*dx + y*dy + z*dz) / hypot.
 template <DualLike A, DualCompatible<A> B, DualCompatible<A> C>
 constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
   using std::hypot;
@@ -475,8 +453,7 @@ constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
   return Dual<T>{h, (xv * xd + yv * yd + zv * zd) / h};
 }
 
-// atan2 / hypot against a constant.  The constant operand contributes exactly
-// one identically-zero term to each derivative, so it is gone rather than added.
+// Against a constant: the zero term is absent rather than added.
 template <DualLike A, CArithmetic U>
 constexpr auto atan2(A &&y, U s) noexcept {
   using std::atan2;
@@ -516,14 +493,13 @@ static_assert(Numeric<Dual<float>>);
 using dual = nth_dual_t<double, 1>;    // first-order forward dual
 using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 
-} // namespace diff
+} // namespace diff::impl
 
-// `v+de` — the two-term case of the shared series renderer.  Needed for a Dual's
-// own sake and because a dual-valued Constant is a leaf the printer renders.
-template <diff::Numeric T>
-struct std::formatter<diff::Dual<T>, char>
-    : diff::detail::dual_formatter_base<T> {
-  auto format(const diff::Dual<T> &d, std::format_context &ctx) const {
+// `v+de` -- the two-term case of the shared series renderer.
+template <diff::impl::Numeric T>
+struct std::formatter<diff::impl::Dual<T>, char>
+    : diff::impl::detail::dual_formatter_base<T> {
+  auto format(const diff::impl::Dual<T> &d, std::format_context &ctx) const {
     this->series(ctx, std::array{d.value(), d.deriv()});
     return ctx.out();
   }

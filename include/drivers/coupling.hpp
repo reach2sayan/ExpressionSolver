@@ -19,28 +19,22 @@
 #include <type_traits>
 #include <utility>
 
-// Hessian sparsity, derived from the expression *type*.
-//
-// d2f/dxi dxj can only be nonzero if xi and xj meet under something with
-// curvature.  The graph is a compile-time type, so that question is answerable
-// at compile time.
-namespace diff {
+// Hessian sparsity, derived from the expression type: d2f/dxi dxj can only be
+// nonzero if xi and xj meet under something with curvature.
+namespace diff::impl {
 
-// Curvature classification of an operation.
 template <COperation Op> inline constexpr bool is_linear_op_v = false;
 template <Numeric T> inline constexpr bool is_linear_op_v<SumOp<T>> = true;
 template <Numeric T> inline constexpr bool is_linear_op_v<NegateOp<T>> = true;
 
-// a*b: curvature only ACROSS the operands (d2/da db = 1), never within one.
+// a*b: curvature across the operands only.
 template <COperation Op> inline constexpr bool is_product_op_v = false;
 template <Numeric T> inline constexpr bool is_product_op_v<MultiplyOp<T>> = true;
 
-// a/b: across the operands, plus within the denominator (d2/db2 = 2a/b^3).
-// Linear in the numerator, so a-with-a is genuinely absent.
+// a/b: across the operands, plus within the denominator; linear in the numerator.
 template <COperation Op> inline constexpr bool is_quotient_op_v = false;
 template <Numeric T> inline constexpr bool is_quotient_op_v<DivideOp<T>> = true;
 
-// Row i of the pattern: the set of j for which d2f/dxi dxj may be nonzero.
 template <std::size_t N> using symbol_set = std::bitset<N>;
 template <std::size_t N> using coupling_rows = std::array<symbol_set<N>, N>;
 
@@ -51,7 +45,7 @@ template <std::size_t N> struct coupling_info {
   coupling_rows<N> rows{};  // rows[i][j]: (i,j) may be nonzero
 };
 
-// Mark every (a,b) pair as coupled, both ways — the pattern is symmetric.
+// Both ways: the pattern is symmetric.
 template <std::size_t N>
 consteval void couple(coupling_rows<N> &rows, const symbol_set<N> &a,
                       const symbol_set<N> &b) noexcept {
@@ -68,16 +62,15 @@ consteval void couple(coupling_rows<N> &rows, const symbol_set<N> &a,
   }
 }
 
-// Walk the expression type, propagating (symbols, coupled pairs) upward.
-// Recursion is on the type — a storing node is not default-constructible, so
-// there is no object to walk.
+// Propagate (symbols, coupled pairs) upward.  Recursion is on the type: a
+// storing node is not default-constructible.
 template <CExpression E, CSymbolList Syms, std::size_t N>
 consteval coupling_info<N> coupling_of() noexcept {
   using U = std::remove_cvref_t<E>;
   coupling_info<N> info{};
 
   if constexpr (is_variable_v<U>) {
-    // A frozen variable differentiates to zero, so it contributes no symbol.
+    // A frozen variable differentiates to zero.
     if constexpr (!U::frozen) {
       info.symbols.set(mpl::mp_find<U::label>(Syms{}));
     }
@@ -99,26 +92,23 @@ consteval coupling_info<N> coupling_of() noexcept {
 
     using Op = typename U::op_type;
     if constexpr (is_linear_op_v<Op>) {
-      // No curvature of its own; the children's coupling is already merged.
+      // No curvature of its own.
     } else if constexpr (is_product_op_v<Op> && K == 2) {
       couple<N>(info.rows, kids[0].symbols, kids[1].symbols);
     } else if constexpr (is_quotient_op_v<Op> && K == 2) {
       couple<N>(info.rows, kids[0].symbols, kids[1].symbols);
       couple<N>(info.rows, kids[1].symbols, kids[1].symbols);
     } else {
-      // Any other op (unary math, pow, hypot, ...) is assumed to couple its
-      // whole support with itself.
+      // Anything else is assumed to couple its whole support with itself.
       couple<N>(info.rows, info.symbols, info.symbols);
     }
   }
-  // Constant / Lit: no symbols, no coupling.
   return info;
 }
 
 } // namespace detail
 
-// The Hessian sparsity pattern of `Expr`: rows[i][j] means d2f/dxi dxj may be
-// nonzero.  A conservative superset of the true pattern.
+// rows[i][j]: d2f/dxi dxj may be nonzero.  A conservative superset.
 template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>>
 consteval coupling_rows<N> hessian_pattern() noexcept {
@@ -126,35 +116,29 @@ consteval coupling_rows<N> hessian_pattern() noexcept {
   return detail::coupling_of<std::remove_cvref_t<Expr>, Syms, N>().rows;
 }
 
-// A variable template is instantiated once per Expr, so the type walk above
-// runs once however many of the derived tables below ask for the pattern.
+// Instantiated once per Expr, so the walk above runs once for all the tables.
 template <CExpression Expr>
 inline constexpr auto hessian_pattern_v = hessian_pattern<Expr>();
 
-// A partition of the columns into groups that can be seeded together.
 template <std::size_t N> struct column_coloring {
   std::array<std::size_t, N> color{};
   std::size_t count = 0;
 };
 
-// Columns j and k may share a seed only if no row has a nonzero in both —
-// otherwise their contributions would add up in that row and be
-// indistinguishable.  That is a distance-1 colouring of the column
-// intersection graph; greedy is enough, and is what CPR does.
+// Two columns may share a seed only if no row has a nonzero in both -- the
+// distance-1 colouring of the column intersection graph that CPR uses.  Greedy.
 template <std::size_t N>
 consteval column_coloring<N>
 color_columns(const coupling_rows<N> &rows) noexcept {
   column_coloring<N> coloring{};
   for (const auto j : std::views::iota(0uz, N)) {
-    // Colours already taken by a column this one conflicts with.
     std::bitset<N> taken{};
     for (const auto k : std::views::iota(0uz, j)) {
       if ((rows[j] & rows[k]).any()) {
         taken.set(coloring.color[k]);
       }
     }
-    // The lowest free colour.  At most j colours are taken, so the search
-    // always lands inside [0, N) and the dereference is well defined.
+    // At most j colours are taken, so the search always lands inside [0, N).
     const auto pick = *std::ranges::find_if(
         std::views::iota(0uz, N), [&taken](std::size_t c) { return !taken[c]; });
     coloring.color[j] = pick;
@@ -166,8 +150,7 @@ color_columns(const coupling_rows<N> &rows) noexcept {
 // No column of this colour writes into this row.
 inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
 
-// map[colour][row]: where that row's sweep result belongs, or no_column when
-// this colour writes nothing into the row.
+// map[colour][row]: where that row's sweep result belongs.
 template <std::size_t N>
 using scatter_map = std::array<std::array<std::size_t, N>, N>;
 
@@ -179,10 +162,8 @@ template <std::size_t N> consteval scatter_map<N> unmapped() noexcept {
   return map;
 }
 
-// For each colour, the column each row takes its entry from — the colouring
-// guarantees there is at most one, so the driver's scatter is a single pass
-// over rows instead of a scan of the whole N x N grid per colour.  Resolving it
-// here means the sweep loop carries no search at all.
+// The colouring guarantees at most one column per (colour, row), so the driver
+// scatters in one pass over rows and the sweep loop carries no search.
 template <std::size_t N>
 consteval scatter_map<N>
 scatter_targets(const coupling_rows<N> &rows,
@@ -198,9 +179,7 @@ scatter_targets(const coupling_rows<N> &rows,
   return targets;
 }
 
-// ===========================================================================
 // Compressed-column layout for the sparsity pattern.
-// ===========================================================================
 template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>>
 consteval std::size_t hessian_nnz() noexcept {
@@ -218,10 +197,7 @@ template <std::size_t N, std::size_t NNZ> struct sparse_layout_t {
   std::array<int, NNZ> inner{};   // row index of each nonzero, ascending
 };
 
-// Column-major, row indices ascending within each column — the sorted,
-// compressed-column (CSC) form every sparse linear-algebra library consumes.
-// The pattern is symmetric, so reading it by column or by row gives the same
-// structure.
+// Sorted CSC.  The pattern is symmetric, so by column and by row agree.
 template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>,
           std::size_t NNZ = hessian_nnz<Expr>()>
@@ -229,9 +205,7 @@ consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
   constexpr auto &pattern = hessian_pattern_v<Expr>;
   sparse_layout_t<N, NNZ> layout{};
 
-  // outer is the exclusive prefix sum of the per-column counts.  The scan runs
-  // over N + 1 inputs so that it emits N + 1 outputs; the extra count is never
-  // added to any of them, and the last output is the total.
+  // Exclusive prefix sum over N + 1 inputs, so it emits N + 1 outputs.
   std::array<int, N + 1> counts{};
   std::ranges::transform(pattern, counts.begin(),
                          [](const symbol_set<N> &column) {
@@ -239,10 +213,8 @@ consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
                          });
   std::exclusive_scan(counts.begin(), counts.end(), layout.outer.begin(), 0);
 
-  // Row indices of column j, ascending — by symmetry, the set bits of row j.
   auto out = layout.inner.begin();
   for (const symbol_set<N> &column : pattern) {
-    // filter_view caches its begin, so it is not a const-iterable range.
     auto occupied = std::views::iota(0uz, N) |
                     std::views::filter(
                         [&column](std::size_t i) { return column[i]; });
@@ -255,13 +227,8 @@ consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
 
 namespace detail {
 
-// Walk a compressed-column layout: for each column j, every stored entry k in
-// it and the row i it sits at.  Both tables below are that same walk differing
-// only in where they write (i, j) -> k, so the walk is written once.
-//
-// The layout type is spelled out rather than taken as a constrained parameter:
-// only sparse_layout() produces one, and naming it deduces the column count too
-// -- both callers used to pass it alongside a layout that already knew it.
+// For each column j, every stored entry k and the row i it sits at.  Both
+// tables below are that walk, differing only in where they write (i, j) -> k.
 struct compressed_entry {
   std::size_t column, row, slot;
 };
@@ -279,9 +246,8 @@ consteval auto compressed_entries(const sparse_layout_t<N, NNZ> &layout) {
 
 } // namespace detail
 
-// Per colour, the slot in the VALUE array each row's sweep result belongs to —
-// the sparse counterpart of scatter_targets, so the sweep writes straight into
-// compressed storage and the dense N x N matrix is never materialised.
+// The sparse counterpart of scatter_targets: the sweep writes straight into
+// compressed storage, so the dense N x N matrix is never materialised.
 template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>>
 consteval scatter_map<N> sparse_slots() noexcept {
@@ -295,28 +261,17 @@ consteval scatter_map<N> sparse_slots() noexcept {
   return slots;
 }
 
-// ===========================================================================
-// layout_sparse_pattern<Expr> — the compressed Hessian, indexed as if dense.
+// layout_sparse_pattern<Expr>: the compressed Hessian, indexed as if dense.
 //
-// sparse_layout<Expr>() already fixes, at compile time, which (i, j) pairs are
-// structurally nonzero and which slot of the value array each one occupies.
-// That is exactly a layout mapping, so saying so lets a caller write H[i, j]
-// over storage that only ever holds the nnz values.
-//
-// The wrinkle is totality: an mdspan mapping has to return an offset for every
-// index inside its extents, and a structural zero has no slot.  So the span is
-// nnz + 1 cells and every structural zero maps to the last one, which the
-// owner keeps at zero.  Reads of a structural zero then give 0.0, which is the
-// right answer; writes to one land in that shared cell and are discarded,
-// which is the right behaviour for a pattern that says the entry cannot be
-// nonzero.  It costs uniqueness — hence is_always_unique() == false.
-// ===========================================================================
+// An mdspan mapping must be total, and a structural zero has no slot -- so the
+// span is nnz + 1 cells and every structural zero maps to the last one, which
+// the owner keeps at zero.  Reads give 0.0; writes are discarded.  That costs
+// uniqueness, hence is_always_unique() == false.
 template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>,
           std::size_t NNZ = hessian_nnz<Expr>()>
 consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {
   constexpr auto layout = sparse_layout<Expr>();
-  // Everything is the sink until the pattern says otherwise.
   std::array<std::size_t, N * N> table{};
   table.fill(NNZ);
   for (const auto [j, i, k] : detail::compressed_entries(layout)) {
@@ -357,8 +312,7 @@ template <CExpression Expr> struct layout_sparse_pattern {
                  static_cast<std::size_t>(j)]);
     }
 
-    // True when (i, j) is in the pattern rather than aliasing the sink — the
-    // question a caller has to be able to ask before writing.
+    // In the pattern, rather than aliasing the sink.
     [[nodiscard]] constexpr bool contains(index_type i,
                                           index_type j) const noexcept {
       return static_cast<std::size_t>((*this)(i, j)) != kNnz;
@@ -383,7 +337,6 @@ template <CExpression Expr> struct layout_sparse_pattern {
   };
 };
 
-// A compressed value buffer, read as though it were the dense N x N matrix.
 template <CExpression Expr>
 [[nodiscard]] constexpr auto sparse_matrix_view(std::span<const double> values)
     noexcept {
@@ -393,4 +346,4 @@ template <CExpression Expr>
                                           typename L::template mapping<Ext>{});
 }
 
-} // namespace diff
+} // namespace diff::impl

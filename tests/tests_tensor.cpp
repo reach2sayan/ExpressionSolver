@@ -69,12 +69,12 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
       using std::exp, std::sin;
       return sin(q[0] * q[1]) * exp(q[0]) + q[2] * q[2] * q[1];
     };
-    const auto H = diff::hessian(fn, std::span<const double>{xs});
+    const auto H = diff::impl::hessian(fn, std::span<const double>{xs});
     feed(val_of(H));
     for (std::size_t k = 0; k < hess_n(H); ++k) feed(grad_at(H, k));
     for (std::size_t r = 0; r < 3; ++r)
       for (std::size_t cc = 0; cc < 3; ++cc) feed(hess_at(H, r, cc));
-    for (auto v : diff::gradient(fn, std::span<const double>{xs})) feed(v);
+    for (auto v : diff::impl::gradient(fn, std::span<const double>{xs})) feed(v);
 
     const auto u = sin(x * x) + exp(x) + atan(x) + asinh(x);
     feed(Equation{u}.template univariate_derivative<1>(a));
@@ -164,8 +164,8 @@ TEST(BoundTest, EvalAsCarriesDualsThroughTheGraph) {
 // ===========================================================================
 
 TEST(MdLayout, SimplexPackedIsABijectionOnSortedMultiIndices) {
-  using T = diff::md_tensor<double, diff::uniform_extents_t<4, 3>,
-                            diff::layout_simplex_packed>;
+  using T = diff::impl::md_tensor<double, diff::impl::uniform_extents_t<4, 3>,
+                            diff::impl::layout_simplex_packed>;
   EXPECT_EQ(T::size(), 20u); // C(4 + 3 - 1, 3) = C(6, 3) = 20
 
   const auto m = T::mapping();
@@ -189,8 +189,8 @@ TEST(MdLayout, SimplexPackedIsABijectionOnSortedMultiIndices) {
 
 TEST(MdLayout, LeadingSimplexKeepsOutputsApart) {
   // Two outputs, each a symmetric 3x3 Hessian: 2 * 6 cells, not 2 * 9.
-  using T = diff::md_tensor<double, diff::stacked_extents_t<2, 3, 2>,
-                            diff::layout_leading_simplex<1>>;
+  using T = diff::impl::md_tensor<double, diff::impl::stacked_extents_t<2, 3, 2>,
+                            diff::impl::layout_leading_simplex<1>>;
   EXPECT_EQ(T::size(), 12u);
 
   T t{};
@@ -203,13 +203,13 @@ TEST(MdLayout, LeadingSimplexKeepsOutputsApart) {
 
 TEST(MdLayout, SparsePatternSendsStructuralZerosToTheSink) {
   // f = x*y + z*z couples {x,y} and {z,z}, but never x with z or y with z.
-  diff::Variable<double, diff::FixedString{"x"}> x;
-  diff::Variable<double, diff::FixedString{"y"}> y;
-  diff::Variable<double, diff::FixedString{"z"}> z;
+  diff::impl::Variable<double, diff::impl::FixedString{"x"}> x;
+  diff::impl::Variable<double, diff::impl::FixedString{"y"}> y;
+  diff::impl::Variable<double, diff::impl::FixedString{"z"}> z;
   using E = decltype(x * y + z * z);
-  using L = diff::layout_sparse_pattern<E>;
+  using L = diff::impl::layout_sparse_pattern<E>;
 
-  const typename L::template mapping<diff::md::extents<std::size_t, 3, 3>> m{};
+  const typename L::template mapping<diff::impl::md::extents<std::size_t, 3, 3>> m{};
   EXPECT_EQ(static_cast<std::size_t>(m.required_span_size()), L::kNnz + 1);
 
   // Symbols are alphabetical: x=0, y=1, z=2.
@@ -228,15 +228,15 @@ TEST(DerivativeTensorTest, ForwardAndReverseHessiansAgree) {
   // derivative_tensor<2> is forward-over-forward; hessian<Reverse> is
   // forward-over-reverse.  Two algorithms, same tensor and same type --
   // which is what lets a caller pick on cost alone.
-  using D = diff::Dual<double>;
-  using diff::FixedString;
+  using D = diff::impl::Dual<double>;
+  using diff::impl::FixedString;
   {
     Variable<D, FixedString{"a"}> a; Variable<D, FixedString{"b"}> b;
     Variable<D, FixedString{"c"}> c; Variable<D, FixedString{"d"}> d;
     auto e = a * log(a) + b * log(b) + c * c * d + exp(a * d);
     const std::array<double, 4> p{0.3, 0.4, 0.5, 0.6};
     const auto T = Equation{e}.template derivative_tensor<2>(p);
-    const auto R = diff::detail::reverse_mode_hessian(e, p);
+    const auto R = diff::impl::detail::reverse_mode_hessian(e, p);
     for (std::size_t i = 0; i < 4; ++i) {
       for (std::size_t j = 0; j < 4; ++j) {
         EXPECT_NEAR((T[i, j]), (R[i, j]), 1e-12) << "N=4 at (" << i << "," << j << ")";
@@ -251,8 +251,8 @@ TEST(DerivativeTensorTest, ForwardAndReverseHessiansAgree) {
     const std::array<double, 5> p{0.3, 0.4, 0.5, 0.6, 0.7};
     const std::span<const double> xs{p.data(), p.size()};
     const auto T = Equation{e}.template derivative_tensor<2>(p);
-    const auto R = diff::detail::reverse_mode_hessian(e, p);
-    const auto H = diff::hessian(e, xs);  // independent driver, as a cross-check
+    const auto R = diff::impl::detail::reverse_mode_hessian(e, p);
+    const auto H = diff::impl::hessian(e, xs);  // independent driver, as a cross-check
     for (std::size_t i = 0; i < 5; ++i) {
       for (std::size_t j = 0; j < 5; ++j) {
         EXPECT_NEAR((T[i, j]), (R[i, j]), 1e-12) << "N=5 at (" << i << "," << j << ")";
@@ -266,13 +266,13 @@ TEST(ForwardDriver, DriverHessianAgreesWithEquationHessian) {
   // Two routes to the same Hessian, with two different return shapes: the
   // driver hands back a plain tuple of owning buffers (row-major), Equation
   // hands back an md_tensor.  What must agree is the numbers, not the spelling.
-  Variable<diff::Dual<double>, diff::FixedString{"x"}> x;
-  Variable<diff::Dual<double>, diff::FixedString{"y"}> y;
+  Variable<diff::impl::Dual<double>, diff::impl::FixedString{"x"}> x;
+  Variable<diff::impl::Dual<double>, diff::impl::FixedString{"y"}> y;
   auto expr = x * y + x * x + sin(y);
   const std::array<double, 2> p{0.7, 1.3};
   const std::span<const double> xs{p.data(), p.size()};
 
-  const auto H = diff::hessian(expr, xs);   // tuple {value, grad, hess}
+  const auto H = diff::impl::hessian(expr, xs);   // tuple {value, grad, hess}
   const auto T = Equation{expr}.hessian(p); // md_tensor
 
   for (std::size_t i = 0; i < 2; ++i) {
@@ -287,7 +287,7 @@ TEST(ForwardDriver, DriverHessianAgreesWithEquationHessian) {
 }
 
 TEST(MdTensor, BothIndexSpellingsAgree) {
-  auto t = diff::nd_tensor_t<double, 3, 3>{};
+  auto t = diff::impl::nd_tensor_t<double, 3, 3>{};
   double v = 0.0;
   for (std::size_t i = 0; i < 3; ++i) {
     for (std::size_t j = i; j < 3; ++j) {
@@ -309,7 +309,7 @@ TEST(MdTensor, BothIndexSpellingsAgree) {
 // must equal the dense tensor with every multi-index evaluated.  If the
 // symmetry assumption or the simplex ranking is ever wrong, this is what says
 // so — the existing derivative tests only check a handful of entries.
-template <std::size_t Order, typename Expr, typename Values>
+template <std::size_t Order, CExpression Expr, CTupleLike Values>
 void ExpectPackedMatchesDense(const Expr &expr, const Values &values) {
   const auto packed = Equation{expr}.template derivative_tensor<Order>(values);
   constexpr std::size_t N = std::tuple_size_v<Values>;
@@ -317,26 +317,26 @@ void ExpectPackedMatchesDense(const Expr &expr, const Values &values) {
   // Recompute every cell densely, straight from the definition, with no
   // symmetry assumed anywhere.
   using S = double;
-  using U = diff::nth_dual_t<S, Order>;
-  using symbols = diff::extract_symbols_from_expr_t<Expr>;
-  for (const auto &multi : diff::detail::index_grid<N, Order>()) {
+  using U = diff::impl::nth_dual_t<S, Order>;
+  using symbols = diff::impl::extract_symbols_from_expr_t<Expr>;
+  for (const auto &multi : diff::impl::detail::index_grid<N, Order>()) {
     const auto idx = std::apply(
         [](auto... i) { return std::array<std::size_t, Order>{i...}; }, multi);
     std::array<U, N> seeds{};
     for (std::size_t k = 0; k < N; ++k) {
-      seeds[k] = diff::detail::make_mixed_seed<S, Order>(values[k], idx, k);
+      seeds[k] = diff::impl::detail::make_mixed_seed<S, Order>(values[k], idx, k);
     }
     const U val = expr.template eval_seeded<symbols>(seeds);
-    const double dense = diff::detail::extract_nth<Order>(val);
+    const double dense = diff::impl::detail::extract_nth<Order>(val);
     EXPECT_DOUBLE_EQ(packed.at_index(idx), dense)
         << "order " << Order << " at index " << idx[0];
   }
 }
 
 TEST(MdTensor, PackedSymmetricTensorMatchesDenseEvaluation) {
-  diff::Variable<double, diff::FixedString{"x"}> x;
-  diff::Variable<double, diff::FixedString{"y"}> y;
-  diff::Variable<double, diff::FixedString{"z"}> z;
+  diff::impl::Variable<double, diff::impl::FixedString{"x"}> x;
+  diff::impl::Variable<double, diff::impl::FixedString{"y"}> y;
+  diff::impl::Variable<double, diff::impl::FixedString{"z"}> z;
 
   ExpectPackedMatchesDense<2>(x * y + x * x, std::array{2.0, 3.0});
   ExpectPackedMatchesDense<3>(x * y * y, std::array{2.0, 3.0});
@@ -350,14 +350,14 @@ TEST(MdTensor, PackedSymmetricTensorMatchesDenseEvaluation) {
 // constexpr and only the ConstexprContract suite would notice, much later.
 TEST(ConstexprContract, MdspanLayerIsConstantEvaluated) {
   constexpr auto simplex = [] {
-    diff::nd_tensor_t<double, 3, 3> t{};
+    diff::impl::nd_tensor_t<double, 3, 3> t{};
     t[2, 1, 0] = 6.0;
     return (t[0, 1, 2]) + (t[1, 0, 2]);
   }();
   static_assert(simplex == 12.0);
 
   constexpr auto stacked = [] {
-    diff::nd_stack_t<double, 2, 3, 2> s{};
+    diff::impl::nd_stack_t<double, 2, 3, 2> s{};
     s[1, 0, 2] = 3.0;
     return (s[1, 2, 0]) + (s[0, 0, 2]); // second output set, first still zero
   }();

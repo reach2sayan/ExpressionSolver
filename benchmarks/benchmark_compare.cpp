@@ -1,3 +1,4 @@
+#include "api.hpp"
 #include "expr/bound.hpp"
 #include "expr/equation.hpp" // Equation: every derivative entry point
 // Apples-to-apples comparison: this library vs. autodiff v1.1.2.
@@ -37,7 +38,7 @@
 #include <string_view>
 #include <tuple>
 
-using namespace diff;
+using namespace diff::impl;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -900,7 +901,7 @@ static void BM_Ours_Forward_Hess(benchmark::State &state) {
   auto f = [n](const auto *dof) { return vf_energy(dof, n); };
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::detail::hessian(f, xs);
+    auto H = diff::impl::detail::hessian(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -978,7 +979,7 @@ static void BM_Ours_Forward_HessSparse(benchmark::State &state) {
   auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::detail::hessian(f, xs);
+    auto H = diff::impl::detail::hessian(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -1012,7 +1013,7 @@ static void BM_AD_Forward_HessSparse(benchmark::State &state) {
 BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(17)->Arg(32);
 
 // The public router, not a driver.  Every other Hess row calls a driver directly,
-// so nothing else here exercises what diff::hessian() picks for a raw callable.
+// so nothing else here exercises what diff::impl::hessian() picks for a raw callable.
 static void BM_Ours_Hessian_HessSparse(benchmark::State &state) {
   const std::size_t n = static_cast<std::size_t>(state.range(0));
   auto x = vf_point(n);
@@ -1020,7 +1021,7 @@ static void BM_Ours_Hessian_HessSparse(benchmark::State &state) {
   auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian(f, xs);
+    auto H = diff::impl::hessian(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -1047,28 +1048,28 @@ BENCHMARK(BM_Ours_Hessian_HessSparse)->Arg(8)->Arg(16)->Arg(17);
 // ===========================================================================
 
 static auto make_chain_expr4() {
-  using D = diff::Dual<double>;
-  using diff::FixedString;
-  diff::Variable<D, FixedString{"x00"}> a;
-  diff::Variable<D, FixedString{"x01"}> b;
-  diff::Variable<D, FixedString{"x02"}> c;
-  diff::Variable<D, FixedString{"x03"}> d;
+  using D = diff::impl::Dual<double>;
+  using diff::impl::FixedString;
+  diff::impl::Variable<D, FixedString{"x00"}> a;
+  diff::impl::Variable<D, FixedString{"x01"}> b;
+  diff::impl::Variable<D, FixedString{"x02"}> c;
+  diff::impl::Variable<D, FixedString{"x03"}> d;
   return a * log(a) + b * log(b) + c * log(c) + d * log(d) +
          0.50 * (a - b) * (a - b) + 0.51 * (b - c) * (b - c) +
          0.52 * (c - d) * (c - d) + exp(a * d);
 }
 
 static auto make_chain_expr8() {
-  using D = diff::Dual<double>;
-  using diff::FixedString;
-  diff::Variable<D, FixedString{"x00"}> a;
-  diff::Variable<D, FixedString{"x01"}> b;
-  diff::Variable<D, FixedString{"x02"}> c;
-  diff::Variable<D, FixedString{"x03"}> d;
-  diff::Variable<D, FixedString{"x04"}> e;
-  diff::Variable<D, FixedString{"x05"}> g;
-  diff::Variable<D, FixedString{"x06"}> h;
-  diff::Variable<D, FixedString{"x07"}> i;
+  using D = diff::impl::Dual<double>;
+  using diff::impl::FixedString;
+  diff::impl::Variable<D, FixedString{"x00"}> a;
+  diff::impl::Variable<D, FixedString{"x01"}> b;
+  diff::impl::Variable<D, FixedString{"x02"}> c;
+  diff::impl::Variable<D, FixedString{"x03"}> d;
+  diff::impl::Variable<D, FixedString{"x04"}> e;
+  diff::impl::Variable<D, FixedString{"x05"}> g;
+  diff::impl::Variable<D, FixedString{"x06"}> h;
+  diff::impl::Variable<D, FixedString{"x07"}> i;
   return a * log(a) + b * log(b) + c * log(c) + d * log(d) + e * log(e) +
          g * log(g) + h * log(h) + i * log(i) + 0.50 * (a - b) * (a - b) +
          0.51 * (b - c) * (b - c) + 0.52 * (c - d) * (c - d) +
@@ -1077,24 +1078,24 @@ static auto make_chain_expr8() {
 }
 
 static auto make_chain_expr16() {
-  using D = diff::Dual<double>;
-  using diff::FixedString;
-  diff::Variable<D, FixedString{"x00"}> v00;
-  diff::Variable<D, FixedString{"x01"}> v01;
-  diff::Variable<D, FixedString{"x02"}> v02;
-  diff::Variable<D, FixedString{"x03"}> v03;
-  diff::Variable<D, FixedString{"x04"}> v04;
-  diff::Variable<D, FixedString{"x05"}> v05;
-  diff::Variable<D, FixedString{"x06"}> v06;
-  diff::Variable<D, FixedString{"x07"}> v07;
-  diff::Variable<D, FixedString{"x08"}> v08;
-  diff::Variable<D, FixedString{"x09"}> v09;
-  diff::Variable<D, FixedString{"x10"}> v10;
-  diff::Variable<D, FixedString{"x11"}> v11;
-  diff::Variable<D, FixedString{"x12"}> v12;
-  diff::Variable<D, FixedString{"x13"}> v13;
-  diff::Variable<D, FixedString{"x14"}> v14;
-  diff::Variable<D, FixedString{"x15"}> v15;
+  using D = diff::impl::Dual<double>;
+  using diff::impl::FixedString;
+  diff::impl::Variable<D, FixedString{"x00"}> v00;
+  diff::impl::Variable<D, FixedString{"x01"}> v01;
+  diff::impl::Variable<D, FixedString{"x02"}> v02;
+  diff::impl::Variable<D, FixedString{"x03"}> v03;
+  diff::impl::Variable<D, FixedString{"x04"}> v04;
+  diff::impl::Variable<D, FixedString{"x05"}> v05;
+  diff::impl::Variable<D, FixedString{"x06"}> v06;
+  diff::impl::Variable<D, FixedString{"x07"}> v07;
+  diff::impl::Variable<D, FixedString{"x08"}> v08;
+  diff::impl::Variable<D, FixedString{"x09"}> v09;
+  diff::impl::Variable<D, FixedString{"x10"}> v10;
+  diff::impl::Variable<D, FixedString{"x11"}> v11;
+  diff::impl::Variable<D, FixedString{"x12"}> v12;
+  diff::impl::Variable<D, FixedString{"x13"}> v13;
+  diff::impl::Variable<D, FixedString{"x14"}> v14;
+  diff::impl::Variable<D, FixedString{"x15"}> v15;
   return v00 * log(v00) + v01 * log(v01) + v02 * log(v02) + v03 * log(v03) + v04 * log(v04) + v05 * log(v05) + v06 * log(v06) + v07 * log(v07) + v08 * log(v08) + v09 * log(v09) + v10 * log(v10) + v11 * log(v11) + v12 * log(v12) + v13 * log(v13) + v14 * log(v14) + v15 * log(v15) +
          0.50 * (v00 - v01) * (v00 - v01) + 0.51 * (v01 - v02) * (v01 - v02) + 0.52 * (v02 - v03) * (v02 - v03) + 0.53 * (v03 - v04) * (v03 - v04) + 0.54 * (v04 - v05) * (v04 - v05) + 0.55 * (v05 - v06) * (v05 - v06) + 0.56 * (v06 - v07) * (v06 - v07) + 0.57 * (v07 - v08) * (v07 - v08) + 0.58 * (v08 - v09) * (v08 - v09) + 0.59 * (v09 - v10) * (v09 - v10) + 0.60 * (v10 - v11) * (v10 - v11) + 0.61 * (v11 - v12) * (v11 - v12) + 0.62 * (v12 - v13) * (v12 - v13) + 0.63 * (v13 - v14) * (v13 - v14) + 0.64 * (v14 - v15) * (v14 - v15) + exp(v00 * v15);
 }
@@ -1103,7 +1104,7 @@ static auto make_chain_expr16() {
 // driver's seeded dofs (symbol order) and traverse the graph once.
 template <std::size_t Nv, typename Expr>
 static auto expr_energy(const Expr &E) {
-  using Syms = diff::extract_symbols_from_expr_t<Expr>;
+  using Syms = diff::impl::extract_symbols_from_expr_t<Expr>;
   return [&E](const auto *dof) {
     using T = std::remove_cvref_t<decltype(dof[0])>;
     std::array<T, Nv> s{};
@@ -1122,13 +1123,13 @@ static void ours_forward_expr(benchmark::State &state, MakeExpr make) {
   const std::span<const double> xs{x.data(), x.size()};
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::detail::hessian(f, xs);
+    auto H = diff::impl::detail::hessian(f, xs);
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
 }
 
-// Public router: handing the raw expression *graph* to diff::hessian() must
+// Public router: handing the raw expression *graph* to diff::impl::hessian() must
 // auto-detect CExpression, bridge it internally, and pick the scalar driver —
 // no seeded_energy() at the call site.  Should track the explicit Ours_Forward
 // (scalar) numbers, proving the routing works end-to-end from the client's
@@ -1140,7 +1141,7 @@ static void ours_hessian_expr(benchmark::State &state, MakeExpr make) {
   const std::span<const double> xs{x.data(), x.size()};
   for (auto _ : state) {
     benchmark::DoNotOptimize(xs);
-    auto H = diff::hessian(E, xs); // raw graph in, right driver out
+    auto H = diff::impl::hessian(E, xs); // raw graph in, right driver out
     benchmark::DoNotOptimize(H);
     benchmark::ClobberMemory();
   }
@@ -1428,7 +1429,7 @@ double ours_partial(const Expr &expr, std::string_view sym,
     reverse_check("G4 d/dx02", ours_partial(e, "x02", g4pt), dc);
     reverse_check("G4 d/dx03", ours_partial(e, "x03", g4pt), dd);
   }
-  // Routed raw-callable Hessian: whichever driver diff::hessian() picks at each
+  // Routed raw-callable Hessian: whichever driver diff::impl::hessian() picks at each
   // T4th / THess: the two forward tutorial rows.  Both AD arms used to spell
   // derivative(f, wrt(x,...,x), at(...)), which returns the FIRST derivative
   // however many wrt args it is handed -- so each row timed our K-th
@@ -1471,8 +1472,8 @@ double ours_partial(const Expr &expr, std::string_view sym,
     const auto pt = vf_point(n);
     const std::span<const double> xs{pt.data(), pt.size()};
     auto f = [n](const auto *dof) { return vf_energy_sparse(dof, n); };
-    const auto [rv, rg, rh, rn] = diff::hessian(f, xs);
-    const auto [sv, sg, sh, sn] = diff::detail::hessian(f, xs);
+    const auto [rv, rg, rh, rn] = diff::impl::hessian(f, xs);
+    const auto [sv, sg, sh, sn] = diff::impl::detail::hessian(f, xs);
     reverse_check("routed hessian value", rv, sv);
     for (std::size_t i = 0; i < n; ++i) {
       reverse_check("routed hessian gradient", rg[i], sg[i]);

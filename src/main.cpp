@@ -1,20 +1,14 @@
 // A tour of every way to ask this library for a derivative, with timings.
 //
-// The organising distinction is how you hand it the function:
+//   LAMBDA — an ordinary templated function; a black box the drivers can only
+//            evaluate at seeded dual numbers.
+//   GRAPH  — the same formula built from Variable<>, so it is a compile-time
+//            tree whose sparsity, symbolic partials and constexpr evaluation
+//            all fall out of its type.
 //
-//   LAMBDA — an ordinary templated C++ function.  The drivers call it with
-//            seeded dual numbers and watch what comes back.  It is a black
-//            box: the library cannot see the formula, only evaluate it.
-//
-//   GRAPH  — the same formula built from Variable<> objects.  operator+ and
-//            operator* return *types*, so the expression is a compile-time
-//            tree and the formula lives in its type.  That is what lets the
-//            library read the sparsity pattern off it, differentiate it
-//            symbolically, and run the whole thing in constant evaluation.
-//
-// Both give the same numbers.  The graph gives more entry points and, on a
-// structured problem, a much better Hessian — see the last two sections.
+// Both give the same numbers; see the last two sections for the difference.
 
+#include "api.hpp"                     // the public surface: Equation, var, named
 #include "drivers/coupling.hpp"        // hessian_pattern(), color_columns()
 #include <tuple>
 #include "drivers/hessian.hpp" // hessian(), gradient()
@@ -23,16 +17,16 @@
 
 #include <array>
 #include <chrono>
+#include <concepts>
 #include <format>
 #include <iostream>
 #include <span>
 #include <string>
 #include <utility>
 
-using namespace diff;
+using namespace diff::impl;
 
-// <format> plus a stream rather than std::println, so this demo does not gate
-// every call site on which libstdc++ ships <print>.
+// <format> plus a stream, so this does not gate on libstdc++ shipping <print>.
 template <typename... Args>
 static void println(std::format_string<Args...> fmt, Args &&...args) {
   std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';
@@ -40,18 +34,12 @@ static void println(std::format_string<Args...> fmt, Args &&...args) {
 
 namespace {
 
-// Somewhere for results to go that the optimiser cannot reason about, so that
-// timing a pure function does not time an empty loop.
+// Somewhere the optimiser cannot reason about, so timing is not of an empty loop.
 volatile double g_sink = 0.0;
 
-// Nanoseconds per call, best-of-rounds.
-//
-// The MINIMUM, not the mean or median: on a machine with frequency scaling a
-// single descheduled run inflates a mean beyond recovery, while the minimum is
-// the closest thing to "what this costs when nothing interferes".  One warm-up
-// round is discarded so the first-call page faults and branch mispredictions
-// do not land in the number.
-template <typename F>
+// Nanoseconds per call, best-of-rounds.  The minimum, not the mean: one
+// descheduled run inflates a mean beyond recovery.  One warm-up is discarded.
+template <std::invocable F>
 double bench_ns(F &&f, int reps = 4000, int rounds = 7) {
   using clock = std::chrono::steady_clock;
   f(); // warm
@@ -71,19 +59,17 @@ double bench_ns(F &&f, int reps = 4000, int rounds = 7) {
   return best;
 }
 
-// value + timing on one line, so the tour reads as "what it costs".
 void row(const std::string &label, double value, double ns) {
   println("  {:<44}{:>12.4f}{:>11.1f} ns", label, value, ns);
 }
 
 // f(x, y, z) = x*log(x) + y^2*z + exp(x*z), as a plain function ...
-template <typename T> T energy(const T *v) {
+template <Numeric T> T energy(const T *v) {
   using std::exp, std::log;
   return v[0] * log(v[0]) + v[1] * v[1] * v[2] + exp(v[0] * v[2]);
 }
 
-// ... and as a graph.  Dual<double> as the value type is what lets the
-// forward-over-reverse routes run on it.
+// ... and as a graph.  Dual<double> is what lets forward-over-reverse run on it.
 auto make_graph() {
   using D = Dual<double>;
   Variable<D, FixedString{"x"}> x;
@@ -100,10 +86,9 @@ constexpr auto make_graph_plain() {
   return x * log(x) + y * y * z + exp(x * z);
 }
 
-// An 8-variable chain: each variable couples only to its neighbours, plus one
-// long-range term.  This is the shape the sparsity pass is built for, and the
-// shape most real problems with 10+ inputs actually have.
-template <typename T> T chain_energy(const T *v, std::size_t n) {
+// An 8-variable chain: neighbour coupling plus one long-range term -- the shape
+// the sparsity pass is built for.
+template <Numeric T> T chain_energy(const T *v, std::size_t n) {
   using std::exp, std::log;
   T acc = T{0};
   for (std::size_t i = 0; i < n; ++i) {
@@ -136,9 +121,8 @@ auto make_chain8() {
 } // namespace
 
 int main() {
-  // Values are positional in CANONICAL order, which is alphabetical by symbol
-  // name — not source order.  symbol_order<Expr>() prints it; the named<>
-  // forms below sidestep the question entirely.
+  // Positional values are in CANONICAL (alphabetical, not source) order; the
+  // named<> forms below sidestep the question.
   std::array<double, 3> p{0.4, 0.7, 1.1}; // x, y, z
   const std::span<const double> xs{p.data(), p.size()};
 
@@ -149,10 +133,7 @@ int main() {
   println("point (x, y, z) = ({}, {}, {})", p[0], p[1], p[2]);
   println("timings are ns/call, best of 7 rounds x 4000 reps\n");
 
-  // =====================================================================
-  // An expression is an empty type: a Variable stores nothing, so the whole
-  // tree is a type and costs no bytes however often a symbol repeats.
-  // =====================================================================
+  // An expression is an empty type: the whole tree costs no bytes.
   {
     constexpr auto x = var<"x", int>;
     constexpr auto y = var<"y", int>;
@@ -165,9 +146,7 @@ int main() {
                  sizeof(with_constant));
   }
 
-  // =====================================================================
-  // VALUE
-  // =====================================================================
+  // ---- VALUE
   println("VALUE");
   row("lambda  energy(p.data())", energy(p.data()),
       bench_ns([&] { return energy(p.data()); }));
@@ -180,12 +159,10 @@ int main() {
                     named<"z">(p[2]));
       }));
 
-  // =====================================================================
-  // GRADIENT
-  // =====================================================================
+  // ---- GRADIENT
   println("\nGRADIENT");
-  row("lambda  gradient(f, xs)           [0]", diff::gradient(lambda, xs)[0],
-      bench_ns([&] { return diff::gradient(lambda, xs)[0]; }, 2000));
+  row("lambda  gradient(f, xs)           [0]", diff::impl::gradient(lambda, xs)[0],
+      bench_ns([&] { return diff::impl::gradient(lambda, xs)[0]; }, 2000));
   row("graph   gradient<Reverse>(expr,p) [0]",
       Equation{gplain}.gradient(p)[0],
       bench_ns([&] { return Equation{gplain}.gradient(p)[0]; }));
@@ -195,16 +172,13 @@ int main() {
         return Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]), named<"z">(p[2]))[0];
       }));
 
-  // =====================================================================
-  // HESSIAN.  hessian() is a router: it picks a driver from what it is given.
-  // The lambda routes allocate a HessianResult; the symbolic route returns a
-  // packed md_tensor on the stack, which is most of why it is quicker here.
-  // =====================================================================
+  // ---- HESSIAN.  hessian() routes on what it is given: the lambda routes
+  // allocate, the symbolic one returns a packed md_tensor on the stack.
   println("\nHESSIAN            H(0,2)");
-  row("lambda  hessian(f, xs)", std::get<2>(diff::hessian(lambda, xs))[0 * xs.size() + 2],
-      bench_ns([&] { return std::get<2>(diff::hessian(lambda, xs))[0 * xs.size() + 2]; }, 1000));
-  row("graph   hessian(expr, xs)", std::get<2>(diff::hessian(graph, xs))[0 * xs.size() + 2],
-      bench_ns([&] { return std::get<2>(diff::hessian(graph, xs))[0 * xs.size() + 2]; }, 1000));
+  row("lambda  hessian(f, xs)", std::get<2>(diff::impl::hessian(lambda, xs))[0 * xs.size() + 2],
+      bench_ns([&] { return std::get<2>(diff::impl::hessian(lambda, xs))[0 * xs.size() + 2]; }, 1000));
+  row("graph   hessian(expr, xs)", std::get<2>(diff::impl::hessian(graph, xs))[0 * xs.size() + 2],
+      bench_ns([&] { return std::get<2>(diff::impl::hessian(graph, xs))[0 * xs.size() + 2]; }, 1000));
   {
     const auto Hs = Equation{graph}.hessian(p);
     row("graph   hessian<Reverse>(expr, p)", (Hs[0, 2]), bench_ns([&] {
@@ -214,9 +188,7 @@ int main() {
     println("          packed: stores {} cells, not {}", Hs.size(), 3 * 3);
   }
 
-  // =====================================================================
-  // HIGHER ORDER — graph only.  There is no lambda entry point above 2nd.
-  // =====================================================================
+  // ---- HIGHER ORDER, graph only: there is no lambda entry point above 2nd.
   println("\nHIGHER ORDER  (graph only)");
   {
     const auto T = Equation{gplain}.template derivative_tensor<3>(p);
@@ -231,9 +203,7 @@ int main() {
                  T.size(), 3 * 3 * 3);
   }
 
-  // =====================================================================
-  // VECTOR-VALUED f — Equation holds one expression per output.
-  // =====================================================================
+  // ---- VECTOR-VALUED f: Equation holds one expression per output.
   println("\nJACOBIAN  (vector-valued -> Equation)");
   {
     Variable<double, FixedString{"x"}> x;
@@ -258,12 +228,9 @@ int main() {
         }, 1000));
   }
 
-  // =====================================================================
-  // THE POINT OF ALL THIS.  Same 8-variable chain energy, both ways.  The
-  // graph's sparsity is known from its TYPE, so columns that share no row are
-  // seeded together and the sweep count is set by the problem's bandwidth
-  // rather than by n.  That gap widens with n; at n = 16 it is ~10x.
-  // =====================================================================
+  // ---- The same 8-variable chain both ways.  The graph's sparsity is known
+  // from its type, so the sweep count follows the bandwidth rather than n --
+  // a gap that widens with n (~10x at n = 16).
   println("\nSTRUCTURED PROBLEM — 8-variable chain, Hessian");
   {
     std::array<double, 8> q{};
@@ -277,9 +244,9 @@ int main() {
     const auto chain_graph = make_chain8();
 
     const double t_lambda =
-        bench_ns([&] { return std::get<2>(diff::hessian(chain_lambda, qs))[0 * qs.size() + 7]; }, 400);
+        bench_ns([&] { return std::get<2>(diff::impl::hessian(chain_lambda, qs))[0 * qs.size() + 7]; }, 400);
     const double t_graph =
-        bench_ns([&] { return std::get<2>(diff::hessian(chain_graph, qs))[0 * qs.size() + 7]; }, 400);
+        bench_ns([&] { return std::get<2>(diff::impl::hessian(chain_graph, qs))[0 * qs.size() + 7]; }, 400);
 
     using G = std::remove_cvref_t<decltype(chain_graph)>;
     constexpr auto pattern = hessian_pattern<G>();
@@ -302,10 +269,7 @@ int main() {
     println("  {} of {} entries can be nonzero", hessian_nnz<G>(), 8 * 8);
   }
 
-  // =====================================================================
-  // ...and the whole symbolic path is usable in constant evaluation, where
-  // the cost is zero because it never runs at run time.
-  // =====================================================================
+  // ---- ...and the whole symbolic path runs in constant evaluation.
   constexpr auto ct = [] {
     Variable<double, FixedString{"a"}> a;
     Variable<double, FixedString{"b"}> b;

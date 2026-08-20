@@ -6,23 +6,11 @@
 #include <string_view>
 #include <tuple>
 
-// The algebraic rewrite rules, in one place.
-//
-// They run at build time -- the operator factories in values.hpp call
-// simplify_node() instead of naming Expression<> directly -- so a tree is born
-// folded and the garbage is never instantiated.  That matters most for
-// derivative(), whose results are flooded with the 0s and 1s the leaves
-// manufacture: without these rules d(x*y)/dx is `1*y + x*0`, seven nodes for one
-// symbol lookup; with them it is `y`.
-//
-// x*0 -> 0 and 0/x -> 0 are not IEEE-faithful (0*Inf is NaN, not 0).  Every AD
-// library makes the same trade: these zeros come from d(const)/dx, not from
-// anything the user wrote.
-namespace diff::detail {
+// Algebraic rewrite rules, run at build time by the operator factories in
+// values.hpp, so a tree is born folded.  x*0 -> 0 and 0/x -> 0 are not
+// IEEE-faithful; those zeros come from d(const)/dx, not from user input.
+namespace diff::impl::detail {
 
-// Which op a node carries.  There is no op-kind enum (Notation and precedence
-// are shared by ops with different algebra), so the table matches the class
-// templates themselves.
 template <typename Op> inline constexpr bool is_sum_op_v = false;
 template <Numeric T> inline constexpr bool is_sum_op_v<SumOp<T>> = true;
 template <typename Op> inline constexpr bool is_mul_op_v = false;
@@ -32,14 +20,12 @@ template <Numeric T> inline constexpr bool is_div_op_v<DivideOp<T>> = true;
 template <typename Op> inline constexpr bool is_pow_op_v = false;
 template <Numeric T> inline constexpr bool is_pow_op_v<PowOp<T>> = true;
 
-// A node that is already a negation, so that -(-x) can collapse.
 template <typename E> inline constexpr bool is_negation_expr_v = false;
 template <Numeric T, CExpression C>
 inline constexpr bool is_negation_expr_v<Expression<NegateOp<T>, C>> = true;
 
-// Only a Lit carries its value in the type; both spellings expose `value`.  A
-// stored Constant<T> holds a number that exists only at run time, so it matches
-// neither and x * PC(0.0) correctly does not fold.
+// Only a Lit carries its value in the type, so a runtime Constant<T> never
+// folds.
 template <CExpression E> consteval bool lit_equals(int n) {
   if constexpr (CLit<E>) {
     return E::value == typename E::value_type(n);
@@ -50,9 +36,7 @@ template <CExpression E> consteval bool lit_equals(int n) {
 template <CExpression E> inline constexpr bool is_zero_v = lit_equals<E>(0);
 template <CExpression E> inline constexpr bool is_one_v = lit_equals<E>(1);
 
-// Lit<T, 0> and Lit<T, 1> -- the int spelling -- are the canonical zero and one:
-// the only ones available for every Numeric T, so folding always lands on the
-// same type whatever the scalar is.
+// Lit<T, 0> / Lit<T, 1> are the canonical zero and one for every Numeric T.
 template <COperation Op, CExpression A, CExpression B>
 [[nodiscard]] constexpr auto simplify_node(const A &a, const B &b) noexcept {
   using T = typename Op::value_type;
@@ -95,8 +79,7 @@ template <COperation Op, CExpression A, CExpression B>
   }
 }
 
-// Unary negation.  -(-x) is x; the literal cases are folded by the caller in
-// values.hpp, which can spell the negated NTTP directly.
+// -(-x) is x; literal cases are folded by the caller in values.hpp.
 template <COperation Op, CExpression A>
 [[nodiscard]] constexpr auto simplify_mono(const A &a) noexcept {
   if constexpr (std::same_as<Op, NegateOp<typename Op::value_type>> &&
@@ -107,33 +90,17 @@ template <COperation Op, CExpression A>
   }
 }
 
-// ---------------------------------------------------------------------------
-// Canonical ordering
-//
-// Putting the operands of a commutative node in a fixed order makes x+y and y+x
-// the same *type*: for a stateless tree, type identity is structural equality.
-//
-// The library assumes exactly the algebra of a (possibly non-commutative) ring:
-//
-//   (a+b)+c == a+(b+c)   yes        a + b == b + a   yes
-//   (a*b)*c == a*(b*c)   yes        a * b == b * a   only when declared
-//
-// So a sum is always reordered, a product only when its scalar has declared
-// CCommutativeMultiply (expressions.hpp) -- Numeric admits matrices and
-// quaternions, and commuting is a property of the scalar, not the tree.
-//
-// This pass only ever swaps the two operands of one node; it never reassociates
-// across nodes.  It runs where Equation is built rather than in the operators,
-// because silently reordering what a user typed is a surprise.
-// ---------------------------------------------------------------------------
+// Canonical ordering: fixing the operand order of a commutative node makes x+y
+// and y+x the same type.  Sums always reorder, products only when the scalar
+// declares CCommutativeMultiply.  Swaps operands of one node, never
+// reassociates, and runs where Equation is built rather than in the operators.
 
 template <typename E> inline constexpr bool is_variable_expr_v = false;
 template <Numeric T, CFixedString auto S, bool F>
 inline constexpr bool is_variable_expr_v<Variable<T, S, F>> = true;
 
-// Leaves sort ahead of branches so 2+x never comes out as x+2, symbols by name,
-// branches by size then by op.  Ties compare equal, leaving the operands where
-// they were -- the order is stable, and a tie never costs correctness.
+// Leaves before branches, symbols by name, branches by size then op.  Ties
+// compare equal, so the order is stable.
 struct order_key {
   int kind{};
   std::size_t nodes{};
@@ -169,9 +136,7 @@ template <COperation Op, CExpression A, CExpression B>
   }
 }
 
-// Bottom-up, one pass.  Every rule returns an already-canonical child, a Lit, or
-// a node whose children are canonical and whose own rule has just run, so no rule
-// leaves a fresh redex behind.
+// Bottom-up, one pass: no rule leaves a fresh redex behind.
 template <CExpression E>
 [[nodiscard]] constexpr auto canonicalise(const E &e) noexcept {
   if constexpr (CExpressionNode<E>) {
@@ -185,4 +150,4 @@ template <CExpression E>
   }
 }
 
-} // namespace diff::detail
+} // namespace diff::impl::detail
