@@ -5,7 +5,7 @@
 # reach the numeric side, `coupling` the compile-time sparsity analysis that
 # decides how few backward sweeps a graph Hessian needs.  `common` is the
 # vocabulary the two driver files share so they need not know about each other.
-target_sources(diff INTERFACE
+target_sources(ddx INTERFACE
         ${CMAKE_CURRENT_LIST_DIR}/common.hpp
         ${CMAKE_CURRENT_LIST_DIR}/numeric.hpp
         ${CMAKE_CURRENT_LIST_DIR}/symbolic.hpp

@@ -10,7 +10,7 @@
 #include <string_view>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // How an op is written down; only expr/format.hpp reads it.
 //   Prefix -a   Infix a + b   Function pow(a, b)
@@ -179,7 +179,7 @@ struct abs_impl {
 };
 // `using std::` plus an unqualified call: ADL finds Dual's / TaylorDual's own
 // overloads, std::* otherwise.
-#define DIFF_ADL_BINARY_IMPL(NAME, FN)                                         \
+#define DDX_ADL_BINARY_IMPL(NAME, FN)                                         \
   struct NAME {                                                                \
     constexpr auto operator()(const Numeric auto &a,                           \
                               const Numeric auto &b) const noexcept {          \
@@ -187,10 +187,10 @@ struct abs_impl {
       return FN(a, b);                                                         \
     }                                                                          \
   };
-DIFF_ADL_BINARY_IMPL(pow_impl, pow)
-DIFF_ADL_BINARY_IMPL(atan2_impl, atan2)
-DIFF_ADL_BINARY_IMPL(hypot_impl, hypot)
-#undef DIFF_ADL_BINARY_IMPL
+DDX_ADL_BINARY_IMPL(pow_impl, pow)
+DDX_ADL_BINARY_IMPL(atan2_impl, atan2)
+DDX_ADL_BINARY_IMPL(hypot_impl, hypot)
+#undef DDX_ADL_BINARY_IMPL
 struct max_impl {
   constexpr auto operator()(const Numeric auto &a,
                             const Numeric auto &b) const noexcept {
@@ -208,7 +208,7 @@ struct min_impl {
 // Generated from the registry: each op pulls value and derivative from its
 // descriptor in unary_math.hpp.  Forward mode needs no member here -- it is the
 // ordinary eval() sweep seeded with Dual, through the same descriptor.
-#define DIFF_UNARY_MATH_OP(FN, NAME, LABEL)                                    \
+#define DDX_UNARY_MATH_OP(FN, NAME, LABEL)                                    \
   template <Numeric T>                                                         \
     requires(!detail::needs_real_constants_v<detail::NAME##Fn<T>> ||           \
              std::constructible_from<T, double>)                               \
@@ -225,8 +225,8 @@ struct min_impl {
     }                                                                          \
   };
 
-DIFF_UNARY_MATH_TABLE(DIFF_UNARY_MATH_OP)
-#undef DIFF_UNARY_MATH_OP
+DDX_UNARY_MATH_TABLE(DDX_UNARY_MATH_OP)
+#undef DDX_UNARY_MATH_OP
 
 // abs is not in the table: its derivative is a sign, not a function of the
 // primal.  totally_ordered because the rule branches on a comparison.
@@ -367,4 +367,4 @@ constexpr auto HypotOp<T>::derivative(const CExpression auto &lhs,
   return (lhs * lhs.derivative() + rhs * rhs.derivative()) / hypot(lhs, rhs);
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

@@ -14,9 +14,9 @@
 #include <string_view>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
-namespace mp = diff::impl::mpl;
+namespace mp = ddx::impl::mpl;
 
 namespace detail {
 // Evaluate a tuple of expressions at one point, in canonical symbol order.
@@ -230,8 +230,8 @@ public:
   }
 
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
-  // canonical symbol order.  Both spellings; see DIFF_KEYED_ACCESSORS.
-  DIFF_KEYED_ACCESSORS(std::size_t N, std::size_t N, N, idx_t<N>,
+  // canonical symbol order.  Both spellings; see DDX_KEYED_ACCESSORS.
+  DDX_KEYED_ACCESSORS(std::size_t N, std::size_t N, N, idx_t<N>,
                        requires(output_dim == 1 && N <= input_dim))
 
   template <DiffMode Mode = DiffMode::Reverse>
@@ -275,7 +275,7 @@ public:
 
   // One variable, one Taylor sweep: a plain number, not a one-entry tensor.
   template <std::size_t Order>
-  [[nodiscard]] DIFF_ALWAYS_INLINE constexpr auto
+  [[nodiscard]] DDX_ALWAYS_INLINE constexpr auto
   univariate_derivative(scalar_base_t<value_type> x0) const noexcept
     requires(input_dim == 1 && output_dim == 1 && Order > 0)
   {
@@ -300,12 +300,12 @@ std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
   return out << std::format("{}", eq);
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl
 
 // One block per output: the function, then its gradient row in canonical
 // symbol order.  The spec is forwarded to every expression printed.
-template <diff::impl::CExpression... Ts>
-struct std::formatter<diff::impl::Equation<Ts...>, char> {
+template <ddx::impl::CExpression... Ts>
+struct std::formatter<ddx::impl::Equation<Ts...>, char> {
   constexpr auto parse(std::format_parse_context &ctx) {
     // (iterator, sentinel): the iterator is const char* on libstdc++ but a
     // class type on MSVC.
@@ -316,19 +316,19 @@ struct std::formatter<diff::impl::Equation<Ts...>, char> {
     return ctx.begin() + static_cast<std::ptrdiff_t>(spec_.size());
   }
 
-  auto format(const diff::impl::Equation<Ts...> &eq, std::format_context &ctx) const {
-    using Eq = diff::impl::Equation<Ts...>;
+  auto format(const ddx::impl::Equation<Ts...> &eq, std::format_context &ctx) const {
+    using Eq = ddx::impl::Equation<Ts...>;
     const std::string one = std::format("{{:{}}}", spec_);
     auto out = ctx.out();
 
     const auto rows = eq.jacobian_rows();
-    diff::impl::static_for<Eq::output_dim>([&]<std::size_t I>() {
+    ddx::impl::static_for<Eq::output_dim>([&]<std::size_t I>() {
       out = std::format_to(out, "f{}: ", I);
       out = std::vformat_to(out, one,
                             std::make_format_args(std::get<I>(eq.functions())));
       out = std::format_to(out, "\n  grad: ");
       const auto &row = std::get<I>(rows);
-      diff::impl::static_for<Eq::input_dim>([&]<std::size_t J>() {
+      ddx::impl::static_for<Eq::input_dim>([&]<std::size_t J>() {
         if constexpr (J > 0) {
           out = std::format_to(out, ", ");
         }

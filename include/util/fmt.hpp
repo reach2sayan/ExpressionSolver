@@ -10,7 +10,7 @@
 #include <string_view>
 #include <type_traits>
 
-namespace diff::impl::detail {
+namespace ddx::impl::detail {
 
 // U+03B5, as UTF-8 bytes so it does not depend on the source encoding.
 inline constexpr std::string_view eps = "\xce\xb5";
@@ -68,9 +68,9 @@ private:
 // Opt-in list for the operator<< below; each dual header adds itself.
 template <typename T> inline constexpr bool is_dual_family_v = false;
 
-} // namespace diff::impl::detail
+} // namespace ddx::impl::detail
 
-namespace diff::impl {
+namespace ddx::impl {
 
 template <typename D>
   requires detail::is_dual_family_v<std::remove_cvref_t<D>>
@@ -78,4 +78,4 @@ std::ostream &operator<<(std::ostream &out, const D &d) {
   return out << std::format("{}", d);
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

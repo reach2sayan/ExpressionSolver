@@ -11,7 +11,7 @@
 #include <tuple>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 namespace detail {
 
@@ -140,11 +140,11 @@ std::ostream &operator<<(std::ostream &out, const CExpression auto &e) {
   return out << std::format("{}", e);
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl
 
 // The whole spec is the value-spec, handed verbatim to the formatter for
 // value_type.  The leading ':' is optional, as in std::formatter for ranges.
-template <diff::impl::CExpression E> struct std::formatter<E, char> {
+template <ddx::impl::CExpression E> struct std::formatter<E, char> {
   constexpr auto parse(std::format_parse_context &ctx) {
     auto it = ctx.begin();
     if (it != ctx.end() && *it == ':') {
@@ -155,8 +155,8 @@ template <diff::impl::CExpression E> struct std::formatter<E, char> {
   }
 
   auto format(const E &e, std::format_context &ctx) const {
-    const diff::impl::detail::printer p{ctx, value_fmt_};
-    diff::impl::detail::print_infix(p, e, 0);
+    const ddx::impl::detail::printer p{ctx, value_fmt_};
+    ddx::impl::detail::print_infix(p, e, 0);
     return ctx.out();
   }
 

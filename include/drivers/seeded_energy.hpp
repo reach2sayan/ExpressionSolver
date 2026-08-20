@@ -10,7 +10,7 @@
 
 #include "util/mpl.hpp" // mp_size
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // Bridges an expression graph into the runtime numeric Hessian driver: seeded
 // dofs arrive in sorted symbol order and the graph is traversed once via
@@ -48,4 +48,4 @@ template <CExpression Expr>
       static_cast<Expr &&>(expr));
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

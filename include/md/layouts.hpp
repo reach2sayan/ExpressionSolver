@@ -11,7 +11,7 @@
 // storage rather than convention.  (The sparse-pattern layout is in
 // coupling.hpp, next to the pass that derives it.)  The mapping is a literal
 // type, so nothing here allocates or holds anything but extents.
-namespace diff::impl {
+namespace ddx::impl {
 
 namespace detail {
 
@@ -147,4 +147,4 @@ template <std::size_t Lead> struct layout_leading_simplex {
 // The scalar case: every axis is a derivative axis.
 using layout_simplex_packed = layout_leading_simplex<0>;
 
-} // namespace diff::impl
+} // namespace ddx::impl

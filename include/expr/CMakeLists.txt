@@ -2,7 +2,7 @@
 # set, the leaves that carry values, the label-keyed binding of a point, and the
 # vector-valued Equation wrapper.  All of it is constexpr-evaluable and free of
 # third-party dependencies.
-target_sources(diff INTERFACE
+target_sources(ddx INTERFACE
         ${CMAKE_CURRENT_LIST_DIR}/expressions.hpp
         ${CMAKE_CURRENT_LIST_DIR}/operations.hpp
         ${CMAKE_CURRENT_LIST_DIR}/unary_math.hpp

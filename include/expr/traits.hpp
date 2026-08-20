@@ -6,9 +6,9 @@
 #include "util/mpl.hpp"
 #include <type_traits>
 
-namespace diff::impl {
+namespace ddx::impl {
 
-namespace mp = diff::impl::mpl;
+namespace mp = ddx::impl::mpl;
 
 template <std::size_t N, typename F>
   requires detail::index_invocable_v<F, std::make_index_sequence<N>>
@@ -214,4 +214,4 @@ template <std::size_t N> [[nodiscard]] consteval idx_t<N> idx() noexcept {
   return {};
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

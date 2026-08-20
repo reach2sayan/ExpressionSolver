@@ -12,7 +12,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // An energy called with a pointer into the driver's seed buffer.  D is `dual`
 // for the gradient sweep, `dual2nd` for the Hessian.
@@ -130,4 +130,4 @@ template <Numeric D> struct SweepWorkspace {
 using GradientWorkspace = SweepWorkspace<dual>;
 using HessianWorkspace = SweepWorkspace<dual2nd>;
 
-} // namespace diff::impl
+} // namespace ddx::impl

@@ -33,43 +33,26 @@ jobs:
       # g++-14, not the image's default g++/libstdc++: the library floor is
       # libstdc++ 14 (std::ranges::to), and clang on Linux compiles against the
       # newest libstdc++ installed, so this line is what feeds both Linux jobs.
-      - name: Install compilers and Eigen (Ubuntu)
+      - name: Install compilers (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang gcc-14 g++-14 libeigen3-dev
+          sudo apt-get install -y clang gcc-14 g++-14
 
-      - name: Install Eigen (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: vcpkg install eigen3:x64-windows
-
-      # Eigen is required, but only at the boundary: interop/eigen_interop.hpp
-      # must stay the single header that includes it, or the constexpr symbolic
-      # core silently acquires a dependency it cannot use in constant
-      # evaluation.  The scan is recursive — the headers live in subdirectories.
-      - name: Eigen stays at the boundary
+      # The library has no third-party dependencies, and the constexpr core
+      # could not use Eigen in constant evaluation anyway.  Eigen now appears
+      # only in benchmarks/benchmark_compare.cpp, which needs DDX_BUILD_COMPARE
+      # and is off by default.  The scan is recursive — the headers live in
+      # subdirectories.
+      - name: Headers stay dependency-free
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          offenders=$(grep -rl '#include <Eigen' include expression_differentiator.hpp \
-                      | grep -v 'include/interop/eigen_interop.hpp' || true)
+          offenders=$(grep -rlE '#[[:space:]]*include[[:space:]]*[<"]Eigen' include || true)
           if [ -n "$offenders" ]; then
-            echo "Eigen leaked out of eigen_interop.hpp into:"; echo "$offenders"; exit 1
+            echo "Eigen leaked into the library headers:"; echo "$offenders"; exit 1
           fi
-          echo "Eigen is confined to include/interop/eigen_interop.hpp"
-
-      # Eigen is optional, so the build without it has to keep working — the
-      # header is #error-guarded and its tests are #ifdef-guarded, both of which
-      # rot silently if nothing exercises them.
-      - name: Build and test without Eigen
-        if: runner.os == 'Linux' && matrix.cpp_compiler == 'g++-14'
-        shell: bash
-        run: |
-          cmake -S . -B build-no-eigen -DDIFF_USE_EIGEN=OFF \
-                -DDIFF_BUILD_BENCHMARKS=OFF -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-no-eigen --target tests
-          ctest --test-dir build-no-eigen --output-on-failure
+          echo "No Eigen under include/"
 
       - name: Set build directory
         id: strings
@@ -90,7 +73,6 @@ jobs:
         shell: pwsh
         run: >
           cmake -B "${{ steps.strings.outputs.build-dir }}"
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}

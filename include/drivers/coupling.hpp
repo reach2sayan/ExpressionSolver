@@ -21,7 +21,7 @@
 
 // Hessian sparsity, derived from the expression type: d2f/dxi dxj can only be
 // nonzero if xi and xj meet under something with curvature.
-namespace diff::impl {
+namespace ddx::impl {
 
 template <COperation Op> inline constexpr bool is_linear_op_v = false;
 template <Numeric T> inline constexpr bool is_linear_op_v<SumOp<T>> = true;
@@ -346,4 +346,4 @@ template <CExpression Expr>
                                           typename L::template mapping<Ext>{});
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

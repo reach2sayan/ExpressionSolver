@@ -9,7 +9,7 @@
 // Algebraic rewrite rules, run at build time by the operator factories in
 // values.hpp, so a tree is born folded.  x*0 -> 0 and 0/x -> 0 are not
 // IEEE-faithful; those zeros come from d(const)/dx, not from user input.
-namespace diff::impl::detail {
+namespace ddx::impl::detail {
 
 template <typename Op> inline constexpr bool is_sum_op_v = false;
 template <Numeric T> inline constexpr bool is_sum_op_v<SumOp<T>> = true;
@@ -150,4 +150,4 @@ template <CExpression E>
   }
 }
 
-} // namespace diff::impl::detail
+} // namespace ddx::impl::detail

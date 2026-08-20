@@ -342,7 +342,7 @@ TEST(ForwardTangentSweep, ArithmeticRules) {
 }
 
 TEST(ForwardTangentSweep, UnaryMathRules) {
-  // One probe per op in the DIFF_UNARY_MATH_OP macro, plus AbsOp's hand-written
+  // One probe per op in the DDX_UNARY_MATH_OP macro, plus AbsOp's hand-written
   // forward().  Arguments stay inside each function's domain.
   EXPECT_TANGENT_MATCHES_REVERSE(sin(PV(0.6, "x")), 0.6);
   EXPECT_TANGENT_MATCHES_REVERSE(cos(PV(0.6, "x")), 0.6);
@@ -435,7 +435,7 @@ TEST(ForwardTangentSweep, IsConstexpr) {
 // Frozen guard the first of the three reported the *unfrozen* derivative, so
 // derivative_tensor and eval_with_tangent disagreed on the same expression.
 TEST(FrozenVariable, EveryEngineSeesZeroDerivative) {
-  auto e = make_const_variable<diff::impl::FixedString{"x"}>(PV(2.0, "x") *
+  auto e = make_const_variable<ddx::impl::FixedString{"x"}>(PV(2.0, "x") *
                                                        PV(3.0, "y"));
   const std::array<double, 2> pt{2.0, 3.0};
 

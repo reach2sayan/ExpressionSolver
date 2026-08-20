@@ -15,7 +15,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // The tag seeded_energy() puts on a bridged expression graph.
 template <typename F>
@@ -128,4 +128,4 @@ auto hessian(F &&f, const std::span<const double> x) {
   }
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

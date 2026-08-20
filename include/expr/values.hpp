@@ -6,7 +6,7 @@
 #include "util/mpl.hpp"
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // Both sides carry the same value_type.
 template <typename LHS, typename RHS>
@@ -22,7 +22,7 @@ concept CompatibleValueTypes =
 
 template <CFixedString auto S, CSymbolList SymList>
 consteval std::size_t find_index_of_symbol() noexcept {
-  return diff::impl::mpl::mp_find<S>(SymList{});
+  return ddx::impl::mpl::mp_find<S>(SymList{});
 }
 
 // Promote a bare scalar into value_type as a zero-derivative constant;
@@ -41,7 +41,7 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
 // template argument exists only for structural T, so a dual scalar can put back
 // only 0 and 1 (the int spelling) -- which are the only values differentiation
 // manufactures.
-#define DIFF_EXPR_BINOP(OP, ...)                                               \
+#define DDX_EXPR_BINOP(OP, ...)                                               \
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
   constexpr auto operator OP(const LHS &a, const RHS &b) noexcept {            \
@@ -73,13 +73,13 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
     return a OP promote_scalar<typename LHS::value_type>(s);                   \
   }
 
-DIFF_EXPR_BINOP(+, return detail::simplify_node<SumOp<value_type>>(a, b);)
-DIFF_EXPR_BINOP(*, return detail::simplify_node<MultiplyOp<value_type>>(a, b);)
-DIFF_EXPR_BINOP(/, return detail::simplify_node<DivideOp<value_type>>(a, b);)
+DDX_EXPR_BINOP(+, return detail::simplify_node<SumOp<value_type>>(a, b);)
+DDX_EXPR_BINOP(*, return detail::simplify_node<MultiplyOp<value_type>>(a, b);)
+DDX_EXPR_BINOP(/, return detail::simplify_node<DivideOp<value_type>>(a, b);)
 // a - b is a + (-b), so the reverse sweep needs one adjoint rule instead of
 // two, and both operators get to apply their folding rules.
-DIFF_EXPR_BINOP(-, return detail::simplify_node<SumOp<value_type>>(a, -b);)
-#undef DIFF_EXPR_BINOP
+DDX_EXPR_BINOP(-, return detail::simplify_node<SumOp<value_type>>(a, -b);)
+#undef DDX_EXPR_BINOP
 
 template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;
@@ -92,17 +92,17 @@ template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
 }
 
 // One factory per unary math function, generated from the registry.
-#define DIFF_EXPR_UNFN(FN, OP, LABEL)                                          \
+#define DDX_EXPR_UNFN(FN, OP, LABEL)                                          \
   template <CExpression Expr> constexpr auto FN(const Expr &a) noexcept {      \
     return MonoExpression<OP<typename Expr::value_type>, Expr>{a};             \
   }
-DIFF_UNARY_MATH_TABLE(DIFF_EXPR_UNFN)
+DDX_UNARY_MATH_TABLE(DDX_EXPR_UNFN)
 // abs has no descriptor, so its factory is spelled out.
-DIFF_EXPR_UNFN(abs, AbsOp, "abs")
-#undef DIFF_EXPR_UNFN
+DDX_EXPR_UNFN(abs, AbsOp, "abs")
+#undef DDX_EXPR_UNFN
 
 // Function-style binary ops, plus scalar-promotion overloads.
-#define DIFF_EXPR_BINFN(NAME, OP)                                              \
+#define DDX_EXPR_BINFN(NAME, OP)                                              \
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
   constexpr auto NAME(const LHS &a, const RHS &b) noexcept {                   \
@@ -117,12 +117,12 @@ DIFF_EXPR_UNFN(abs, AbsOp, "abs")
   constexpr auto NAME(const LHS &a, S s) noexcept {                            \
     return NAME(a, promote_scalar<typename LHS::value_type>(s));               \
   }
-DIFF_EXPR_BINFN(pow, PowOp)
-DIFF_EXPR_BINFN(atan2, Atan2Op)
-DIFF_EXPR_BINFN(hypot, HypotOp)
-DIFF_EXPR_BINFN(max, MaxOp)
-DIFF_EXPR_BINFN(min, MinOp)
-#undef DIFF_EXPR_BINFN
+DDX_EXPR_BINFN(pow, PowOp)
+DDX_EXPR_BINFN(atan2, Atan2Op)
+DDX_EXPR_BINFN(hypot, HypotOp)
+DDX_EXPR_BINFN(max, MaxOp)
+DDX_EXPR_BINFN(min, MinOp)
+#undef DDX_EXPR_BINFN
 
 namespace detail {
 
@@ -281,27 +281,27 @@ public:
 };
 
 #define DEFINE_CONST_UDL(type, suffix)                                         \
-  consteval diff::impl::Constant<type> operator""_##suffix(unsigned long long val) { \
-    return diff::impl::Constant<type>{static_cast<type>(val)};                       \
+  consteval ddx::impl::Constant<type> operator""_##suffix(unsigned long long val) { \
+    return ddx::impl::Constant<type>{static_cast<type>(val)};                       \
   }                                                                            \
-  consteval diff::impl::Constant<type> operator""_##suffix(long double val) {        \
-    return diff::impl::Constant<type>{static_cast<type>(val)};                       \
+  consteval ddx::impl::Constant<type> operator""_##suffix(long double val) {        \
+    return ddx::impl::Constant<type>{static_cast<type>(val)};                       \
   }
 
 // The literal's value is unused; only its type selects value_type.
 #define DEFINE_VAR_UDL(type, suffix, label)                                    \
   consteval auto operator""_##suffix(unsigned long long) {                     \
-    return diff::impl::Variable<type, diff::impl::FixedString{label}>{};                   \
+    return ddx::impl::Variable<type, ddx::impl::FixedString{label}>{};                   \
   }                                                                            \
   consteval auto operator""_##suffix(long double) {                            \
-    return diff::impl::Variable<type, diff::impl::FixedString{label}>{};                   \
+    return ddx::impl::Variable<type, ddx::impl::FixedString{label}>{};                   \
   }
 
 // var<"x"> — name a symbol.
 template <FixedString S, Numeric T = double>
 inline constexpr Variable<T, S> var{};
 
-} // namespace diff::impl
+} // namespace ddx::impl
 
 DEFINE_CONST_UDL(int, ci)
 DEFINE_CONST_UDL(double, cd)
@@ -309,29 +309,29 @@ DEFINE_VAR_UDL(int, vi, "c")
 DEFINE_VAR_UDL(double, vd, "v")
 
 namespace std {
-template <diff::impl::Numeric T, auto... V>
-struct tuple_size<diff::impl::Lit<T, V...>> : integral_constant<std::size_t, 2> {};
+template <ddx::impl::Numeric T, auto... V>
+struct tuple_size<ddx::impl::Lit<T, V...>> : integral_constant<std::size_t, 2> {};
 
-template <std::size_t I, diff::impl::Numeric T, auto... V>
-struct tuple_element<I, diff::impl::Lit<T, V...>> {
-  using type = typename diff::impl::detail::expression_element<T, I>::type;
+template <std::size_t I, ddx::impl::Numeric T, auto... V>
+struct tuple_element<I, ddx::impl::Lit<T, V...>> {
+  using type = typename ddx::impl::detail::expression_element<T, I>::type;
 };
 
-template <diff::impl::Numeric T, diff::impl::CFixedString auto C, bool F>
-struct tuple_size<diff::impl::Variable<T, C, F>> : integral_constant<std::size_t, 2> {
+template <ddx::impl::Numeric T, ddx::impl::CFixedString auto C, bool F>
+struct tuple_size<ddx::impl::Variable<T, C, F>> : integral_constant<std::size_t, 2> {
 };
 
-template <std::size_t I, diff::impl::Numeric T, diff::impl::CFixedString auto C, bool F>
-struct tuple_element<I, diff::impl::Variable<T, C, F>> {
-  using type = typename diff::impl::detail::expression_element<T, I>::type;
+template <std::size_t I, ddx::impl::Numeric T, ddx::impl::CFixedString auto C, bool F>
+struct tuple_element<I, ddx::impl::Variable<T, C, F>> {
+  using type = typename ddx::impl::detail::expression_element<T, I>::type;
 };
 } // namespace std
 
 #define PDV(x, label)                                                          \
-  diff::impl::Variable<diff::impl::Dual<std::decay_t<decltype(x)>>,                        \
-                 diff::impl::FixedString{label}> {}
+  ddx::impl::Variable<ddx::impl::Dual<std::decay_t<decltype(x)>>,                        \
+                 ddx::impl::FixedString{label}> {}
 #define PV(x, label)                                                           \
-  diff::impl::Variable<std::decay_t<decltype(x)>, diff::impl::FixedString{label}> {}
+  ddx::impl::Variable<std::decay_t<decltype(x)>, ddx::impl::FixedString{label}> {}
 // Lit(x), not Constant(x): deducing through an alias template is P1814, which
 // Clang lacks before 19.  Same resulting type.
-#define PC(x) diff::impl::Lit(x)
+#define PC(x) ddx::impl::Lit(x)

@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 template <auto S> struct symbol_type;
 
 // A symbol lifted to a type; spelled here because the list vocabulary needs it.
@@ -18,9 +18,9 @@ template <auto S> inline constexpr bool is_symbol_v<symbol_type<S>> = true;
 
 template <typename T>
 concept CSymbol = is_symbol_v<std::remove_cvref_t<T>>;
-} // namespace diff::impl
+} // namespace ddx::impl
 
-namespace diff::impl::mpl {
+namespace ddx::impl::mpl {
 
 template <class... T> struct mp_list {};
 template <class... T> mp_list(T...) -> mp_list<T...>;
@@ -33,7 +33,7 @@ inline constexpr bool is_mp_list_v<mp_list<T...>> = true;
 template <typename T> inline constexpr bool is_symbol_list_v = false;
 template <typename... T>
 inline constexpr bool is_symbol_list_v<mp_list<T...>> =
-    (::diff::impl::CSymbol<T> && ...);
+    (::ddx::impl::CSymbol<T> && ...);
 } // namespace detail
 
 template <typename L>
@@ -58,7 +58,7 @@ template <typename... T> consteval std::size_t mp_size(mp_list<T...>) noexcept {
   return sizeof...(T);
 }
 
-template <::diff::impl::CSymbol V, typename... T>
+template <::ddx::impl::CSymbol V, typename... T>
 consteval std::size_t mp_find(V, mp_list<T...>) noexcept {
   const std::array<bool, sizeof...(T)> hit{std::is_same_v<T, V>...};
   return static_cast<std::size_t>(std::find(hit.begin(), hit.end(), true) -
@@ -67,7 +67,7 @@ consteval std::size_t mp_find(V, mp_list<T...>) noexcept {
 
 template <auto Needle, typename... T>
 consteval std::size_t mp_find(mp_list<T...> list) noexcept {
-  return mp_find(::diff::impl::symbol_type<Needle>{}, list);
+  return mp_find(::ddx::impl::symbol_type<Needle>{}, list);
 }
 
 namespace detail {
@@ -183,13 +183,13 @@ using mp_unique = detail::rebuild_t<L, detail::unique_selection<L>()>;
 template <CTypeList L, auto Less>
 using mp_sort = detail::rebuild_t<L, detail::sort_selection<L, Less>()>;
 
-} // namespace diff::impl::mpl
+} // namespace ddx::impl::mpl
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // mp_list<symbol_type<...>...>, alphabetical by name: the `Syms` threaded
 // through every seeded sweep, and what turns a label into a slot index.
 template <typename L>
 concept CSymbolList = mpl::detail::is_symbol_list_v<std::remove_cvref_t<L>>;
 
-} // namespace diff::impl
+} // namespace ddx::impl

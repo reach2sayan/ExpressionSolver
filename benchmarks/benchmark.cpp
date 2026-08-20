@@ -1,4 +1,4 @@
-#include "api.hpp"
+#include "ddx.hpp"
 #include "drivers/symbolic.hpp"
 #include "dual/dual.hpp"
 #include "expr/bound.hpp"
@@ -11,14 +11,14 @@
 #include <math.h>
 #include <vector>
 
-using namespace diff::impl;
+using namespace ddx::impl;
 
 template <typename Eq, typename Pt>
 static void run_symbolic(benchmark::State &state, Eq &eq, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto gradients = eq.template gradient<diff::DiffMode::Symbolic>(pt);
+    auto gradients = eq.template gradient<ddx::DiffMode::Symbolic>(pt);
     benchmark::DoNotOptimize(gradients);
     benchmark::ClobberMemory();
   }
@@ -53,7 +53,7 @@ static void run_symbolic_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto J = ve.template jacobian<diff::DiffMode::Symbolic>(pt);
+    auto J = ve.template jacobian<ddx::DiffMode::Symbolic>(pt);
     benchmark::DoNotOptimize(J);
     benchmark::ClobberMemory();
   }
@@ -330,7 +330,7 @@ static void BM_Symbolic_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (const auto &pt : points) {
-      auto grads = eq.template gradient<diff::DiffMode::Symbolic>(pt);
+      auto grads = eq.template gradient<ddx::DiffMode::Symbolic>(pt);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();

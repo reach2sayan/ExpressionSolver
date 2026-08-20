@@ -1,5 +1,5 @@
 #pragma once
-#include "api.hpp"
+#include "ddx.hpp"
 
 #include "dual/dual.hpp"
 #include "dual/taylor_dual.hpp"
@@ -31,8 +31,8 @@
 #include <sstream>
 #include <stdexcept>
 
-using namespace diff::impl;
-using namespace diff::literals; // "x"_s
+using namespace ddx::impl;
+using namespace ddx::literals; // "x"_s
 
 // Test-side conveniences for the drivers' plain-tuple results.  They live here,
 // not in the library: they are the accessors the tuple return exists to avoid.

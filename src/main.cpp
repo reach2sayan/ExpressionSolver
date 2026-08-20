@@ -8,7 +8,7 @@
 //
 // Both give the same numbers; see the last two sections for the difference.
 
-#include "api.hpp"                     // the public surface: Equation, var, named
+#include "ddx.hpp"                     // the public surface: Equation, var, named
 #include "drivers/coupling.hpp"        // hessian_pattern(), color_columns()
 #include <tuple>
 #include "drivers/hessian.hpp" // hessian(), gradient()
@@ -24,7 +24,7 @@
 #include <string>
 #include <utility>
 
-using namespace diff::impl;
+using namespace ddx::impl;
 
 // <format> plus a stream, so this does not gate on libstdc++ shipping <print>.
 template <typename... Args>
@@ -161,8 +161,8 @@ int main() {
 
   // ---- GRADIENT
   println("\nGRADIENT");
-  row("lambda  gradient(f, xs)           [0]", diff::impl::gradient(lambda, xs)[0],
-      bench_ns([&] { return diff::impl::gradient(lambda, xs)[0]; }, 2000));
+  row("lambda  gradient(f, xs)           [0]", ddx::impl::gradient(lambda, xs)[0],
+      bench_ns([&] { return ddx::impl::gradient(lambda, xs)[0]; }, 2000));
   row("graph   gradient<Reverse>(expr,p) [0]",
       Equation{gplain}.gradient(p)[0],
       bench_ns([&] { return Equation{gplain}.gradient(p)[0]; }));
@@ -175,10 +175,10 @@ int main() {
   // ---- HESSIAN.  hessian() routes on what it is given: the lambda routes
   // allocate, the symbolic one returns a packed md_tensor on the stack.
   println("\nHESSIAN            H(0,2)");
-  row("lambda  hessian(f, xs)", std::get<2>(diff::impl::hessian(lambda, xs))[0 * xs.size() + 2],
-      bench_ns([&] { return std::get<2>(diff::impl::hessian(lambda, xs))[0 * xs.size() + 2]; }, 1000));
-  row("graph   hessian(expr, xs)", std::get<2>(diff::impl::hessian(graph, xs))[0 * xs.size() + 2],
-      bench_ns([&] { return std::get<2>(diff::impl::hessian(graph, xs))[0 * xs.size() + 2]; }, 1000));
+  row("lambda  hessian(f, xs)", std::get<2>(ddx::impl::hessian(lambda, xs))[0 * xs.size() + 2],
+      bench_ns([&] { return std::get<2>(ddx::impl::hessian(lambda, xs))[0 * xs.size() + 2]; }, 1000));
+  row("graph   hessian(expr, xs)", std::get<2>(ddx::impl::hessian(graph, xs))[0 * xs.size() + 2],
+      bench_ns([&] { return std::get<2>(ddx::impl::hessian(graph, xs))[0 * xs.size() + 2]; }, 1000));
   {
     const auto Hs = Equation{graph}.hessian(p);
     row("graph   hessian<Reverse>(expr, p)", (Hs[0, 2]), bench_ns([&] {
@@ -244,9 +244,9 @@ int main() {
     const auto chain_graph = make_chain8();
 
     const double t_lambda =
-        bench_ns([&] { return std::get<2>(diff::impl::hessian(chain_lambda, qs))[0 * qs.size() + 7]; }, 400);
+        bench_ns([&] { return std::get<2>(ddx::impl::hessian(chain_lambda, qs))[0 * qs.size() + 7]; }, 400);
     const double t_graph =
-        bench_ns([&] { return std::get<2>(diff::impl::hessian(chain_graph, qs))[0 * qs.size() + 7]; }, 400);
+        bench_ns([&] { return std::get<2>(ddx::impl::hessian(chain_graph, qs))[0 * qs.size() + 7]; }, 400);
 
     using G = std::remove_cvref_t<decltype(chain_graph)>;
     constexpr auto pattern = hessian_pattern<G>();

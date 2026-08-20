@@ -15,7 +15,7 @@
 #include <tuple>
 #include <vector>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 namespace detail {
 // Over storage the caller has already seeded.
@@ -143,4 +143,4 @@ HessianOwned hessian(F &&f, const std::span<const double> x) {
 
 } // namespace detail
 
-} // namespace diff::impl
+} // namespace ddx::impl

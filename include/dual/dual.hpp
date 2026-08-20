@@ -1,7 +1,7 @@
 #pragma once
 
 #include "expr/expressions.hpp"
-#include "util/config.hpp" // DIFF_ALWAYS_INLINE
+#include "util/config.hpp" // DDX_ALWAYS_INLINE
 #include "expr/unary_math.hpp"
 #include "util/fmt.hpp"
 #include <array>
@@ -10,7 +10,7 @@
 #include <tuple>
 #include <type_traits>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // (a+be)(c+de) = ac + (ad+bc)e, so a dual commutes exactly when the scalar
 // underneath it does.
@@ -103,18 +103,18 @@ template <typename A, typename B>
 concept DualCompatible = DualLike<A> && DualLike<B> &&
                          std::same_as<dual_value_t<A>, dual_value_t<B>>;
 
-} // namespace diff::impl
+} // namespace ddx::impl
 
 namespace std {
-template <diff::impl::Numeric T>
-struct tuple_size<diff::impl::Dual<T>> : integral_constant<std::size_t, 2> {};
-template <diff::impl::Numeric T, std::size_t N>
-struct tuple_element<N, diff::impl::Dual<T>> {
+template <ddx::impl::Numeric T>
+struct tuple_size<ddx::impl::Dual<T>> : integral_constant<std::size_t, 2> {};
+template <ddx::impl::Numeric T, std::size_t N>
+struct tuple_element<N, ddx::impl::Dual<T>> {
   using type = T;
 };
 } // namespace std
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // nth_dual_t<T, N> = Dual<Dual<...<T>...>> nested N times
 template <Numeric T, std::size_t N> consteval auto nth_dual_impl() noexcept {
@@ -191,48 +191,48 @@ template <typename C, typename T>
 concept ScalarOperand = !std::same_as<std::remove_cvref_t<C>, Dual<T>>;
 
 template <Numeric T>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a, const Dual<T> &b) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
   return Dual<T>{av + bv, ad + bd};
 }
 
 template <Numeric T, ScalarOperand<T> C>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a, const C &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av + s, ad};
 }
 template <Numeric T>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a, const Dual<T> &b) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
   return Dual<T>{av - bv, ad - bd};
 }
 template <Numeric T, ScalarOperand<T> C>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a, const C &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av - s, ad};
 }
 template <Numeric T, ScalarOperand<T> C>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_sub(const C &s, const Dual<T> &a) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s - a == -(a - s);
   return Dual<T>{-(av - s), -ad};
 }
 template <Numeric T>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a, const Dual<T> &b) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
   return Dual<T>{av * bv, ad * bv + av * bd};
 }
 template <Numeric T, ScalarOperand<T> C>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
   return Dual<T>{av * s, ad * s};
 }
 
 // Reciprocal form: one hardware division per nesting level instead of two.
 template <Numeric T>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b) noexcept {
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
   const T inv = T{1} / bv;
@@ -240,13 +240,13 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a, const Dual<T> &b
   return Dual<T>{q, (ad - q * bd) * inv};
 }
 template <Numeric T, ScalarOperand<T> C>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a, const C &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a, const C &s) noexcept {
   const auto &[av, ad] = a; // s is a zero-derivative constant
   const T inv = T{1} / T(s);
   return Dual<T>{av * inv, ad * inv};
 }
 template <Numeric T, ScalarOperand<T> C>
-DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (wide-scalar-safe)
   const T inv = T{1} / av;
   const T q = T{s} * inv; // value = s / a
@@ -258,7 +258,7 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noex
 // operators.  The scalar shapes are separate kernels, never a promotion to a
 // zero-derivative Dual: promotion leaves an `ad + 0` IEEE will not let the
 // compiler fold.
-#define DIFF_DUAL_BINOP(OP, COMB, LEFT)                                        \
+#define DDX_DUAL_BINOP(OP, COMB, LEFT)                                        \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
     return COMB(a, b);                                                         \
@@ -271,11 +271,11 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noex
   constexpr auto operator OP(C &&s, A &&a) noexcept {                          \
     return LEFT;                                                               \
   }
-DIFF_DUAL_BINOP(+, dual_add, dual_add(a, s))
-DIFF_DUAL_BINOP(-, dual_sub, dual_sub(s, a))
-DIFF_DUAL_BINOP(*, dual_mul, dual_mul(a, s))
-DIFF_DUAL_BINOP(/, dual_div, dual_div(s, a))
-#undef DIFF_DUAL_BINOP
+DDX_DUAL_BINOP(+, dual_add, dual_add(a, s))
+DDX_DUAL_BINOP(-, dual_sub, dual_sub(s, a))
+DDX_DUAL_BINOP(*, dual_mul, dual_mul(a, s))
+DDX_DUAL_BINOP(/, dual_div, dual_div(s, a))
+#undef DDX_DUAL_BINOP
 
 // ---- unary minus + math functions (eager) ---------------------------------
 template <DualLike A> constexpr auto operator-(A &&a) noexcept {
@@ -287,7 +287,7 @@ template <DualLike A> constexpr auto operator-(A &&a) noexcept {
 // Chain rule for a unary math node; the primal is reused when the descriptor
 // can express its derivative in terms of f(u).
 template <template <Numeric> class Fn> struct unary_dual_combine {
-  DIFF_ALWAYS_INLINE constexpr auto operator()(const DualLike auto &x) const noexcept {
+  DDX_ALWAYS_INLINE constexpr auto operator()(const DualLike auto &x) const noexcept {
     const auto &[v, d] = x;
     // Comp types the primal and the result, and must stay a Dual at depth >= 2
     // or fv truncates.  S is the base scalar, and the only thing the descriptor
@@ -316,12 +316,12 @@ struct abs_combine {
   }
 };
 // One chain-rule overload per unary math function, from the registry.
-#define DIFF_DUAL_UNARY(FN, OP, LABEL)                                         \
+#define DDX_DUAL_UNARY(FN, OP, LABEL)                                         \
   template <DualLike A> constexpr auto FN(A &&a) noexcept {                    \
     return unary_dual_combine<detail::OP##Fn>{}(a);                            \
   }
-DIFF_UNARY_MATH_TABLE(DIFF_DUAL_UNARY)
-#undef DIFF_DUAL_UNARY
+DDX_UNARY_MATH_TABLE(DDX_DUAL_UNARY)
+#undef DDX_DUAL_UNARY
 
 template <DualLike A> constexpr auto abs(A &&a) noexcept {
   return abs_combine{}(a);
@@ -493,13 +493,13 @@ static_assert(Numeric<Dual<float>>);
 using dual = nth_dual_t<double, 1>;    // first-order forward dual
 using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 
-} // namespace diff::impl
+} // namespace ddx::impl
 
 // `v+de` -- the two-term case of the shared series renderer.
-template <diff::impl::Numeric T>
-struct std::formatter<diff::impl::Dual<T>, char>
-    : diff::impl::detail::dual_formatter_base<T> {
-  auto format(const diff::impl::Dual<T> &d, std::format_context &ctx) const {
+template <ddx::impl::Numeric T>
+struct std::formatter<ddx::impl::Dual<T>, char>
+    : ddx::impl::detail::dual_formatter_base<T> {
+  auto format(const ddx::impl::Dual<T> &d, std::format_context &ctx) const {
     this->series(ctx, std::array{d.value(), d.deriv()});
     return ctx.out();
   }

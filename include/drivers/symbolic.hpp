@@ -21,9 +21,9 @@
 #include <string_view>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
-namespace mp = diff::impl::mpl;
+namespace mp = ddx::impl::mpl;
 
 template <CExpression Expr>
 using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
@@ -64,7 +64,7 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 // gradient.
 template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds,
           CNumericBuffer Grads>
-DIFF_ALWAYS_INLINE constexpr auto
+DDX_ALWAYS_INLINE constexpr auto
 reverse_sweep(const Expr &expr, const Seeds &seeds, Grads &grads) noexcept {
   using T = typename std::remove_cvref_t<Expr>::value_type;
   node_cache_t<Expr> cache{};
@@ -86,7 +86,7 @@ template <auto Colors, CExpression Expr, CNumericBuffer Point, typename Harvest>
       const typename std::remove_cvref_t<Expr>::value_type &,
       std::array<typename std::remove_cvref_t<Expr>::value_type,
                  detail::expr_arity_v<std::remove_cvref_t<Expr>>> &>
-DIFF_ALWAYS_INLINE constexpr void
+DDX_ALWAYS_INLINE constexpr void
 color_sweeps(const Expr &expr, const Point &x, Harvest &&harvest) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
@@ -368,7 +368,7 @@ template <std::size_t Order, CExpression Expr,
           Numeric S = scalar_base_t<T>,
           std::size_t NVars = detail::expr_arity_v<Expr>>
   requires(Order > 0 && NVars == 1)
-[[nodiscard]] DIFF_ALWAYS_INLINE constexpr S
+[[nodiscard]] DDX_ALWAYS_INLINE constexpr S
 univariate_derivative_impl(const Expr &expr, S x0) noexcept {
   using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   using TD = TaylorDual<S, Order>;
@@ -530,4 +530,4 @@ template <CExpression Expr>
   return SparseHessian<Expr>{detail::hessian_values_sparse(expr, x)};
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

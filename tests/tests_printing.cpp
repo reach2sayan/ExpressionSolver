@@ -11,9 +11,9 @@
 // ===========================================================================
 
 namespace {
-constexpr auto px = diff::var<"x">;
-constexpr auto py = diff::var<"y">;
-constexpr auto pz = diff::var<"z">;
+constexpr auto px = ddx::var<"x">;
+constexpr auto py = ddx::var<"y">;
+constexpr auto pz = ddx::var<"z">;
 } // namespace
 
 // A unary node must name its operator, not print as its bare child.
@@ -57,7 +57,7 @@ TEST(ExpressionPrinting, FrozenVariablesPrintAsConstants) {
   EXPECT_EQ(std::format("{}", px * py), "x * y");
   EXPECT_EQ(
       std::format("{}",
-                  make_all_constant_except<diff::impl::FixedString{"x"}>(px * py)),
+                  make_all_constant_except<ddx::impl::FixedString{"x"}>(px * py)),
       "x * y_c");
 }
 
@@ -78,7 +78,7 @@ TEST(ExpressionPrinting, StreamInserterMatchesFormat) {
 // A dual-valued constant is reachable through PDV, so the leaf printer has to
 // cope with a value_type that is not an arithmetic type.
 TEST(ExpressionPrinting, DualValuedLeavesPrint) {
-  const diff::impl::Constant<diff::impl::Dual<double>> c{diff::impl::Dual<double>{1.5, 2.0}};
+  const ddx::impl::Constant<ddx::impl::Dual<double>> c{ddx::impl::Dual<double>{1.5, 2.0}};
   EXPECT_EQ(std::format("{}", c), "1.5+2ε");
   EXPECT_EQ(std::format("{::.2f}", c), "1.50+2.00ε");
 }
@@ -92,7 +92,7 @@ TEST(ExpressionPrinting, RejectsUnparseableValueSpec) {
 }
 
 TEST(ExpressionPrinting, EquationPrintsFunctionsAndGradientRows) {
-  auto eq = diff::Equation{px * py};
+  auto eq = ddx::Equation{px * py};
   const auto text = std::format("{}", eq);
   EXPECT_TRUE(text.starts_with("f0: x * y\n"));
   EXPECT_NE(text.find("grad: "), std::string::npos);
@@ -102,8 +102,8 @@ TEST(ExpressionPrinting, EquationPrintsFunctionsAndGradientRows) {
 // number/punctuation primitives are written once, so a spec means the same
 // thing in both and the iostream spelling cannot drift from std::format.
 TEST(DualPrinting, EachDualRendersItsOwnShape) {
-  const diff::impl::Dual<double> d{1.5, 2.0};
-  diff::impl::TaylorDual<double, 3> t;
+  const ddx::impl::Dual<double> d{1.5, 2.0};
+  ddx::impl::TaylorDual<double, 3> t;
   t.c = {1.0, 2.0, 3.0, 4.0};
 
   EXPECT_EQ(std::format("{}", d), "1.5+2ε");
@@ -111,8 +111,8 @@ TEST(DualPrinting, EachDualRendersItsOwnShape) {
 }
 
 TEST(DualPrinting, OneSpecReachesEveryPart) {
-  const diff::impl::Dual<double> d{1.5, 2.0};
-  diff::impl::TaylorDual<double, 2> t;
+  const ddx::impl::Dual<double> d{1.5, 2.0};
+  ddx::impl::TaylorDual<double, 2> t;
   t.c = {1.0, 2.0, 3.0};
 
   EXPECT_EQ(std::format("{:.2f}", d), "1.50+2.00ε");
@@ -121,14 +121,14 @@ TEST(DualPrinting, OneSpecReachesEveryPart) {
 
 // Without bracketing, Dual<Dual<double>> reads as one four-term series.
 TEST(DualPrinting, NestedCoefficientsAreBracketed) {
-  const diff::impl::Dual<diff::impl::Dual<double>> d{diff::impl::Dual<double>{1.0, 2.0},
-                                         diff::impl::Dual<double>{3.0, 4.0}};
+  const ddx::impl::Dual<ddx::impl::Dual<double>> d{ddx::impl::Dual<double>{1.0, 2.0},
+                                         ddx::impl::Dual<double>{3.0, 4.0}};
   EXPECT_EQ(std::format("{}", d), "(1+2ε)+(3+4ε)ε");
 }
 
 TEST(DualPrinting, StreamInserterMatchesFormat) {
-  const diff::impl::Dual<double> d{1.5, 2.0};
-  diff::impl::TaylorDual<double, 2> t;
+  const ddx::impl::Dual<double> d{1.5, 2.0};
+  ddx::impl::TaylorDual<double, 2> t;
   t.c = {1.0, 2.0, 3.0};
 
   std::ostringstream oss;
@@ -139,10 +139,10 @@ TEST(DualPrinting, StreamInserterMatchesFormat) {
 // Every dual is reachable as an expression leaf, which is the reason both have
 // to be formattable and not just Dual.
 TEST(DualPrinting, AllThreeWorkAsExpressionLeaves) {
-  EXPECT_EQ(std::format("{}", diff::impl::Constant<diff::impl::Dual<double>>{
-                                  diff::impl::Dual<double>{5.0, 1.0}}),
+  EXPECT_EQ(std::format("{}", ddx::impl::Constant<ddx::impl::Dual<double>>{
+                                  ddx::impl::Dual<double>{5.0, 1.0}}),
             "5+1ε");
-  EXPECT_EQ(std::format("{}", diff::impl::Constant<diff::impl::TaylorDual<double, 2>>{
-                                  diff::impl::TaylorDual<double, 2>{5.0}}),
+  EXPECT_EQ(std::format("{}", ddx::impl::Constant<ddx::impl::TaylorDual<double, 2>>{
+                                  ddx::impl::TaylorDual<double, 2>{5.0}}),
             "5+0ε+0ε^2");
 }

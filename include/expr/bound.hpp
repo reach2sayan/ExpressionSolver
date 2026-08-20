@@ -15,7 +15,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // A compile-time label-keyed map: one slot per symbol.
 template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
@@ -38,8 +38,8 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
     }
   }
 
-  // Subscript spelling: m["x"_s] = v.  See DIFF_KEYED_ACCESSORS.
-  DIFF_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
+  // Subscript spelling: m["x"_s] = v.  See DDX_KEYED_ACCESSORS.
+  DDX_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 
   template <FixedString S> constexpr void set(const Scalar &v) noexcept {
     slot<S>(*this) = v;
@@ -149,7 +149,7 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     return map_type::template slot<S>(std::forward<decltype(self)>(self).map);
   }
 
-  DIFF_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
+  DDX_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 };
 
 template <CExpression Expr, CValueMap Map> Bound(Expr, Map) -> Bound<Expr, Map>;
@@ -273,4 +273,4 @@ template <CExpression Expr, CEvalArg... Args>
   return detail::eval_dispatch(e, args...);
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

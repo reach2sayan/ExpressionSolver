@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // md_tensor: an owning, constant-evaluable tensor with compile-time extents.
 // Both t[i, j, k] and t[i][j][k] work.  The latter is not a slice -- a
@@ -204,4 +204,4 @@ constexpr void assign_row(md_tensor<S, Ext, Layout> &t,
   }
 }
 
-} // namespace diff::impl
+} // namespace ddx::impl

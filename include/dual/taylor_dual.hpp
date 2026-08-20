@@ -9,7 +9,7 @@
 #include <ranges>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 // TaylorDual<S, N>: flat N+1 normalized coefficients c[k] = f^(k)(x)/k! for
 // univariate higher-order AD.  Multiply is truncated convolution, O(N^2)
@@ -409,15 +409,15 @@ template <Numeric S, std::size_t N>
 inline constexpr bool is_dual_family_v<TaylorDual<S, N>> = true;
 } // namespace detail
 
-} // namespace diff::impl
+} // namespace ddx::impl
 
 // The shared series renderer over the coefficient array.  These are the
 // normalized coefficients f^(k)/k!; univariate_derivative puts the factorial
 // back, not this.
-template <diff::impl::Numeric S, std::size_t N>
-struct std::formatter<diff::impl::TaylorDual<S, N>, char>
-    : diff::impl::detail::dual_formatter_base<S> {
-  auto format(const diff::impl::TaylorDual<S, N> &t, std::format_context &ctx) const {
+template <ddx::impl::Numeric S, std::size_t N>
+struct std::formatter<ddx::impl::TaylorDual<S, N>, char>
+    : ddx::impl::detail::dual_formatter_base<S> {
+  auto format(const ddx::impl::TaylorDual<S, N> &t, std::format_context &ctx) const {
     this->series(ctx, t.c);
     return ctx.out();
   }

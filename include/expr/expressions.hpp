@@ -10,7 +10,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 template <typename T>
 concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
@@ -33,7 +33,7 @@ concept Numeric = CArithmetic<T> || CFieldLike<T>;
 
 // Declared, not deduced: Numeric admits matrices and quaternions, and the
 // default is the safe answer.  Only simplify.hpp reads it.  Specialise directly
-// for a class template; DIFF_COMMUTATIVE_MULTIPLY below covers concrete types.
+// for a class template; DDX_COMMUTATIVE_MULTIPLY below covers concrete types.
 template <typename T>
 inline constexpr bool is_commutative_multiply_v = CArithmetic<T>;
 
@@ -313,24 +313,24 @@ struct expression_element<V, I,
 };
 } // namespace detail
 
-} // namespace diff::impl
+} // namespace ddx::impl
 
-// At GLOBAL scope: the body opens namespace diff::impl.  Variadic, so a
+// At GLOBAL scope: the body opens namespace ddx::impl.  Variadic, so a
 // template-id containing commas survives the preprocessor.
-#define DIFF_COMMUTATIVE_MULTIPLY(...)                                         \
-  namespace diff::impl {                                                             \
+#define DDX_COMMUTATIVE_MULTIPLY(...)                                         \
+  namespace ddx::impl {                                                             \
   template <>                                                                  \
   inline constexpr bool is_commutative_multiply_v<__VA_ARGS__> = true;         \
   }
 
 namespace std {
-template <diff::impl::COperation Op, diff::impl::CExpression... Children>
-struct tuple_size<diff::impl::Expression<Op, Children...>>
+template <ddx::impl::COperation Op, ddx::impl::CExpression... Children>
+struct tuple_size<ddx::impl::Expression<Op, Children...>>
     : integral_constant<size_t, 2> {};
 
-template <size_t I, diff::impl::COperation Op, diff::impl::CExpression... Children>
-struct tuple_element<I, diff::impl::Expression<Op, Children...>> {
-  using type = typename diff::impl::detail::expression_element<
-      typename diff::impl::Expression<Op, Children...>::value_type, I>::type;
+template <size_t I, ddx::impl::COperation Op, ddx::impl::CExpression... Children>
+struct tuple_element<I, ddx::impl::Expression<Op, Children...>> {
+  using type = typename ddx::impl::detail::expression_element<
+      typename ddx::impl::Expression<Op, Children...>::value_type, I>::type;
 };
 } // namespace std

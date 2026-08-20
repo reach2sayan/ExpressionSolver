@@ -1,7 +1,7 @@
-[![CMake](https://github.com/reach2sayan/ExpressionSolver/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/reach2sayan/ExpressionSolver/actions/workflows/cmake-multi-platform.yml)
+[![CMake](https://github.com/reach2sayan/ddx/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/reach2sayan/ddx/actions/workflows/cmake-multi-platform.yml)
 [![C++](https://img.shields.io/badge/C++-%2300599C.svg?logo=c%2B%2B&logoColor=white)](#)
 
-# Expression Differentiator
+# ddx
 
 A header-only C++23 library for symbolic expression trees and automatic
 differentiation: symbolic derivatives, forward mode (dual numbers), reverse mode
@@ -9,8 +9,8 @@ differentiation: symbolic derivatives, forward mode (dual numbers), reverse mode
 univariate derivatives — all usable at run time or inside `constexpr`.
 
 ```cpp
-#include "expression_differentiator.hpp"
-using namespace diff;
+#include "ddx.hpp"
+using namespace ddx;
 
 constexpr auto x = var<"x">;
 constexpr auto y = var<"y">;
@@ -53,33 +53,21 @@ is used automatically when your toolchain has no complete `<mdspan>`.
 With CMake, link the interface target — it puts `include/` on your include path:
 
 ```cmake
-add_subdirectory(ExpressionDifferentiator)
-target_link_libraries(my_app PRIVATE ExpressionDifferentiator::diff)   # or: diff
+add_subdirectory(ddx)
+target_link_libraries(my_app PRIVATE ddx::ddx)   # or: ddx
 ```
 
 Then include the public header:
 
 ```cpp
-#include "api.hpp"           // the whole public surface
+#include "ddx.hpp"    // the whole public surface
 
-using namespace diff;        // assumed by every example below
+using namespace ddx;  // assumed by every example below
 ```
 
-`expression_differentiator.hpp`, at the repository root, is an umbrella header
-that pulls in `api.hpp` and every implementation header besides. Add the root to
-your include path to use it:
+### What `namespace ddx` contains
 
-```cmake
-target_include_directories(my_app PRIVATE ExpressionDifferentiator)
-```
-
-```cpp
-#include "expression_differentiator.hpp"   // everything
-```
-
-### What `namespace diff` contains
-
-`api.hpp` puts six names in `namespace diff`, and that is the whole surface:
+`ddx.hpp` puts nine names in `namespace ddx`, and that is the whole surface:
 
 | Name | Purpose |
 |---|---|
@@ -93,8 +81,8 @@ target_include_directories(my_app PRIVATE ExpressionDifferentiator)
 The operators (`+`, `*`, …), the math functions (`sin`, `exp`, …), `operator<<`
 and the `std::formatter` specialisations are deliberately *not* on that list.
 They are found by argument-dependent lookup, so they work on an expression
-without their names being visible. `using namespace diff;` therefore brings in
-six names, not a hundred and a half.
+without their names being visible. `using namespace ddx;` therefore brings in
+nine names, not a hundred and a half.
 
 The convenience macros (`PC`, `PV`, `PDV`) and the user-defined literals (`_cd`,
 `_ci`, `_vd`, `_vi`) are global, in no namespace at all.
@@ -465,7 +453,7 @@ takes a point of `double`; the seeding happens inside. Positional and named
 arguments cost exactly the same — the reordering is resolved at compile time.
 
 **Compile with the flags the project already sets.** `-ffp-contract=fast` and
-`-fno-math-errno` (`DIFF_FP_FLAGS=ON`, the default) are both worth having.
+`-fno-math-errno` (`DDX_FP_FLAGS=ON`, the default) are both worth having.
 `-ffast-math` is **not**: it was measured at 19% *slower* here, and it changes
 derivative values. `-march=native` (`ENABLE_NATIVE_ARCH=ON`) is on by default.
 
@@ -526,12 +514,12 @@ results, and `src/main.cpp` for a runnable tour of every entry point.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `DIFF_BUILD_BENCHMARKS` | `ON` | build the Google Benchmark targets |
-| `DIFF_BUILD_COMPARE` | `OFF` | build comparison benchmarks against autodiff (needs Eigen) |
+| `DDX_BUILD_BENCHMARKS` | `ON` | build the Google Benchmark targets |
+| `DDX_BUILD_COMPARE` | `OFF` | build comparison benchmarks against autodiff (needs Eigen) |
 | `ENABLE_NATIVE_ARCH` | `ON` | `-march=native` (falls back to `x86-64-v3`) |
-| `DIFF_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
-| `DIFF_MDSPAN_MODE` | `auto` | `auto` / `std` / `vendored` — which `mdspan` to bind to |
-| `DIFF_DEDUCING_THIS` | `auto` | `auto` / `on` / `off` — accessor spelling (P0847) |
+| `DDX_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
+| `DDX_MDSPAN_MODE` | `auto` | `auto` / `std` / `vendored` — which `mdspan` to bind to |
+| `DDX_DEDUCING_THIS` | `auto` | `auto` / `on` / `off` — accessor spelling (P0847) |
 
 `-ffast-math` is not used and is not recommended: it changes derivative values.
 

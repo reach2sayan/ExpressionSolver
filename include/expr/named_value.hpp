@@ -5,7 +5,7 @@
 
 #include <type_traits>
 
-namespace diff::impl {
+namespace ddx::impl {
 
 template <FixedString Sym, Numeric V> struct NamedValue {
   static constexpr auto symbol = Sym;
@@ -22,4 +22,4 @@ template <typename T> inline constexpr bool is_named_value_v = false;
 template <FixedString S, Numeric V>
 inline constexpr bool is_named_value_v<NamedValue<S, V>> = true;
 
-} // namespace diff::impl
+} // namespace ddx::impl
