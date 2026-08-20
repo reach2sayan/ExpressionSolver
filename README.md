@@ -67,14 +67,15 @@ using namespace ddx;  // assumed by every example below
 
 ### What `namespace ddx` contains
 
-`ddx.hpp` puts nine names in `namespace ddx`, and that is the whole surface:
+`ddx.hpp` puts twelve names in `namespace ddx`, and that is the whole surface:
 
 | Name | Purpose |
 |---|---|
 | `Equation` | the derivative API — every derivative entry point is a member |
 | `var<"x">`, `sym<"x">`, `idx<N>()` | name a symbol; index into an `Equation` |
 | `literals` — `"x"_s` | the symbol literal, as a namespace |
-| `named<"x">(v)` | one keyword argument of a point |
+| `named<"x">(v)`, `NamedValue` | one keyword argument of a point, or one map entry |
+| `map(…)`, `Map` | a compile-time map of those entries |
 | `DiffMode` | `Symbolic` vs `Reverse` |
 | `dual`, `dual2nd` | the symbol value type `Equation::hessian` needs |
 
@@ -82,7 +83,7 @@ The operators (`+`, `*`, …), the math functions (`sin`, `exp`, …), `operator
 and the `std::formatter` specialisations are deliberately *not* on that list.
 They are found by argument-dependent lookup, so they work on an expression
 without their names being visible. `using namespace ddx;` therefore brings in
-nine names, not a hundred and a half.
+twelve names, not a hundred and a half.
 
 The convenience macros (`PC`, `PV`, `PDV`) and the user-defined literals (`_cd`,
 `_ci`, `_vd`, `_vi`) are global, in no namespace at all.
@@ -208,6 +209,67 @@ extra value is a compile error. The named form binds by name and is immune to
 ordering entirely — prefer them when the symbol set is large. A
 non-sized range that runs short throws `std::out_of_range` (a compile error
 during constant evaluation).
+
+### A compile-time map
+
+The same keyword arguments also stand on their own, as `map`:
+
+```cpp
+constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+
+static_assert(m.get<"n">() == 3);          // int
+static_assert(m["x"_s] == 1.5);            // double
+static_assert(m.contains<"n">());
+static_assert(m.size == 2);
+```
+
+The keys live in the type, so a lookup is a member access the compiler has
+already resolved — there is no search, no hashing, and nothing to keep in step
+at run time. The values do *not* have to share a type: each slot keeps exactly
+what it was given, which is what separates this from the point of an
+expression.
+
+**The entries, in every spelling.** A map is an aggregate over its entries, so
+braces work as well as the `map(…)` call, and an entry can be written as a
+keyword argument, as a label/value pair, or as a variable/value pair:
+
+```cpp
+constexpr auto x = var<"x">;
+constexpr auto n = var<"n", int>;
+
+Map{named<"n">(3), named<"x">(1.5)};                  // keyword argument
+Map{NamedValue{"n"_s, 3}, NamedValue{x, 1.5}};        // label pair, variable pair
+map(named(n, 3), named(x, 1.5));                      // named(), keyed by a tag
+Map<NamedValue<"n", int>, NamedValue<"x", double>>{{3}, {1.5}};   // type spelled out
+```
+
+All four are the same type. What no spelling can do is `{"n", 3}` with a bare
+string: a braced list has no type for the compiler to read `"n"` out of, and the
+key has to reach the *type* — so the label comes in as `"n"_s`, as `var<"n">`,
+or as the `named<"n">` template argument.
+
+**Everything else it answers.** Writing a slot is in place; adding or removing
+one gives a new map, since the keys are part of the type:
+
+```cpp
+auto m2 = m;
+m2.set<"x">(2.5);                          // in place — same type
+m2["x"_s] = 2.5;                           // the same write
+
+constexpr auto m3 = m.insert(named<"y">('c'));   // 3 entries, m untouched
+constexpr auto m4 = m3.erase<"n">();             // 2 entries, order preserved
+constexpr auto m5 = m.erase<"n">().insert(named<"n">(2.5f));   // "n" is now float
+
+m.for_each([](auto key, const auto &v) { /* key.name is "n", then "x" */ });
+m.keys();                                  // {"n", "x"} — entry order, not sorted
+```
+
+`m == m2` compares keys in order and then values; a map whose keys are permuted
+is a different type and does not compare at all. Asking for a key that is not
+there is a compile error (`Map: key not present`), as is a duplicate key.
+
+A map is a container, not a point: `f.eval(…)` takes the `named<"x">(v)`
+arguments themselves, not a map of them.
 
 ## Derivatives: the `Equation` API
 
@@ -535,6 +597,11 @@ auto f = exp(x) * sin(y) + pow(x, 2.0);
 f.eval(1.0, 2.0);                              // positional (alphabetical order!)
 f.eval(named<"y">(2.0), named<"x">(1.0));      // by name
 
+// a compile-time map of the same keyword arguments
+constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+static_assert(m.get<"n">() == 3 && m["x"_s] == 1.5);
+m.insert(named<"y">('c'));                     // new key, new type
+
 // scalar derivatives
 auto eq = Equation{f};
 eq.evaluate(1.0, 2.0);
@@ -571,6 +638,8 @@ Common compile-time messages and what they mean:
 | `eval: supply exactly one value per symbol, in canonical order` | wrong number of positional values — canonical order is alphabetical |
 | `eval: no value supplied for this symbol` | the point does not cover every symbol |
 | no matching call to `hessian` | the symbols are not `dual`-valued — use `var<"x", dual>`, or use `derivative_tensor<2>` |
+| `Map: key not present (see keys())` | the map has no such key — `keys()` lists the ones it has |
+| `map: duplicate key` / `Map: duplicate key` | two entries name the same key |
 
 At run time the library throws only where a wrong point would otherwise pass
 silently, and always `std::out_of_range`: an input range that supplies fewer

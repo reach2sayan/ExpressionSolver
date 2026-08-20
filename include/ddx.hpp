@@ -3,6 +3,7 @@
 // lives in ddx::impl.  Operators and math functions are found by ADL, so they
 // are deliberately not re-exported here.
 #include "expr/equation.hpp"
+#include "expr/named_map.hpp"
 
 namespace ddx {
 
@@ -22,8 +23,15 @@ namespace literals = impl::literals;
 // eq[idx<1>()] -- the subscript spelling of Equation::get<N>().
 using impl::idx;
 
-// named<"x">(3.0) -- one keyword argument of a point.
+// named<"x">(3.0) -- one keyword argument of a point, or one map entry.
+// NamedValue is the type behind it: NamedValue{"x"_s, 3.0}, NamedValue{x, 3.0}.
 using impl::named;
+using impl::NamedValue;
+
+// map(named<"n">(3), named<"x">(1.5)) -- a compile-time map of those entries,
+// and Map{...}, the brace spelling of the same thing.
+using impl::map;
+using impl::Map;
 
 // Symbolic (evaluate the stored partial trees) vs Reverse (one sweep, no trees).
 using impl::DiffMode;

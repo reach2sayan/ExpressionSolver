@@ -2366,3 +2366,155 @@ TEST(ForwardDriver, RepeatedCallsDoNotLeakSeeds) {
     }
   }
 }
+
+// ===========================================================================
+// Map — the heterogeneous compile-time map.  ValueMap (tests_math.cpp) is the
+// homogeneous one; these pin what that one cannot do.
+// ===========================================================================
+
+namespace {
+
+using ddx::impl::Map;
+using ddx::impl::NamedValue;
+
+constexpr auto kMapX = var<"x">;
+constexpr auto kMapN = var<"n", int>;
+
+} // namespace
+
+TEST(MapTest, KeepsTheValueTypeOfEachEntry) {
+  constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+  static_assert(m.size == 2);
+  static_assert(std::is_same_v<decltype(m)::value_type_of<"n">, int>);
+  static_assert(std::is_same_v<decltype(m)::value_type_of<"x">, double>);
+  EXPECT_EQ(m.get<"n">(), 3);
+  EXPECT_DOUBLE_EQ(m.get<"x">(), 1.5);
+}
+
+TEST(MapTest, SubscriptReadsTheSameSlotAsGet) {
+  constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+  EXPECT_EQ(m["n"_s], m.get<"n">());
+  EXPECT_DOUBLE_EQ(m["x"_s], m.get<"x">());
+}
+
+TEST(MapTest, OwnershipFollowsTheMapNotTheKey) {
+  auto m = map(named<"x">(1.5));
+  static_assert(std::is_same_v<decltype(m.get<"x">()), double &>);
+  static_assert(std::is_same_v<decltype(std::as_const(m).get<"x">()),
+                               const double &>);
+  static_assert(std::is_same_v<decltype(map(named<"x">(1.5)).get<"x">()),
+                               double>);
+}
+
+TEST(MapTest, ContainsAnswersForAbsentAndSimilarKeys) {
+  constexpr auto m = map(named<"x">(1.5));
+  static_assert(m.contains<"x">());
+  static_assert(!m.contains<"y">());
+  static_assert(!m.contains<"xy">());
+}
+
+TEST(MapTest, EverySpellingBuildsTheSameType) {
+  constexpr Map by_keyword{named<"n">(3), named<"x">(1.5)};
+  constexpr Map by_label{NamedValue{"n"_s, 3}, NamedValue{"x"_s, 1.5}};
+  constexpr Map by_variable{NamedValue{kMapN, 3}, NamedValue{kMapX, 1.5}};
+  constexpr Map by_tagged_named{named(kMapN, 3), named(kMapX, 1.5)};
+  constexpr Map<NamedValue<"n", int>, NamedValue<"x", double>> by_type{{3},
+                                                                      {1.5}};
+
+  static_assert(std::is_same_v<decltype(by_keyword), decltype(by_label)>);
+  static_assert(std::is_same_v<decltype(by_keyword), decltype(by_variable)>);
+  static_assert(std::is_same_v<decltype(by_keyword), decltype(by_tagged_named)>);
+  static_assert(std::is_same_v<decltype(by_keyword), decltype(by_type)>);
+  static_assert(by_keyword == by_label && by_label == by_variable &&
+                by_variable == by_tagged_named && by_tagged_named == by_type);
+}
+
+TEST(MapTest, KeysAreInEntryOrderNotSorted) {
+  constexpr auto m = map(named<"z">(1), named<"a">(2), named<"m">(3));
+  static_assert(m.keys()[0] == std::string_view{"z"});
+  static_assert(m.keys()[1] == std::string_view{"a"});
+  static_assert(m.keys()[2] == std::string_view{"m"});
+}
+
+TEST(MapTest, SetWritesTheNamedSlotInPlace) {
+  auto m = map(named<"a">(1.0), named<"b">(2.0));
+  m.set<"a">(7.0);
+  m["b"_s] = 9.0;
+  EXPECT_DOUBLE_EQ(m.get<"a">(), 7.0);
+  EXPECT_DOUBLE_EQ(m.get<"b">(), 9.0);
+}
+
+TEST(MapTest, InsertAndEraseReturnNewMaps) {
+  constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+  constexpr auto with_y = m.insert(named<"y">('c'));
+  static_assert(with_y.size == 3 && with_y.get<"y">() == 'c');
+  static_assert(with_y.get<"n">() == 3 && with_y.get<"x">() == 1.5);
+  static_assert(m.size == 2, "insert leaves the original alone");
+
+  constexpr auto without_n = with_y.erase<"n">();
+  static_assert(without_n.size == 2 && !without_n.contains<"n">());
+  static_assert(without_n.get<"x">() == 1.5 && without_n.get<"y">() == 'c');
+  static_assert(without_n.keys()[0] == std::string_view{"x"},
+                "erase keeps the order of what is left");
+
+  static_assert(m.insert(named<"p">(1), named<"q">(2)).size == 4);
+  static_assert(m.insert().size == 2);
+}
+
+TEST(MapTest, EraseThenInsertRetypesASlot) {
+  constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+  constexpr auto retyped = m.erase<"n">().insert(named<"n">(2.5f));
+  static_assert(std::is_same_v<decltype(retyped)::value_type_of<"n">, float>);
+  static_assert(retyped.get<"n">() == 2.5f);
+}
+
+TEST(MapTest, ForEachVisitsEveryEntryInOrder) {
+  constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+  std::string labels;
+  double sum = 0.0;
+  m.for_each([&](auto key, const auto &v) {
+    labels += key.name;
+    sum += static_cast<double>(v);
+  });
+  EXPECT_EQ(labels, "nx");
+  EXPECT_DOUBLE_EQ(sum, 4.5);
+
+  auto mutable_map = map(named<"a">(1.0), named<"b">(2.0));
+  mutable_map.for_each([](auto, auto &v) { v *= 10.0; });
+  EXPECT_DOUBLE_EQ(mutable_map.get<"a">(), 10.0);
+  EXPECT_DOUBLE_EQ(mutable_map.get<"b">(), 20.0);
+}
+
+TEST(MapTest, HoldsValuesNoExpressionWouldAccept) {
+  constexpr auto m = map(named<"name">(std::string_view{"ddx"}),
+                         named<"order">(2u), named<"tol">(1e-9));
+  static_assert(m.get<"name">() == std::string_view{"ddx"});
+  static_assert(m.get<"order">() == 2u);
+  EXPECT_DOUBLE_EQ(m.get<"tol">(), 1e-9);
+}
+
+TEST(MapTest, EqualityIsKeysInOrderAndValues) {
+  constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+  static_assert(m == map(named<"n">(3), named<"x">(1.5)));
+  static_assert(!(m == map(named<"n">(4), named<"x">(1.5))));
+  static_assert(
+      !std::is_same_v<decltype(m), decltype(map(named<"x">(1.5), named<"n">(3)))>);
+}
+
+TEST(MapTest, EmptyMapIsUsable) {
+  constexpr Map<> m{};
+  static_assert(m.size == 0);
+  static_assert(m.keys().empty());
+  static_assert(!m.contains<"x">());
+  static_assert(m.insert(named<"x">(1.0)).get<"x">() == 1.0);
+}
+
+// Relaxing NamedValue to any object type must not disturb its numeric use.
+TEST(MapTest, NamedValueStillDrivesTheExpressionSide) {
+  constexpr auto x = var<"x">;
+  constexpr auto y = var<"y">;
+  const auto f = x * y;
+  EXPECT_DOUBLE_EQ(f.eval(named<"y">(2.0), named<"x">(4.0)), 8.0);
+  EXPECT_DOUBLE_EQ(Equation{f}.gradient(named<"y">(2.0), named<"x">(4.0))[0],
+                   2.0);
+}
