@@ -1,5 +1,5 @@
 #pragma once
-#include "drivers/gradient.hpp"
+#include "drivers/symbolic.hpp"
 #include "dual/dual.hpp"
 #include "expr/format.hpp"
 #include "expr/simplify.hpp"

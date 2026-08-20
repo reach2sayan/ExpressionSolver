@@ -6,8 +6,8 @@
 #define EXPRESSIONDIFFERENTIATOR_EXPRESSION_DIFFERENTIATOR_HPP
 
 #include "drivers/coupling.hpp"
-#include "drivers/forward_driver.hpp"
-#include "drivers/gradient.hpp"
+#include "drivers/numeric.hpp"
+#include "drivers/symbolic.hpp"
 #include "drivers/hessian.hpp"
 #include "dual/dual.hpp"
 #include "dual/taylor_dual.hpp"

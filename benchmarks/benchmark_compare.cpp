@@ -21,7 +21,7 @@
 #include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/reverse/var.hpp>
 
-#include "drivers/gradient.hpp"
+#include "drivers/symbolic.hpp"
 #include "drivers/seeded_energy.hpp"
 #include "drivers/hessian.hpp"
 #include "dual/dual.hpp"

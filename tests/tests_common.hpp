@@ -6,8 +6,8 @@
 #ifdef DIFF_USE_EIGEN
 #include "interop/eigen_interop.hpp"
 #endif
-#include "drivers/forward_driver.hpp"
-#include "drivers/gradient.hpp"
+#include "drivers/numeric.hpp"
+#include "drivers/symbolic.hpp"
 #include "drivers/seeded_energy.hpp"
 #include "drivers/hessian.hpp"
 #include "expr/equation.hpp"

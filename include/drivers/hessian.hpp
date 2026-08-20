@@ -1,21 +1,22 @@
 #pragma once
 
-#include "drivers/coupling.hpp" // compile-time Hessian sparsity + colouring
-#include "drivers/forward_driver.hpp" // HessianResult + scalar hessian() fallback
-#include "drivers/gradient.hpp" // fill_cache / node_cache_t for the reverse sweep
+// The public `hessian()` entry point, and nothing else: it owns the choice
+// between the two Hessian drivers and the argument checks that choice needs.
+//
+//   drivers/numeric.hpp   detail::hessian  -- O(N^2) probes over a callable
+//   drivers/symbolic.hpp  detail::hessian_expr_reverse -- O(N) sweeps of a graph
+
+#include "drivers/numeric.hpp"
 #include "drivers/seeded_energy.hpp" // seeded_energy() bridge for expression graphs
+#include "drivers/symbolic.hpp"
 #include "dual/dual.hpp"
 #include "expr/expressions.hpp" // CExpression
-#include "util/scope_guard.hpp" // scoped_value — RAII for the per-sweep seed
 
-#include <algorithm>
-#include <array>
 #include <cstddef>
 #include <ranges>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
-#include <vector>
 
 namespace diff {
 
@@ -42,145 +43,6 @@ concept CHessianTarget =
 
 namespace detail {
 
-template <CExpression Expr, typename Colors, typename Harvest>
-DIFF_ALWAYS_INLINE void color_sweeps(const Expr &expr, std::span<const double> x,
-                  const Colors &colors, Harvest &&harvest) {
-  using E = std::remove_cvref_t<Expr>;
-  using T = typename E::value_type;
-  using S = dual_scalar_t<T>;
-  using Syms = detail::expr_symbols_t<E>;
-  constexpr std::size_t N = mpl::mp_size(Syms{});
-
-  // The value level is the point and is identical on every sweep; only the
-  // seeded tangents move between colours.
-  std::array<T, N> seeds{};
-  std::ranges::transform(x, seeds.begin(),
-                         [](double v) { return T{static_cast<S>(v), S{}}; });
-
-  for (std::size_t c = 0; c < colors.count; ++c) {
-    for (auto &&[seed, color] : std::views::zip(seeds, colors.color)) {
-      seed.deriv() = (color == c) ? S{1} : S{};
-    }
-    std::array<T, N> grads{};
-    const T root = reverse_sweep<Syms>(expr, seeds, grads);
-    harvest(c, root, grads);
-  }
-}
-
-// Forward-over-reverse Hessian for a compile-time expression graph.  Seeding
-// column j with a first-order tangent and running ONE backward sweep yields
-// that whole Hessian column, so the full N x N matrix costs N sweeps against
-// the scalar driver's N(N+1)/2 forward-over-forward probes — an O(N) vs O(N^2)
-// difference, and the j == 0 sweep hands back the value and gradient for free.
-// Only a graph can take this path: a runtime lambda has no tree to sweep
-// backward.  The seed array is sized by the symbol set, so N is compile-time.
-template <CExpression Expr>
-HessianStatic<mpl::mp_size(detail::expr_symbols_t<std::remove_cvref_t<Expr>>{})>
-hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
-  using E = std::remove_cvref_t<Expr>;
-  using T = typename E::value_type;
-  using Syms = detail::expr_symbols_t<E>;
-  constexpr std::size_t N = mpl::mp_size(Syms{});
-
-  // Sparsity read off the expression type, then a colouring of it: columns
-  // that share no row can be seeded in the SAME sweep, because no row receives
-  // a contribution from more than one of them.  A banded Hessian needs a fixed
-  // number of colours regardless of n, so this takes the sweep count from O(N)
-  // to O(colours) — the chain energy's tridiagonal-plus-corner pattern colours
-  // in 5 whether n is 8 or 32.  A dense pattern colours in N and the loop
-  // degenerates to one sweep per column, i.e. never worse.
-  static constexpr auto kPattern = hessian_pattern<E>();
-  static constexpr auto kColors = color_columns<N>(kPattern);
-  // Value-initialised, and that is load-bearing: the scatter below writes only
-  // structurally non-zero entries and relies on everything outside the pattern
-  // already being zero.
-  HessianStatic<N> res{};
-  auto &res_gradient = std::get<1>(res);
-  auto &res_hessian = std::get<2>(res);
-
-  color_sweeps(expr, x, kColors, [&](std::size_t c, const T &root,
-                                     const auto &grads) {
-    static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
-    if (c == 0) {
-      // The value and the first-order adjoints do not depend on the tangent
-      // seeding, so any one sweep yields both.
-      std::get<0>(res) = static_cast<double>(root.template get<0>());
-      std::ranges::transform(grads, res_gradient.begin(), [](const T &g) {
-        return static_cast<double>(g.template get<0>());
-      });
-    }
-
-    // Row i received the sum over this colour's columns; the colouring
-    // guarantees at most one of them is structurally nonzero in row i, so the
-    // sum IS that entry, and which column it belongs to was resolved at compile
-    // time.  Entries outside the pattern are never written and stay zero.
-    for (auto &&[row, grad, target] :
-         std::views::zip(res_hessian | std::views::chunk(N), grads,
-                         kScatter[c])) {
-      if (target != no_column) {
-        // A chunk view indexes by its signed difference_type, not by size_t.
-        row[static_cast<std::ranges::range_difference_t<decltype(row)>>(
-            target)] = static_cast<double>(grad.template get<1>());
-      }
-    }
-  });
-
-  // Columns come from independent sweeps, so mirrored entries can differ in
-  // the last ULP.
-  detail::symmetrize(res_hessian.data(), N);
-  return res;
-}
-
-// The nonzero VALUES of the Hessian, in the compressed-column order fixed by
-// sparse_layout<Expr>() — the same colour-compressed sweeps as above, but
-// scattered straight into compressed storage, so the dense N x N matrix is
-// never materialised and the buffer is O(nnz) rather than O(N^2).
-// No symmetrization pass: the layout already names each entry exactly once, and
-// H(i,j) and H(j,i) are separate slots filled from the sweep of their own
-// colour, so there is no pair to average.
-//
-// NNZ rides along as a defaulted template parameter — the same shape as
-// sparse_layout() in coupling.hpp — because hessian_nnz is consteval: the size
-// of this buffer is a property of Expr, so it is an array and not a vector, and
-// the sparse path does not allocate.  std::vector is for the runtime-extent
-// drivers above, where the active-variable count is a span and not a type.
-template <CExpression Expr,
-          std::size_t NNZ = hessian_nnz<std::remove_cvref_t<Expr>>()>
-std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
-                                                  std::span<const double> x) {
-  using E = std::remove_cvref_t<Expr>;
-  using T = typename E::value_type;
-  using Syms = detail::expr_symbols_t<E>;
-  constexpr std::size_t N = mpl::mp_size(Syms{});
-
-  static constexpr auto kPattern = hessian_pattern<E>();
-  static constexpr auto kColors = color_columns<N>(kPattern);
-
-  // One cell past the nonzeros: layout_sparse_pattern maps every structural
-  // zero onto that last slot, so H[i, j] answers for indices the pattern
-  // excludes without the caller checking first.  Eigen reads exactly nnz
-  // entries from values.data(), so the extra cell is invisible to it.
-  //
-  // Value-initialised, which zeroes it: the sweeps below only write the slots
-  // the pattern names, and every other cell — the sink included — has to read
-  // back as exactly 0.0.
-  std::array<double, NNZ + 1> values{};
-
-  color_sweeps(expr, x, kColors,
-               [&](std::size_t c, const T &, const auto &grads) {
-                 static constexpr auto kSlots = sparse_slots<E>();
-                 for (auto &&[grad, slot] : std::views::zip(grads, kSlots[c])) {
-                   if (slot != no_column) {
-                     values[slot] = static_cast<double>(grad.template get<1>());
-                   }
-                 }
-               });
-  return values;
-}
-
-// A graph can take the forward-over-reverse path only if its numbers carry a
-// first-order tangent to seed — that is what makes one backward sweep yield a
-// whole Hessian column rather than just a gradient.
 template <typename F>
 concept CGraphReverseHessian =
     CExpression<F> && DualLike<typename std::remove_cvref_t<F>::value_type>;
@@ -273,7 +135,7 @@ template <typename F> constexpr std::size_t declared_arity() noexcept {
 } // namespace detail
 
 template <CHessianTarget F, CIndexRange R>
-auto hessian(F &&f, std::span<const double> x, R &&active) {
+auto hessian(F &&f, const std::span<const double> x, R &&active) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
       if (detail::reverse_hessian_applies(detail::expr_arity_v<F>, x, active)) {
@@ -296,7 +158,7 @@ auto hessian(F &&f, std::span<const double> x, R &&active) {
 // the extent is then a compile-time constant for a graph, which lets the whole
 // sweep run out of a std::array and allocate nothing but the result.
 template <CHessianTarget F>
-auto hessian(F &&f, std::span<const double> x) {
+auto hessian(F &&f, const std::span<const double> x) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
       if (x.size() == detail::expr_arity_v<F>) {
@@ -313,21 +175,6 @@ auto hessian(F &&f, std::span<const double> x) {
   } else {
     return detail::hessian(static_cast<F &&>(f), x);
   }
-}
-
-// Any contiguous sized range of doubles -- vector, array, C array, span.  One
-// conversion, then the span form; no driver is re-instantiated per container.
-template <CHessianTarget F, CPointRange P>
-  requires(!std::same_as<std::remove_cvref_t<P>, std::span<const double>>)
-auto hessian(F &&f, const P &x) {
-  return hessian(static_cast<F &&>(f), as_point(x));
-}
-
-template <CHessianTarget F, CPointRange P, CIndexRange R>
-  requires(!std::same_as<std::remove_cvref_t<P>, std::span<const double>>)
-auto hessian(F &&f, const P &x, R &&active) {
-  return hessian(static_cast<F &&>(f), as_point(x),
-                 static_cast<R &&>(active));
 }
 
 } // namespace diff

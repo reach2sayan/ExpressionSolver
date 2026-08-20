@@ -1,6 +1,6 @@
 #pragma once
 
-#include "drivers/gradient.hpp"
+#include "drivers/symbolic.hpp"
 #include "expr/named_value.hpp"
 #include "expr/traits.hpp"
 #include "util/config.hpp"

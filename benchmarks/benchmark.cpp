@@ -1,4 +1,4 @@
-#include "drivers/gradient.hpp"
+#include "drivers/symbolic.hpp"
 #include "dual/dual.hpp"
 #include "expr/bound.hpp"
 #include "expr/equation.hpp"
