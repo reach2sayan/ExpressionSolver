@@ -1,13 +1,12 @@
 #pragma once
 
 // The drivers that differentiate a *runtime callable* -- an energy lambda the
-// library cannot see inside.  Both work the same way: seed a dual into a
-// scratch buffer, hand the callable a pointer to it, read the derivative back
-// out.  `gradient` seeds `dual` and sweeps once per active variable; `hessian`
-// seeds `dual2nd` and sweeps once per probe pair.
+// library cannot see inside.  Both seed a dual into a scratch buffer, hand the
+// callable a pointer to it, and read the derivative back out: `gradient` seeds
+// `dual` and sweeps once per active variable, `hessian` seeds `dual2nd` and
+// sweeps once per probe pair.
 //
-// The graph drivers, which can see the expression and sweep it backward, are in
-// `symbolic.hpp`; `hessian.hpp` chooses between the two.
+// The graph drivers are in `symbolic.hpp`; `hessian.hpp` chooses between them.
 
 #include "drivers/common.hpp"
 #include "util/scope_guard.hpp" // scoped_value — RAII for the per-probe seed toggle
@@ -35,8 +34,8 @@ constexpr void gradient_into(F &&f, dual *const dof, R &&active,
 }
 } // namespace detail
 
-// Writing form: the caller owns the output, the library only fills it.  Nothing
-// here allocates once `ws` has been used once.
+// Writing form: the caller owns the output.  Nothing here allocates once `ws`
+// has been used once.
 template <CEnergyOf<dual> F>
 void gradient(F &&f, const std::span<const double> x,
               CIndexRange auto &&active, GradientWorkspace &ws,
@@ -45,8 +44,8 @@ void gradient(F &&f, const std::span<const double> x,
                         static_cast<decltype(active) &&>(active), out);
 }
 
-// Owning forms, unchanged in signature.  They keep a local workspace, so a
-// one-shot call costs one scratch allocation plus the returned vector.
+// Owning forms: a local workspace, so a one-shot call costs one scratch
+// allocation plus the returned vector.
 template <CEnergyOf<dual> F>
 std::vector<double> gradient(F &&f, const std::span<const double> x,
                              CIndexRange auto &&active) {
@@ -72,25 +71,19 @@ namespace detail {
 // slot and active[j] in the inner derivative slot; evaluating f then yields, in
 // the result D = ((A0,A1),(B0,B1)):
 //   A0 = f(x),  B0 = df/dx_i,  A1 = df/dx_j,  B1 = d2f/dx_i dx_j.
-// The sweep proper, over storage the caller has already seeded and buffers the
-// caller already owns.  Every entry point below funnels through this, so the
-// probe loop -- and the seeding convention it encodes -- exists exactly once.
+// Every entry point below funnels through this, so the probe loop -- and the
+// seeding convention it encodes -- exists exactly once.  It writes every cell of
+// both outputs, so callers may hand it uninitialised storage.  Returns f(x).
 //
-// Writes every cell of both outputs: hessian[i*m+j] and its mirror for all
-// i <= j is the whole matrix, and gradient[k] is covered as i and j sweep.  That
-// is what lets every caller hand it uninitialised storage.  Returns f(x).
-//
-// Of a dual2nd's four scalars [value.value, value.deriv, deriv.value,
-// deriv.deriv] only the two first-order seed slots ever move per probe:
-// value.deriv carries e_j (inner, d/dx_j) and deriv.value carries e_i (outer,
-// d/dx_i).  value.value == x[k] and the second-order seed deriv.deriv == 0 are
-// loop-invariant, so the sweep toggles the two derivative scalars in place
-// rather than reconstructing the whole dual2nd on every seed and reset.
+// Of a dual2nd's four scalars only the two first-order seed slots move per probe:
+// value.deriv carries e_j (inner, d/dx_j), deriv.value carries e_i (outer,
+// d/dx_i).  value.value == x[k] and deriv.deriv == 0 are loop-invariant, so the
+// sweep toggles the two derivative scalars in place.
 //
 // Each toggle is a scoped_value whose scope IS the span the seed covers.  Both
-// guards hold a bare double, never the enclosing dual2nd: when ai == aj they
-// name two different scalars of the same number, and a guard over the number
-// would clobber its sibling.
+// guards hold a bare double, never the enclosing dual2nd: when ai == aj they name
+// two different scalars of the same number, and a guard over the number would
+// clobber its sibling.
 template <CEnergyOf<dual2nd> F, CIndexRange R>
 constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
                                      double *const grad_out,
@@ -123,9 +116,7 @@ constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
 }
 
 // Writing form: the caller owns both output buffers and the scratch, so nothing
-// here allocates once they have been used once.  This is the only entry point
-// that writes into memory the library did not create, and it says so in the
-// signature.  Returns f(x).
+// here allocates once they have been used once.  Returns f(x).
 template <CEnergyOf<dual2nd> F>
 double hessian(F &&f, const std::span<const double> x,
                       CIndexRange auto &&active, HessianWorkspace &ws,
@@ -136,10 +127,9 @@ double hessian(F &&f, const std::span<const double> x,
                              grad_out.data(), hess_out.data());
 }
 
-// Compile-time arity: the expression entry points know how many symbols there
-// are, so both the seeded-variable array and the result are std::array and this
-// path allocates nothing at all.  N is the arity, which is also the extent -- an
-// expression is differentiated with respect to all of its own symbols.
+// Compile-time arity: both the seeded-variable array and the result are
+// std::array, so this path allocates nothing.  N is the arity and the extent --
+// an expression is differentiated w.r.t. all of its own symbols.
 template <std::size_t N, CEnergyOf<dual2nd> F>
 HessianStatic<N> hessian_static(F &&f, const std::span<const double> x) {
   std::array<dual2nd, N> dof{};

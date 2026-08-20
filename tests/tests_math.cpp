@@ -668,14 +668,8 @@ TEST(PositionalEvalTest, IsConstexpr) {
   EXPECT_DOUBLE_EQ(eval(e, 2.0, 3.0), 10.0);
 }
 
-// derivative_tensor<1> has to support every unary math function at any arity.
-// This guarded a real bug: a VectorDual<N> fast path used to take over at
-// N >= 3 and implemented only 6 of the 19 functions, so an expression that
-// compiled at 2 variables failed to compile at 3 — log10/cbrt/abs/asin/acos/
-// atan/sinh/cosh/tanh/asinh/acosh/atanh/erf.  That path is gone (deleted
-// 2026-08-20 for being slower than the scalar passes it replaced), but the
-// coverage guard is worth keeping on its own terms: every function below has to
-// *instantiate* at 3 variables and agree with reverse mode.
+// derivative_tensor<1> has to support every unary math function at any arity:
+// each one below must *instantiate* at 3 variables and agree with reverse mode.
 TEST(ForwardGradient, CoversEveryUnaryMathFunction) {
   const std::array<double, 3> pt{0.6, 0.4, 1.3};
   auto y = PV(0.4, "y");
@@ -720,11 +714,7 @@ TEST(ForwardGradient, CoversEveryUnaryMathFunction) {
     const auto rev_ = Equation{e_}.gradient(hi);
     EXPECT_NEAR(fwd_.data()[0], rev_[0], 1e-12);
   }
-  // The BINARY math functions, same guard.  hypot and atan2 used to be missing
-  // from the since-deleted VectorDual fast path entirely, so an expression
-  // using either compiled at two variables and failed to compile at three --
-  // the same shape of gap as the unary one above.  pow/max/min already worked (pow is
-  // hand-written, max/min go through the comparison operators).
+  // The BINARY math functions, same guard.
   {
     auto a = PV(1.3, "a");
     auto b = PV(0.7, "b");

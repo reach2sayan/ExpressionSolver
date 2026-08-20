@@ -21,11 +21,10 @@ namespace diff {
 //   t[i][j][k]     the nested-array spelling every existing caller uses
 //
 // The second is not a slice.  A rank-reducing view would need the layout to
-// support submdspan, which the packed and sparse layouts do not -- so the
-// proxy just accumulates the index prefix and calls the mapping once, at the
-// last subscript.  That keeps the old spelling working over *any* layout, and
-// keeps it as cheap as the mdspan one: the proxy is a pointer plus a small
-// index array, all of it constexpr and none of it surviving -O2.
+// support submdspan, which the packed and sparse layouts do not -- so the proxy
+// accumulates the index prefix and calls the mapping once, at the last subscript.
+// That works over *any* layout and costs the same: a pointer plus a small index
+// array, all constexpr and none of it surviving -O2.
 // ===========================================================================
 
 namespace detail {
@@ -54,9 +53,7 @@ using uniform_extents_t = typename decltype(detail::uniform_extents_fn<N>(
     std::make_index_sequence<Order>{}))::type;
 
 // The same, with one leading axis of a different size — a per-output stack of
-// derivative tensors, which is what a vector-valued Equation produces.  The
-// old spelling was std::array<nd_array_t<S, N, Order>, Lead>, i.e. an outer
-// dimension that lived in a different type from the inner ones.
+// derivative tensors, which is what a vector-valued Equation produces.
 template <std::size_t Lead, std::size_t N, std::size_t Order>
 using stacked_extents_t = typename decltype(detail::stacked_extents_fn<Lead, N>(
     std::make_index_sequence<Order>{}))::type;
@@ -69,10 +66,9 @@ namespace detail {
 // The index-prefix proxy behind t[i][j][k].  Depth indices have been supplied;
 // it resolves to a reference once Depth + 1 == rank.
 //
-// It holds a pointer to the tensor rather than to the data so that both the
-// mapping and the const-ness travel with it, and it is deliberately not
-// storable in any useful way -- like std::vector<bool>'s proxy, it exists for
-// the duration of the subscript chain and nothing else.
+// It holds a pointer to the tensor rather than to the data, so both the mapping
+// and the const-ness travel with it.  Like std::vector<bool>'s proxy, it exists
+// for the duration of the subscript chain and nothing else.
 template <typename Tensor, std::size_t Depth> class md_index_proxy {
   using index_type = typename Tensor::index_type;
   static constexpr std::size_t kRank = Tensor::rank();

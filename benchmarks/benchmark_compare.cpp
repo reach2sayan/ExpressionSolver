@@ -806,10 +806,6 @@ BENCHMARK(BM_AD_Reverse_TDir_Reuse);
 //   Ours_Forward  — hessian():          O(n^2) scalar forward-over-forward
 //   AD_Forward    — autodiff::hessian(): Eigen VectorXdual2nd, O(n^2)
 //
-// A third arm, a vector-forward driver sweeping Dual<VectorDual<N>>, was
-// carried here until 2026-08-20 and deleted: it lost to the scalar driver at
-// every n on both energies (0.45-0.98x), and the instruction counts that had
-// said otherwise were reading 2x fewer instructions at 2x worse IPC.
 // ===========================================================================
 
 // Single templated energy shared by every implementation — `y` is anything
@@ -959,13 +955,8 @@ static void BM_AD_Forward_HessSparse(benchmark::State &state) {
 }
 BENCHMARK(BM_AD_Forward_HessSparse)->Arg(4)->Arg(8)->Arg(16)->Arg(17)->Arg(32);
 
-// The public router, not a driver.  Every other Hess row in this file calls a
-// driver directly, so nothing here would otherwise exercise what
-// diff::hessian() picks for a raw callable.  That choice used to be a tuned
-// constant (kVForwardCrossover) selecting between the scalar probe driver and a
-// vector-forward one; the vector-forward driver was deleted on 2026-08-20 after
-// it measured slower at every m, so the router now has one answer and this row
-// guards that it stays the right one.
+// The public router, not a driver.  Every other Hess row calls a driver directly,
+// so nothing else here exercises what diff::hessian() picks for a raw callable.
 static void BM_Ours_Hessian_HessSparse(benchmark::State &state) {
   const std::size_t n = static_cast<std::size_t>(state.range(0));
   auto x = vf_point(n);

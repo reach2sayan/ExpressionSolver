@@ -1,15 +1,11 @@
 #pragma once
 
-// The pieces every std::formatter in the library is built out of.
+// The pieces every std::formatter in the library is built out of: emit fixed
+// punctuation, and emit numbers through a nested formatter handed the caller's
+// spec.  Writing those once is what keeps "{:.3f}" meaning the same thing in
+// Dual, TaylorDual and the expression tree.
 //
-// Three types are formattable here -- Dual, TaylorDual and the
-// expression tree -- and all four do the same two things: emit fixed
-// punctuation, and emit numbers through a nested formatter that was handed the
-// caller's spec.  Writing those two once is what keeps "{:.3f}" meaning the
-// same thing in all four, and keeps a fifth from having to reinvent them.
-//
-// This header knows about none of those types, which is why it can sit below
-// all of them.
+// This header knows about none of those types, so it sits below all of them.
 
 #include <algorithm>
 #include <cstddef>
@@ -31,13 +27,13 @@ inline void fmt_put(std::format_context &ctx, std::string_view s) {
   ctx.advance_to(std::ranges::copy(s, ctx.out()).out);
 }
 
-// The half of a dual formatter that does not depend on which dual it is.
-//
-// All three duals are a value followed by derivative parts, and all three want
-// the same thing from a spec: forward it whole to the numbers, so one "{:.3f}"
-// fixes the precision of every part.  parse(), plus the primitives a format()
-// is written in terms of, live here; the derived specialisation supplies only
-// the layout.
+// The half of a dual formatter that does not depend on which dual it is: every
+// dual is a value followed by derivative parts, and every one forwards the spec
+// whole to the numbers.  The derived specialisation supplies only the layout.
+// S is the coefficient type, and stays a bare parameter on purpose: the
+// requirement is `std::formattable<S, char>`, but a nested dual names this base
+// from inside the very std::formatter specialisation that would answer it, so
+// spelling the constraint is a recursive instantiation and does not compile.
 template <typename S> struct dual_formatter_base {
   constexpr auto parse(std::format_parse_context &ctx) {
     return part_.parse(ctx);
@@ -52,9 +48,9 @@ protected:
     ctx.advance_to(part_.format(v, ctx));
   }
 
-  // A coefficient that is itself a series has to be bracketed, or the two
-  // levels run together: Dual<Dual<double>> printed 1+2ε+3+4εε, which reads as
-  // four terms of one series rather than two of two.
+  // A coefficient that is itself a series has to be bracketed, or the levels run
+  // together: Dual<Dual<double>> would print 1+2ε+3+4εε, which reads as four
+  // terms of one series rather than two of two.
   void term(std::format_context &ctx, const S &v) const {
     if constexpr (std::is_arithmetic_v<S>) {
       num(ctx, v);
@@ -93,8 +89,8 @@ template <typename T> inline constexpr bool is_dual_family_v = false;
 
 namespace diff {
 
-// Anything in the dual family: Dual, TaylorDual.  One inserter serves both, so
-// the iostream spelling can never drift from the std::format one.
+// Anything in the dual family.  One inserter serves all of them, so the iostream
+// spelling cannot drift from the std::format one.
 template <typename T>
 concept CDualFamily = detail::is_dual_family_v<std::remove_cvref_t<T>>;
 

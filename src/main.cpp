@@ -31,10 +31,8 @@
 
 using namespace diff;
 
-// std::println is C++23, but libstdc++ only ships <print> from GCC 14 and the
-// CI image still carries an older one, so including <print> fails there.  This
-// demo has no reason to gate every call site on a library version: <format>
-// (GCC 13) plus a stream does the same job in two lines.
+// <format> plus a stream rather than std::println, so this demo does not gate
+// every call site on which libstdc++ ships <print>.
 template <typename... Args>
 static void println(std::format_string<Args...> fmt, Args &&...args) {
   std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';

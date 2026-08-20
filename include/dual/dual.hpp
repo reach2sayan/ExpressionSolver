@@ -261,16 +261,13 @@ DIFF_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s, const Dual<T> &a) noex
 
 // ---- binary operators (eager) ---------------------------------------------
 // All three shapes of each operator in one place: (Dual, Dual), (Dual, scalar)
-// and (scalar, Dual).  LEFT spells the last one, which is the only shape that
-// differs between operators -- + and * commute, so they hand the dual over
-// first and reuse the (Dual, scalar) kernel; - and / do not, so they take the
-// reversed kernel instead.
+// and (scalar, Dual).  LEFT spells the last one, the only shape that differs
+// between operators -- + and * commute and reuse the (Dual, scalar) kernel;
+// - and / take the reversed kernel instead.
 //
-// The scalar shapes are separate kernels rather than a promotion of the scalar
-// to a zero-derivative Dual, and deliberately so: promotion leaves an `ad + 0`
-// that IEEE will not let the compiler fold (-0.0 + 0.0 is +0.0).  This used to
-// be measured on a 32-lane pack scalar, where it turned a one-instruction add
-// into thirteen; the principle outlives that type.
+// The scalar shapes are separate kernels, never a promotion of the scalar to a
+// zero-derivative Dual: promotion leaves an `ad + 0` that IEEE will not let the
+// compiler fold (-0.0 + 0.0 is +0.0).
 #define DIFF_DUAL_BINOP(OP, COMB, LEFT)                                        \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
@@ -299,16 +296,14 @@ template <DualLike A> constexpr auto operator-(A &&a) noexcept {
 
 // Chain rule for a unary math node.  When the descriptor can express its
 // derivative in terms of f(u), the primal is computed once and reused;
-template <template <typename> class Fn> struct unary_dual_combine {
+template <template <Numeric> class Fn> struct unary_dual_combine {
   DIFF_ALWAYS_INLINE constexpr auto operator()(const DualLike auto &x) const noexcept {
     const auto &[v, d] = x;
-    // Two distinct roles, previously conflated under one `T`.  Comp is the
-    // component type -- it types the primal and the result, and must stay a
-    // Dual at depth >= 2 or fv truncates.  S is the base scalar, and it is the
-    // only thing the descriptor should be instantiated at: a descriptor
-    // instantiated at the component type spells its constants as
-    // zero-derivative duals, which binds the general (Dual, Dual) kernels and
-    // leaves `0.0 - x` behind that IEEE signed zeros forbid folding.
+    // Two distinct roles.  Comp is the component type: it types the primal and
+    // the result, and must stay a Dual at depth >= 2 or fv truncates.  S is the
+    // base scalar, and the only thing the descriptor may be instantiated at --
+    // at the component type it would spell its constants as zero-derivative
+    // duals, binding the general kernels and leaving a `0.0 - x` behind.
     using Comp = std::remove_cvref_t<decltype(v)>;
     using DT = std::remove_cvref_t<decltype(x)>;
     using S = scalar_base_t<Comp>;
@@ -352,37 +347,22 @@ template <typename A, typename B>
 concept DualComparable =
     DualOrArithmetic<A> && DualOrArithmetic<B> && (DualLike<A> || DualLike<B>);
 
-template <typename A, DualComparable<A> B>
+template <DualOrArithmetic A, DualComparable<A> B>
 constexpr auto operator<=>(const A &a, const B &b) noexcept {
   return val(a) <=> val(b);
 }
-template <typename A, DualComparable<A> B>
+template <DualOrArithmetic A, DualComparable<A> B>
 constexpr bool operator==(const A &a, const B &b) noexcept {
   return val(a) == val(b);
 }
 
 // ---- pow / max / min ------------------------------------------------------
-// Each all-dual form is followed by its scalar-mixed forms, written out.  A
-// macro used to generate those by lifting the scalar to a zero-derivative Dual
-// so the formula appeared once, but a zero derivative is not free: nothing in
-// the general rule is elided by it, and `pow` paid a whole libm `log` per
-// nesting level for a term that is identically absent.  Writing each mixed
-// form costs repetition and buys a kernel that computes only what it needs --
-// the same trade the arithmetic operators above already make, and for the same
-// reason (see the note on `ad + 0` at DIFF_DUAL_BINOP).  The inner call
-// (std::pow on scalars, diff::pow by ADL on nested duals) is what makes these
-// work at any depth.
+// Each all-dual form is followed by its scalar-mixed forms, written out for the
+// same reason as the operators above: a zero derivative is not free, and nothing
+// in a general rule is elided by one.  The inner call (std::pow on scalars,
+// diff::pow by ADL on nested duals) is what makes these work at any depth.
 
 // pow(a, b) = a^b.  d(a^b) = a^b (b' ln a + b a'/a).
-//
-// The two mixed forms below are written out rather than promoted.  Promoting
-// the scalar to a zero-derivative Dual makes this general kernel run with a
-// known-zero b', but nothing in it is then elided: `bd * log(av)` still
-// evaluates a full libm `log` per nesting level,
-// because IEEE will not let the compiler fold `0 * x` (x may be inf or NaN).
-// Measured on Dual<Dual<double>>, `pow(x, 2.0)` cost exactly what a genuine
-// dual exponent cost -- the promotion buys the formula's uniformity and pays
-// for it with a transcendental the maths never needed.
 template <DualLike A, DualCompatible<A> B>
 constexpr auto pow(A &&a, B &&b) noexcept {
   using std::log, std::pow;
@@ -395,13 +375,10 @@ constexpr auto pow(A &&a, B &&b) noexcept {
 }
 
 // pow(a, s), s a constant exponent.  d(a^s) = s a^(s-1) a' = a^s (s a'/a).
-// The b' ln a term of the general rule is identically absent, not merely zero,
-// so there is no `log` here at any depth.  Recursion is through `pow` itself,
-// so a nested dual sheds one `log` per level rather than only the outermost.
-//
-// This is also better defined than the promoted form was: at av < 0 with an
-// integral exponent the derivative is finite (d/dx x^2 at -2 is -4), but
-// `0 * log(-2)` is `0 * NaN` = NaN, so promotion used to poison it.
+// The b' ln a term is identically absent, not merely zero, so there is no `log`
+// here at any depth -- recursion through `pow` sheds one per level.  It is also
+// the better-defined form: at av < 0 with an integral exponent the derivative is
+// finite (d/dx x^2 at -2 is -4), where `0 * log(-2)` would be NaN.
 template <DualLike A, CArithmetic U>
 constexpr auto pow(A &&a, U s) noexcept {
   using std::pow;
@@ -439,10 +416,7 @@ constexpr auto min(A &&a, B &&b) noexcept {
 }
 
 // max/min against a constant.  These select an operand whole and never read a
-// derivative, so lifting the scalar to a zero-derivative Dual built the entire
-// nested object -- embed_constant recurses once per level -- purely so that
-// val() could peel it straight back off to compare.  The bound is a scalar; it
-// is compared as one.
+// derivative, so the bound stays a scalar and is compared as one.
 template <DualLike A, CArithmetic U>
 constexpr auto max(A &&a, U s) noexcept {
   using DT = std::remove_cvref_t<A>;
@@ -501,9 +475,8 @@ constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
   return Dual<T>{h, (xv * xd + yv * yd + zv * zd) / h};
 }
 
-// atan2 / hypot against a constant.  The promoted operand contributed exactly
-// one term to each derivative and that term was identically zero; written out,
-// it is gone rather than computed and added.
+// atan2 / hypot against a constant.  The constant operand contributes exactly
+// one identically-zero term to each derivative, so it is gone rather than added.
 template <DualLike A, CArithmetic U>
 constexpr auto atan2(A &&y, U s) noexcept {
   using std::atan2;
@@ -545,9 +518,8 @@ using dual2nd = nth_dual_t<double, 2>; // second-order (Hessian-capable) dual
 
 } // namespace diff
 
-// `v+de` — the two-term case of the shared series renderer.  A Dual has to be
-// formattable for its own sake, but also because a dual-valued Constant is a
-// leaf the expression printer has to render.
+// `v+de` — the two-term case of the shared series renderer.  Needed for a Dual's
+// own sake and because a dual-valued Constant is a leaf the printer renders.
 template <diff::Numeric T>
 struct std::formatter<diff::Dual<T>, char>
     : diff::detail::dual_formatter_base<T> {

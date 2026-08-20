@@ -3,38 +3,28 @@
 // ===========================================================================
 // The one place the library says "mdspan".
 //
-// C++23 standardised std::mdspan, but no toolchain this library targets ships
-// it yet: libstdc++ 15.2 has nothing (its only trace is a `// FIXME <mdspan>`
-// in bits/std.cc), and clang here uses that same libstdc++.  Worse, three of
-// the four pieces we actually want — submdspan, the padded layouts, mdarray —
-// are C++26, so even a libstdc++ that grows <mdspan> would only get us part of
-// the way.
+// The reference implementation is vendored (third_party/mdspan.hpp, Apache-2.0
+// WITH LLVM-exception) into its own namespace, and this header picks between it
+// and the standard one at compile time.  Everything else spells these names
+// `diff::md::...` and never learns which it got; when a real <mdspan> is
+// everywhere, the only edit is deleting the vendored branch.
 //
-// So the reference implementation is vendored (include/third_party/mdspan.hpp,
-// Apache-2.0 WITH LLVM-exception) into its own namespace, and this header
-// picks between it and the standard one at compile time.  Everything else in
-// the library spells these names `diff::md::...` and never learns which it
-// got.  When a real <mdspan> shows up, the only edit is deleting the vendored
-// branch.
-//
-// The re-exports are explicit `using` declarations rather than a namespace
-// alias on purpose: `namespace md = std` would drag every name in std into
-// diff::md, and `diff::md::vector` should not be a thing that compiles.
+// The re-exports are explicit `using` declarations, not a namespace alias:
+// `namespace md = std` would make `diff::md::vector` compile.
 // ===========================================================================
 
 #include <version> // __cpp_lib_mdspan / __cpp_lib_submdspan
 
-// DIFF_MDSPAN_FORCE_VENDORED is what the CMake `DIFF_MDSPAN_MODE=vendored`
-// option sets; it exists so the vendored path stays continuously compiled even
-// on a toolchain that could use the standard one.
+// Set by the CMake option DIFF_MDSPAN_MODE=vendored, so that path stays
+// continuously compiled even on a toolchain that could use the standard one.
 #if defined(DIFF_MDSPAN_FORCE_VENDORED)
 #define DIFF_MDSPAN_USE_STD 0
 #elif __has_include(<mdspan>) && defined(__cpp_lib_mdspan) &&                   \
     __cpp_lib_mdspan >= 202207L && defined(__cpp_lib_submdspan) &&             \
     __cpp_lib_submdspan >= 202306L
-// Both halves or neither: a std::mdspan without std::submdspan would leave the
-// driver slicing in workstream 5 with no spelling at all, and silently falling
-// back to hand-rolled offsets is exactly the split this header exists to end.
+// Both halves or neither: a std::mdspan without std::submdspan leaves slicing
+// with no spelling at all, and falling back to hand-rolled offsets is exactly
+// the split this header exists to end.
 #define DIFF_MDSPAN_USE_STD 1
 #else
 #define DIFF_MDSPAN_USE_STD 0
@@ -52,7 +42,7 @@
 #else
 // Must be defined before the include: the vendored header guards this with
 // #ifndef and otherwise plants itself in ::std, which is UB and would collide
-// with a future real <mdspan> in the same translation unit.
+// with a real <mdspan> in the same TU.
 #ifndef MDSPAN_IMPL_STANDARD_NAMESPACE
 #define MDSPAN_IMPL_STANDARD_NAMESPACE diff_mdspan
 #endif
@@ -82,10 +72,9 @@ using DIFF_MDSPAN_NS::full_extent_t;
 using DIFF_MDSPAN_NS::strided_slice;
 using DIFF_MDSPAN_NS::submdspan;
 using DIFF_MDSPAN_NS::submdspan_extents;
-// submdspan_mapping is deliberately not re-exported: it is the layout's own
-// customization hook and is found by ADL on the mapping type, so a custom
-// layout in diff:: supplies it as a hidden friend and submdspan() picks it up
-// without any name here.
+// submdspan_mapping is not re-exported: it is the layout's own customization
+// hook, found by ADL on the mapping type, so a custom layout supplies it as a
+// hidden friend and submdspan() picks it up without any name here.
 
 #if DIFF_MDSPAN_HAS_PADDED
 using DIFF_MDSPAN_NS::layout_left_padded;

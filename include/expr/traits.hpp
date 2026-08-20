@@ -1,10 +1,9 @@
 #pragma once
 #include "expr/values.hpp"
-// CFixedString is used 14 times below, but only ever as a constrained-auto NTTP
-// placeholder (`CFixedString auto symbol`) — a position clangd's include-cleaner
-// does not count as a reference, so it reports this header as unused.  It is
-// not: dropping it would leave this file depending on expr/values.hpp to drag
-// the concept in transitively.
+// CFixedString appears below only as a constrained-auto NTTP placeholder, which
+// include-cleaner does not count as a reference — hence the pragma.  The include
+// is real: without it this file would depend on expr/values.hpp to drag the
+// concept in transitively.
 #include "util/fixed_string.hpp" // IWYU pragma: keep
 #include "util/mpl.hpp"
 #include <type_traits>

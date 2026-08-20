@@ -2305,8 +2305,8 @@ TEST(ScopedValue, NestedGuardsOverSiblingScalarsOfOneDual) {
 }
 
 TEST(ScopedValue, RestoresWhenTheGuardedScopeThrows) {
-  // The behaviour the hand-written `slot = 0` reset could not give: an energy
-  // that throws mid-probe no longer leaves the dof buffer seeded.
+  // An energy that throws mid-probe must not leave the dof buffer seeded --
+  // which a hand-written `slot = 0` reset cannot guarantee.
   double slot = 0.0;
   auto blow_up = [&slot] {
     const auto seed = scoped_seed<1.0>(slot);

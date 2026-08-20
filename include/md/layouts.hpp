@@ -7,34 +7,25 @@
 #include <cstddef>
 #include <ranges>
 
-// The one layout this library needs beyond the standard ones.
+// The one layout this library needs beyond the standard ones: mdspan's layout is
+// a policy, which is what lets a derivative tensor's symmetry become storage
+// rather than a convention.  The sparse-pattern layout is in coupling.hpp, next
+// to the consteval pass that derives the pattern it maps.
 //
-// mdspan's layout is a policy rather than a fixed row-major assumption, which
-// is what lets a derivative tensor's symmetry become storage rather than a
-// convention.  Only the symmetric packing lives here; the sparse-pattern
-// layout is in coupling.hpp, next to the consteval pass that derives the
-// pattern it maps.
-//
-// The mapping is a literal type with a constexpr constructor, so a tensor over
-// it stays usable in constant evaluation — the contract tests.cpp pins with
-// static_assert, and the reason nothing here allocates or holds anything but
-// extents.
+// The mapping is a literal type with a constexpr constructor, so a tensor over it
+// stays usable in constant evaluation -- which is why nothing here allocates or
+// holds anything but extents.
 namespace diff {
 
 namespace detail {
 
-// C(n, k).
+// C(n, k).  Integer arithmetic only, in the multiply-then-divide form, which
+// never overflows early because the partial product of k consecutive integers is
+// always divisible by k!.  This value is a storage *offset*, so a rounded double
+// would file a derivative in the wrong cell.
 //
-// Hand-written rather than taken from <cmath>: the nearest standard offering is
-// std::beta, which is floating point, not constexpr, and inexact.  This value
-// is a storage *offset*, so an off-by-one from a rounded double would file a
-// derivative in the wrong cell, silently.  Integer arithmetic only, in the
-// multiply-then-divide form, which never overflows early because the partial
-// product of k consecutive integers is always divisible by k!.
-//
-// consteval: this only ever sizes storage, never indexes it.  The runtime
-// subscript path uses binomial_fixed below instead, so nothing here needs to
-// survive outside constant evaluation and the compiler enforces that.
+// consteval: this only ever sizes storage.  The runtime subscript path uses
+// binomial_fixed below, and the compiler enforces the split.
 [[nodiscard]] consteval std::size_t binomial(std::size_t n,
                                              std::size_t k) noexcept {
   if (k > n) {
@@ -50,17 +41,12 @@ static_assert(binomial(4, 2) == 6);
 static_assert(binomial(8, 3) == 56);
 static_assert(binomial(10, 0) == 1);
 
-// C(n, K) with K fixed at compile time: the falling product
-// n(n-1)...(n-K+1) over K!.
-//
-// This exists because binomial() above is the wrong shape for the *subscript*
-// path, not numerically but structurally: its `k = min(k, n - k)` makes the
-// fold's bound depend on the runtime n, so the loop cannot unroll and every
-// subscript pays a real loop.  Here K is a template parameter and nothing
-// depends on n but the factors themselves, so the whole thing collapses to a
-// few multiplies and one divide.  Measured: this is on the hot path of every
-// packed tensor access.  Hence constexpr and not consteval, unlike binomial():
-// the mapping calls this with a runtime index on every subscript.
+// C(n, K) with K fixed at compile time: the falling product n(n-1)...(n-K+1)
+// over K!.  binomial() above is structurally wrong for the *subscript* path --
+// its `k = min(k, n - k)` makes the fold's bound depend on the runtime n, so the
+// loop cannot unroll and every subscript pays a real loop.  Here nothing but the
+// factors depends on n, so it collapses to a few multiplies and one divide.
+// constexpr, not consteval: the mapping calls it on every subscript.
 template <std::size_t K>
 [[nodiscard]] constexpr std::size_t binomial_fixed(std::size_t n) noexcept {
   if (n < K) {
@@ -87,15 +73,13 @@ static_assert(binomial_fixed<2>(1) == 0);
 // with Lead leading axes left dense.
 //
 // A derivative tensor is symmetric under every permutation of its *derivative*
-// axes (Clairaut/Schwarz), so only non-decreasing multi-indices over those
-// carry distinct values: C(N + Order - 1, Order) of them, against N^Order
-// cells for the dense layout.  At Order 3 over 6 variables that is 56 instead
-// of 216.
+// axes (Clairaut/Schwarz), so only non-decreasing multi-indices over those carry
+// distinct values: C(N + Order - 1, Order) of them against N^Order dense cells --
+// at Order 3 over 6 variables, 56 instead of 216.
 //
-// Lead exists because a vector-valued Equation stacks one such tensor per
-// output: the output axis is not interchangeable with the derivative axes and
-// is not even the same length, so it stays a plain dense outer dimension and
-// the packing applies to the rest.  Lead == 0 is the scalar case.
+// Lead is for a vector-valued Equation, which stacks one such tensor per output:
+// the output axis is neither interchangeable with the derivative axes nor the
+// same length, so it stays a dense outer dimension.  Lead == 0 is the scalar case.
 //
 // The symmetric part sorts its indices and ranks the resulting multiset in
 // colex order, through the standard multiset-to-combination bijection

@@ -54,16 +54,21 @@ template <CExpression E> consteval bool renders_as_subtraction() {
 
 // The state a walk carries that is not per-node: where output goes and how
 // values are formatted.
-template <typename Ctx, typename ValueFmt> struct printer {
-  Ctx &ctx;
-  const ValueFmt &value_fmt;
+// Neither member was ever open -- fmt_put takes a std::format_context, and the
+// formatter is the one std::formatter<E> holds for E::value_type -- so both are
+// spelled outright instead of taken as parameters; V still deduces via CTAD.
+template <Numeric V> struct printer {
+  std::format_context &ctx;
+  const std::formatter<V, char> &value_fmt;
 
   void put(std::string_view s) const { fmt_put(ctx, s); }
   void put(char c) const { put(std::string_view{&c, 1}); }
 
   // Values go through the nested formatter, so a value-spec supplied by the
   // caller ("{::.3f}") reaches every leaf.
-  template <Numeric V> void put_value(const V &v) const {
+  // Generic in the value: a leaf may hand over something that merely converts
+  // to V, and the nested formatter is what decides whether that prints.
+  template <Numeric U> void put_value(const U &v) const {
     ctx.advance_to(value_fmt.format(v, ctx));
   }
 };
@@ -75,8 +80,8 @@ template <typename Ctx, typename ValueFmt> struct printer {
 // its own operator (`a - b - c` is flat), a right operand must be one step
 // tighter -- which is exactly what keeps `x / (y / z)` and `x - (y + z)`
 // parenthesised while leaving `x - y * z` clean.
-template <CExpression E, typename P>
-void print_infix(const P &p, const E &e, int min_prec) {
+template <CExpression E, Numeric V>
+void print_infix(const printer<V> &p, const E &e, int min_prec) {
   using U = std::remove_cvref_t<E>;
 
   if constexpr (CExpressionNode<U>) {

@@ -16,8 +16,7 @@ constexpr auto py = diff::var<"y">;
 constexpr auto pz = diff::var<"z">;
 } // namespace
 
-// Unary nodes used to print as their bare child -- the operator itself was
-// dropped on the floor.  These three are the regression gate.
+// A unary node must name its operator, not print as its bare child.
 TEST(ExpressionPrinting, UnaryNodesNameTheirOperator) {
   EXPECT_EQ(std::format("{}", sin(px)), "sin(x)");
   EXPECT_EQ(std::format("{}", -px), "-x");

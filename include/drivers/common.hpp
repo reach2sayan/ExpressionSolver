@@ -1,11 +1,5 @@
 #pragma once
 
-// Vocabulary shared by every driver: what an energy must look like, what a
-// sweep is taken over, what a second-order result is, and the scratch a sweep
-// seeds into.  Split out so `numeric.hpp` (runtime callables) and
-// `symbolic.hpp` (expression graphs) can each depend on the shapes without
-// depending on each other.
-
 #include "dual/dual.hpp"
 
 #include <algorithm>
@@ -20,96 +14,55 @@
 
 namespace diff {
 
-// An energy in the shape every driver here hands one: it is called with a
-// pointer into the driver's own seed buffer and returns a number of the same
-// type.  The buffer's length is deliberately not part of the type — the
-// driver owns it and the callable reads a window the caller has guaranteed
-// (see SeededExprEnergy in seeded_energy.hpp).
-//
-// D is the number the driver seeds with, and it is what distinguishes the
-// drivers from each other: `dual` for the gradient sweep, `dual2nd` for the
-// forward-over-forward Hessian.  Naming it here is what lets an energy that is
-// not generic enough fail at its call site rather than inside a sweep.
+// An energy as every driver here calls one: with a pointer into the driver's
+// own seed buffer, returning a number of the same type.  The buffer's length is
+// not part of the type; the callable reads a window the caller has guaranteed
+// (see SeededExprEnergy in seeded_energy.hpp).  D is what distinguishes the
+// drivers: `dual` for the gradient sweep, `dual2nd` for the Hessian.
 template <typename F, typename D>
 concept CEnergyOf =
     std::invocable<F &, const D *> &&
     std::convertible_to<std::invoke_result_t<F &, const D *>, D>;
 
-// The set of variables a sweep is taken over, as a *range* rather than a
-// materialised container.
-//
-// Every driver here indexes `active` and asks for its size, and nothing else.
-// Spelling that as `std::span<const std::size_t>` forced the overwhelmingly
-// common case -- differentiate everything -- to build a vector 0,1,...,n-1 and
-// heap-allocate it, purely so it could be pointed at.  A `views::iota` models
-// the same operations, allocates nothing, and folds `active[i]` to `i`, so the
-// all-variables path is now *cheaper* than the explicit-subset one instead of
-// paying a container for the privilege.  A real span still binds unchanged.
+// Every driver here indexes `active` and asks for its size, and nothing else --
+// so a `views::iota` and a real span both model it, and the all-variables case
+// costs no container.
 template <typename R>
 concept CIndexRange =
     std::ranges::random_access_range<R> && std::ranges::sized_range<R> &&
     std::convertible_to<std::ranges::range_value_t<R>, std::size_t>;
 
-// The point every driver here differentiates at is a `std::span<const double>`,
-// and that is deliberately a concrete type rather than a concept.
-//
-// It reads like it forces the caller's hand and it does not: a span parameter is
-// non-deduced, so implicit conversion applies at the call site and a vector, a
-// std::array, a C array, and a contiguous view over any of them all bind with
-// nothing spelled.  A temporary binds too -- span's range constructor drops the
-// borrowed_range requirement when the element type is const, which it is here.
-//
-// There used to be a `CPointRange` concept plus an `as_point()` helper and a
-// second overload of every entry point taking `const P&`, held apart from the
-// span one by a `requires(!same_as<..., span>)` clause.  All of it was
-// accepting exactly what the span parameter already accepted.  Erasing to the
-// span at the boundary also keeps each sweep instantiated once instead of once
-// per container type, which the concept version had to hand-arrange.
+// The point is a `std::span<const double>`, a concrete type and not a concept:
+// the parameter is non-deduced, so a vector, array, C array, contiguous view or
+// temporary all convert at the call site with nothing spelled.
 namespace detail {
-// 0,1,...,n-1 without materialising it.  This is what a driver means by "all
-// variables"; it is a view, so it costs nothing to form or to pass.
+// 0,1,...,n-1 without materialising it -- what a driver means by "all variables".
 [[nodiscard]] constexpr auto all_indices(std::size_t n) noexcept {
   return std::views::iota(std::size_t{0}, n);
 }
 } // namespace detail
 
-// What a second-order sweep hands back.
-//
-// Plain std types, and owning ones: the caller takes the buffers and the library
-// keeps no reference to them.  Two shapes, because the extent is a compile-time
-// constant for an expression graph and a runtime value for an opaque lambda.
-// Both destructure the same way, so `auto [v, g, H, n] = ...` reads identically
-// and the binding itself says which you have.
+// What a second-order sweep hands back: owning std types the caller takes over,
+// in two shapes that destructure alike (`auto [v, g, H, n] = ...`).
 //
 //   value    f(x)
 //   gradient n entries
 //   hessian  n*n entries, ROW-MAJOR: element (i, j) is hessian[i * n + j]
-//
-// There is deliberately no accessor type wrapping these.  The layout is part of
-// the contract rather than something a member function hides, and a caller that
-// wants matrix semantics maps its own linear-algebra type onto the buffer --
-// the pointer and the extent are all that takes, and this library never names
-// such a type.
 
 // Runtime extent: two owning buffers plus the extent they are sized by.
 using HessianOwned = std::tuple<double, std::unique_ptr<double[]>,
                                 std::unique_ptr<double[]>, std::size_t>;
 
-// Compile-time extent: no allocation at all, and constant-evaluable, which the
-// unique_ptr form cannot be.  The extent is N, so it is not carried.
+// Compile-time extent: no allocation, and constant-evaluable.  N is the extent.
 template <std::size_t N>
 using HessianStatic =
     std::tuple<double, std::array<double, N>, std::array<double, N * N>>;
 
 namespace detail {
-// Average each (i, j) / (j, i) pair in place.
-//
-// A driver that fills the matrix one row (or column) at a time computes the two
-// halves in independent sweeps, so mirrored entries can differ in the last ULP.
-// H is analytically symmetric, so averaging only removes that FP noise -- and it
-// is what makes the exactly-symmetric contract the drivers advertise true of the
-// buffer as well as of the maths.  Drivers whose layout names each entry exactly
-// once (the sparse path) have no pair to average and do not call this.
+// Average each (i, j) / (j, i) pair in place.  Mirrored entries come from
+// independent sweeps and can differ in the last ULP; H is analytically
+// symmetric, so this removes only that noise.  The sparse path names each entry
+// once and does not call it.
 constexpr void symmetrize(double *const h, const std::size_t n) noexcept {
   for (std::size_t i = 0; i < n; ++i) {
     for (std::size_t j = i + 1; j < n; ++j) {
@@ -120,15 +73,9 @@ constexpr void symmetrize(double *const h, const std::size_t n) noexcept {
   }
 }
 
-// Copy a static-extent result into owning buffers.
-//
-// Needed only where one entry point can reach both shapes: the subset-taking
-// hessian() can dispatch to the compile-time-arity reverse driver (when the
-// subset happens to be every symbol) or to the runtime probe driver, and a
-// function returns one type.  The static form is the cheaper of the two, so it
-// stays the return type wherever it is the *only* thing an entry point can
-// produce -- which is the plain hessian(expr, x) overload, the one the graph
-// benchmarks and most callers use.
+// Copy a static-extent result into owning buffers.  Needed only where one entry
+// point can reach both shapes and has to return one type -- the subset-taking
+// hessian().  The static form stays the return type everywhere else.
 template <std::size_t N>
 [[nodiscard]] inline HessianOwned to_owned(HessianStatic<N> &&h) {
   auto grad = std::make_unique_for_overwrite<double[]>(N);
@@ -140,44 +87,23 @@ template <std::size_t N>
 }
 
 // Uninitialised owning buffer.  make_unique_for_overwrite, not make_unique: the
-// sweep writes every cell, so value-initialising first is a memset the driver
-// immediately overwrites -- the same waste HessianResult::resize used to pay.
+// sweep writes every cell, so value-initialising first is a wasted memset.
 [[nodiscard]] inline std::unique_ptr<double[]> raw_buffer(std::size_t k) {
   return std::make_unique_for_overwrite<double[]>(k);
 }
 } // namespace detail
 
-// Caller-owned scratch for a sweep's seeded variables.
-//
-// The dof array is pure working storage: it is written at the top of every
-// sweep and never read afterwards, so there is no reason for each call to buy
-// its own.  Handing one of these to a loop over many points allocates on the
-// first call and never again.
-//
-// Small points -- which is nearly all of them -- are seeded into an inline
-// block and never touch the allocator at all.  The block is *raw storage*, and
-// that is the whole point: a plain `std::array<D, K>` member was tried first
-// and measured worse (7,920 -> 9,581 Ir at n = 4), because Dual's members carry
-// `{}` initialisers, so the array is value-initialised on every construction
-// and the call trades one allocation for a full zero-fill of the block.  Here
-// nothing is constructed until `seed_with` places a seed in a slot, so the
-// unused tail costs exactly nothing.  D is required to be trivially
-// destructible, which is what makes reusing the block between calls -- and
-// simply abandoning it -- well defined.
+// Caller-owned scratch for a sweep's seeded variables.  The dof array is pure
+// working storage, so one workspace handed to a loop over many points allocates
+// on the first call and never again.  Small points are seeded into an inline
+// block instead -- *raw* storage, so an unused tail is never constructed, which
+// is why D must be trivially destructible.
 
 namespace detail {
-// The inline block, or nothing at all.
-//
-// `alignas(D) std::byte[N]` is an array member, and -fstack-protector-strong
-// (on by default on this toolchain) gives a canary to every function holding
-// one.  For a D wide enough that the block could never hold a whole point that
-// canary -- plus the stack it reserves -- is pure loss, so the block is not
-// declared at all there and [[no_unique_address]] gives the empty stand-in no
-// footprint.  Measured: carrying an unusable block cost the vector-forward
-// driver 3.8% at Dual<VectorDual<8>>, a 192-byte element (that driver has since
-// been deleted, but the rule -- do not declare a block a type can never use --
-// is what the static_assert-free `inline_floor` gate below encodes).
-template <typename D, std::size_t Bytes> struct inline_block {
+// The inline block, or nothing at all.  An array member costs a stack-protector
+// canary on every function holding the workspace, so a D too wide to ever fit a
+// whole point gets no block and [[no_unique_address]] gives the stand-in no size.
+template <Numeric D, std::size_t Bytes> struct inline_block {
   alignas(D) std::byte storage[Bytes];
 };
 struct no_inline_block {};
@@ -187,10 +113,8 @@ template <Numeric D> struct SweepWorkspace {
   static_assert(std::is_trivially_destructible_v<D>,
                 "the inline block is reused and abandoned without destruction");
 
-  // A byte budget, not an element count: this template is instantiated at
-  // dual2nd (32 B) and could be instantiated at a much wider D.  A block that
-  // cannot hold `inline_floor` seeds is not worth its stack, so it is not
-  // declared at all there.
+  // A byte budget, not an element count: D may be much wider than dual2nd's
+  // 32 B.  A block that cannot hold `inline_floor` seeds is not declared.
   static constexpr std::size_t inline_bytes = 512;
   static constexpr std::size_t inline_floor = 8;
   static constexpr std::size_t inline_capacity =
@@ -205,7 +129,11 @@ template <Numeric D> struct SweepWorkspace {
   // next seed on this workspace.
   //
   // Not const: this fills the scratch.  Not noexcept: growth may allocate.
-  template <typename Make>
+  // regular_invocable, not invocable: the heap path hands `make` to
+  // std::ranges::transform, which may call it once per element in any order and
+  // expects the same seed each time.
+  template <std::regular_invocable<double> Make>
+    requires std::convertible_to<std::invoke_result_t<Make &, double>, D>
   [[nodiscard]] D *seed_with(const std::span<const double> x, Make make) {
     if constexpr (inline_capacity > 0) {
       if (x.size() <= inline_capacity) {
@@ -219,21 +147,16 @@ template <Numeric D> struct SweepWorkspace {
         return dof;
       }
     }
-    // Grow-only, and resize() rather than a capacity check: the vector's size
-    // is what a later .data() read is entitled to, and resize keeps capacity on
-    // shrink anyway.  These slots already hold live objects, so seeding them is
-    // plain assignment, and the transform stays exactly what it was before the
-    // inline block existed -- the wide instantiations reach only this path and
-    // must not pay for a fast path they can never take.
+    // Grow-only, and resize() rather than a capacity check: the vector's size is
+    // what a later .data() read is entitled to.  These slots already hold live
+    // objects, so seeding them is plain assignment.
     if (heap.size() < x.size()) {
       heap.resize(x.size());
     }
     std::ranges::transform(x, heap.begin(), make);
     return heap.data();
   }
-  // `D{v}` is the uniform lift of a plain scalar to a zero-derivative dual at
-  // any nesting depth: Dual's converting constructor sets the value component
-  // and value-initialises the derivative, recursively.
+  // `D{v}` lifts a scalar to a zero-derivative dual at any nesting depth.
   [[nodiscard]] D *seed(const std::span<const double> x) {
     return seed_with(x, [](const double v) { return D{v}; });
   }

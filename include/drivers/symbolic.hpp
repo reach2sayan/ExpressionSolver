@@ -14,6 +14,7 @@
 #include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <functional>
 #include <ranges>
 #include <span>
@@ -28,21 +29,12 @@ template <CExpression Expr>
 using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
                                 node_count_v<std::remove_cvref_t<Expr>>>;
 
-// Leaves hold no value, so the point is threaded through the sweep: a leaf
-// reads its slot out of `vals` (in canonical symbol order) instead of out of
-// itself.
+// Leaves hold no value, so the point is threaded through the sweep: a leaf reads
+// its slot out of `vals` (in canonical symbol order) instead of out of itself.
 //
 // `Store` says whether this node's value has to be written to its slot at all.
-// A slot is only ever read back by a *parent's* adjoint rule -- every cache[]
-// in operations.hpp is cache[cb[...]], a child index, so no rule reads its own
-// slot -- which makes the answer entirely the parent's `reads_primals`.  A sum
-// or a negation reads neither operand, so everything directly beneath one is
-// computed, handed upward, and never written down.  The root is likewise never
-// stored: its value is the return value, and nothing looks it up.
-//
-// The array keeps one slot per node either way; what goes away is the store.
-// A slot that is written by nobody and read by nobody is dead, which is the
-// form the optimiser can actually drop.
+// No adjoint rule reads its own slot -- every cache[] in operations.hpp is a
+// child index -- so the answer is entirely the parent's `reads_primals`.
 template <std::size_t Base = 0, CSymbolList Syms, bool Store = true,
           CExpression E, CNumericBuffer Vals, CNumericBuffer Cache>
 constexpr auto fill_cache(const E &node, const Vals &vals,
@@ -72,23 +64,18 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
   }
 }
 
-// One reverse sweep: fill the primal cache from `seeds`, then push adjoints
-// back through it from a root adjoint of 1.  Returns {root value, gradients}.
-//
-// This is the whole reverse mode, and every caller of it wants exactly these
-// four lines -- the cache, the fill, the backward, the root adjoint of one.
-// They differ only in what they do with the answer: peel a dual level, harvest
-// one Hessian column, scatter into a sparse buffer, stack a Jacobian row.
-// Writing it once is also what fixes the convention (Syms{}, T{1}) in one
-// place rather than six.
+// One reverse sweep: fill the primal cache from `seeds`, then push adjoints back
+// through it from a root adjoint of 1.  Returns the root value; `grads` receives
+// the gradient.  This is the whole of reverse mode -- callers differ only in what
+// they do with the answer, so the (Syms{}, T{1}) convention is fixed here.
 template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds,
           CNumericBuffer Grads>
 DIFF_ALWAYS_INLINE constexpr auto
 reverse_sweep(const Expr &expr, const Seeds &seeds, Grads &grads) noexcept {
   using T = typename std::remove_cvref_t<Expr>::value_type;
   node_cache_t<Expr> cache{};
-  // Store=false: the root's value is what this function returns, and no
-  // adjoint rule looks up its slot, so writing it would be a dead store.
+  // Store=false: the root's value is the return value and no adjoint rule looks
+  // up its slot, so writing it would be a dead store.
   const T root = fill_cache<0, Syms, false>(expr, seeds, cache);
   expr.backward(Syms{}, T{1}, grads, cache);
   return root;
@@ -97,15 +84,11 @@ reverse_sweep(const Expr &expr, const Seeds &seeds, Grads &grads) noexcept {
 // ===========================================================================
 // Order-safe seeding for the symbolic value-array APIs.
 //
-// derivative_tensor(expr, values) and the reverse-mode hessian(expr, values)
-// take a positional std::array whose slot i must hold the value of the i-th
-// symbol in CANONICAL order — which is alphabetical by symbol name (see
-// extract_symbols_from_expr_t / symbol_less in traits.hpp), NOT source order.
-// Passing them in the wrong order silently computes a derivative at the wrong
-// point.  make_values() removes that footgun: values bind by symbol *name*, so
-// a missing, extra, duplicated, or misspelled symbol is a compile error and
-// position is irrelevant.  symbol_order() exposes the canonical order for
-// introspection / building arrays by hand.
+// The symbolic value-array APIs take a positional std::array whose slot i holds
+// the i-th symbol in CANONICAL order — alphabetical by symbol name (see
+// extract_symbols_from_expr_t in traits.hpp), NOT source order.  make_values()
+// binds by name instead, so a missing, extra, duplicated or misspelled symbol is
+// a compile error; symbol_order() exposes the canonical order.
 // ===========================================================================
 
 // The canonical (alphabetical-by-name) order of an expression's free symbols.
@@ -248,13 +231,13 @@ template <std::size_t N, std::size_t Order>
 
 // The non-decreasing multi-indices: C(N + Order - 1, Order) of them rather than
 // N^Order, one canonical representative per permutation class (mixed partials
-// commute).  A consteval table, not a filtered view and not a lazy iterator --
-// both alternatives measured 4x slower, for two different reasons.
+// commute).  Keep it a consteval table -- a filtered view and a lazy iterator
+// were each measured 4x slower.
 template <std::size_t N, std::size_t Order>
   requires(N > 0 && Order > 0)
 consteval auto simplex_index_table() noexcept {
-  // binomial() lives in md/layouts.hpp, same namespace — the layout's own
-  // cell count, so the table and the storage cannot disagree on the size.
+  // binomial() is the layout's own cell count (md/layouts.hpp), so the table and
+  // the storage cannot disagree on the size.
   std::array<std::array<std::size_t, Order>, binomial(N + Order - 1, Order)>
       out{};
   std::array<std::size_t, Order> idx{};
@@ -274,8 +257,7 @@ consteval auto simplex_index_table() noexcept {
   return out;
 }
 
-// Instantiated once per (N, Order), so the walk above runs once however many
-// callers ask for the table.
+// Instantiated once per (N, Order), however many callers ask for the table.
 template <std::size_t N, std::size_t Order>
 inline constexpr auto simplex_index_table_v = simplex_index_table<N, Order>();
 
@@ -294,9 +276,8 @@ constexpr auto extract_nth(const T &x) noexcept {
 }
 
 // The full seed array for one entry of the derivative grid: every variable
-// lifted to nth_dual_t, with the tangents that `idx` names switched on.  Used
-// by both tensor drivers -- the scalar one and Equation's stacked one -- which
-// build it identically and differ only in where the answer lands.
+// lifted to nth_dual_t, with the tangents `idx` names switched on.  Shared by
+// both tensor drivers -- the scalar one and Equation's stacked one.
 template <Numeric S, std::size_t Order, std::size_t N>
 [[nodiscard]] constexpr std::array<nth_dual_t<S, Order>, N>
 mixed_seeds(const std::array<S, N> &values,
@@ -321,13 +302,10 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
 
   nd_tensor_t<S, N, Order> result{};
 
-  // First-order, low arity: one plain Dual pass per variable.  The generic
-  // tensor loop below can do this, but only through machinery that is pure
-  // overhead at Order == 1 — a runtime index walk over the cartesian grid and
-  // make_mixed_seed's recursive span walk, none of it constant enough for the
-  // compiler to unroll the N == 2 case.  Here the seeded variable J is a
-  // template parameter, so `k == J` folds away and the passes become
-  // straight-line code instead of a rolled loop over stack-resident seeds.
+  // First-order: one plain Dual pass per variable.  The generic loop below can
+  // do this, but its runtime index walk and make_mixed_seed's recursive span
+  // walk are pure overhead at Order == 1.  Here the seeded variable J is a
+  // template parameter, so `k == J` folds away and the passes are straight-line.
   if constexpr (Order == 1) {
     [&]<std::size_t... J>(std::index_sequence<J...>) {
       auto sweep = [&]<std::size_t Seeded>() {
@@ -355,10 +333,8 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
 
 namespace detail {
 
-// Same fold as binomial() in md/layouts.hpp, which is the idiom this file
-// should match.  The self-test is a plain static_assert rather than the macro
-// dance the hand-rolled loop needed: consteval means it is checked here, once,
-// in every build rather than only in debug ones.
+// Same fold as binomial() in md/layouts.hpp; consteval, so the static_asserts
+// below are checked in every build.
 template <CArithmetic T> consteval T compile_time_factorial(T Order) {
   return std::ranges::fold_left(std::views::iota(T{1}, T(Order + 1)), T{1},
                                 std::multiplies{});
@@ -383,37 +359,39 @@ template <std::size_t Order, CExpression Expr,
 
   TD result = expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
 
-  // Computed in size_t (exact) and converted once, rather than folded in S:
-  // the cast is explicit so it does not read as an accidental narrowing.
+  // Folded in size_t (exact) and converted once, not accumulated in S.
   constexpr S factorial = static_cast<S>(compile_time_factorial(Order));
   return result.c[Order] * factorial;
 }
 
 } // namespace detail
 
-// The expression-taking entry points that used to live here -- gradient<Mode>,
-// hessian<Mode>, derivative_tensor<Order>, univariate_derivative<Order>, and
-// the reverse_mode_grad / reverse_mode_hess macros -- are now members of
-// Equation (expr/equation.hpp).  A bare expression converts to a one-output
-// Equation implicitly, so `Equation{expr}.gradient(pt)` is the one spelling.
-// Everything above stays here as the engine those members call.
-
+// Everything above is the engine behind Equation's members (expr/equation.hpp),
+// which are the public derivative entry points.
 
 // ---------------------------------------------------------------------------
 // Forward-over-reverse Hessian of an expression graph.
 //
-// The only O(N)-sweep Hessian driver in the library: seeds a tangent, sweeps
-// the graph backward once per colour, and harvests a whole set of rows per
-// sweep.  It lives here, with the other graph sweeps, because what it needs is
-// the tree -- `reverse_sweep` above and the compile-time sparsity pattern from
-// coupling.hpp.  The router in hessian.hpp decides when it applies.
+// The only O(N)-sweep Hessian driver in the library: seeds a tangent, sweeps the
+// graph backward once per colour, and harvests a whole set of rows per sweep.
+// It needs the tree -- `reverse_sweep` above and the compile-time sparsity
+// pattern from coupling.hpp.  The router in hessian.hpp decides when it applies.
 // ---------------------------------------------------------------------------
 
 namespace detail {
 
-template <CExpression Expr, typename Colors, typename Harvest>
+// `colors` is spelled as the type color_columns() returns, which deduces its
+// width.  The harvester is constrained inline rather than by a concept of its
+// own -- this is its only caller -- and takes the gradient array by non-const
+// reference because both harvesters below scatter straight out of it.
+template <CExpression Expr, std::size_t NCol, typename Harvest>
+  requires std::invocable<
+      Harvest &, std::size_t,
+      const typename std::remove_cvref_t<Expr>::value_type &,
+      std::array<typename std::remove_cvref_t<Expr>::value_type,
+                 detail::expr_arity_v<std::remove_cvref_t<Expr>>> &>
 DIFF_ALWAYS_INLINE void color_sweeps(const Expr &expr, std::span<const double> x,
-                  const Colors &colors, Harvest &&harvest) {
+                  const column_coloring<NCol> &colors, Harvest &&harvest) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using S = dual_scalar_t<T>;
@@ -437,12 +415,9 @@ DIFF_ALWAYS_INLINE void color_sweeps(const Expr &expr, std::span<const double> x
 }
 
 // Forward-over-reverse Hessian for a compile-time expression graph.  Seeding
-// column j with a first-order tangent and running ONE backward sweep yields
-// that whole Hessian column, so the full N x N matrix costs N sweeps against
-// the scalar driver's N(N+1)/2 forward-over-forward probes — an O(N) vs O(N^2)
-// difference, and the j == 0 sweep hands back the value and gradient for free.
-// Only a graph can take this path: a runtime lambda has no tree to sweep
-// backward.  The seed array is sized by the symbol set, so N is compile-time.
+// column j with a first-order tangent and running ONE backward sweep yields that
+// whole Hessian column, so the matrix costs N sweeps against the scalar driver's
+// N(N+1)/2 probes, and the j == 0 sweep hands back the value and gradient free.
 template <CExpression Expr>
 HessianStatic<mpl::mp_size(detail::expr_symbols_t<std::remove_cvref_t<Expr>>{})>
 hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
@@ -451,13 +426,10 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
   using Syms = detail::expr_symbols_t<E>;
   constexpr std::size_t N = mpl::mp_size(Syms{});
 
-  // Sparsity read off the expression type, then a colouring of it: columns
-  // that share no row can be seeded in the SAME sweep, because no row receives
-  // a contribution from more than one of them.  A banded Hessian needs a fixed
-  // number of colours regardless of n, so this takes the sweep count from O(N)
-  // to O(colours) — the chain energy's tridiagonal-plus-corner pattern colours
-  // in 5 whether n is 8 or 32.  A dense pattern colours in N and the loop
-  // degenerates to one sweep per column, i.e. never worse.
+  // Sparsity read off the expression type, then a colouring of it: columns that
+  // share no row can be seeded in the SAME sweep.  A banded Hessian needs a fixed
+  // number of colours regardless of n; a dense one colours in N, so the loop
+  // degenerates to one sweep per column and is never worse.
   static constexpr auto kPattern = hessian_pattern<E>();
   static constexpr auto kColors = color_columns<N>(kPattern);
   // Value-initialised, and that is load-bearing: the scatter below writes only
@@ -501,18 +473,12 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
 }
 
 // The nonzero VALUES of the Hessian, in the compressed-column order fixed by
-// sparse_layout<Expr>() — the same colour-compressed sweeps as above, but
-// scattered straight into compressed storage, so the dense N x N matrix is
-// never materialised and the buffer is O(nnz) rather than O(N^2).
-// No symmetrization pass: the layout already names each entry exactly once, and
-// H(i,j) and H(j,i) are separate slots filled from the sweep of their own
-// colour, so there is no pair to average.
+// sparse_layout<Expr>() — the same colour-compressed sweeps as above, scattered
+// straight into compressed storage, so the dense N x N matrix is never
+// materialised.  No symmetrization: the layout names each entry exactly once.
 //
-// NNZ rides along as a defaulted template parameter — the same shape as
-// sparse_layout() in coupling.hpp — because hessian_nnz is consteval: the size
-// of this buffer is a property of Expr, so it is an array and not a vector, and
-// the sparse path does not allocate.  std::vector is for the runtime-extent
-// drivers above, where the active-variable count is a span and not a type.
+// NNZ is a defaulted template parameter because hessian_nnz is consteval, so the
+// buffer is an array and the sparse path does not allocate.
 template <CExpression Expr,
           std::size_t NNZ = hessian_nnz<std::remove_cvref_t<Expr>>()>
 std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
@@ -525,14 +491,10 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
   static constexpr auto kPattern = hessian_pattern<E>();
   static constexpr auto kColors = color_columns<N>(kPattern);
 
-  // One cell past the nonzeros: layout_sparse_pattern maps every structural
-  // zero onto that last slot, so H[i, j] answers for indices the pattern
-  // excludes without the caller checking first.  A CSC consumer reads exactly nnz
-  // entries from values.data(), so the extra cell is invisible to it.
-  //
-  // Value-initialised, which zeroes it: the sweeps below only write the slots
-  // the pattern names, and every other cell — the sink included — has to read
-  // back as exactly 0.0.
+  // One cell past the nonzeros: layout_sparse_pattern maps every structural zero
+  // onto that last slot, so H[i, j] answers for excluded indices without a check.
+  // A CSC consumer reads exactly nnz entries and never sees it.  Value-initialised,
+  // because the sweeps write only the slots the pattern names.
   std::array<double, NNZ + 1> values{};
 
   color_sweeps(expr, x, kColors,
@@ -547,9 +509,6 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
   return values;
 }
 
-// A graph can take the forward-over-reverse path only if its numbers carry a
-// first-order tangent to seed — that is what makes one backward sweep yield a
-
 } // namespace detail
 
 
@@ -559,15 +518,8 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
 // The structure comes from the compile-time coupling pass, so `outer` and
 // `inner` are `static constexpr` and cost nothing at run time; only the nnz
 // values are computed and stored.  Together they are a standard
-// compressed-column (CSC) triple, which is what every sparse linear-algebra
-// library consumes -- so handing the three of them over is all this needs to
-// do, and it deliberately does not name any of those libraries.  Building an
-// Eigen map from it is one line at the call site:
-//
-//   auto H = diff::sparse_hessian(expr, x);
-//   Eigen::Map<const Eigen::SparseMatrix<double>> m{
-//       H.rows, H.rows, H.nnz, H.outer().data(), H.inner().data(),
-//       H.values().data()};
+// compressed-column (CSC) triple, which every sparse linear-algebra library
+// consumes -- the caller maps its own matrix type onto them.
 // ---------------------------------------------------------------------------
 template <CExpression Expr> class SparseHessian {
   using E = std::remove_cvref_t<Expr>;

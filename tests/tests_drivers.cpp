@@ -2,11 +2,9 @@
 
 
 // ===========================================================================
-// The public hessian() router on a raw callable.  It has one answer now — the
-// scalar O(m^2) probe driver — and this pins that, across a spread of m, on an
-// energy exercising +,-,*,/,log,exp and scalar*dual.  A second arm, the
-// vector-forward driver, was compared here until it was deleted on 2026-08-20
-// for losing to the scalar driver at every m.
+// The public hessian() router on a raw callable.  It has one answer — the scalar
+// O(m^2) probe driver — and this pins that across a spread of m, on an energy
+// exercising +,-,*,/,log,exp and scalar*dual.
 // ===========================================================================
 namespace {
 // Non-trivial multivariate function exercising +,-,*,/,log,exp and
@@ -180,10 +178,9 @@ TEST(Ownership, GraphHessianRejectsAnActiveIndexThatNamesNoSymbol) {
 }
 
 TEST(Ownership, ResultOwnsItsBuffersAndTransfersThem) {
-  // The drivers hand back plain owning std types, so ownership is the tuple's.
-  // What used to be guarded here -- an accessor on a prvalue result returning a
-  // dangling reference -- cannot arise, because there is no accessor: the
-  // buffers move with the tuple and die with it.
+  // The drivers hand back plain owning std types, so ownership is the tuple's:
+  // the buffers move with it and die with it.  There is no accessor, so an
+  // accessor on a prvalue result cannot dangle.
   auto f = [](const auto *d) { return d[0] * d[0] * d[1]; };
   const std::array<double, 2> x{2.0, 3.0};
 
@@ -225,8 +222,7 @@ TEST(Ownership, EquationSubtreeAccessorsWorkOnTemporaries) {
 }
 
 TEST(Ownership, ReverseHessianAcceptsATemporaryExpression) {
-  // hessian() used to take a non-const lvalue reference, so this did not
-  // compile while the sibling gradient() call did.
+  // A temporary expression has to reach hessian(), not just gradient().
   using D = diff::Dual<double>;
   const auto H = Equation{PDV(0.0, "x") * PDV(0.0, "y")}.hessian(std::array{2.0, 3.0});
   const auto g = Equation{PDV(0.0, "x") * PDV(0.0, "y")}.gradient(std::array{D{2.0}, D{3.0}});
@@ -690,10 +686,9 @@ TEST(ForwardDriverReuse, GradientReusingOverloadMatchesOwning) {
 }
 
 TEST(ForwardDriverReuse, PointAcceptsAnyContiguousSizedRange) {
-  // The point used to have to be spelled as a std::span at every call site even
-  // though the conversion is lossless.  vector, array, C array and span must all
-  // bind and agree to the last bit -- they are the same numbers by construction,
-  // so anything other than exact equality means a conversion is doing work.
+  // vector, array, C array and span must all bind and agree to the last bit --
+  // they are the same numbers by construction, so anything other than exact
+  // equality means a conversion is doing work.
   auto f = [](const auto *q) { return q[0] * q[0] * q[1] + q[2]; };
 
   const std::vector<double> v{0.4, 0.9, 1.3};

@@ -1,18 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-# The accessors -- Equation::get<N>(), ValueMap::get<S>() and Bound::get<S>(),
-# plus their operator[] spellings -- have two forms behind DIFF_DEDUCING_THIS
-# (include/util/config.hpp): one definition using deducing this (P0847), and an
-# explicit overload set for toolchains without it.  Each pair shares a single
-# static slot() body, so they compile and behave identically and nothing here
-# is a hard requirement (Clang 17, inside the supported range, has no P0847) --
-# but our own builds should exercise the deducing-this path, and a box's default
-# /usr/bin/c++ is often older than the GCC 14 floor the README states, so it may
-# have neither that nor std::ranges::to.  Pick the newest GCC on PATH when the
-# caller has not chosen a compiler; a caller who passes -DCMAKE_CXX_COMPILER or
-# sets $CXX always wins, and a consumer pulling this in via add_subdirectory
-# already has the variable set, so the block is a no-op there.
-# CMAKE_CXX_COMPILER must be set before project().
+# Newest GCC on PATH, unless the caller chose a compiler.  Must precede project().
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
         AND NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
     find_program(DIFF_PREFERRED_CXX NAMES g++-15 g++-14)
@@ -28,21 +16,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Which accessor spelling this build takes, and why -- see include/util/config.hpp,
-# which owns the decision and is the only header that names P0847's macro.  The
-# option is here so the choice is visible at configure time rather than only in
-# a disassembly, and so a stale compiler selection is caught immediately.
-#
+# Accessor spelling (include/util/config.hpp owns the decision).
 #   auto - the compiler's own answer (__cpp_explicit_this_parameter)
-#   on   - deducing this even where the macro is absent.  Clang implements P0847
-#          from 18 without ever defining it, so `auto` is merely conservative
-#          there and this is the switch that says so.
-#   off  - the ref-qualified overload set even where the feature works, for a
-#          build whose other tools cannot parse it yet.
-#
-# Two probes, because the macro and the feature are not the same question: the
-# first asks what the compiler advertises (what `auto` will pick up), the second
-# whether the feature actually compiles (what `on` requires).
+#   on   - deducing this even where the macro is absent
+#   off  - the ref-qualified overload set
+# The first probe asks what `auto` picks up, the second what `on` requires.
 include(CheckCXXSourceCompiles)
 set(DIFF_DEDUCING_THIS "auto" CACHE STRING "Accessor spelling: auto|on|off")
 set_property(CACHE DIFF_DEDUCING_THIS PROPERTY STRINGS auto on off)
@@ -70,9 +48,7 @@ elseif (DIFF_DEDUCING_THIS STREQUAL "on")
 elseif (DIFF_DEDUCING_THIS STREQUAL "off")
     set(DIFF_DEDUCING_THIS_VALUE 0)
 elseif (DIFF_DEDUCING_THIS STREQUAL "auto")
-    # Leave it undefined and let config.hpp decide, so a consumer compiling
-    # against the installed headers without this CMake file gets the same
-    # answer as one building through it.
+    # Undefined: config.hpp decides, so a consumer building without this file agrees.
     unset(DIFF_DEDUCING_THIS_VALUE)
 else ()
     message(FATAL_ERROR "DIFF_DEDUCING_THIS must be auto, on or off (got '${DIFF_DEDUCING_THIS}').")
@@ -88,17 +64,10 @@ else ()
     message(STATUS "accessors: ref-qualified overload set (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
 endif ()
 
-# include/md/md.hpp needs an mdspan.  No toolchain we target ships one yet --
-# libstdc++ 15.2 has no <mdspan> at all -- and three of the pieces the layouts
-# and drivers use (submdspan, the padded layouts, the accessor machinery around
-# them) are C++26 even where <mdspan> does exist.  So the reference
-# implementation is vendored under include/md/third_party and this probe decides
-# which one md.hpp binds to, the same way the deducing-this probe above reports
-# which get<N>() spelling is live.
-#
+# Which mdspan include/md/md.hpp binds to.
 #   auto     - standard <mdspan> when it is complete enough, vendored otherwise
 #   std      - require the standard one; hard error if incomplete
-#   vendored - always the vendored one, so that path stays continuously built
+#   vendored - always the vendored one under include/md/third_party
 set(DIFF_MDSPAN_MODE "auto" CACHE STRING "Which mdspan md.hpp binds to: auto|std|vendored")
 set_property(CACHE DIFF_MDSPAN_MODE PROPERTY STRINGS auto std vendored)
 
@@ -132,25 +101,9 @@ option(DIFF_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
 option(DIFF_BUILD_COMPARE "Build comparison benchmarks against autodiff" OFF)
 option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
 
-# Codegen flags for OUR targets only.
-#
-# These used to be add_compile_options(), i.e. global, which meant -march=native
-# also landed on gtest, Google Benchmark and autodiff.  That is not just untidy:
-# Google Benchmark builds itself with -Werror, and on a CI runner whose native
-# arch resolves to something clang only half-supports it turns clang's
-#   "invalid feature combination: +avx10.1-256; will be promoted to avx10.1-512"
-# into a hard build failure in a dependency we do not control.  Our flags belong
-# on our targets.
-#
-# Not put on the `diff` INTERFACE target either: diff is header-only, so it
-# compiles nothing, and pushing -march=native onto a downstream consumer would
-# decide their deployment target for them.
+# Codegen flags for our own targets only -- never global, never on `diff`.
 if (MSVC)
-    # /bigobj raises the COFF section limit from 2^16 to 2^32.  A header-only
-    # expression-template library hits the 2^16 ceiling in one TU: every
-    # instantiated node type is its own COMDAT section, and tests.cpp alone
-    # instantiates enough of them to fail the link-time object write with
-    # C1128.  GCC and Clang have no such limit and need no equivalent flag.
+    # /bigobj: one TU instantiates past the 2^16 COFF section limit.
     set(DIFF_CODEGEN_FLAGS /arch:AVX2 /bigobj)
 elseif (ENABLE_NATIVE_ARCH)
     set(DIFF_CODEGEN_FLAGS -march=native)
@@ -158,64 +111,17 @@ else ()
     set(DIFF_CODEGEN_FLAGS -march=x86-64-v3)
 endif ()
 
-# Floating-point contract.  Two flags, and neither of them trades accuracy for
-# speed -- this library's results are exact answers, so nothing here is allowed
-# to be lossy.  In particular -ffast-math and its parts (-ffinite-math-only,
-# -fno-signed-zeros, -fassociative-math, -freciprocal-math) are deliberately
-# NOT used, and neither is glibc's vector math: libmvec is 4 ULP against 0.5
-# for the scalar calls.  Measured, -ffast-math is worth about -19% on the
-# benchmark suite; it is still refused, and it would break the bitwise
-# agreement the suite asserts between the seeded and leaf-storage engines.
-#
-#   -ffp-contract=fast   is already GCC's default under -std=gnu++.  Naming it
-#       changes nothing today and is not a speed flag: it pins the one
-#       remaining source of result variation.  Contraction placement decides
-#       where a*b+c becomes a single FMA, and the same source compiles to three
-#       different bit patterns under fast/on/off.  FMA is one rounding instead
-#       of two, so `fast` is both the quickest and the most accurate of the
-#       three -- but left unstated, a compiler default change would silently
-#       move every derivative in the last bit.
-#
-#   -fno-math-errno      says nothing in here reads errno after a libm call,
-#       which is true.  It lets sqrt() become the sqrtsd instruction (bitwise
-#       identical -- IEEE requires sqrt to be correctly rounded) instead of a
-#       library call.  Measured at -1.7% on the benchmark suite, and with
-#       contraction pinned as above the results are byte-for-byte unchanged.
-#
-# Not used, on measurement rather than principle: -fno-plt was +0.8% (slower,
-# despite PLT stubs showing at 3.2% of the profile) and LTO was -0.2%, inside
-# noise and one more input to inlining, hence to contraction placement.
-#
-# MSVC gets nothing here, and wants nothing: /fp:precise is already its default
-# and already forbids the reassociations refused above, and it does not contract
-# unless asked (/fp:contract).  There is no /fp: spelling of -fno-math-errno.
-# So the conservative behaviour is the default there and the flags below would
-# have no equivalent to express -- MSVC results are its own, and the
-# bit-exactness test in tests.cpp is a same-compiler A/B for exactly that
-# reason.  Do NOT add /fp:fast: it is MSVC's -ffast-math.
+# Floating-point contract: pin contraction, drop errno.  Neither flag is lossy.
+# Nothing that trades accuracy for speed belongs here -- in particular never
+# -ffast-math (nor /fp:fast on MSVC, which needs no flags at all).
 option(DIFF_FP_FLAGS "Pin FP contraction and drop errno on libm calls" ON)
 if (DIFF_FP_FLAGS AND NOT MSVC)
     list(APPEND DIFF_CODEGEN_FLAGS -ffp-contract=fast -fno-math-errno)
 endif ()
 
-# Eigen is NOT a dependency of this library.  It never was one of the AD core --
-# the symbolic path is constexpr and Eigen types cannot be constant-evaluated --
-# and as of 2026-08-20 it is not one of the boundary either: the drivers hand
-# back plain pointers, arrays and spans (a dense buffer with its extent, or a
-# compressed-column triple for the sparse Hessian), and a caller maps whatever
-# matrix type it likes onto those in one line.  There is nothing left for an
-# interop header to do.
-#
-# Eigen is still needed for DIFF_BUILD_COMPARE, because autodiff is built on it.
-# Requesting it there rather than globally also keeps a real bug fixed: autodiff
-# calls find_package(Eigen3) without ever linking Eigen3::Eigen to its target,
-# so <Eigen/Core> would otherwise resolve through a /usr/include/Eigen symlink
-# rather than through any include path CMake set.
-#
-# No version in the request, then checked by hand.  Eigen's config file is
-# generated with SameMajorVersion compatibility, so asking for "3.4" is asking
-# for "some 3.x" -- and vcpkg now ships Eigen 5, which can never satisfy that
-# however compatible it actually is.
+# Eigen is not a dependency of the library -- only of the autodiff comparison.
+# Requested without a version (Eigen's config is SameMajorVersion, so "3.4"
+# would exclude Eigen 5) and checked by hand below.
 if (DIFF_BUILD_COMPARE)
     find_package(Eigen3 REQUIRED NO_MODULE)
     if (DEFINED Eigen3_VERSION AND Eigen3_VERSION VERSION_LESS 3.4)
@@ -260,8 +166,7 @@ if (DIFF_BUILD_COMPARE)
     FetchContent_MakeAvailable(autodiff_lib)
 endif ()
 
-# Use CMAKE_CURRENT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so this file works
-# both standalone and as a git submodule via add_subdirectory().
+# CMAKE_CURRENT_SOURCE_DIR, so this works standalone and via add_subdirectory().
 add_library(diff INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/expression_differentiator.hpp
 )
@@ -269,11 +174,8 @@ add_library(diff INTERFACE
 add_library(ExpressionDifferentiator::diff ALIAS diff)
 target_include_directories(diff INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# Each header directory lists its own files: include/CMakeLists.txt walks the
-# subdirectories and each one calls target_sources(diff INTERFACE ...) on the
-# target created just above.  Nothing is compiled from there -- diff is an
-# INTERFACE library, so the lists exist to make the headers visible in IDEs and
-# to keep a directory's contents described next to the contents themselves.
+# Each header directory lists its own files onto the INTERFACE target above,
+# for IDE visibility; nothing is compiled from there.
 add_subdirectory(include)
 if (DIFF_MDSPAN_VENDORED)
     target_compile_definitions(diff INTERFACE DIFF_MDSPAN_FORCE_VENDORED)
@@ -288,10 +190,7 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     target_link_libraries(main PUBLIC diff)
     target_compile_options(main PRIVATE ${DIFF_CODEGEN_FLAGS})
 
-    # Split across several translation units so `-j` can build them at once:
-    # as one 4.5k-line file this was a ~54 s serial compile and the critical
-    # path of every build.  The cut points are the anonymous-namespace helper
-    # blocks, so each file owns the helpers its tests use.
+    # One TU per anonymous-namespace helper block, so `-j` can build them at once.
     file(GLOB DIFF_TEST_SOURCES CONFIGURE_DEPENDS
          "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
     add_executable(tests ${DIFF_TEST_SOURCES})
@@ -328,44 +227,8 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     endif ()
 
     if (MSVC)
-        # /Wall enables off-by-default noise warnings. Expression/Equation types
-        # hold non-assignable members (const/reference data) by design, so the
-        # implicit special members are deleted. Silence that family:
-        #   C4625 copy ctor implicitly deleted
-        #   C4626 copy assignment implicitly deleted
-        #   C5026 move ctor implicitly deleted
-        #   C5027 move assignment implicitly deleted
-        #   C4623/C4625/C4626/C5026/C5027  implicit default/copy/move member
-        #       deleted -- by design: Expression and Equation hold const members
-        #       and have no default state (an expression node without operands
-        #       is not a thing).  C4623 alone accounts for a few hundred lines
-        #       of a /Wall log, one per instantiated node type.
-        #   C4710/C4711  "function not inlined" / "selected for automatic inline
-        #       expansion".  These are inlining *diagnostics*, not defects, and a
-        #       header-only expression-template library emits thousands of them:
-        #       every operator, every sweep, every std::array copy.  They say
-        #       nothing a reader can act on.
-        #   C4868  "may not enforce left-to-right evaluation order in a brace
-        #       enclosed initializer list".  The standard does guarantee that
-        #       order; this warns that MSVC may not.  Nothing here depends on
-        #       evaluation order inside a braced list -- the initializers are
-        #       independent element computations.
-        #   C4820  trailing padding inserted after a member.
-        #   C5045  Spectre mitigation would be inserted for a load.
-        #   C5246  "the initialization of a subobject should be wrapped in
-        #       braces".  Fires on every `std::array{a, b}` in the library.
-        #       Brace elision in aggregate initialization is standard and
-        #       intended; MSVC is asking for the inner braces back.
-        #   C4514  unreferenced inline function removed -- the expected fate of
-        #       most of a header-only library in any one TU.
-        #   C4324  structure padded due to an alignment specifier.  That is the
-        #       whole point of VectorDual's alignas(32) on its partial pack.
-        #   C5266  'const' on a return type has no effect -- from the vendored
-        #       mdspan in include/md/third_party, not our code to change.
-        #
-        # Deliberately NOT suppressed: C4365 (signed/unsigned mismatch) and
-        # C5219 (implicit integer->float conversion).  Both fire only a handful
-        # of times, and both are the kind of warning that can catch a real bug.
+        # /Wall noise a header-only expression-template library emits by the
+        # thousand.  C4365 and C5219 are deliberately left on.
         set(DIFF_MSVC_WALL_NOISE /Wall /wd4623 /wd4625 /wd4626 /wd5026 /wd5027
                                  /wd4710 /wd4711 /wd4868 /wd4820 /wd5045
                                  /wd5246 /wd4514 /wd4324 /wd5266)

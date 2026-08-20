@@ -258,13 +258,17 @@ namespace detail {
 // Walk a compressed-column layout: for each column j, every stored entry k in
 // it and the row i it sits at.  Both tables below are that same walk differing
 // only in where they write (i, j) -> k, so the walk is written once.
+//
+// The layout type is spelled out rather than taken as a constrained parameter:
+// only sparse_layout() produces one, and naming it deduces the column count too
+// -- both callers used to pass it alongside a layout that already knew it.
 struct compressed_entry {
   std::size_t column, row, slot;
 };
-template <typename Layout>
-consteval auto compressed_entries(const Layout &layout, std::size_t n) {
+template <std::size_t N, std::size_t NNZ>
+consteval auto compressed_entries(const sparse_layout_t<N, NNZ> &layout) {
   std::vector<compressed_entry> out;
-  for (std::size_t j = 0; j < n; ++j) {
+  for (std::size_t j = 0; j < N; ++j) {
     for (auto k = static_cast<std::size_t>(layout.outer[j]);
          k < static_cast<std::size_t>(layout.outer[j + 1]); ++k) {
       out.push_back({j, static_cast<std::size_t>(layout.inner[k]), k});
@@ -285,7 +289,7 @@ consteval scatter_map<N> sparse_slots() noexcept {
   constexpr auto layout = sparse_layout<Expr>();
 
   auto slots = unmapped<N>();
-  for (const auto [j, i, k] : detail::compressed_entries(layout, N)) {
+  for (const auto [j, i, k] : detail::compressed_entries(layout)) {
     slots[coloring.color[j]][i] = k;
   }
   return slots;
@@ -315,7 +319,7 @@ consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {
   // Everything is the sink until the pattern says otherwise.
   std::array<std::size_t, N * N> table{};
   table.fill(NNZ);
-  for (const auto [j, i, k] : detail::compressed_entries(layout, N)) {
+  for (const auto [j, i, k] : detail::compressed_entries(layout)) {
     table[i * N + j] = k;
   }
   return table;

@@ -86,8 +86,8 @@ TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
 
 TEST(Simplify, DualValuedTreesAreStatelessToo) {
   // The int spelling of Lit works for a T that can never be an NTTP itself, so
-  // the dual-valued path no longer falls back to a stored Constant -- which
-  // used to drag the whole spine above it into the storing node form.
+  // the dual-valued path never falls back to a stored Constant -- which would
+  // drag the whole spine above it into the storing node form.
   using D = diff::Dual<double>;
   diff::Variable<D, diff::FixedString{"x"}> dx;
   diff::Variable<D, diff::FixedString{"y"}> dy;

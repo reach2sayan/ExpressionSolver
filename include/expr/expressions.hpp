@@ -12,9 +12,8 @@
 
 namespace diff {
 
-// The standard library has no `arithmetic` concept, so this is the one gap we
-// fill ourselves — and only by composing the two std concepts that partition
-// it.
+// The standard library has no `arithmetic` concept; this composes the two that
+// partition it.
 template <typename T>
 concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
                       std::floating_point<std::remove_cvref_t<T>>;
@@ -22,13 +21,10 @@ concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
 // Closed under the four arithmetic operators and negation (Dual, TaylorDual,
 // TaylorDual, ...).
 template <typename T>
-// constructible_from<T, int> is the multiplicative identity, and it is not
-// decoration: differentiation manufactures exactly 0 and 1, the reverse sweep
-// seeds its root adjoint with T{1}, and the int spelling of Lit<T, V> -- the
-// thing that keeps dual-valued trees empty -- is `T(V)` for an int V.  A type
-// closed under the five operators but unable to spell one cannot be
-// differentiated at all, so the concept says so rather than letting it fail
-// deep inside a sweep.
+// constructible_from<T, int> is not decoration: differentiation manufactures
+// exactly 0 and 1 -- the reverse sweep seeds T{1}, and the int spelling of
+// Lit<T, V> is `T(V)`.  A type that cannot spell them cannot be differentiated,
+// so the concept says so instead of failing deep inside a sweep.
 concept CFieldLike = std::default_initializable<T> &&
                      std::constructible_from<T, int> && requires(T a, T b) {
   { a + b } -> std::convertible_to<T>;
@@ -41,19 +37,11 @@ concept CFieldLike = std::default_initializable<T> &&
 template <typename T>
 concept Numeric = CArithmetic<T> || CFieldLike<T>;
 
-// Does multiplication commute for this scalar?
-//
-// Numeric asks only for closure under + - * / and negation, so it admits
-// matrices, quaternions, and anything else whose product depends on the order
-// of its operands.  Nothing detects that structurally, so it is declared rather
-// than deduced.  Built-in arithmetic commutes and says so here; every other
-// type opts in for itself.
-//
-// The default is the safe answer: a type that says nothing is treated as
-// non-commutative, which costs a canonicalisation share and never a wrong
-// result.  Only expr/simplify.hpp reads it -- to decide whether the operands of
-// a product may be put in a canonical order, which is what lets x*y and y*x
-// become the same type.
+// Does multiplication commute for this scalar?  Numeric admits matrices and
+// quaternions, so this is declared rather than deduced; the default is the safe
+// answer (non-commutative costs a canonicalisation share, never a wrong result).
+// Only expr/simplify.hpp reads it, to decide whether a product's operands may be
+// put in canonical order.
 //
 // Specialise it directly for a class template, propagating from the scalar
 // underneath:
@@ -76,9 +64,8 @@ template <typename T>
 concept CTupleLike =
     requires { std::tuple_size<std::remove_cvref_t<T>>::value; };
 
-// A random-access buffer of numbers.  Every sweep threads two of these — the
-// point (in canonical symbol order) and the node-value cache — and both happen
-// to be std::array, but nothing in the sweeps requires that.
+// A random-access buffer of numbers: every sweep threads two of these, the point
+// (in canonical symbol order) and the node-value cache.
 template <typename R>
 concept CNumericBuffer = std::ranges::random_access_range<R> &&
                          Numeric<std::ranges::range_value_t<R>>;
@@ -128,13 +115,10 @@ template <auto S> struct symbol_type {
 };
 
 // The same symbol carried as a *value*, for the one place that cannot take a
-// template argument: operator[].
-// Prefer the template form — m.get<"x">() — everywhere except the assignment
-// spelling m["x"_s] = v, which has no template-argument equivalent.
-// FixedString, not `CFixedString auto`: the placeholder has to be the class
-// template so that CTAD turns the literal in sym<"x"> into a FixedString rather
-// than decaying it to const char*.  (The operator[] overloads below deduce from
-// a symbol_type<S> argument instead, where no CTAD is involved.)
+// template argument: operator[].  Prefer m.get<"x">() except in the assignment
+// spelling m["x"_s] = v.  FixedString, not `CFixedString auto`: the placeholder
+// has to be the class template so CTAD turns the literal into a FixedString
+// rather than decaying it to const char*.
 template <FixedString S> inline constexpr symbol_type<S> sym{};
 
 namespace literals {
@@ -150,24 +134,15 @@ template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 template <CExpression... Ts> class Equation;
 
 // Every derivative entry point is an Equation member, so a bare expression has
-// to be able to reach one.  The conversion is only declared here -- Equation is
-// still incomplete, and expr/equation.hpp cannot be included from this header
-// without a cycle -- and defined out of line once it is a complete type.  A
-// mixin rather than a member of ExpressionOps because leaves do not derive from
-// ExpressionOps: Variable and the constant leaves each pick it up separately.
+// to reach one.  Declared here (Equation is still incomplete; including
+// expr/equation.hpp would be a cycle) and defined out of line.  A mixin rather
+// than part of ExpressionOps, because the leaves do not derive from it.
 //
-// It buys implicit conversion at a non-deduced `const Equation<E>&` parameter.
-// Deduction never fires through a user-defined conversion, so it does not, and
-// cannot, shorten `Equation{expr}.gradient(pt)` at a call site.
-// A *constrained template* rather than a plain `operator Equation<Derived>()`.
-// A plain one is a candidate for every is_convertible query, and answering such
-// a query means completing its return type -- so std::tuple asking whether an
-// expression converts to itself would complete Equation<that expression>, which
-// in turn canonicalises, which std::applys over the children, which asks
-// is_convertible again.  That recursion is immediate and the cost, even where
-// it terminates, lands on every tuple operation in the library.  Deducing the
-// target and rejecting it with same_as answers those queries without ever
-// naming Equation's members.
+// Keep it a *constrained template*.  A plain `operator Equation<Derived>()` is a
+// candidate for every is_convertible query, and answering one completes its
+// return type -- which canonicalises, which std::applys over the children, which
+// asks is_convertible again.  Deducing the target and rejecting it with same_as
+// answers those queries without ever naming Equation's members.
 template <typename Derived> struct EquationConvertible {
   template <typename Eq>
     requires std::same_as<Eq, Equation<Derived>>
@@ -326,8 +301,8 @@ public:
   }
 };
 
-// The CRTP parameter is the public Expression type, not this base, so that
-// every type-level pattern match sees Expression<Op, C...> as it always has.
+// The CRTP parameter is the public Expression type, not this base, so every
+// type-level pattern match sees Expression<Op, C...>.
 template <COperation Op, CExpression... Children>
 class ExpressionImpl<true, Op, Children...>
     : public ExpressionOps<Expression<Op, Children...>, Op> {
@@ -359,9 +334,8 @@ public:
 };
 
 // The public node type.  It derives from the storage form rather than aliasing
-// it so that Expression stays a class template and can be pattern-matched by
-// partial specialisations.  The base is empty whenever the children are, so
-// this adds no bytes.
+// it so Expression stays a class template and can be pattern-matched by partial
+// specialisations.  The base is empty whenever the children are.
 template <COperation Op, CExpression... Children>
 class Expression
     : public ExpressionImpl<(std::is_empty_v<Children> && ...), Op,
@@ -390,17 +364,12 @@ struct expression_element<V, I,
 
 } // namespace diff
 
-// Declare a concrete user type's multiplication commutative, so that
-// canonicalisation may reorder the operands of a product of it.
-//
-// Write it at GLOBAL scope: the body opens namespace diff, so inside another
-// namespace it would declare that namespace's own nested `diff` instead.  The
-// argument is variadic so a template-id containing commas -- MyScalar<double,3>
-// -- survives the preprocessor, which splits macro arguments before it knows
-// anything about templates.
-//
-// For a class template, specialise is_commutative_multiply_v directly instead;
-// a macro cannot express a partial specialisation.
+// Declare a concrete user type's multiplication commutative, so canonicalisation
+// may reorder the operands of a product of it.  Write it at GLOBAL scope -- the
+// body opens namespace diff.  Variadic, so a template-id containing commas
+// survives the preprocessor.  For a class template, specialise
+// is_commutative_multiply_v directly; a macro cannot express a partial
+// specialisation.
 #define DIFF_COMMUTATIVE_MULTIPLY(...)                                         \
   namespace diff {                                                             \
   template <>                                                                  \

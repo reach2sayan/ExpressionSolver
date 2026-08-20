@@ -5,28 +5,19 @@
 // Bit-exactness gate.
 //
 // This library's contract is exact answers, so a build flag or a kernel rewrite
-// is only acceptable if it leaves every derivative bit-for-bit unchanged.  That
-// is not something EXPECT_DOUBLE_EQ can check -- it allows 4 ULP, which is
-// exactly the room a "harmless" reassociation needs.
+// is only acceptable if it leaves every derivative bit-for-bit unchanged.
+// EXPECT_DOUBLE_EQ cannot check that -- it allows 4 ULP, exactly the room a
+// "harmless" reassociation needs.
 //
 // So: run every driver over a sweep of points, fold the raw IEEE bits of every
 // result into one hash, and pin it.  Two builds agree iff the hash agrees.
-// Recompute and update the constant deliberately, never to make a red test
+// Recompute and update the constant deliberately, NEVER to make a red test
 // green -- a change here means results moved, and that needs a reason.
-//
-// It moved once deliberately, on g++-15: 4af90585ebef1b44 -> 35edd3a28b699cac,
-// when Equation started storing its functions canonically (expr/simplify.hpp).
-// Commuting the operands of + and * is exact, so the primal is untouched; what
-// changes is the order the reverse sweep accumulates adjoints in, and addition
-// is not associative.  Measured over this test's 120 points: 168 of 360
-// gradient entries differ, worst relative difference 3.0e-14.  Reassociation is
-// permitted here by design -- the algebraic rewrites assume it.
 //
 // The pinned value is necessarily per-toolchain: where a compiler forms an FMA
 // changes the last bit, so GCC, clang and MSVC each have their own answer and
-// none of them is wrong.  Pinning one of them in CI would just mean the other
-// two fail for no defect.  So the constant is checked only when the build asks
-// for it with -DDIFF_PIN_BIT_HASH=<value>, and the hash is always reported.
+// none is wrong.  The constant is therefore checked only when the build asks for
+// it with -DDIFF_PIN_BIT_HASH=<value>; the hash is always reported.
 //
 // The way to use it is a same-compiler A/B, which is the question it answers:
 //

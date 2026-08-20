@@ -29,10 +29,7 @@ namespace detail {
 
 // The expressions are final by the time an Equation is built, so this is where
 // the symbolic partials get their canonical form.  Folding already happened as
-// the trees were built (simplify.hpp, called from the operator factories); what
-// is left to do here is order the commutative operands.
-//
-// Nothing outside Equation builds a Jacobian this way, so none of it is public.
+// the trees were built; what is left is ordering the commutative operands.
 template <CExpression E>
 using canonical_t = decltype(canonicalise(std::declval<const E &>()));
 
@@ -70,8 +67,8 @@ public:
   static constexpr std::size_t number_of_derivatives = input_dim;
 
 private:
-  // Stored canonical: symbols and input_dim above stay derived from what the
-  // user wrote, so a partial that folds away a symbol cannot shrink the point.
+  // Stored canonical, but symbols and input_dim stay derived from what the user
+  // wrote, so a partial that folds away a symbol cannot shrink the point.
   using Exprs =
       std::tuple<detail::canonical_t<TFirst>, detail::canonical_t<TRest>...>;
   Exprs expressions;
@@ -183,32 +180,29 @@ private:
   }
 
 public:
-  // explicit: without it, `Equation<E> eq = expr;` would be ambiguous between
-  // this constructor and EquationConvertible's conversion operator.  A
-  // multi-argument constructor was never an implicit-conversion candidate
-  // anyway, and CTAD is direct-initialisation, so nothing else changes.
+  // explicit, or `Equation<E> eq = expr;` is ambiguous between this and
+  // EquationConvertible's conversion operator.  CTAD is direct-initialisation,
+  // so nothing else changes.
   constexpr explicit Equation(TFirst first, TRest... rest) noexcept
       : expressions{detail::canonicalise(first),
                     detail::canonicalise(rest)...} {}
 
-  // The symbolic trees themselves.  Every other member reduces them to numbers
-  // at a point; these hand them over intact, which is what the formatter below
-  // needs and what makes the built Jacobian inspectable at all.
+  // The symbolic trees themselves; every other member reduces them to numbers at
+  // a point.  What the formatter below needs, and what makes the Jacobian
+  // inspectable.
   [[nodiscard]] constexpr const Exprs &functions() const noexcept {
     return expressions;
   }
-  // Built on demand rather than stored.  Naming Equation<E> would otherwise
-  // instantiate the whole symbolic Jacobian, which the reverse-mode members and
-  // derivative_tensor never touch -- and with the implicit conversion from a
-  // bare expression, naming it is something callers now do constantly.
+  // Built on demand.  Were it stored, naming Equation<E> would instantiate the
+  // whole symbolic Jacobian, which the reverse-mode members and derivative_tensor
+  // never touch -- and callers name it constantly via the implicit conversion.
   [[nodiscard]] constexpr auto jacobian_rows() const noexcept {
     return detail::make_jac_rows(expressions, symbols{});
   }
 
-  // Every numeric member takes a point in any of the spellings eval() accepts
-  // -- an array, positional scalars in canonical order, named<"x">(v) pack, a
-  // ValueMap, or a range -- because they all go through one normaliser.  The
-  // element type is the only thing that differs between them.
+  // Every numeric member takes a point in any spelling eval() accepts -- an
+  // array, positional scalars in canonical order, a named<"x">(v) pack, a
+  // ValueMap, or a range -- through one normaliser.
   template <Numeric U = value_type>
   [[nodiscard]] static constexpr auto point(const CEvalArg auto &...args) noexcept {
     return detail::make_point<symbols, U, input_dim>(args...);
@@ -267,9 +261,9 @@ public:
     }
   }
 
-  // A scalar function's Hessian is a matrix, not a 1 x n x n stack, so the
-  // leading output axis only appears when there is more than one output.  Same
-  // for derivative_tensor below.
+  // A scalar function's Hessian is a matrix, not a 1 x n x n stack: the leading
+  // output axis only appears with more than one output.  Same for
+  // derivative_tensor below.
   template <DiffMode Mode = DiffMode::Reverse>
   [[nodiscard]] constexpr auto hessian(const CEvalArg auto &...args) const noexcept
     requires(Mode == DiffMode::Reverse && DualLike<value_type> && input_dim > 0)
@@ -327,15 +321,13 @@ std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
 } // namespace diff
 
 // One block per output function: the function itself, then its gradient row in
-// canonical symbol order.  The spec is whatever expr/format.hpp accepts and is
-// forwarded to every expression printed, so "{::.3f}" fixes the precision of
-// every number in a whole system.
+// canonical symbol order.  The spec is forwarded to every expression printed, so
+// "{::.3f}" fixes the precision of every number in a whole system.
 template <diff::CExpression... Ts>
 struct std::formatter<diff::Equation<Ts...>, char> {
   constexpr auto parse(std::format_parse_context &ctx) {
     // (iterator, sentinel), not (pointer, size): format_parse_context::iterator
-    // is a raw const char* on libstdc++ but a class type on MSVC, so only this
-    // C++20 constructor spells the same thing on both.
+    // is a raw const char* on libstdc++ but a class type on MSVC.
     spec_ = std::string_view(ctx.begin(), ctx.end());
     if (const auto close = spec_.find('}'); close != std::string_view::npos) {
       spec_ = spec_.substr(0, close);

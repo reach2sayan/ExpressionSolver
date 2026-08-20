@@ -36,19 +36,15 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
 }
 
 // The four arithmetic operators, each in its three shapes: expression OP
-// expression (with the constant-folding ladder), and the two scalar-promoted
-// forms.  Only the node branch differs between them, so that is the argument --
-// everything else was four, then eight, copies of the same text.
+// expression (with the constant-folding ladder) and the two scalar-promoted
+// forms.  Only the node branch differs, so that is the macro argument.
 //
-// Folding is what keeps a literal-only subtree from ever becoming a node: two
-// Lits fold to a Lit at compile time, two Constants to a Constant.
-//
-// A T-valued template argument only exists for structural T, so for a dual
-// scalar the folded value cannot go back into the type in general -- but 0 and
-// 1 can, via the int spelling, and those are the only values differentiation
-// manufactures.  Checking for them keeps a literal-only dual subtree empty.
-// Without that check the pair falls to the Constant branch below, which stores,
-// and the whole spine above it leaves the stateless node form.
+// Folding keeps a literal-only subtree from ever becoming a node: two Lits fold
+// to a Lit at compile time, two Constants to a Constant.  A T-valued template
+// argument only exists for structural T, so for a dual scalar only 0 and 1 can
+// go back into the type (via the int spelling) -- but those are the only values
+// differentiation manufactures, and checking for them is what keeps a
+// literal-only dual subtree empty rather than storing.
 #define DIFF_EXPR_BINOP(OP, ...)                                               \
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
@@ -84,10 +80,9 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
 DIFF_EXPR_BINOP(+, return detail::simplify_node<SumOp<value_type>>(a, b);)
 DIFF_EXPR_BINOP(*, return detail::simplify_node<MultiplyOp<value_type>>(a, b);)
 DIFF_EXPR_BINOP(/, return detail::simplify_node<DivideOp<value_type>>(a, b);)
-// Subtraction has no node of its own: a - b is a + (-b), which is what keeps
-// the reverse sweep down to one adjoint rule instead of two.  Spelling it with
-// the operators rather than by hand means both of them get to apply their
-// rules, so a - 0 is a and a - (-b) is a + b.
+// Subtraction has no node of its own: a - b is a + (-b), so the reverse sweep
+// needs one adjoint rule instead of two.  Spelling it with the operators lets
+// both apply their rules -- a - 0 is a, a - (-b) is a + b.
 DIFF_EXPR_BINOP(-, return detail::simplify_node<SumOp<value_type>>(a, -b);)
 #undef DIFF_EXPR_BINOP
 
@@ -108,8 +103,8 @@ template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
     return MonoExpression<OP<typename Expr::value_type>, Expr>{a};             \
   }
 DIFF_UNARY_MATH_TABLE(DIFF_EXPR_UNFN)
-// abs is not in the registry (no descriptor -- its derivative is a sign), so
-// its factory is spelled out; AbsOp itself is likewise hand-written.
+// abs has no descriptor (its derivative is a sign), so its factory is spelled
+// out; AbsOp itself is likewise hand-written.
 DIFF_EXPR_UNFN(abs, AbsOp, "abs")
 #undef DIFF_EXPR_UNFN
 
@@ -139,19 +134,14 @@ DIFF_EXPR_BINFN(min, MinOp)
 
 namespace detail {
 
-// The constant-leaf protocol, written once.
+// The constant-leaf protocol, written once.  Both forms of constant answer every
+// sweep identically -- the value, and a derivative of zero -- so read() is the
+// only member the specialisations supply.
 //
-// Both forms of constant answer every sweep identically — the value, and a
-// derivative of zero — so the only thing that differs is where the value comes
-// from.  That is the single member the specialisations below supply (read());
-// everything else lives here.
-//
-// CRTP rather than a data member holding the value, because the compile-time
-// form has to stay std::is_empty_v: that predicate is what selects the
-// stateless node storage in expressions.hpp, and a member would defeat it even
-// if the member were itself empty and marked [[no_unique_address]] — occupying
-// no bytes and being no member are different things, and only the second one
-// satisfies is_empty_v.
+// CRTP rather than a data member, because the compile-time form has to stay
+// std::is_empty_v: that is what selects the stateless node storage in
+// expressions.hpp, and a member defeats it even when it is itself empty and
+// [[no_unique_address]].
 template <typename Derived, Numeric T>
 class ConstantOps : public EquationConvertible<Derived> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
@@ -165,8 +155,8 @@ public:
   [[nodiscard]] constexpr T eval() const noexcept { return get(); }
   constexpr operator T() const noexcept { return get(); }
 
-  // The int spelling of Lit works for every Numeric T, dual types included, so
-  // a constant's derivative is empty no matter what it is a constant of.
+  // The int spelling of Lit works for every Numeric T, so a constant's
+  // derivative is empty whatever it is a constant of.
   [[nodiscard]] constexpr auto derivative() const noexcept {
     return Lit<T, 0>{};
   }
@@ -176,11 +166,10 @@ public:
   constexpr void backward(const auto &, T, auto &,
                           const auto &) const noexcept {}
 
-  // Seeded sweep leaf.  When the seed type is the constant's own type there is
-  // nothing to convert and the stored value passes through verbatim — dual
-  // parts and all.  Seeded with a deeper type, the constant is embedded with
-  // zero dual parts via ConstantEmbedder<U>, so custom numeric types (e.g.
-  // TaylorDual) can specialise the embedding without touching this code.
+  // Seeded sweep leaf.  At the constant's own type the stored value passes
+  // through verbatim, dual parts and all; at a deeper type it is embedded with
+  // zero dual parts via ConstantEmbedder<U>, which a custom numeric type may
+  // specialise.
   template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded(const std::array<U, N> &) const noexcept {
@@ -221,7 +210,7 @@ public:
 
 // A literal carried in the type, so the object is empty.  This is what
 // derivative() manufactures: the 0s and 1s that flood a Jacobian cost nothing,
-// and a node all of whose children are empty stores nothing at all.
+// and a node whose children are all empty stores nothing.
 template <Numeric T, auto V>
   requires std::same_as<std::remove_cv_t<decltype(V)>, T>
 class Lit<T, V> : public detail::ConstantOps<Lit<T, V>, T> {
@@ -233,12 +222,10 @@ public:
 };
 
 // The same thing keyed on an int, for a T that could never be a template
-// argument itself: Dual and friends are not structural, so Lit<Dual<double>,
-// V> above is unspellable.  0 and 1 -- the only values differentiation
-// manufactures -- are exact in every Numeric T, so this covers the whole
-// dual-valued path and keeps those trees empty too.  Disjoint from the
-// specialisation above by construction: that one requires decltype(V) to be T,
-// this one requires it to be int and T to be something else.
+// argument itself (Dual and friends are not structural).  0 and 1 are exact in
+// every Numeric T, so this keeps the dual-valued trees empty too.  Disjoint from
+// the specialisation above: that one requires decltype(V) to be T, this one
+// requires int and a T that is not int.
 template <Numeric T, auto V>
   requires(std::same_as<std::remove_cv_t<decltype(V)>, int> &&
            !std::same_as<T, int>)
@@ -250,9 +237,8 @@ public:
   static constexpr T value = T(V);
 };
 
-// The storing form.  One type per value_type rather than one per value, which
-// is what lets it hold a number that only exists at run time — and a T that
-// could never be a template argument in the first place.
+// The storing form: one type per value_type rather than one per value, so it can
+// hold a number that only exists at run time.
 template <Numeric T> class Lit<T> : public detail::ConstantOps<Lit<T>, T> {
   friend detail::ConstantOps<Lit<T>, T>;
   T value;
@@ -274,8 +260,7 @@ public:
   static constexpr bool frozen = Frozen;
   using value_type = T;
 
-  // The int spelling of Lit is available for every Numeric T, so this is one
-  // line rather than a structural/non-structural fork.
+  // The int spelling of Lit covers every Numeric T, so no structural fork.
   [[nodiscard]] constexpr auto derivative() const noexcept {
     return Lit<T, Frozen ? 0 : 1>{};
   }
@@ -286,30 +271,19 @@ public:
     if constexpr (!Frozen) {
       using Syms = std::decay_t<decltype(syms)>;
       constexpr auto idx = find_index_of_symbol<symbol, Syms>();
-      // Spelled with + and assignment rather than +=, because that is all
-      // CFieldLike actually asks of a scalar -- it requires a + b and says
-      // nothing about compound assignment, so a += here quietly demanded more
-      // than the concept advertised and a conforming scalar could fail to
-      // compile through this line.
-      //
-      // std::move needs no is_move_constructible guard: on a type without a
-      // move constructor the rvalue simply binds to operator+'s const& or
-      // selects its copy constructor, so this degrades to a copy on its own.
-      // It buys nothing for the scalars shipped today -- Dual, TaylorDual and
-      // TaylorDual are trivially copyable -- and costs nothing either;
-      // it is here for a scalar that owns storage.
+      // `+` and assignment, not `+=`: CFieldLike asks for a + b and says
+      // nothing about compound assignment.  std::move needs no guard -- without
+      // a move constructor the rvalue binds to operator+'s const& or selects the
+      // copy constructor.  Do not "simplify" this back to `+=`.
       grads[idx] = std::move(grads[idx]) + adj;
     }
   }
 
-  // Seeded sweep leaf: read this symbol's slot, whatever the seed type is.
-  //
-  // A frozen symbol is a constant -- same value lookup, zero derivative -- so
-  // it takes the seed's value and drops its derivative slots, exactly as
-  // Constant::eval_seeded embeds a bare scalar.  Without this the three engines
-  // disagree: derivative() and backward() both guard on Frozen, so only this
-  // one would have reported a nonzero derivative for a variable that was
-  // explicitly frozen.
+  // Seeded sweep leaf: read this symbol's slot, whatever the seed type is.  A
+  // frozen symbol is a constant -- same value lookup, zero derivative -- so it
+  // takes the seed's value and drops its derivative slots, exactly as
+  // Constant::eval_seeded embeds a bare scalar.  All three engines guard on
+  // Frozen or they disagree.
   template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded(const std::array<U, N> &vals) const noexcept {
@@ -389,9 +363,6 @@ struct tuple_element<I, diff::Variable<T, C, F>> {
                  diff::FixedString{label}> {}
 #define PV(x, label)                                                           \
   diff::Variable<std::decay_t<decltype(x)>, diff::FixedString{label}> {}
-// diff::Lit(x), not diff::Constant(x): Constant is an alias template, and
-// deducing template arguments through one is P1814, which Clang did not
-// implement until 19 -- so the alias spelling is a hard error on older Clang
-// while the class template it aliases deduces fine everywhere (see the
-// deduction guide on Lit above).  Same resulting type, Lit<T> == Constant<T>.
+// diff::Lit(x), not diff::Constant(x): deducing through an alias template is
+// P1814, which Clang lacks before 19.  Same resulting type, Lit<T> == Constant<T>.
 #define PC(x) diff::Lit(x)

@@ -20,9 +20,8 @@
 
 namespace diff {
 
-// An energy callable produced by seeded_energy() (a compile-time expression
-// graph bridged into the driver) advertises this tag.  hessian() routes such
-// callables to the scalar driver — see the note on SeededExprEnergy.
+// The tag seeded_energy() puts on a bridged expression graph; hessian() routes
+// such callables to the scalar driver.
 template <typename F>
 concept CSeededExprEnergy =
     requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };
@@ -47,18 +46,11 @@ template <typename F>
 concept CGraphReverseHessian =
     CExpression<F> && DualLike<typename std::remove_cvref_t<F>::value_type>;
 
-// Precondition for handing an expression graph to a probe-based driver.
-//
-// The bridge built by seeded_energy() reads a fixed window — slots [0, arity)
-// of the driver's seed buffer — because a raw `const Dof *` carries no length
-// (see SeededExprEnergy::operator()).  The buffer is sized from `x`, so the two
-// only line up if the caller supplied at least one value per symbol, and only
-// addressed symbols that exist.  A short `x` would read off the end of the
-// driver's vector; an out-of-range `active` index would be silently dropped by
-// the bridge and come back as a zero row rather than an error.  Both are
-// checked here, for the same reason eval() refuses a short range
-// (bound.hpp): silently differentiating at the wrong point is worse than
-// throwing.
+// Precondition for handing an expression graph to a probe-based driver.  The
+// bridge reads slots [0, arity) of a buffer sized from `x`, so a short `x` would
+// read off the end and an out-of-range `active` index would come back as a zero
+// row rather than an error.  Silently differentiating at the wrong point is
+// worse than throwing.
 constexpr void check_graph_point(std::size_t arity, std::span<const double> x,
                                  CIndexRange auto &&active) {
   if (x.size() < arity) {
@@ -74,9 +66,8 @@ constexpr void check_graph_point(std::size_t arity, std::span<const double> x,
   }
 }
 
-// All-variables form: with no `active` the driver differentiates every slot of
-// x, so a point LONGER than the symbol set is just as wrong as a short one —
-// the surplus rows would come back zero instead of erroring.
+// All-variables form: every slot of x is differentiated, so a point LONGER than
+// the symbol set is as wrong as a short one -- the surplus rows would be zero.
 constexpr void check_graph_point(std::size_t arity,
                                  std::span<const double> x) {
   if (x.size() != arity) {
@@ -97,35 +88,25 @@ reverse_hessian_applies(std::size_t n, std::span<const double> x,
   }
 
   return std::ranges::equal(active, std::views::iota(std::size_t{0}, n));
-  return true;
 }
 
 } // namespace detail
 
-// Driver selection.  There are two Hessian drivers left, and only one kind of
-// input can choose between them:
+// Driver selection.  Only one kind of input can choose:
 //
 //   expression graph  -> forward-over-reverse, O(N) backward sweeps.  A graph is
-//                        the only input carrying a tree to sweep backward, and
-//                        this is the only O(N) driver -- everything else is
-//                        O(N^2) probes, autodiff's hessian() included.  When it
-//                        does not apply (a strict `active` subset, a mismatched
-//                        point, a non-dual graph) the graph is bridged and falls
-//                        through to the probes.
-//   anything else     -> the O(N^2) probe driver, full stop.
+//                        the only input carrying a tree to sweep backward.  When
+//                        that does not apply (a strict `active` subset, a
+//                        mismatched point, a non-dual graph) the graph is bridged
+//                        and falls through to the probes.
+//   anything else     -> the O(N^2) probe driver.
 //
-// A `seeded_energy()`-tagged callable is a graph the caller already bridged, so
-// there is no tree left and it is "anything else" -- it differs from a raw
-// lambda only in that its arity is known, which is worth an argument check.
-// That check is the entire remainder of the dispatch.
-//
-// This used to be a three-way choice with a size threshold in it: raw callables
-// went to a vector-forward driver below kVForwardCrossover.  That driver was
-// deleted on 2026-08-20 for losing at every size, and the branch went with it.
+// A seeded_energy()-tagged callable is a graph already bridged, so it is
+// "anything else" -- it differs from a raw lambda only in advertising its arity,
+// which is worth an argument check.  That check is the rest of the dispatch.
 namespace detail {
-// The arity a bridged or raw callable advertises, for the argument check; 0 if
-// it advertises none (a raw lambda, whose arity is whatever the point says).
-template <typename F> constexpr std::size_t declared_arity() noexcept {
+// The arity a bridged or raw callable advertises; 0 if it advertises none.
+template <CHessianTarget F> constexpr std::size_t declared_arity() noexcept {
   if constexpr (CSeededExprEnergy<F>) {
     return std::remove_cvref_t<F>::arity;
   } else {
@@ -139,8 +120,8 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
   if constexpr (CExpression<F>) {
     if constexpr (detail::CGraphReverseHessian<F>) {
       if (detail::reverse_hessian_applies(detail::expr_arity_v<F>, x, active)) {
-        // This overload can also reach the runtime-extent probe driver below,
-        // and a function has one return type, so the static result is widened.
+        // This overload can also reach the runtime-extent probe driver, and a
+        // function has one return type, so the static result is widened.
         return detail::to_owned(detail::hessian_expr_reverse(f, x));
       }
     }
@@ -155,8 +136,8 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
 }
 
 // Every symbol, in canonical order.  Distinct from the overload above because
-// the extent is then a compile-time constant for a graph, which lets the whole
-// sweep run out of a std::array and allocate nothing but the result.
+// the extent is then compile-time for a graph, so the sweep runs out of a
+// std::array and allocates nothing but the result.
 template <CHessianTarget F>
 auto hessian(F &&f, const std::span<const double> x) {
   if constexpr (CExpression<F>) {

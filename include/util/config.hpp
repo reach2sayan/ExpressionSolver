@@ -19,14 +19,10 @@
 #define DIFF_FWD_SELF std::forward<decltype(self)>(self)
 #endif
 
-// The sweep helpers in the drivers (reverse_sweep, color_sweeps) exist to stop
-// the same four lines being written six times -- they are not meant to be
-// function calls.  Left to itself GCC inlines them in a small translation unit
-// and stops once a TU has enough heavy template instantiations to exhaust its
-// inlining budget, at which point a Hessian sweep pays a real call per colour.
-// Measured with perf on an 11-benchmark TU: reverse_sweep and color_sweeps
-// showed up as separate out-of-line symbols and the reverse Hessian lost ~30%.
-// So the decision is stated rather than left to a budget.
+// The sweep helpers (reverse_sweep, color_sweeps) and the dual kernels exist to
+// stop the same lines being written six times; they are not meant to be calls.
+// GCC stops inlining them once a TU exhausts its inlining budget, so the
+// decision is stated here rather than left to one.
 #if defined(__GNUC__) || defined(__clang__)
 #define DIFF_ALWAYS_INLINE [[gnu::always_inline]] inline
 #elif defined(_MSC_VER)
@@ -39,17 +35,11 @@
 // this toolchain takes.
 //
 // Three classes hand out a slot by a compile-time key: ValueMap and Bound by
-// symbol (bound.hpp), Equation by index (equation.hpp).  Each offers the same
-// four things -- get<Key>() and the subscript spelling, each in the value
-// category of the object it was called on -- and each delegates to a private
-// static slot(auto &&self) that does the real work.  So the only thing that
-// varies between the twelve resulting functions is how `self` is passed, and
-// the only thing that varies between the three classes is how the key is named.
-//
-// Spelled out that was three near-identical blocks, each of which had to be
-// written twice over (once per DIFF_DEDUCING_THIS branch) and kept in step by
-// hand.  Here it is one definition; the branch below is the only place the two
-// forms are described.
+// symbol (bound.hpp), Equation by index (equation.hpp).  Each offers get<Key>()
+// and the subscript spelling in the value category of the object it was called
+// on, and each delegates to a private static slot(auto &&self).  Only how `self`
+// is passed and how the key is named vary, so both are parameters here and the
+// branch below is the only place the two forms are described.
 //
 //   GET_TPARAMS  template parameter list for get<...>()
 //   SUB_TPARAMS  template parameter list for operator[] -- not always the same,

@@ -44,11 +44,8 @@ struct UnaryOp {
   static constexpr int precedence = prec;
 
   // Whether this op's adjoint rule reads the primal values of its operands.
-  // The reverse sweep only has to *store* a node's value when some parent will
-  // read it back -- no rule ever reads its own slot -- so an op that answers
-  // false lets fill_cache skip the store for every child it has.  True by
-  // default, so an op that forgets to say otherwise keeps its operands, which
-  // is the conservative answer rather than the wrong one.
+  // Answering false lets fill_cache skip the store for every child.  True by
+  // default: the conservative answer, not the wrong one.
   static constexpr bool reads_primals = true;
   [[nodiscard]] static constexpr auto
   eval(const CExpression auto &lhs) noexcept {
@@ -67,11 +64,8 @@ struct BinaryOp {
   static constexpr int precedence = prec;
 
   // Whether this op's adjoint rule reads the primal values of its operands.
-  // The reverse sweep only has to *store* a node's value when some parent will
-  // read it back -- no rule ever reads its own slot -- so an op that answers
-  // false lets fill_cache skip the store for every child it has.  True by
-  // default, so an op that forgets to say otherwise keeps its operands, which
-  // is the conservative answer rather than the wrong one.
+  // Answering false lets fill_cache skip the store for every child.  True by
+  // default: the conservative answer, not the wrong one.
   static constexpr bool reads_primals = true;
   [[nodiscard]] static constexpr auto
   eval(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
@@ -84,10 +78,9 @@ struct BinaryOp {
 template <Numeric T>
 struct SumOp : BinaryOp<T, std::plus<void>, FixedString{"+"}, Notation::Infix,
                         10> {
-  // adjoints() hands its own adjoint to both operands unchanged, so a sum
-  // never looks at what it added.  Addition is the most common node in the
-  // library -- a - b is spelled a + (-b) -- so this is the single biggest
-  // source of stores the forward sweep can skip.
+  // adjoints() hands its own adjoint to both operands unchanged, so a sum never
+  // looks at what it added.  a - b is spelled a + (-b), which makes this the
+  // biggest source of stores the forward sweep can skip.
   static constexpr bool reads_primals = false;
 
   [[nodiscard]] static constexpr auto
@@ -113,16 +106,10 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"},
     return std::move(lmul) + std::move(rmul);
   }
   // Sided to match the product rule above: for c = a*b the differential is
-  // da*b + a*db, so the adjoint reaching `a` multiplies on the LEFT of b and
-  // the one reaching `b` multiplies on the RIGHT of a.  Writing both as
-  // `adj * ...` was only correct because every scalar shipped today commutes;
-  // the symbolic path never had the bug, since derivative() already spells
-  // lhs.derivative() * rhs and lhs * rhs.derivative().
-  //
-  // Exact wherever multiplication commutes, so this is bit-identical for
-  // double, Dual and TaylorDual.  It is the correctly *sided* rule
-  // rather than a complete one for a genuinely non-commutative scalar: a matrix
-  // would additionally need a transpose here, and Numeric provides none.
+  // da*b + a*db, so the adjoint reaching `a` multiplies on the LEFT of b and the
+  // one reaching `b` on the RIGHT of a.  Bit-identical wherever multiplication
+  // commutes.  Sided, not complete: a genuinely non-commutative scalar would
+  // also need a transpose here, and Numeric provides none.
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -154,10 +141,9 @@ template <Numeric T>
 struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"},
                            Notation::Infix, 20> {
   // `a / b` is read as a * b^-1 -- RIGHT division.  A ring with inverses admits
-  // two divisions and nothing in CFieldLike distinguishes them, so the side is
-  // chosen and stated here rather than left implied: a scalar whose operator/
-  // means b^-1 * a gets the wrong rule from both functions below, and cannot be
-  // detected.  (Mat2 in the test suite follows this convention.)
+  // two divisions and CFieldLike distinguishes neither, so the side is stated
+  // here: a scalar whose operator/ means b^-1 * a gets the wrong rule from both
+  // functions below and cannot be detected.  (Mat2 in the tests follows this.)
   //
   // Under it, c = a*b^-1 differentiates as
   //
@@ -165,20 +151,9 @@ struct DivideOp : BinaryOp<T, std::divides<void>, FixedString{"/"},
   //
   // so the b term threads db BETWEEN a/b and b^-1 and will not fold into a
   // single division by b*b.  The familiar quotient rule (a'b - ab')/b^2 is that
-  // expression with the factors commuted, which is why both spellings appear
-  // below: they agree exactly wherever multiplication commutes.
-  //
-  // Both spellings are kept, selected by if constexpr -- so the choice is made
-  // at compile time and each instantiation emits exactly one of them.  There is
-  // no runtime branch and no dead code, which is what makes keeping the fast
-  // path free rather than a tradeoff against the general one.
-  //
-  // It earns its place: the sided form costs a second division in a hot path,
-  // and a/b/b does not round like a/(b*b).  Taking it unconditionally would
-  // slow down and perturb every scalar that ships to fix a case none of them
-  // has.  Correctness is not what is being traded here -- the two agree
-  // exactly wherever multiplication commutes, which the guard is precisely the
-  // condition for.
+  // expression with the factors commuted -- hence both spellings, selected by
+  // if constexpr.  They agree exactly wherever multiplication commutes, which is
+  // precisely the guard, and the sided form costs a second division.
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -230,10 +205,8 @@ struct abs_impl {
     return abs(a);
   }
 };
-// Binary impls.  ADL resolves pow/atan2/hypot for diff::Dual, TaylorDual and
-// TaylorDual (each defines its own) when T is one of those, and to std::* for
-// plain arithmetic T.  The `using std::` + unqualified call is the whole
-// mechanism, so it is written once.
+// Binary impls.  `using std::` plus an unqualified call is the whole mechanism:
+// ADL finds diff::Dual's / TaylorDual's own overloads, std::* otherwise.
 #define DIFF_ADL_BINARY_IMPL(NAME, FN)                                         \
   struct NAME {                                                                \
     constexpr auto operator()(const Numeric auto &a,                           \
@@ -261,13 +234,10 @@ struct min_impl {
 } // namespace detail
 
 // Each unary math op pulls its value + derivative from the shared descriptor
-// detail::<Name>Fn (unary_math.hpp).  derivative() builds f'(lhs)·lhs';
-// adjoints pushes adj·f'(value).  Forward mode needs no member here: it is the
-// ordinary eval() sweep seeded with Dual, and the same descriptor drives
-// unary_dual_combine in dual.hpp.
-//
-// Generated from the registry in unary_math.hpp -- the name list is not
-// repeated here.
+// detail::<Name>Fn (unary_math.hpp).  derivative() builds f'(lhs)·lhs'; adjoints
+// pushes adj·f'(value).  Forward mode needs no member here: it is the ordinary
+// eval() sweep seeded with Dual, driven by the same descriptor through
+// unary_dual_combine in dual.hpp.  Generated from the registry.
 #define DIFF_UNARY_MATH_OP(FN, NAME, LABEL)                                    \
   template <Numeric T>                                                         \
     requires(!detail::needs_real_constants_v<detail::NAME##Fn<T>> ||           \
@@ -289,11 +259,9 @@ DIFF_UNARY_MATH_TABLE(DIFF_UNARY_MATH_OP)
 #undef DIFF_UNARY_MATH_OP
 
 // abs is not in the table: its derivative is a sign, not a function of the
-// primal, so it has no descriptor to generate from.
-// Ordering is a real requirement, not an implied one: the rules below branch on
-// operand comparison, and CFieldLike asks only for closure under the five
-// operators.  Saying so here fails a bad scalar at the point of use with a
-// readable message, instead of deep inside a sweep.
+// primal, so there is no descriptor to generate from.
+// Ordering is a real requirement: the rules below branch on comparing operands,
+// and CFieldLike asks only for closure under the five operators.
 template <Numeric T>
   requires std::totally_ordered<T>
 struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
@@ -362,20 +330,17 @@ struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, Notation:
   }
 };
 
-// Ordering is a real requirement, not an implied one: the rules below branch on
-// operand comparison, and CFieldLike asks only for closure under the five
-// operators.  Saying so here fails a bad scalar at the point of use with a
-// readable message, instead of deep inside a sweep.
+// Ordering is a real requirement: the rules below branch on comparing operands,
+// and CFieldLike asks only for closure under the five operators.
 template <Numeric T>
   requires std::totally_ordered<T>
 struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, Notation::Function> {
   // max(a, b) = (a + b + |a - b|) / 2, so with s = (a - b)/|a - b|,
   //   max' = (a' + b' + s*(a' - b')) / 2
   // which is a' where a > b and b' where a < b.  It has to be branch-free: a
-  // runtime conditional would have to choose between lhs.derivative() and
-  // rhs.derivative(), and those are two different *types*.  NaN at a == b,
-  // where max is genuinely not differentiable -- the same convention abs
-  // already follows at 0.
+  // runtime conditional would choose between lhs.derivative() and
+  // rhs.derivative(), which are two different *types*.  NaN at a == b, where max
+  // is genuinely not differentiable.
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -394,10 +359,8 @@ struct MaxOp : BinaryOp<T, detail::max_impl, FixedString{"max"}, Notation::Funct
   }
 };
 
-// Ordering is a real requirement, not an implied one: the rules below branch on
-// operand comparison, and CFieldLike asks only for closure under the five
-// operators.  Saying so here fails a bad scalar at the point of use with a
-// readable message, instead of deep inside a sweep.
+// Ordering is a real requirement: the rules below branch on comparing operands,
+// and CFieldLike asks only for closure under the five operators.
 template <Numeric T>
   requires std::totally_ordered<T>
 struct MinOp : BinaryOp<T, detail::min_impl, FixedString{"min"}, Notation::Function> {

@@ -42,10 +42,9 @@ using namespace diff::literals; // "x"_s
 // ---------------------------------------------------------------------------
 // Test-side conveniences for the drivers' plain-tuple results.
 //
-// The drivers deliberately return std::tuple of owning buffers rather than a
-// library type, so indexing is the caller's job.  These two helpers exist HERE,
-// in the tests, rather than in the library -- they are exactly the kind of
-// accessor the tuple return was chosen to keep out of the public surface.
+// The drivers return a std::tuple of owning buffers rather than a library type,
+// so indexing is the caller's job.  These helpers live here, not in the library:
+// they are the kind of accessor the tuple return exists to keep out of it.
 //
 //   owning form: {value, gradient, hessian, extent}   (runtime arity)
 //   static form: {value, gradient, hessian}           (extent is the array size)

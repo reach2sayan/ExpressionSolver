@@ -98,9 +98,9 @@ inline constexpr bool has_deriv_from_value_v =
 
 } // namespace diff::detail
 
-// `abs` is deliberately absent.  Its derivative is a sign rather than a
-// function of the primal, so it has no descriptor above and each consumer
-// spells it out; see abs_combine in dual/dual.hpp.
+// `abs` is absent: its derivative is a sign rather than a function of the
+// primal, so it has no descriptor and each consumer spells it out (see
+// abs_combine in dual/dual.hpp).
 // clang-format off
 #define DIFF_UNARY_MATH_TABLE(X)                                               \
   X(sin,   SineOp,   "sin")                                                    \

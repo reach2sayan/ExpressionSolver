@@ -12,18 +12,14 @@
 
 namespace diff {
 
-// Bridges a compile-time expression *graph* (Variable / + / * / log / exp ...)
-// into the runtime numeric Hessian driver.  The driver hands us seeded dual
-// dofs in sorted symbol order; we pack them and traverse the graph once via
-// eval_seeded.  Holding the expression by value keeps the dofs alive for the
-// driver and lets the resulting callable be stored or returned safely.
+// Bridges a compile-time expression *graph* into the runtime numeric Hessian
+// driver.  The driver hands over seeded dual dofs in sorted symbol order; we
+// pack them and traverse the graph once via eval_seeded.  The expression is held
+// by value so the callable can be stored or returned safely.
 //
-// The wrapper carries a static tag (kSeededExprEnergy) that the public
-// hessian() router keys on: it says "this callable is a graph that has already
-// been bridged, so there is no tree left to sweep backward", which takes the
-// forward-over-reverse branch out of contention and lands on the scalar
-// O(n^2) forward-over-forward driver.  A raw arithmetic energy lambda carries
-// no tag and reaches the same driver by the other route.
+// The static tag kSeededExprEnergy tells the public hessian() router that this
+// is a graph already bridged -- no tree left to sweep backward -- which takes
+// the forward-over-reverse branch out of contention.
 template <CExpression Expr> class SeededExprEnergy {
   static_assert(!std::is_reference_v<Expr>,
                 "SeededExprEnergy stores the expression by value on purpose — a "
@@ -44,7 +40,7 @@ public:
   template <Numeric Dof>
   [[nodiscard]] constexpr auto operator()(const Dof *dof) const noexcept {
     using T = std::remove_cvref_t<Dof>;
-    // Built by copy, not value-initialized then overwritten: this runs once per
+    // Built by copy, not value-initialised then overwritten: this runs once per
     // Hessian probe, and for a wide dof type zeroing first doubles the writes.
     const auto s = [&]<std::size_t... I>(std::index_sequence<I...>) {
       return std::array<T, arity>{dof[I]...};
