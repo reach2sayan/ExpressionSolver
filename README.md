@@ -151,9 +151,10 @@ auto g = pow(x, 2.0) + hypot(x, y) - log(max(x, y));
 ```
 
 Trees are simplified as they are built: `x + 0`, `x * 1`, `x * 0`, `x / 1`,
-`-(-x)`, `pow(x, 0)`, `pow(x, 1)` and literal folding are applied by the
-operators themselves, so a derivative comes out as `y` rather than
-`1 * y + x * 0`.
+`(a / x) * x`, `-(-x)`, `pow(x, 0)`, `pow(x, 1)` and literal folding are applied
+by the operators themselves, so a derivative comes out as `y` rather than
+`1 * y + x * 0`, and `d(x log x)/dx` as `1 + log(x)` rather than
+`log(x) + x * (1 / x)`.
 
 ### Symbols carry no value
 

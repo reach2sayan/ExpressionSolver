@@ -316,3 +316,33 @@ TEST(Simplify, MaxAndMinHaveASymbolicDerivative) {
                      rmin[0]);
   }
 }
+
+TEST(Simplify, ReciprocalsCancelOnTheSideDivisionPutsThem) {
+  // d(x*log x)/dx is born as log(x) + x*(1/x): the chain rule multiplies
+  // log's own 1/u straight back by u.  Cancelling it costs no accuracy and
+  // takes four cache slots off every sweep of the partial.
+  constexpr auto dxlogx =
+      ddx::impl::make_all_constant_except<ddx::impl::FixedString{"x"}>(sx * log(sx))
+          .derivative();
+  static_assert(ddx::impl::node_count_v<decltype(dxlogx)> == 4);
+  EXPECT_EQ(std::format("{}", canonicalise(dxlogx)), "1 + log(x)");
+  EXPECT_DOUBLE_EQ(dxlogx.eval(2.0), std::log(2.0) + 1.0);
+
+  // The numerator need not be a literal.
+  static_assert(std::is_same_v<std::remove_cvref_t<decltype((sy / sx) * sx)>,
+                               std::remove_cvref_t<decltype(sy)>>);
+
+  // `/` is right division, so a^-1 only ever meets the operand on its right.
+  // (n/a)*a cancels for any ring; a*(n/a) is a*n*a^-1 and needs commutativity.
+  ddx::impl::Variable<Mat2, ddx::impl::FixedString{"x"}> mx;
+  ddx::impl::Variable<Mat2, ddx::impl::FixedString{"y"}> my;
+  static_assert(std::is_same_v<std::remove_cvref_t<decltype((my / mx) * mx)>,
+                               std::remove_cvref_t<decltype(my)>>);
+  static_assert(ddx::impl::node_count_v<decltype(mx * (my / mx))> == 5);
+
+  // For a scalar that commutes both spellings fold, and what is left is a
+  // one-symbol tree: x is gone from the signature, not just from the maths.
+  static_assert(std::is_same_v<std::remove_cvref_t<decltype(sx * (sy / sx))>,
+                               std::remove_cvref_t<decltype(sy)>>);
+  EXPECT_DOUBLE_EQ((sx * (sy / sx)).eval(12.0), 12.0);
+}

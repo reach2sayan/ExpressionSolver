@@ -2,13 +2,15 @@
 #include "expr/expressions.hpp"
 #include "expr/operations.hpp"
 #include <compare>
+#include <concepts>
 #include <cstddef>
 #include <string_view>
 #include <tuple>
 
 // Algebraic rewrite rules, run at build time by the operator factories in
-// values.hpp, so a tree is born folded.  x*0 -> 0 and 0/x -> 0 are not
-// IEEE-faithful; those zeros come from d(const)/dx, not from user input.
+// values.hpp, so a tree is born folded.  x*0 -> 0, 0/x -> 0 and (1/x)*x -> 1
+// are not IEEE-faithful; they cancel arithmetic the derivative rules
+// manufactured, not anything the user wrote.
 namespace ddx::impl::detail {
 
 template <typename Op> inline constexpr bool is_sum_op_v = false;
@@ -23,6 +25,14 @@ template <Numeric T> inline constexpr bool is_pow_op_v<PowOp<T>> = true;
 template <typename E> inline constexpr bool is_negation_expr_v = false;
 template <Numeric T, CExpression C>
 inline constexpr bool is_negation_expr_v<Expression<NegateOp<T>, C>> = true;
+
+// Q is a quotient whose denominator is exactly the tree X.  Trees are empty
+// types carrying their whole structure, so type identity *is* structural
+// identity -- no walk needed.
+template <typename Q, typename X> inline constexpr bool is_over_v = false;
+template <Numeric T, CExpression N, CExpression D, typename X>
+inline constexpr bool is_over_v<Expression<DivideOp<T>, N, D>, X> =
+    std::same_as<D, X>;
 
 // Only a Lit carries its value in the type, so a runtime Constant<T> never
 // folds.
@@ -47,6 +57,14 @@ template <COperation Op, CExpression A, CExpression B>
       return b;
     } else if constexpr (is_one_v<B>) {
       return a;
+    } else if constexpr (is_over_v<A, B>) {
+      // (n/a) * a -> n.  `/` is right division, so a^-1 meets a and cancels
+      // whatever T is.  It fires where a 1/u a derivative manufactured meets
+      // the u the product rule put back: d(u log u)/du is one such.
+      return std::get<0>(a.expressions());
+    } else if constexpr (is_over_v<B, A> && CCommutativeMultiply<T>) {
+      // a * (n/a) is a*n*a^-1 -- only n when the factors commute.
+      return std::get<0>(b.expressions());
     } else {
       return Expression<Op, A, B>{a, b};
     }
