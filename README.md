@@ -67,13 +67,15 @@ using namespace ddx;  // assumed by every example below
 
 ### What `namespace ddx` contains
 
-`ddx.hpp` puts twelve names in `namespace ddx`, and that is the whole surface:
+`ddx.hpp` puts fifteen names in `namespace ddx`, and that is the whole surface:
 
 | Name | Purpose |
 |---|---|
 | `Equation` | the derivative API — every derivative entry point is a member |
 | `var<"x">`, `sym<"x">`, `idx<N>()` | name a symbol; index into an `Equation` |
-| `literals` — `"x"_s` | the symbol literal, as a namespace |
+| `var_of<"x">(v)`, `dual_var_of<"x">(v)` | name a symbol, taking its scalar type from `v` |
+| `constant(3.0)` | a value stored in the tree |
+| `literals` — `"x"_s`, `_cd`, `_ci`, `_vd`, `_vi` | the user-defined literals, as a namespace |
 | `named<"x">(v)`, `NamedValue` | one keyword argument of a point, or one map entry |
 | `map(…)`, `Map` | a compile-time map of those entries |
 | `DiffMode` | `Symbolic` vs `Reverse` |
@@ -83,10 +85,19 @@ The operators (`+`, `*`, …), the math functions (`sin`, `exp`, …), `operator
 and the `std::formatter` specialisations are deliberately *not* on that list.
 They are found by argument-dependent lookup, so they work on an expression
 without their names being visible. `using namespace ddx;` therefore brings in
-twelve names, not a hundred and a half.
+fifteen names, not a hundred and a half.
 
-The convenience macros (`PC`, `PV`, `PDV`) and the user-defined literals (`_cd`,
-`_ci`, `_vd`, `_vi`) are global, in no namespace at all.
+Every user-defined literal — `"x"_s` and the `_cd`, `_ci`, `_vd`, `_vi` suffixes
+— lives in `ddx::literals`, so they arrive only where you ask for them:
+
+```cpp
+using namespace ddx::literals;    // "x"_s, 2.0_cd, 4_vi, …
+```
+
+The public API is macro-free, so nothing of the library sits at global scope.
+Everything that deduces a type from a value — `constant(v)`, `var_of<"x">(v)`,
+`dual_var_of<"x">(v)` — is an ordinary function template, and obeys namespaces
+like the rest.
 
 ---
 
@@ -102,29 +113,29 @@ constexpr auto n = var<"n", int>;         // another scalar type
 auto xd = var<"x", dual>;                 // dual-valued symbol (needed for hessian())
 ```
 
-Equivalent spellings, when you would rather deduce the scalar type from an
-exemplar value:
+Equivalent spellings, including the ones that deduce the scalar type from an
+exemplar value rather than naming it:
 
 | Syntax | Means |
 |---|---|
 | `var<"x">` | a symbol named `"x"`, valued `double` |
 | `var<"x", T>` | a symbol named `"x"`, valued `T` |
-| `PV(1.0, "x")` | same as `var<"x">` — the `1.0` supplies only the *type* |
-| `PDV(1.0, "x")` | same as `var<"x", dual>` |
-| `2.0_vd` | a `double` symbol named `"v"` |
-| `4_vi` | an `int` symbol named `"c"` |
+| `var_of<"x">(v)` | a symbol named `"x"`, valued `decltype(v)` — `v` supplies only the *type* |
+| `dual_var_of<"x">(v)` | the same, dual-valued: `var<"x", dual>` when `v` is a `double` |
+| `2.0_vd` | a `double` symbol named `"v"` (needs `ddx::literals`) |
+| `4_vi` | an `int` symbol named `"c"` (needs `ddx::literals`) |
 
 ### Constants
 
 | Syntax | Means |
 |---|---|
-| `PC(3.0)` | a `double` constant stored in the tree |
-| `1.5_cd` | the same, as a literal |
-| `3_ci` | an `int` constant |
+| `constant(3.0)` | a `double` constant stored in the tree |
+| `1.5_cd` | the same, as a literal (needs `ddx::literals`) |
+| `3_ci` | an `int` constant (needs `ddx::literals`) |
 
 A bare scalar mixed with an expression is promoted automatically, so `x * 2.0`
-and `2.0 * x + 1.0` need no wrapping. Use `PC` only when you want the constant
-spelled explicitly.
+and `2.0 * x + 1.0` need no wrapping. Use `constant` only when you want the
+constant spelled explicitly.
 
 ### Operators and functions
 
@@ -187,7 +198,7 @@ Every entry point that needs numbers accepts the point in three interchangeable
 spellings:
 
 ```cpp
-auto f = x * y + PC(3.0) * x;                       // f(x, y) = xy + 3x
+auto f = x * y + constant(3.0) * x;                 // f(x, y) = xy + 3x
 
 f.eval(4.0, 2.0);                                   // positional, canonical order
 f.eval(named<"y">(2.0), named<"x">(4.0));           // by name, order-independent

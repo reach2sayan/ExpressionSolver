@@ -93,7 +93,7 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
 // TaylorDual had no comparison operators, so detail::max_impl/min_impl -- which
 // spell `a < b` -- could not compile for a univariate_derivative sweep at all.
 TEST(UnivariateDerivative, MaxAndMinAreDifferentiable) {
-  auto x = PV(2.0, "x");
+  auto x = var<"x">;
   EXPECT_DOUBLE_EQ(Equation{max(x * x, 1.0)}.template univariate_derivative<1>(2.0), 4.0);
   EXPECT_DOUBLE_EQ(Equation{min(x * x, 1.0)}.template univariate_derivative<1>(2.0), 0.0);
   EXPECT_DOUBLE_EQ(Equation{max(x * x, 1.0)}.template univariate_derivative<2>(2.0), 2.0);
@@ -144,8 +144,8 @@ TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
 
 TEST(BoundTest, EvalAsCarriesDualsThroughTheGraph) {
   // eval_as is the deeper-numeric-type entry point the drivers use.
-  auto x = PV(1.0, "x");
-  auto y = PV(1.0, "y");
+  auto x = var<"x">;
+  auto y = var<"y">;
   const auto b = bind(x * x + y, named<"x">(3.0), named<"y">(4.0));
 
   using D = Dual<double>;

@@ -207,7 +207,7 @@ TEST(Ownership, ResultOwnsItsBuffersAndTransfersThem) {
       std::is_same_v<decltype(values(named<"x">(2.0)).get<"x">()), double>,
       "get() on a temporary map must return by value");
   EXPECT_DOUBLE_EQ(values(named<"x">(2.0)).get<"x">(), 2.0);
-  EXPECT_DOUBLE_EQ(bind(PV(0.0, "x") * PV(0.0, "y"), named<"x">(4.0),
+  EXPECT_DOUBLE_EQ(bind(var<"x"> * var<"y">, named<"x">(4.0),
                         named<"y">(5.0))
                        .get<"x">(),
                    4.0);
@@ -215,8 +215,8 @@ TEST(Ownership, ResultOwnsItsBuffersAndTransfersThem) {
 
 TEST(Ownership, EquationSubtreeAccessorsWorkOnTemporaries) {
   // The nodes are empty types now, so the rvalue overload copies nothing.
-  auto x = PV(0.0, "x");
-  auto y = PV(0.0, "y");
+  auto x = var<"x">;
+  auto y = var<"y">;
   EXPECT_DOUBLE_EQ(Equation(x * y).get<1>().eval(2.0), 2.0);
   EXPECT_DOUBLE_EQ(Equation(x * y)[idx<2>()].eval(4.0), 4.0);
 }
@@ -224,8 +224,8 @@ TEST(Ownership, EquationSubtreeAccessorsWorkOnTemporaries) {
 TEST(Ownership, ReverseHessianAcceptsATemporaryExpression) {
   // A temporary expression has to reach hessian(), not just gradient().
   using D = ddx::impl::Dual<double>;
-  const auto H = Equation{PDV(0.0, "x") * PDV(0.0, "y")}.hessian(std::array{2.0, 3.0});
-  const auto g = Equation{PDV(0.0, "x") * PDV(0.0, "y")}.gradient(std::array{D{2.0}, D{3.0}});
+  const auto H = Equation{var<"x", dual> * var<"y", dual>}.hessian(std::array{2.0, 3.0});
+  const auto g = Equation{var<"x", dual> * var<"y", dual>}.gradient(std::array{D{2.0}, D{3.0}});
   EXPECT_DOUBLE_EQ(H[0][1], 1.0);
   EXPECT_DOUBLE_EQ(H[0][0], 0.0);
   EXPECT_DOUBLE_EQ(g[0], 3.0);

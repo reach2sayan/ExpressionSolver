@@ -301,12 +301,41 @@ public:
 template <FixedString S, Numeric T = double>
 inline constexpr Variable<T, S> var{};
 
+// var_of<"x">(v) — the same, with the exemplar supplying the type and nothing
+// else.  It is never read, so a run-time value names a symbol as well as a
+// literal does.
+template <FixedString S, Numeric T>
+[[nodiscard]] constexpr auto var_of(const T &) noexcept {
+  return Variable<T, S>{};
+}
+
+// dual_var_of<"x">(v) — dual-valued, which is what hessian() needs.
+template <FixedString S, Numeric T>
+[[nodiscard]] constexpr auto dual_var_of(const T &) noexcept {
+  return Variable<Dual<T>, S>{};
+}
+
+// constant(3.0) — a value stored in the tree.  A bare scalar mixed with an
+// expression promotes on its own; this is for spelling one out.
+template <Numeric T> [[nodiscard]] constexpr auto constant(T v) noexcept {
+  return Lit<T>{v};
+}
+
 } // namespace ddx::impl
+
+// In namespace literals, next to "x"_s, and reached the same way:
+// `using namespace ddx::literals;`.  Nothing of ours belongs at global scope.
+namespace ddx::impl::literals {
 
 DEFINE_CONST_UDL(int, ci)
 DEFINE_CONST_UDL(double, cd)
 DEFINE_VAR_UDL(int, vi, "c")
 DEFINE_VAR_UDL(double, vd, "v")
+
+} // namespace ddx::impl::literals
+
+#undef DEFINE_CONST_UDL
+#undef DEFINE_VAR_UDL
 
 namespace std {
 template <ddx::impl::Numeric T, auto... V>
@@ -327,11 +356,3 @@ struct tuple_element<I, ddx::impl::Variable<T, C, F>> {
 };
 } // namespace std
 
-#define PDV(x, label)                                                          \
-  ddx::impl::Variable<ddx::impl::Dual<std::decay_t<decltype(x)>>,                        \
-                 ddx::impl::FixedString{label}> {}
-#define PV(x, label)                                                           \
-  ddx::impl::Variable<std::decay_t<decltype(x)>, ddx::impl::FixedString{label}> {}
-// Lit(x), not Constant(x): deducing through an alias template is P1814, which
-// Clang lacks before 19.  Same resulting type.
-#define PC(x) ddx::impl::Lit(x)

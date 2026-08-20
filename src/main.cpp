@@ -141,7 +141,7 @@ int main() {
     static_assert(std::is_empty_v<decltype(symbols_only)>,
                   "an expression over stateless leaves stores nothing");
     println("sizeof(x*y + x*y*y)   = {} byte", sizeof(symbols_only));
-    auto with_constant = x * y + PC(3) * x * y * y;
+    auto with_constant = x * y + constant(3) * x * y * y;
     println("sizeof(.. + 3*x*y*y)  = {} bytes (one stored constant)\n",
                  sizeof(with_constant));
   }

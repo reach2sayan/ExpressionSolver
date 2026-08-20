@@ -15,10 +15,16 @@ using impl::Equation;
 using impl::dual;
 using impl::dual2nd;
 
-// var<"x">, or "x"_s.
+// var<"x">, or "x"_s.  var_of<"x">(v) / dual_var_of<"x">(v) take the scalar
+// type from an exemplar value instead of naming it.
 using impl::var;
+using impl::var_of;
+using impl::dual_var_of;
 using impl::sym;
 namespace literals = impl::literals;
+
+// constant(3.0) -- a value stored in the tree.
+using impl::constant;
 
 // eq[idx<1>()] -- the subscript spelling of Equation::get<N>().
 using impl::idx;
