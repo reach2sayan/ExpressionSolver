@@ -40,7 +40,6 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
 
   // Subscript spelling: m["x"_s] = v.  See DDX_KEYED_ACCESSORS.
   DDX_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
-
   template <FixedString S> constexpr void set(const Scalar &v) noexcept {
     slot<S>(*this) = v;
   }
