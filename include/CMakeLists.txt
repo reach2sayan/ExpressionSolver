@@ -4,7 +4,7 @@
 #
 # Each subdirectory adds its own headers to the `ddx` INTERFACE target defined
 # in the top-level CMakeLists.txt.
-target_sources(ddx INTERFACE ${CMAKE_CURRENT_LIST_DIR}/ddx.hpp)
+target_sources(ddx INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/ddx.hpp>)
 
 add_subdirectory(util)
 add_subdirectory(expr)

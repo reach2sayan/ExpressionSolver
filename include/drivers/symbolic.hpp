@@ -1,16 +1,16 @@
 #pragma once
 
-#include "drivers/coupling.hpp" // compile-time Hessian sparsity + colouring
 #include "drivers/common.hpp"   // HessianStatic, symmetrize
+#include "drivers/coupling.hpp" // compile-time Hessian sparsity + colouring
 
 #include "dual/dual.hpp"
 #include "dual/taylor_dual.hpp"
 #include "expr/expressions.hpp"
 #include "expr/named_value.hpp"
+#include "expr/symbol.hpp"
 #include "expr/traits.hpp"
 #include "md/tensor.hpp"
 #include "util/config.hpp"
-#include "util/mpl.hpp"
 #include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>
@@ -22,8 +22,6 @@
 #include <utility>
 
 namespace ddx::impl {
-
-namespace mp = ddx::impl::mpl;
 
 template <CExpression Expr>
 using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
@@ -40,7 +38,7 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
   using VT = typename U::value_type;
   if constexpr (CExpressionNode<U>) {
     using Kids = typename U::children_t;
-    VT v = [&]<std::size_t... I>(std::index_sequence<I...>) {
+    const VT v = [&]<std::size_t... I>(std::index_sequence<I...>) {
       return typename U::op_type::func_type{}(
           fill_cache<child_base_at<Base, Kids, I>(), Syms,
                      U::op_type::reads_primals>(std::get<I>(node.expressions()),
@@ -51,7 +49,7 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
     }
     return v;
   } else { // leaf (Variable / Constant / Lit)
-    VT v = node.template eval_seeded<Syms>(vals);
+    const VT v = node.template eval_seeded<Syms>(vals);
     if constexpr (Store) {
       cache[Base] = v;
     }
@@ -62,6 +60,8 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 // One reverse sweep: fill the primal cache from `seeds`, then push adjoints
 // back from a root adjoint of 1.  Returns the root value; `grads` receives the
 // gradient.
+// Ref: Linnainmaa, BIT 16(2) (1976) 146.  docs/reverse_mode_by_example.md
+// walks one of these by hand.
 template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds,
           CNumericBuffer Grads>
 DDX_ALWAYS_INLINE constexpr auto
@@ -86,13 +86,13 @@ template <auto Colors, CExpression Expr, CNumericBuffer Point, typename Harvest>
       const typename std::remove_cvref_t<Expr>::value_type &,
       std::array<typename std::remove_cvref_t<Expr>::value_type,
                  detail::expr_arity_v<std::remove_cvref_t<Expr>>> &>
-DDX_ALWAYS_INLINE constexpr void
-color_sweeps(const Expr &expr, const Point &x, Harvest &&harvest) {
+DDX_ALWAYS_INLINE constexpr void color_sweeps(const Expr &expr, const Point &x,
+                                              Harvest &&harvest) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using S = dual_scalar_t<T>;
   using Syms = detail::expr_symbols_t<E>;
-  constexpr std::size_t N = mpl::mp_size(Syms{});
+  constexpr std::size_t N = mp::mp_size<Syms>::value;
 
   // Only the seeded tangents move between colours.
   std::array<T, N> seeds{};
@@ -132,11 +132,10 @@ color_sweeps(const Expr &expr, const Point &x, Harvest &&harvest) {
 template <CExpression Expr>
 [[nodiscard]] consteval auto symbol_order() noexcept {
   using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
-  constexpr std::size_t N = mp::mp_size(SymList{});
+  constexpr std::size_t N = mp::mp_size<SymList>::value;
   std::array<std::string_view, N> out{};
-  [&]<std::size_t... I>(std::index_sequence<I...>) {
-    ((out[I] = mp::mp_at_c<SymList, I>::name), ...);
-  }(std::make_index_sequence<N>{});
+  static_for<N>(
+      [&]<std::size_t I>() { out[I] = mp::mp_at_c<SymList, I>::name; });
   return out;
 }
 
@@ -149,11 +148,11 @@ template <CExpression Expr,
 [[nodiscard]] constexpr std::array<Scalar, detail::expr_arity_v<Expr>>
 make_values(NamedValue<Syms, Vs>... nv) noexcept {
   using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
-  constexpr std::size_t N = mp::mp_size(SymList{});
+  constexpr std::size_t N = mp::mp_size<SymList>::value;
   static_assert(sizeof...(Syms) == N,
                 "make_values: supply exactly one value per symbol");
   static_assert(
-      mp::mp_size(mp::mp_unique<mp::mp_list<symbol_type<Syms>...>>{}) ==
+      mp::mp_size<mp::mp_unique<mp::mp_list<symbol_type<Syms>...>>>::value ==
           sizeof...(Syms),
       "make_values: duplicate symbol");
   std::array<Scalar, N> out{};
@@ -169,6 +168,11 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 
 // Forward mode is reached through the drivers, which take a callable rather
 // than a Mode, so it is not a value here.
+//
+// Reverse is the gradient default: one sweep yields every partial, at a cost
+// bounded by a constant times the function itself however many inputs there
+// are, where forward mode needs one sweep per input.
+// Ref: Baur & Strassen, Theoret. Comput. Sci. 22(3) (1983) 317.
 enum class DiffMode { Symbolic, Reverse };
 
 namespace detail {
@@ -206,7 +210,8 @@ template <CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>>
   requires DualLike<T>
 [[nodiscard]] constexpr auto
-reverse_mode_hessian(const Expr &expr, std::array<S, N> values) noexcept {
+reverse_mode_hessian(const Expr &expr,
+                     const std::array<S, N> &values) noexcept {
   using E = std::remove_cvref_t<Expr>;
 
   // Sparsity is a property of the type, so the colouring and the row -> column
@@ -251,19 +256,20 @@ constexpr nth_dual_t<S, Depth> make_mixed_seed(S value,
 // The cartesian product of Order copies of [0, N), in layout_right order.
 template <std::size_t N, std::size_t Order>
 [[nodiscard]] constexpr auto index_grid() noexcept {
-  return []<std::size_t... D>(std::index_sequence<D...>) {
+  return index_apply<Order>([]<std::size_t... D>() {
     return std::views::cartesian_product(
         ((void)D, std::views::iota(std::size_t{0}, N))...);
-  }(std::make_index_sequence<Order>{});
+  });
 }
 
-// One canonical representative per permutation class: C(N + Order - 1, Order)
-// of them.  Keep it a consteval table -- a filtered view and a lazy iterator
-// were each measured 4x slower.
+// One canonical representative per permutation class: mixed partials commute
+// (Schwarz), so only C(N+Order-1, Order) of the N^Order entries are distinct.
+// A consteval table, not a filtered view or a lazy iterator: both measured 4x
+// slower.  Ref: Neidinger, ACM TOMS 18(2) (1992) 159 for the same saving in
+// multivariate Taylor arithmetic.
 template <std::size_t N, std::size_t Order>
   requires(N > 0 && Order > 0)
 consteval auto simplex_index_table() noexcept {
-  // The layout's own cell count, so table and storage cannot disagree.
   std::array<std::array<std::size_t, Order>, binomial(N + Order - 1, Order)>
       out{};
   std::array<std::size_t, Order> idx{};
@@ -318,7 +324,8 @@ template <std::size_t Order, CExpression Expr,
           std::size_t N = detail::expr_arity_v<Expr>>
   requires(Order > 0 && N > 0)
 [[nodiscard]] constexpr auto
-derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
+derivative_tensor_impl(const Expr &expr,
+                       const std::array<S, N> &values) noexcept {
   using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   using U = nth_dual_t<S, Order>;
 
@@ -328,23 +335,20 @@ derivative_tensor_impl(const Expr &expr, std::array<S, N> values) noexcept {
   // passes are straight-line.  The generic loop below costs a runtime index
   // walk plus make_mixed_seed's recursive span walk for nothing.
   if constexpr (Order == 1) {
-    [&]<std::size_t... J>(std::index_sequence<J...>) {
-      auto sweep = [&]<std::size_t Seeded>() {
-        std::array<U, N> seeds{};
-        for (std::size_t k = 0; k < N; ++k) {
-          seeds[k] = U{values[k], k == Seeded ? S{1} : S{}};
-        }
-        result[Seeded] =
-            expr.template eval_seeded<symbols>(seeds).template get<1>();
-      };
-      (sweep.template operator()<J>(), ...);
-    }(std::make_index_sequence<N>{});
+    static_for<N>([&]<std::size_t Seeded>() {
+      std::array<U, N> seeds{};
+      for (std::size_t k = 0; k < N; ++k) {
+        seeds[k] = U{values[k], k == Seeded ? S{1} : S{}};
+      }
+      result[Seeded] =
+          expr.template eval_seeded<symbols>(seeds).template get<1>();
+    });
     return result;
   }
 
   for (const auto &idx : detail::symmetric_index_grid<N, Order>()) {
     const auto seeds = mixed_seeds<S, Order>(values, idx);
-    U val = expr.template eval_seeded<symbols>(seeds);
+    const U val = expr.template eval_seeded<symbols>(seeds);
     result.at_index(idx) = extract_nth<Order>(val);
   }
   return result;
@@ -363,6 +367,9 @@ static_assert(compile_time_factorial(3) == 6);
 static_assert(compile_time_factorial(5) == 120);
 static_assert(compile_time_factorial(7) == 5040);
 
+// One Taylor sweep, then undo the 1/Order! normalisation.  Ref: Griewank,
+// Utke & Walther, "Evaluating Higher Derivative Tensors by Forward Propagation
+// of Univariate Taylor Series", Math. Comp. 69(231) (2000) 1117.
 template <std::size_t Order, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = scalar_base_t<T>,
@@ -377,7 +384,7 @@ univariate_derivative_impl(const Expr &expr, S x0) noexcept {
   seed.c[0] = x0;
   seed.c[1] = S{1};
 
-  TD result = expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
+  const TD result = expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
 
   constexpr S factorial = static_cast<S>(compile_time_factorial(Order));
   return result.c[Order] * factorial;
@@ -385,23 +392,20 @@ univariate_derivative_impl(const Expr &expr, S x0) noexcept {
 
 } // namespace detail
 
-// Forward-over-reverse Hessian of an expression graph: the only O(N)-sweep
-// Hessian driver.  Seeds a tangent, sweeps backward once per colour, harvests a
-// whole set of rows per sweep.  hessian.hpp decides when it applies.
-
 namespace detail {
 
-// Seeding column j and running one backward sweep yields that whole Hessian
-// column: N sweeps against the scalar driver's N(N+1)/2 probes, and the j == 0
-// sweep hands back the value and gradient free.
+// Forward-over-reverse: seeding column j and running one backward sweep yields
+// that whole Hessian column, N sweeps against the scalar driver's N(N+1)/2
+// probes, and the j == 0 sweep hands back the value and gradient free.
+// hessian.hpp decides when it applies.
 template <CExpression Expr>
 constexpr HessianStatic<
-    mpl::mp_size(detail::expr_symbols_t<std::remove_cvref_t<Expr>>{})>
+    mp::mp_size<detail::expr_symbols_t<std::remove_cvref_t<Expr>>>::value>
 hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using Syms = detail::expr_symbols_t<E>;
-  constexpr std::size_t N = mpl::mp_size(Syms{});
+  constexpr std::size_t N = mp::mp_size<Syms>::value;
 
   // Columns sharing no row are seeded in the same sweep.  A dense Hessian
   // colours in N, so the loop degenerates to one sweep per column, never worse.
@@ -409,41 +413,42 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
   static constexpr auto kColors = color_columns<N>(kPattern);
   // Value-initialised is load-bearing: the scatter writes only the pattern.
   HessianStatic<N> res{};
-  auto &res_gradient = std::get<1>(res);
-  auto &res_hessian = std::get<2>(res);
+  auto &res_gradient = res.gradient;
+  auto &res_hessian = res.hessian;
 
-  color_sweeps<kColors>(expr, x, [&](std::size_t c, const T &root,
-                                     const auto &grads) {
-    static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
-    if (c == 0) {
-      // Neither depends on the tangent seeding, so any one sweep yields both.
-      std::get<0>(res) = static_cast<double>(root.template get<0>());
-      std::ranges::transform(grads, res_gradient.begin(), [](const T &g) {
-        return static_cast<double>(g.template get<0>());
+  color_sweeps<kColors>(
+      expr, x, [&](std::size_t c, const T &root, const auto &grads) {
+        static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
+        if (c == 0) {
+          // Neither depends on the tangent seeding, so any one sweep yields
+          // both.
+          res.value = static_cast<double>(root.template get<0>());
+          std::ranges::transform(grads, res_gradient.begin(), [](const T &g) {
+            return static_cast<double>(g.template get<0>());
+          });
+        }
+
+        // At most one of this colour's columns is structurally nonzero in row
+        // i, so the sum IS that entry; which column was resolved at compile
+        // time.
+        for (auto &&[row, grad, target] : std::views::zip(
+                 res_hessian | std::views::chunk(N), grads, kScatter[c])) {
+          if (target != no_column) {
+            row[static_cast<std::ranges::range_difference_t<decltype(row)>>(
+                target)] = static_cast<double>(grad.template get<1>());
+          }
+        }
       });
-    }
-
-    // At most one of this colour's columns is structurally nonzero in row i,
-    // so the sum IS that entry; which column was resolved at compile time.
-    for (auto &&[row, grad, target] :
-         std::views::zip(res_hessian | std::views::chunk(N), grads,
-                         kScatter[c])) {
-      if (target != no_column) {
-        row[static_cast<std::ranges::range_difference_t<decltype(row)>>(
-            target)] = static_cast<double>(grad.template get<1>());
-      }
-    }
-  });
 
   // Independent sweeps, so mirrored entries can differ in the last ULP.
-  detail::symmetrize(res_hessian.data(), N);
+  detail::symmetrize(res_hessian, N);
   return res;
 }
 
-// The nonzero values in sparse_layout<Expr>() order: the same sweeps as above
+// The nonzero values in sparse_layout<Expr>() order: the same sweeps as above,
 // scattered straight into compressed storage.  No symmetrization -- the layout
-// names each entry exactly once.  NNZ is defaulted from a consteval count, so
-// the buffer is an array and this path does not allocate.
+// names each entry exactly once.  NNZ comes from a consteval count, so the
+// buffer is an array and this path does not allocate.
 template <CExpression Expr,
           std::size_t NNZ = hessian_nnz<std::remove_cvref_t<Expr>>()>
 std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
@@ -451,7 +456,7 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using Syms = detail::expr_symbols_t<E>;
-  constexpr std::size_t N = mpl::mp_size(Syms{});
+  constexpr std::size_t N = mp::mp_size<Syms>::value;
 
   static constexpr auto kPattern = hessian_pattern<E>();
   static constexpr auto kColors = color_columns<N>(kPattern);
@@ -460,20 +465,19 @@ std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
   // CSC consumer reads exactly nnz entries and never sees it.
   std::array<double, NNZ + 1> values{};
 
-  color_sweeps<kColors>(expr, x,
-               [&](std::size_t c, const T &, const auto &grads) {
-                 static constexpr auto kSlots = sparse_slots<E>();
-                 for (auto &&[grad, slot] : std::views::zip(grads, kSlots[c])) {
-                   if (slot != no_column) {
-                     values[slot] = static_cast<double>(grad.template get<1>());
-                   }
-                 }
-               });
+  color_sweeps<kColors>(
+      expr, x, [&](std::size_t c, const T &, const auto &grads) {
+        static constexpr auto kSlots = sparse_slots<E>();
+        for (auto &&[grad, slot] : std::views::zip(grads, kSlots[c])) {
+          if (slot != no_column) {
+            values[slot] = static_cast<double>(grad.template get<1>());
+          }
+        }
+      });
   return values;
 }
 
 } // namespace detail
-
 
 // A sparse Hessian whose structure is a property of the expression type, so
 // `outer` and `inner` are static constexpr and only the nnz values are
@@ -491,7 +495,7 @@ public:
   static constexpr std::size_t rows = kN;
   static constexpr std::size_t nnz = kNnz;
 
-  explicit SparseHessian(std::array<double, kNnz + 1> values) noexcept
+  explicit SparseHessian(const std::array<double, kNnz + 1> &values) noexcept
       : values_(values) {}
 
   // Column j occupies [outer()[j], outer()[j + 1]); inner()[k] is the row of

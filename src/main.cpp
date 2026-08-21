@@ -8,12 +8,12 @@
 //
 // Both give the same numbers; see the last two sections for the difference.
 
-#include "ddx.hpp"                     // the public surface: Equation, var, named
-#include "drivers/coupling.hpp"        // hessian_pattern(), color_columns()
+#include "ddx.hpp"              // the public surface: Equation, var, named
+#include "drivers/coupling.hpp" // hessian_pattern(), color_columns()
+#include "drivers/hessian.hpp"  // hessian(), gradient()
+#include "expr/bound.hpp"       // eval(), bind(), named<>()
+#include "expr/equation.hpp"    // Equation: vector-valued f, Jacobians
 #include <tuple>
-#include "drivers/hessian.hpp" // hessian(), gradient()
-#include "expr/bound.hpp"              // eval(), bind(), named<>()
-#include "expr/equation.hpp"           // Equation: vector-valued f, Jacobians
 
 #include <array>
 #include <chrono>
@@ -27,14 +27,15 @@
 using namespace ddx::impl;
 
 // <format> plus a stream, so this does not gate on libstdc++ shipping <print>.
-template <typename... Args>
+template <std::formattable<char>... Args>
 static void println(std::format_string<Args...> fmt, Args &&...args) {
   std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';
 }
 
 namespace {
 
-// Somewhere the optimiser cannot reason about, so timing is not of an empty loop.
+// Somewhere the optimiser cannot reason about, so timing is not of an empty
+// loop.
 volatile double g_sink = 0.0;
 
 // Nanoseconds per call, best-of-rounds.  The minimum, not the mean: one
@@ -69,20 +70,21 @@ template <Numeric T> T energy(const T *v) {
   return v[0] * log(v[0]) + v[1] * v[1] * v[2] + exp(v[0] * v[2]);
 }
 
-// ... and as a graph.  Dual<double> is what lets forward-over-reverse run on it.
+// ... and as a graph.  Dual<double> is what lets forward-over-reverse run on
+// it.
 auto make_graph() {
   using D = Dual<double>;
-  Variable<D, FixedString{"x"}> x;
-  Variable<D, FixedString{"y"}> y;
-  Variable<D, FixedString{"z"}> z;
+  const Variable<D, FixedString{"x"}> x;
+  const Variable<D, FixedString{"y"}> y;
+  const Variable<D, FixedString{"z"}> z;
   return x * log(x) + y * y * z + exp(x * z);
 }
 
 // The same graph over plain double, for the constexpr-capable symbolic API.
 constexpr auto make_graph_plain() {
-  Variable<double, FixedString{"x"}> x;
-  Variable<double, FixedString{"y"}> y;
-  Variable<double, FixedString{"z"}> z;
+  const Variable<double, FixedString{"x"}> x;
+  const Variable<double, FixedString{"y"}> y;
+  const Variable<double, FixedString{"z"}> z;
   return x * log(x) + y * y * z + exp(x * z);
 }
 
@@ -103,14 +105,14 @@ template <Numeric T> T chain_energy(const T *v, std::size_t n) {
 
 auto make_chain8() {
   using D = Dual<double>;
-  Variable<D, FixedString{"x0"}> a;
-  Variable<D, FixedString{"x1"}> b;
-  Variable<D, FixedString{"x2"}> c;
-  Variable<D, FixedString{"x3"}> d;
-  Variable<D, FixedString{"x4"}> e;
-  Variable<D, FixedString{"x5"}> f;
-  Variable<D, FixedString{"x6"}> g;
-  Variable<D, FixedString{"x7"}> h;
+  const Variable<D, FixedString{"x0"}> a;
+  const Variable<D, FixedString{"x1"}> b;
+  const Variable<D, FixedString{"x2"}> c;
+  const Variable<D, FixedString{"x3"}> d;
+  const Variable<D, FixedString{"x4"}> e;
+  const Variable<D, FixedString{"x5"}> f;
+  const Variable<D, FixedString{"x6"}> g;
+  const Variable<D, FixedString{"x7"}> h;
   return a * log(a) + b * log(b) + c * log(c) + d * log(d) + e * log(e) +
          f * log(f) + g * log(g) + h * log(h) + 0.50 * (a - b) * (a - b) +
          0.51 * (b - c) * (b - c) + 0.52 * (c - d) * (c - d) +
@@ -123,10 +125,10 @@ auto make_chain8() {
 int main() {
   // Positional values are in CANONICAL (alphabetical, not source) order; the
   // named<> forms below sidestep the question.
-  std::array<double, 3> p{0.4, 0.7, 1.1}; // x, y, z
+  const std::array<double, 3> p{0.4, 0.7, 1.1}; // x, y, z
   const std::span<const double> xs{p.data(), p.size()};
 
-  auto lambda = [](const auto *dof) { return energy(dof); };
+  const auto lambda = [](const auto *dof) { return energy(dof); };
   const auto graph = make_graph();
   constexpr auto gplain = make_graph_plain();
 
@@ -137,13 +139,13 @@ int main() {
   {
     constexpr auto x = var<"x", int>;
     constexpr auto y = var<"y", int>;
-    auto symbols_only = x * y + x * y * y;
+    const auto symbols_only = x * y + x * y * y;
     static_assert(std::is_empty_v<decltype(symbols_only)>,
                   "an expression over stateless leaves stores nothing");
     println("sizeof(x*y + x*y*y)   = {} byte", sizeof(symbols_only));
-    auto with_constant = x * y + constant(3) * x * y * y;
+    const auto with_constant = x * y + constant(3) * x * y * y;
     println("sizeof(.. + 3*x*y*y)  = {} bytes (one stored constant)\n",
-                 sizeof(with_constant));
+            sizeof(with_constant));
   }
 
   // ---- VALUE
@@ -161,24 +163,36 @@ int main() {
 
   // ---- GRADIENT
   println("\nGRADIENT");
-  row("lambda  gradient(f, xs)           [0]", ddx::impl::gradient(lambda, xs)[0],
+  row("lambda  gradient(f, xs)           [0]",
+      ddx::impl::gradient(lambda, xs)[0],
       bench_ns([&] { return ddx::impl::gradient(lambda, xs)[0]; }, 2000));
-  row("graph   gradient<Reverse>(expr,p) [0]",
-      Equation{gplain}.gradient(p)[0],
+  row("graph   gradient<Reverse>(expr,p) [0]", Equation{gplain}.gradient(p)[0],
       bench_ns([&] { return Equation{gplain}.gradient(p)[0]; }));
   row("graph   ...bound by name          [0]",
-      Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]), named<"z">(p[2]))[0],
+      Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]),
+                                named<"z">(p[2]))[0],
       bench_ns([&] {
-        return Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]), named<"z">(p[2]))[0];
+        return Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]),
+                                         named<"z">(p[2]))[0];
       }));
 
   // ---- HESSIAN.  hessian() routes on what it is given: the lambda routes
   // allocate, the symbolic one returns a packed md_tensor on the stack.
   println("\nHESSIAN            H(0,2)");
-  row("lambda  hessian(f, xs)", std::get<2>(ddx::impl::hessian(lambda, xs))[0 * xs.size() + 2],
-      bench_ns([&] { return std::get<2>(ddx::impl::hessian(lambda, xs))[0 * xs.size() + 2]; }, 1000));
-  row("graph   hessian(expr, xs)", std::get<2>(ddx::impl::hessian(graph, xs))[0 * xs.size() + 2],
-      bench_ns([&] { return std::get<2>(ddx::impl::hessian(graph, xs))[0 * xs.size() + 2]; }, 1000));
+  row("lambda  hessian(f, xs)",
+      ddx::impl::hessian(lambda, xs)->hessian[0 * xs.size() + 2],
+      bench_ns(
+          [&] {
+            return ddx::impl::hessian(lambda, xs)->hessian[0 * xs.size() + 2];
+          },
+          1000));
+  row("graph   hessian(expr, xs)",
+      ddx::impl::hessian(graph, xs)->hessian[0 * xs.size() + 2],
+      bench_ns(
+          [&] {
+            return ddx::impl::hessian(graph, xs)->hessian[0 * xs.size() + 2];
+          },
+          1000));
   {
     const auto Hs = Equation{graph}.hessian(p);
     row("graph   hessian<Reverse>(expr, p)", (Hs[0, 2]), bench_ns([&] {
@@ -193,23 +207,25 @@ int main() {
   {
     const auto T = Equation{gplain}.template derivative_tensor<3>(p);
     row("graph   derivative_tensor<3>  d3f/dx dz dz", (T[0, 2, 2]),
-        bench_ns([&] {
-          const auto t = Equation{gplain}.template derivative_tensor<3>(p);
-          return (t[0, 2, 2]);
-        }, 1000));
+        bench_ns(
+            [&] {
+              const auto t = Equation{gplain}.template derivative_tensor<3>(p);
+              return (t[0, 2, 2]);
+            },
+            1000));
     println("          same cell, chained spelling t[0][2][2] = {:.4f}",
-                 T[0][2][2]);
-    println("          packed: stores {} cells, not {} — symmetric",
-                 T.size(), 3 * 3 * 3);
+            T[0][2][2]);
+    println("          packed: stores {} cells, not {} — symmetric", T.size(),
+            3 * 3 * 3);
   }
 
   // ---- VECTOR-VALUED f: Equation holds one expression per output.
   println("\nJACOBIAN  (vector-valued -> Equation)");
   {
-    Variable<double, FixedString{"x"}> x;
-    Variable<double, FixedString{"y"}> y;
-    Variable<double, FixedString{"z"}> z;
-    auto sys = Equation(x * y, sin(x) * z, y * y + z); // f: R^3 -> R^3
+    const Variable<double, FixedString{"x"}> x;
+    const Variable<double, FixedString{"y"}> y;
+    const Variable<double, FixedString{"z"}> z;
+    const auto sys = Equation(x * y, sin(x) * z, y * y + z); // f: R^3 -> R^3
 
     row("graph   .jacobian<Symbolic>(p)      J(1,0)",
         (sys.jacobian<DiffMode::Symbolic>(p)[1, 0]), bench_ns([&] {
@@ -222,10 +238,13 @@ int main() {
           return (J[1, 0]);
         }));
     row("graph   .derivative_tensor<2>(p)  d2f1/dxdz",
-        (sys.derivative_tensor<2>(p)[1, 0, 2]), bench_ns([&] {
-          const auto T = sys.derivative_tensor<2>(p);
-          return (T[1, 0, 2]);
-        }, 1000));
+        (sys.derivative_tensor<2>(p)[1, 0, 2]),
+        bench_ns(
+            [&] {
+              const auto T = sys.derivative_tensor<2>(p);
+              return (T[1, 0, 2]);
+            },
+            1000));
   }
 
   // ---- The same 8-variable chain both ways.  The graph's sparsity is known
@@ -238,26 +257,36 @@ int main() {
       q[k] = 0.15 + 0.6 * (static_cast<double>(k) + 1.0) / 9.0;
     }
     const std::span<const double> qs{q.data(), q.size()};
-    auto chain_lambda = [n = q.size()](const auto *dof) {
+    const auto chain_lambda = [n = q.size()](const auto *dof) {
       return chain_energy(dof, n);
     };
     const auto chain_graph = make_chain8();
 
-    const double t_lambda =
-        bench_ns([&] { return std::get<2>(ddx::impl::hessian(chain_lambda, qs))[0 * qs.size() + 7]; }, 400);
-    const double t_graph =
-        bench_ns([&] { return std::get<2>(ddx::impl::hessian(chain_graph, qs))[0 * qs.size() + 7]; }, 400);
+    const double t_lambda = bench_ns(
+        [&] {
+          return ddx::impl::hessian(chain_lambda, qs)
+              ->hessian[0 * qs.size() + 7];
+        },
+        400);
+    const double t_graph = bench_ns(
+        [&] {
+          return ddx::impl::hessian(chain_graph, qs)
+              ->hessian[0 * qs.size() + 7];
+        },
+        400);
 
     using G = std::remove_cvref_t<decltype(chain_graph)>;
     constexpr auto pattern = hessian_pattern<G>();
     constexpr auto colours = color_columns<8>(pattern);
 
-    println("  lambda  hessian(f, qs)      {:>10.1f} ns   (probes all {} entries)",
-                 t_lambda, 8 * 9 / 2);
-    println("  graph   hessian(expr, qs)   {:>10.1f} ns   ({} colours -> {} sweeps)",
-                 t_graph, colours.count, colours.count);
+    println(
+        "  lambda  hessian(f, qs)      {:>10.1f} ns   (probes all {} entries)",
+        t_lambda, 8 * 9 / 2);
+    println("  graph   hessian(expr, qs)   {:>10.1f} ns   ({} colours -> {} "
+            "sweeps)",
+            t_graph, colours.count, colours.count);
     println("  ---> graph is {:.1f}x faster, and the gap grows with n",
-                 t_lambda / t_graph);
+            t_lambda / t_graph);
     println("\n  sparsity read off the TYPE (. = provably always zero):");
     for (std::size_t i = 0; i < 8; ++i) {
       std::string line;
@@ -271,8 +300,8 @@ int main() {
 
   // ---- ...and the whole symbolic path runs in constant evaluation.
   constexpr auto ct = [] {
-    Variable<double, FixedString{"a"}> a;
-    Variable<double, FixedString{"b"}> b;
+    const Variable<double, FixedString{"a"}> a;
+    const Variable<double, FixedString{"b"}> b;
     return Equation{a * b}.gradient(std::array{3.0, 4.0});
   }();
   static_assert(ct[0] == 4.0 && ct[1] == 3.0,

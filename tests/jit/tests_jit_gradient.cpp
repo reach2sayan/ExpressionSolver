@@ -1,0 +1,206 @@
+#include "ddx.hpp"
+#include "jit/kernel.hpp"
+#include "rt/bridge.hpp"
+#include "rt/derivative.hpp"
+#include "rt/graph.hpp"
+#include "rt/interpret.hpp"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <iterator>
+#include <ranges>
+#include <vector>
+
+// ===========================================================================
+// JIT'd gradients
+//
+// A kernel computes exactly the outputs its graph was frozen with, so freezing
+// {value, partials...} is all it takes to get the gradient columns; the checks
+// here are that those columns land in the right buffers and hold what the
+// interpreter says they should.
+// ===========================================================================
+
+namespace {
+using ddx::rt::Builder;
+using ddx::rt::Graph;
+
+// A host with no native target has no JIT to test; every test here needs one,
+// so bring it up once and let the assertion name the reason if it will not.
+ddx::jit::Compiler &compiler() {
+  static ddx::jit::result<ddx::jit::Compiler> c = ddx::jit::Compiler::create();
+  EXPECT_TRUE(c.has_value()) << (c ? "" : c.error().detail);
+  return *c;
+}
+
+// A compile that has to succeed for the test to mean anything.  compile()
+// answers with result<Kernel>; the assertion names LLVM's own reason when it
+// does not, instead of an empty Kernel three lines later.
+ddx::jit::Kernel must_compile(auto &&...args) {
+  auto k = compiler().compile(static_cast<decltype(args) &&>(args)...);
+  EXPECT_TRUE(k.has_value()) << (k ? std::string{} : k.error().detail);
+  return k ? std::move(*k) : ddx::jit::Kernel{};
+}
+
+void expect_gradient_matches_interpreter(auto build, std::size_t nvars,
+                                         std::size_t n = 32) {
+  Builder<> b;
+  std::vector<ddx::rt::RTExpression<>> vars;
+  static constexpr const char *names[] = {"x", "y", "z"};
+  for (std::size_t i = 0; i < nvars; ++i) {
+    vars.push_back(var(b, names[i]));
+  }
+  const auto root = build(b, vars);
+  // The sweep is repeated for the reference values; the builder runs its own.
+  const auto reference_gradient = ddx::rt::gradient(b, root.id(b));
+  const auto kernel =
+      must_compile(ddx::rt::GraphBuilder{b}.value(root).gradient().build());
+  ASSERT_EQ(kernel.outputs(), nvars + 1);
+
+  std::vector<std::vector<double>> columns(nvars, std::vector<double>(n));
+  for (std::size_t j = 0; j < nvars; ++j) {
+    for (std::size_t i = 0; i < n; ++i) {
+      columns[j][i] = 0.2 + 0.5 * static_cast<double>((i + 2 * j) % 7) / 7.0;
+    }
+  }
+  std::vector<const double *> xs(nvars);
+  for (std::size_t j = 0; j < nvars; ++j) {
+    xs[j] = columns[j].data();
+  }
+
+  std::vector<double> value(n);
+  std::vector<std::vector<double>> grad(nvars, std::vector<double>(n));
+  std::vector<double *> gp(nvars);
+  for (std::size_t j = 0; j < nvars; ++j) {
+    gp[j] = grad[j].data();
+  }
+  double *const value_columns[]{value.data()};
+  kernel(xs, value_columns, gp, {}, n);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    std::vector<double> point(nvars);
+    for (std::size_t j = 0; j < nvars; ++j) {
+      point[j] = columns[j][i];
+    }
+    const auto reference = ddx::rt::evaluate_all(b, point);
+    EXPECT_NEAR(value[i], reference[reference_gradient.value], 1e-12);
+    for (std::size_t j = 0; j < nvars; ++j) {
+      const double want = reference[reference_gradient.partial[j]];
+      EXPECT_NEAR(grad[j][i], want, 1e-12 * std::max(1.0, std::abs(want)))
+          << "d/d" << names[j] << " at point " << i;
+    }
+  }
+}
+
+TEST(JitGradient, MatchesTheInterpreter) {
+  expect_gradient_matches_interpreter(
+      [](Builder<> &, auto &v) { return exp(v[0]) * sin(v[1]); }, 2);
+  expect_gradient_matches_interpreter(
+      [](Builder<> &, auto &v) { return v[0] / v[1]; }, 2);
+  expect_gradient_matches_interpreter(
+      [](Builder<> &, auto &v) { return pow(v[0], v[1]); }, 2);
+  expect_gradient_matches_interpreter(
+      [](Builder<> &, auto &v) { return log(v[0]) * sqrt(v[1]) + tanh(v[2]); },
+      3);
+  expect_gradient_matches_interpreter(
+      [](Builder<> &, auto &v) { return erf(v[0]) + cbrt(v[1]); }, 2);
+  // abs and max/min put sign nodes in the gradient graph, which codegen emits
+  // as compare-and-select rather than a libm call.
+  expect_gradient_matches_interpreter(
+      [](Builder<> &, auto &v) { return abs(v[0] - v[1]) * v[1]; }, 2);
+  expect_gradient_matches_interpreter(
+      [](Builder<> &, auto &v) {
+        return max(v[0] * v[0], v[1]) + min(v[0], v[1]);
+      },
+      2);
+}
+
+TEST(JitGradient, MatchesDdxThroughTheBridge) {
+  constexpr auto x = ddx::var<"x">;
+  constexpr auto y = ddx::var<"y">;
+  const auto f = exp(x) * sin(y) + x * y;
+
+  Builder<> b;
+  const auto root = ddx::rt::to_graph(b, f);
+  const auto kernel =
+      must_compile(ddx::rt::GraphBuilder{b}.value(root).gradient().build());
+
+  const std::array cx{1.0, 0.25, 2.5};
+  const std::array cy{2.0, 1.75, 0.5};
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+  std::array<double, 3> value{};
+  std::array<double, 3> dx{};
+  std::array<double, 3> dy{};
+  std::array<double *, 2> gp{dx.data(), dy.data()};
+  double *const value_columns[]{value.data()};
+  kernel(xs, value_columns, gp, {}, value.size());
+
+  for (std::size_t i = 0; i < value.size(); ++i) {
+    const auto expected = ddx::Equation{f}.gradient(cx[i], cy[i]);
+    EXPECT_NEAR(value[i], ddx::Equation{f}.evaluate(cx[i], cy[i]), 1e-12);
+    EXPECT_NEAR(dx[i], expected[0], 1e-12);
+    EXPECT_NEAR(dy[i], expected[1], 1e-12);
+  }
+}
+
+} // namespace
+
+namespace {
+
+// The block the four-pointer signature exists for.  The Hessian arrives
+// compressed by colour, which is why the kernel reports its column count
+// rather than leaving the caller to work it out from n.
+TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto f = exp(x) * sin(y) + x * x * y;
+
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(f).gradient().hessian().build();
+  const auto kernel = must_compile(graph);
+
+  ASSERT_EQ(kernel.values(), 1u);
+  ASSERT_EQ(kernel.jacobian_columns(), 2u);
+  ASSERT_EQ(kernel.hessian_columns(), graph.layout().hessian);
+  ASSERT_GT(kernel.hessian_columns(), 0u);
+
+  constexpr std::size_t n = 4;
+  std::array<double, n> cx{0.7, 0.8, 0.9, 1.0};
+  std::array<double, n> cy{1.1, 1.2, 1.3, 1.4};
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+
+  std::array<double, n> value{};
+  std::vector<std::vector<double>> jac(2, std::vector<double>(n));
+  std::vector<std::vector<double>> hess(kernel.hessian_columns(),
+                                        std::vector<double>(n));
+  double *const values[]{value.data()};
+  const auto columns_of = [](auto &blocks) {
+    return blocks | std::views::transform([](auto &c) { return c.data(); }) |
+           std::ranges::to<std::vector<double *>>();
+  };
+  auto jp = columns_of(jac);
+  auto hp = columns_of(hess);
+
+  kernel(xs, values, jp, hp, n);
+
+  // Against the interpreter over the same graph, scattered the same way.
+  const auto &coloring = graph.coloring();
+  for (std::size_t point = 0; point < n; ++point) {
+    const std::array<double, 2> at{cx[point], cy[point]};
+    const auto reference = ddx::rt::evaluate_all(b, at);
+    const auto outputs = graph.outputs();
+
+    EXPECT_NEAR(value[point], reference[outputs[0]], 1e-12);
+    for (std::size_t j = 0; j < 2; ++j) {
+      EXPECT_NEAR(jac[j][point], reference[outputs[1 + j]], 1e-12);
+    }
+    for (std::size_t c = 0; c < kernel.hessian_columns(); ++c) {
+      EXPECT_NEAR(hess[c][point], reference[outputs[3 + c]], 1e-12)
+          << "compressed Hessian column " << c;
+    }
+  }
+  EXPECT_EQ(coloring.count * 2, kernel.hessian_columns());
+}
+
+} // namespace

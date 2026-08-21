@@ -1,6 +1,5 @@
 #include "tests_common.hpp"
 
-
 // ===========================================================================
 // Algebraic simplification (expr/simplify.hpp)
 //
@@ -19,25 +18,27 @@ constexpr auto sz = ddx::var<"z">;
 constexpr auto sw = ddx::var<"w">;
 
 template <ddx::impl::FixedString S, class E> consteval std::size_t d_nodes() {
-  return ddx::impl::node_count_v<decltype(ddx::impl::make_all_constant_except<S>(E{})
-                                         .derivative())>;
+  return ddx::impl::node_count_v<
+      decltype(ddx::impl::make_all_constant_except<S>(E{}).derivative())>;
 }
 constexpr auto F4 =
     (sx + sy) * (sz - sw) + exp(sx * sz) + sin(sy * sw) + sx * sy * sz * sw;
 } // namespace
 
 TEST(Simplify, IdentitiesCollapseDerivativeTrees) {
-  // d(x*y)/dx was `1*y_c + x*0` -- seven nodes and seven cache slots for one
-  // symbol lookup.
+  // Unfolded, d(x*y)/dx is `1*y_c + x*0`: seven nodes and seven cache slots
+  // for one symbol lookup.
   static_assert(d_nodes<ddx::impl::FixedString{"x"}, decltype(sx * sy)>() == 1);
 
-  // The whole F4 Jacobian was 268 nodes across its four rows.
-  constexpr std::size_t rows = d_nodes<ddx::impl::FixedString{"w"}, decltype(F4)>() +
-                               d_nodes<ddx::impl::FixedString{"x"}, decltype(F4)>() +
-                               d_nodes<ddx::impl::FixedString{"y"}, decltype(F4)>() +
-                               d_nodes<ddx::impl::FixedString{"z"}, decltype(F4)>();
+  // Unfolded, the F4 Jacobian is 268 nodes across its four rows.
+  constexpr std::size_t rows =
+      d_nodes<ddx::impl::FixedString{"w"}, decltype(F4)>() +
+      d_nodes<ddx::impl::FixedString{"x"}, decltype(F4)>() +
+      d_nodes<ddx::impl::FixedString{"y"}, decltype(F4)>() +
+      d_nodes<ddx::impl::FixedString{"z"}, decltype(F4)>();
   static_assert(rows == 68);
-  static_assert(ddx::impl::node_count_v<decltype(F4)> == 26); // f itself is untouched
+  static_assert(ddx::impl::node_count_v<decltype(F4)> ==
+                26); // f itself is untouched
 }
 
 TEST(Simplify, OnlyCompileTimeLiteralsFold) {
@@ -52,36 +53,41 @@ TEST(Simplify, OnlyCompileTimeLiteralsFold) {
   using X = std::remove_cvref_t<decltype(sx)>;
   auto folded = sx * ddx::impl::Lit<double, 1>{}; // x*1 -> x, no node built
   static_assert(std::is_same_v<std::remove_cvref_t<decltype(folded)>, X>);
-  auto unfolded = sx * ddx::impl::Constant<double>{1.0}; // value unknown until run time
+  auto unfolded =
+      sx * ddx::impl::Constant<double>{1.0}; // value unknown until run time
   static_assert(!std::is_same_v<std::remove_cvref_t<decltype(unfolded)>, X>);
   EXPECT_DOUBLE_EQ(unfolded.eval(3.0), 3.0);
 }
 
 TEST(Simplify, DualLiteralPairsStayEmpty) {
-  // Two Lits meeting at a node fold.  For a dual scalar the folded value cannot
-  // go back into the type in general, but 0 and 1 can via the int spelling --
-  // and those are the only values differentiation makes.  Without that check
-  // the pair falls to the stored-Constant branch and the spine above it stops
-  // being empty, which is the thing the int spelling exists to prevent.
+  // For a dual scalar the folded value cannot go back into the type in general,
+  // but 0 and 1 can via the int spelling -- and those are the only values
+  // differentiation makes.  Without that the pair falls to the stored-Constant
+  // branch and the spine above it stops being empty.
   using D = ddx::impl::Dual<double>;
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 0>{} + ddx::impl::Lit<D, 1>{})>);
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 0>{} * ddx::impl::Lit<D, 1>{})>);
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 1>{} + ddx::impl::Lit<D, 0>{})>);
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<double, 0>{} + ddx::impl::Lit<double, 1>{})>);
+  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 0>{} +
+                                         ddx::impl::Lit<D, 1>{})>);
+  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 0>{} *
+                                         ddx::impl::Lit<D, 1>{})>);
+  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 1>{} +
+                                         ddx::impl::Lit<D, 0>{})>);
+  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<double, 0>{} +
+                                         ddx::impl::Lit<double, 1>{})>);
   // A value that is neither 0 nor 1 has nowhere to live but a stored Constant.
-  EXPECT_DOUBLE_EQ((ddx::impl::Lit<D, 1>{} + ddx::impl::Lit<D, 1>{}).get().value(), 2.0);
+  EXPECT_DOUBLE_EQ(
+      (ddx::impl::Lit<D, 1>{} + ddx::impl::Lit<D, 1>{}).get().value(), 2.0);
 }
 
 TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
-  // The branch-free expansion is not cheap: (a+b±|a-b|)/2 names a-b twice, once
-  // bare and once inside the abs, and that duplication is structural so it
-  // stays in the type.  Recorded rather than defended -- the rule it replaced
-  // did not compile at all, so this is not a regression from anything that
-  // worked, and it is the densest target in the codebase for a later CSE pass.
-  constexpr auto dmax = d_nodes<ddx::impl::FixedString{"x"}, decltype(max(sx, sy))>();
-  constexpr auto dmin = d_nodes<ddx::impl::FixedString{"x"}, decltype(min(sx, sy))>();
-  static_assert(dmax == 14);
-  static_assert(dmin == 15);
+  // The branch-free expansion (a'+b'±sign(a-b)*(a'-b'))/2 keeps a whole a-b
+  // subtree inside the sign node, and that duplication against the primal is
+  // structural so it stays in the type.
+  constexpr auto dmax =
+      d_nodes<ddx::impl::FixedString{"x"}, decltype(max(sx, sy))>();
+  constexpr auto dmin =
+      d_nodes<ddx::impl::FixedString{"x"}, decltype(min(sx, sy))>();
+  static_assert(dmax == 9);
+  static_assert(dmin == 10);
 }
 
 TEST(Simplify, DualValuedTreesAreStatelessToo) {
@@ -100,10 +106,10 @@ TEST(Simplify, CommutativeOperandsCanonicalise) {
   // x+y and y+x become the same type, which is what makes type identity a
   // usable value numbering for a later CSE/DAG pass.  double declares its
   // multiplication commutative, so x*y and y*x unify for it too.
-  static_assert(
-      std::is_same_v<decltype(canonicalise(sx + sy)), decltype(canonicalise(sy + sx))>);
-  static_assert(
-      std::is_same_v<decltype(canonicalise(sx * sy)), decltype(canonicalise(sy * sx))>);
+  static_assert(std::is_same_v<decltype(canonicalise(sx + sy)),
+                               decltype(canonicalise(sy + sx))>);
+  static_assert(std::is_same_v<decltype(canonicalise(sx * sy)),
+                               decltype(canonicalise(sy * sx))>);
   static_assert(std::is_same_v<decltype(canonicalise((sx * sy) * sz)),
                                decltype(canonicalise(sz * (sy * sx)))>);
   // Reordering is exact, so the values do not move.
@@ -114,26 +120,33 @@ TEST(Simplify, CommutativeOperandsCanonicalise) {
   EXPECT_EQ(std::format("{}", canonicalise(2.0 * sx)), "2 * x");
 }
 
-// Two scalars for the commutativity opt-in below.  Both satisfy CFieldLike --
-// closure under + - * / and negation is all Numeric asks -- and they are the
-// same type but for the tag, so the only thing that differs between them is
-// whether they declare that their multiplication commutes.
+// Two scalars for the commutativity opt-in below: the same type but for the
+// tag, so the only thing that differs is whether they declare that their
+// multiplication commutes.
 template <int Tag> struct Ring {
   double v{};
-  friend constexpr Ring operator+(Ring a, Ring b) noexcept { return {a.v + b.v}; }
-  friend constexpr Ring operator-(Ring a, Ring b) noexcept { return {a.v - b.v}; }
-  friend constexpr Ring operator*(Ring a, Ring b) noexcept { return {a.v * b.v}; }
-  friend constexpr Ring operator/(Ring a, Ring b) noexcept { return {a.v / b.v}; }
+  friend constexpr Ring operator+(Ring a, Ring b) noexcept {
+    return {a.v + b.v};
+  }
+  friend constexpr Ring operator-(Ring a, Ring b) noexcept {
+    return {a.v - b.v};
+  }
+  friend constexpr Ring operator*(Ring a, Ring b) noexcept {
+    return {a.v * b.v};
+  }
+  friend constexpr Ring operator/(Ring a, Ring b) noexcept {
+    return {a.v / b.v};
+  }
   constexpr Ring operator-() const noexcept { return {-v}; }
 };
 using Undeclared = Ring<0>;
 using Declared = Ring<1>;
 DDX_COMMUTATIVE_MULTIPLY(Ring<1>)
 
-// 2x2 real matrices: a genuine non-commutative ring, and the only kind of
-// scalar that can observe which side an adjoint multiplies on.  Scalars embed
-// as s*I, which is what makes Lit<Mat2, 0> and Lit<Mat2, 1> -- and the reverse
-// sweep's root adjoint T{1} -- come out as the zero and identity matrices.
+// A genuine non-commutative ring: the only kind of scalar that can observe
+// which side an adjoint multiplies on.  Scalars embed as s*I, which is what
+// makes Lit<Mat2, 0>, Lit<Mat2, 1> and the sweep's root adjoint T{1} come out
+// as the zero and identity matrices.
 struct Mat2 {
   double a{}, b{}, c{}, d{};
   constexpr Mat2() = default;
@@ -147,8 +160,8 @@ struct Mat2 {
     return {x.a - y.a, x.b - y.b, x.c - y.c, x.d - y.d};
   }
   friend constexpr Mat2 operator*(Mat2 x, Mat2 y) noexcept {
-    return {x.a * y.a + x.b * y.c, x.a * y.b + x.b * y.d,
-            x.c * y.a + x.d * y.c, x.c * y.b + x.d * y.d};
+    return {x.a * y.a + x.b * y.c, x.a * y.b + x.b * y.d, x.c * y.a + x.d * y.c,
+            x.c * y.b + x.d * y.d};
   }
   friend constexpr Mat2 operator/(Mat2 x, Mat2 y) noexcept { // x * y^-1
     const double det = y.a * y.d - y.b * y.c;
@@ -165,9 +178,9 @@ TEST(ReverseMode, MultiplyAdjointRespectsOperandSide) {
   // MultiplyOp::adjoints must return {adj*b, a*adj}, not {adj*b, adj*a}: for
   // c = a*b the differential is da*b + a*db, so the adjoint reaching `b`
   // multiplies on the RIGHT of a.  Every scalar the library ships commutes, so
-  // the two spellings are bit-identical for all of them -- this is the only
-  // test that can tell them apart, and without it a revert is invisible.
-  static_assert(ddx::impl::Numeric<Mat2> && !ddx::impl::CCommutativeMultiply<Mat2>);
+  // only a non-commutative one can tell the two spellings apart.
+  static_assert(ddx::impl::Numeric<Mat2> &&
+                !ddx::impl::CCommutativeMultiply<Mat2>);
 
   constexpr ddx::impl::Variable<Mat2, ddx::impl::FixedString{"x"}> mx;
   constexpr ddx::impl::Variable<Mat2, ddx::impl::FixedString{"y"}> my;
@@ -193,9 +206,7 @@ TEST(ReverseMode, MultiplyAdjointRespectsOperandSide) {
 TEST(ReverseMode, DivideAdjointRespectsOperandSide) {
   // DivideOp reads a/b as a*b^-1, so c = a*b^-1 differentiates as
   // da*b^-1 - a*b^-1*db*b^-1: the b-adjoint threads BETWEEN a/b and b^-1 and
-  // does not collapse to the -adj*a/(b*b) of the quotient rule.  As with
-  // multiply, the two agree for every scalar that ships, so only a
-  // non-commutative one can tell them apart.
+  // does not collapse to the -adj*a/(b*b) of the quotient rule.
   constexpr ddx::impl::Variable<Mat2, ddx::impl::FixedString{"x"}> mx;
   constexpr ddx::impl::Variable<Mat2, ddx::impl::FixedString{"y"}> my;
   constexpr ddx::impl::Variable<Mat2, ddx::impl::FixedString{"z"}> mz;
@@ -206,15 +217,15 @@ TEST(ReverseMode, DivideAdjointRespectsOperandSide) {
   // identity -- which is what makes the two spellings disagree.
   const auto g = ddx::Equation{mz * (mx / my)}.gradient(std::array{X, Y, Z});
 
-  const Mat2 sided = -((X / Y) * Z) / Y;   // what the sided rule must produce
+  const Mat2 sided = -((X / Y) * Z) / Y;    // what the sided rule must produce
   const Mat2 quotient = -(Z * X) / (Y * Y); // what the commutative rule gives
   // Guard the guard: if these ever coincided the test below would be vacuous.
   ASSERT_NE(sided, quotient);
 
-  EXPECT_EQ(g[0], Z / Y);   // dx = adj*b^-1 with adj = z
-  EXPECT_EQ(g[1], sided);   // dy -- the whole point of the test
+  EXPECT_EQ(g[0], Z / Y); // dx = adj*b^-1 with adj = z
+  EXPECT_EQ(g[1], sided); // dy -- the whole point of the test
   EXPECT_NE(g[1], quotient);
-  EXPECT_EQ(g[2], X / Y);   // dz = adj*(x/y) with adj = I
+  EXPECT_EQ(g[2], X / Y); // dz = adj*(x/y) with adj = I
 }
 
 // Whether an op template accepts a scalar, WITHOUT instantiating it -- naming a
@@ -230,27 +241,31 @@ class NoIdentity {
 
 public:
   constexpr NoIdentity() = default;
-  friend constexpr NoIdentity operator+(NoIdentity, NoIdentity) noexcept { return {}; }
-  friend constexpr NoIdentity operator-(NoIdentity, NoIdentity) noexcept { return {}; }
-  friend constexpr NoIdentity operator*(NoIdentity, NoIdentity) noexcept { return {}; }
-  friend constexpr NoIdentity operator/(NoIdentity, NoIdentity) noexcept { return {}; }
+  friend constexpr NoIdentity operator+(NoIdentity, NoIdentity) noexcept {
+    return {};
+  }
+  friend constexpr NoIdentity operator-(NoIdentity, NoIdentity) noexcept {
+    return {};
+  }
+  friend constexpr NoIdentity operator*(NoIdentity, NoIdentity) noexcept {
+    return {};
+  }
+  friend constexpr NoIdentity operator/(NoIdentity, NoIdentity) noexcept {
+    return {};
+  }
   constexpr NoIdentity operator-() const noexcept { return {}; }
 };
 
 TEST(Concepts, NumericDemandsWhatTheSweepsActuallyUse) {
-  // Closure under + - * / and negation is not sufficient to differentiate a
-  // scalar.  Differentiation manufactures exactly 0 and 1: reverse_sweep seeds
-  // its root adjoint with T{1} and Lit<T, V>'s int spelling is T(V).  A type
-  // that cannot spell 1 must be rejected by the concept rather than failing
-  // somewhere inside a sweep.
+  // Differentiation manufactures exactly 0 and 1: reverse_sweep seeds its root
+  // adjoint with T{1} and Lit<T, V>'s int spelling is T(V).  A type that cannot
+  // spell 1 must be rejected by the concept rather than deep inside a sweep.
   static_assert(std::default_initializable<NoIdentity>);
   static_assert(!std::constructible_from<NoIdentity, int>);
   static_assert(!ddx::impl::Numeric<NoIdentity>);
 
-  // Ordering is likewise a real requirement, but only of the three ops that
-  // compare their operands -- abs branches on the sign, min and max on which
-  // side is larger.  Ring is Numeric and defines no ordering, so those three
-  // reject it while everything else in the library still accepts it.
+  // Ordering is required only of the three ops that compare their operands:
+  // abs branches on the sign, min and max on which side is larger.
   static_assert(ddx::impl::Numeric<Undeclared>);
   static_assert(!std::totally_ordered<Undeclared>);
   static_assert(!OpAccepts<ddx::impl::AbsOp, Undeclared>);
@@ -259,7 +274,8 @@ TEST(Concepts, NumericDemandsWhatTheSweepsActuallyUse) {
   static_assert(OpAccepts<ddx::impl::MultiplyOp, Undeclared>);
   static_assert(OpAccepts<ddx::impl::SumOp, Undeclared>);
   // Ordered scalars are accepted by all five, so the guard is narrow.
-  static_assert(OpAccepts<ddx::impl::AbsOp, double> && OpAccepts<ddx::impl::MinOp, double>);
+  static_assert(OpAccepts<ddx::impl::AbsOp, double> &&
+                OpAccepts<ddx::impl::MinOp, double>);
 
   // The scalars that ship satisfy both, so neither constraint narrows the
   // library's actual surface.
@@ -270,16 +286,18 @@ TEST(Concepts, NumericDemandsWhatTheSweepsActuallyUse) {
 }
 
 TEST(Simplify, MultiplicationCommutesOnlyWhenTheScalarSaysSo) {
-  // Numeric admits matrices, quaternions, anything whose product depends on
-  // operand order, so commuting a product is asked rather than assumed.  The
-  // default is the conservative answer: a type that says nothing does not
-  // commute, which costs a CSE share and never a wrong result.
-  static_assert(ddx::impl::Numeric<Undeclared> && !ddx::impl::CCommutativeMultiply<Undeclared>);
+  // Numeric admits anything whose product depends on operand order, so a type
+  // that says nothing does not commute: that costs a CSE share, never a wrong
+  // result.
+  static_assert(ddx::impl::Numeric<Undeclared> &&
+                !ddx::impl::CCommutativeMultiply<Undeclared>);
   static_assert(ddx::impl::Numeric<Declared>);
   static_assert(ddx::impl::CCommutativeMultiply<double>);
   static_assert(ddx::impl::CCommutativeMultiply<ddx::impl::Dual<double>>);
-  static_assert(ddx::impl::CCommutativeMultiply<ddx::impl::TaylorDual<double, 3>>);
-  static_assert(ddx::impl::CCommutativeMultiply<ddx::impl::TaylorDual<double, 3>>);
+  static_assert(
+      ddx::impl::CCommutativeMultiply<ddx::impl::TaylorDual<double, 3>>);
+  static_assert(
+      ddx::impl::CCommutativeMultiply<ddx::impl::TaylorDual<double, 3>>);
   // The dual wrappers defer to the scalar underneath rather than asserting for
   // themselves, so an undeclared scalar stays undeclared through a Dual.
   static_assert(!ddx::impl::CCommutativeMultiply<ddx::impl::Dual<Undeclared>>);
@@ -290,22 +308,23 @@ TEST(Simplify, MultiplicationCommutesOnlyWhenTheScalarSaysSo) {
   // same shape, reordered for one scalar and left alone for the other.
   ddx::impl::Variable<Undeclared, ddx::impl::FixedString{"x"}> ux;
   ddx::impl::Variable<Undeclared, ddx::impl::FixedString{"y"}> uy;
-  static_assert(
-      !std::is_same_v<decltype(canonicalise(ux * uy)), decltype(canonicalise(uy * ux))>);
+  static_assert(!std::is_same_v<decltype(canonicalise(ux * uy)),
+                                decltype(canonicalise(uy * ux))>);
   // Addition needs no opt-in -- a ring's addition commutes by definition.
-  static_assert(
-      std::is_same_v<decltype(canonicalise(ux + uy)), decltype(canonicalise(uy + ux))>);
+  static_assert(std::is_same_v<decltype(canonicalise(ux + uy)),
+                               decltype(canonicalise(uy + ux))>);
 }
 
 TEST(Simplify, MaxAndMinHaveASymbolicDerivative) {
-  // max(x,y).derivative() did not compile at all before: the old rule selected
-  // between lhs.derivative() and rhs.derivative() with a runtime conditional,
-  // and those are two different types.
+  // Selecting between lhs.derivative() and rhs.derivative() with a runtime
+  // conditional cannot type-check: the two are different types.
   const auto dmax_dx =
-      ddx::impl::make_all_constant_except<ddx::impl::FixedString{"x"}>(max(sx, sy))
+      ddx::impl::make_all_constant_except<ddx::impl::FixedString{"x"}>(
+          max(sx, sy))
           .derivative();
   const auto dmin_dx =
-      ddx::impl::make_all_constant_except<ddx::impl::FixedString{"x"}>(min(sx, sy))
+      ddx::impl::make_all_constant_except<ddx::impl::FixedString{"x"}>(
+          min(sx, sy))
           .derivative();
   for (auto [a, b] : {std::pair{3.0, 1.0}, std::pair{1.0, 3.0}}) {
     const auto rmax = Equation{max(sx, sy)}.gradient(std::array{a, b});
@@ -318,11 +337,11 @@ TEST(Simplify, MaxAndMinHaveASymbolicDerivative) {
 }
 
 TEST(Simplify, ReciprocalsCancelOnTheSideDivisionPutsThem) {
-  // d(x*log x)/dx is born as log(x) + x*(1/x): the chain rule multiplies
-  // log's own 1/u straight back by u.  Cancelling it costs no accuracy and
-  // takes four cache slots off every sweep of the partial.
+  // d(x*log x)/dx is born as log(x) + x*(1/x): the chain rule multiplies log's
+  // own 1/u straight back by u.  Cancelling costs no accuracy.
   constexpr auto dxlogx =
-      ddx::impl::make_all_constant_except<ddx::impl::FixedString{"x"}>(sx * log(sx))
+      ddx::impl::make_all_constant_except<ddx::impl::FixedString{"x"}>(sx *
+                                                                       log(sx))
           .derivative();
   static_assert(ddx::impl::node_count_v<decltype(dxlogx)> == 4);
   EXPECT_EQ(std::format("{}", canonicalise(dxlogx)), "1 + log(x)");

@@ -4,13 +4,13 @@
 #include "expr/named_value.hpp"
 #include "expr/traits.hpp"
 #include "util/config.hpp"
+#include "util/error.hpp"
 #include "util/fixed_string.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <ranges>
-#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -23,7 +23,7 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
   using value_type = Scalar;
 
   static constexpr bool kValueMap = true;
-  static constexpr std::size_t arity = mp::mp_size(SymList{});
+  static constexpr std::size_t arity = mp::mp_size<SymList>::value;
 
   std::array<Scalar, arity> slots{};
 
@@ -70,10 +70,9 @@ consteval std::array<std::size_t, N> arg_of_canonical() noexcept {
 template <CSymbolList ExprSyms, CSymbolList MapSyms, std::size_t N>
 consteval std::array<std::size_t, N> symbol_permutation() noexcept {
   std::array<std::size_t, N> p{};
-  [&]<std::size_t... I>(std::index_sequence<I...>) {
-    ((p[I] = find_index_of_symbol<mp::mp_at_c<ExprSyms, I>::value, MapSyms>()),
-     ...);
-  }(std::make_index_sequence<N>{});
+  static_for<N>([&]<std::size_t I>() {
+    p[I] = find_index_of_symbol<mp::mp_at_c<ExprSyms, I>::value, MapSyms>();
+  });
   return p;
 }
 
@@ -84,16 +83,16 @@ template <FixedString... Syms, Numeric... Vs>
 [[nodiscard]] constexpr auto values(NamedValue<Syms, Vs>... nv) noexcept {
   using SymList = unique_tuple_t<mp::mp_list<symbol_type<Syms>...>>;
   constexpr std::size_t N = sizeof...(Syms);
-  static_assert(mp::mp_size(SymList{}) == N, "values: duplicate symbol");
+  static_assert(mp::mp_size<SymList>::value == N, "values: duplicate symbol");
 
   using Scalar = std::common_type_t<Vs...>;
   constexpr auto pos =
       detail::arg_of_canonical<SymList, N, symbol_type<Syms>...>();
   const auto args = std::tuple<Vs...>{nv.value...};
-  return [&]<std::size_t... I>(std::index_sequence<I...>) {
+  return index_apply<N>([&]<std::size_t... I>() {
     return ValueMap<Scalar, SymList>{
         std::array<Scalar, N>{static_cast<Scalar>(std::get<pos[I]>(args))...}};
-  }(std::make_index_sequence<N>{});
+  });
 }
 
 // An expression paired with a point; the expression is empty.
@@ -105,7 +104,7 @@ template <CExpression Expr, CValueMap Map> struct Bound {
   using symbols = detail::expr_symbols_t<expr_type>;
   using value_type = typename expr_type::value_type;
 
-  static constexpr std::size_t arity = mp::mp_size(symbols{});
+  static constexpr std::size_t arity = mp::mp_size<symbols>::value;
 
   static constexpr auto kPerm =
       detail::symbol_permutation<symbols, typename map_type::symbols, arity>();
@@ -174,11 +173,21 @@ template <CExpression Expr>
 
 namespace detail {
 
+// The one spelling of a point whose length is not known until it arrives: a
+// single range that is not tuple-like.  Every other spelling is counted by a
+// static_assert, so this is the only one that can answer with an error.
+template <typename... Args>
+concept CDynamicPoint =
+    sizeof...(Args) == 1 && (std::ranges::input_range<Args> && ...) &&
+    !(CTupleLike<Args> && ...);
+
 // Every spelling of "a point" reduced to an array of N values in canonical
 // symbol order.  Written against a symbol list, not an expression, because
 // Equation supplies its own.
 template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
-[[nodiscard]] constexpr std::array<U, N> make_point(const Args &...args) {
+  requires(!CDynamicPoint<Args...>)
+[[nodiscard]] constexpr std::array<U, N>
+make_point(const Args &...args) noexcept {
   // clang-format off
   if constexpr (sizeof...(Args) == 0) { // constant-folded: no free symbols
     static_assert(N == 0,
@@ -204,24 +213,18 @@ template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
     return vals;
   }
 
-  // point(range)
+  // point(tuple-like range) -- the size is in the type, so it is a diagnostic.
   else if constexpr (sizeof...(Args) == 1 && (std::ranges::input_range<Args> && ...)) {
     return [&](const auto &r) {
-      if constexpr (CTupleLike<decltype(r)>) {
-        static_assert(
-            std::tuple_size_v<std::remove_cvref_t<decltype(r)>> == N,
-            "eval: range size must equal the expression's symbol count "
-            "(see symbol_order<Expr>())");
-      }
+      static_assert(
+          std::tuple_size_v<std::remove_cvref_t<decltype(r)>> == N,
+          "eval: range size must equal the expression's symbol count "
+          "(see symbol_order<Expr>())");
       std::array<U, N> vals{};
       std::size_t i = 0;
       std::ranges::for_each(r | std::views::take(N), [&](const auto &v) {
         vals[i++] = static_cast<U>(v);
       });
-      if (i != N) {
-        throw std::out_of_range("eval: range supplied fewer values than the "
-                                "expression has symbols");
-      }
       return vals;
     }(args...);
   }
@@ -233,15 +236,52 @@ template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
                   "order (see symbol_order<Expr>())");
     return std::array<U, N>{static_cast<U>(args)...};
   }
-  // clang-format on
+  //clang-format on
+}
+
+// point(range) -- the length arrives with the range, so a short one is the one
+// wrong point this library cannot catch at compile time.
+template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
+  requires(CDynamicPoint<Args...>)
+[[nodiscard]] constexpr result<std::array<U, N>>
+make_point(const Args &...args) noexcept {
+  return [&](const auto &r) -> result<std::array<U, N>> {
+    std::array<U, N> vals{};
+    std::size_t i = 0;
+    std::ranges::for_each(
+        r | std::views::take(N),
+        [&](const auto &v) { vals[i++] = static_cast<U>(v); });
+    if (i != N) {
+      return fail(errc::short_point);
+    }
+    return vals;
+  }(args...);
+}
+
+// Run `body` on the point.  Whether the point is an array or an error is
+// settled here and nowhere else, so every numeric member below reads as though
+// it were always an array -- and returns result<T> exactly when its caller
+// spelled the point as a range.
+template <CSymbolList Syms, Numeric U, std::size_t N, typename Body,
+          CEvalArg... Args>
+[[nodiscard]] constexpr auto with_point(Body &&body,
+                                        const Args &...args) noexcept {
+  if constexpr (CDynamicPoint<Args...>) {
+    return make_point<Syms, U, N>(args...).transform(
+        static_cast<Body &&>(body));
+  } else {
+    return static_cast<Body &&>(body)(make_point<Syms, U, N>(args...));
+  }
 }
 
 template <CExpression Expr, CEvalArg... Args>
-[[nodiscard]] constexpr auto eval_dispatch(const Expr &e, const Args &...args) {
+[[nodiscard]] constexpr auto eval_dispatch(const Expr &e,
+                                           const Args &...args) noexcept {
   using VT = typename std::remove_cvref_t<Expr>::value_type;
   using Syms = expr_symbols_t<Expr>;
-  return e.template eval_seeded<Syms>(
-      make_point<Syms, VT, expr_arity_v<Expr>>(args...));
+  return with_point<Syms, VT, expr_arity_v<Expr>>(
+      [&e](const auto &vals) { return e.template eval_seeded<Syms>(vals); },
+      args...);
 }
 
 // Forward-mode sweep seeded on `Seed`: the ordinary seeded sweep with Dual<VT>,
@@ -269,7 +309,8 @@ template <auto Seed, CExpression Expr, CEvalArg... Args>
 
 template <CExpression Expr, CEvalArg... Args>
   requires(sizeof...(Args) > 0)
-[[nodiscard]] constexpr auto eval(const Expr &e, const Args &...args) {
+[[nodiscard]] constexpr auto eval(const Expr &e,
+                                  const Args &...args) noexcept {
   return detail::eval_dispatch(e, args...);
 }
 

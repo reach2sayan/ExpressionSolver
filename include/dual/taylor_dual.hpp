@@ -14,6 +14,13 @@ namespace ddx::impl {
 // TaylorDual<S, N>: flat N+1 normalized coefficients c[k] = f^(k)(x)/k! for
 // univariate higher-order AD.  Multiply is truncated convolution, O(N^2)
 // against the O(2^N) of nested Dual.  Reach it via univariate_derivative<N>().
+//
+// Ref: Berz, Particle Accelerators 24 (1989) 109 for the truncated-polynomial
+// (differential algebra) view, and Griewank & Walther, "Evaluating
+// Derivatives" (2nd ed., SIAM, 2008) Ch. 13.  Every transcendental below is
+// derived the way Jorba & Zou, Exp. Math. 14(1) (2005) 99 §2 derive theirs:
+// write the ODE the function satisfies, differentiate, match coefficients --
+// never Faa di Bruno, whose term count is the set partitions of k.
 
 // The coefficient product is a convolution, sum_i a_i b_(k-i), so it commutes
 // exactly when the scalar underneath does.
@@ -29,8 +36,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   // ~13-cycle vdivsd on the dependency chain.
   static constexpr std::array<S, N + 1> inv_k = []() consteval {
     std::array<S, N + 1> r{};
-    for (std::size_t k = 1; k <= N; ++k) {
-      r[k] = S{1} / static_cast<S>(k);
+    for (auto &&[k, rk] : r | std::views::enumerate | std::views::drop(1)) {
+      rk = S{1} / static_cast<S>(k);
     }
     return r;
   }();
@@ -55,6 +62,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   }
 
   // Truncated polynomial multiplication: (uv)[k] = Σ_{j=0}^{k} u[j]*v[k-j]
+  // Ref: Knuth, TAOCP Vol. 2 (3rd ed.) §4.7.  O(N²); the sub-quadratic forms
+  // (Brent & Kung, JACM 25(4) (1978) 581) only pay off far above this N.
   constexpr TaylorDual operator*(const TaylorDual &o) const noexcept {
     TaylorDual r;
     for (std::size_t k = 0; k <= N; ++k) {
@@ -67,7 +76,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return r;
   }
 
-  // Polynomial division via r*o = this:
+  // Polynomial division via r*o = this -- forward substitution, Knuth §4.7:
   //   r[k] = (c[k] - Σ_{j=0}^{k-1} r[j]*o[k-j]) / o[0]
   constexpr TaylorDual operator/(const TaylorDual &o) const noexcept {
     TaylorDual r;
@@ -106,9 +115,24 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   operator<=>(const TaylorDual &a, const TaylorDual &b) noexcept {
     return a.c[0] <=> b.c[0];
   }
-  [[nodiscard]] friend constexpr bool
-  operator==(const TaylorDual &a, const TaylorDual &b) noexcept {
+  [[nodiscard]] friend constexpr bool operator==(const TaylorDual &a,
+                                                 const TaylorDual &b) noexcept {
     return a.c[0] == b.c[0];
+  }
+
+  // Coefficient k-1 of a·b': Σ_{j=j0}^{k-1} a[j]·(k-j)·b[k-j].  The
+  // recurrences below all read a product-with-a-derivative in this shape;
+  // j0 = 1 drops the a[0] term a recurrence has already moved to the left.
+  // (coupled_pair stays a fused loop: its two sums share the j·u[j] factor.)
+  [[nodiscard]] static constexpr S dconv(const std::array<S, N + 1> &a,
+                                         const std::array<S, N + 1> &b,
+                                         std::size_t k,
+                                         std::size_t j0 = 0) noexcept {
+    return std::ranges::fold_left(
+        std::views::iota(j0, k) | std::views::transform([&](std::size_t j) {
+          return a[j] * static_cast<S>(k - j) * b[k - j];
+        }),
+        S{}, std::plus{});
   }
 
   // Solve g·w' = u' for w, given w[0].  Differentiating and matching
@@ -124,11 +148,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     w.c[0] = w0;
     const S invg0 = S{1} / g.c[0];
     for (std::size_t k = 1; k <= N; ++k) {
-      auto rhs = static_cast<S>(k) * u.c[k];
-      for (std::size_t j = 1; j < k; ++j) {
-        rhs -= g.c[j] * static_cast<S>(k - j) * w.c[k - j];
-      }
-      w.c[k] = rhs * inv_k[k] * invg0;
+      w.c[k] = (static_cast<S>(k) * u.c[k] - dconv(g.c, w.c, k, 1)) * inv_k[k] *
+               invg0;
     }
     return w;
   }
@@ -139,11 +160,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     TaylorDual w;
     w.c[0] = exp(u.c[0]);
     for (std::size_t k = 1; k <= N; ++k) {
-      S s{};
-      for (std::size_t j = 1; j <= k; ++j) {
-        s += static_cast<S>(j) * u.c[j] * w.c[k - j];
-      }
-      w.c[k] = s * inv_k[k];
+      w.c[k] = dconv(w.c, u.c, k) * inv_k[k];
     }
     return w;
   }
@@ -156,11 +173,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     w.c[0] = log(u.c[0]);
     const S invu0 = S{1} / u.c[0];
     for (std::size_t k = 1; k <= N; ++k) {
-      S s{};
-      for (std::size_t j = 1; j < k; ++j) {
-        s += static_cast<S>(j) * w.c[j] * u.c[k - j];
-      }
-      w.c[k] = (u.c[k] - s * inv_k[k]) * invu0;
+      w.c[k] = (u.c[k] - dconv(u.c, w.c, k, 1) * inv_k[k]) * invu0;
     }
     return w;
   }
@@ -207,8 +220,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return sincos_td(u).second;
   }
   [[nodiscard]] constexpr friend TaylorDual tan(const TaylorDual &u) noexcept {
-    auto [s, c] = sincos_td(u);
-    return s / c;
+    const auto [sn, cn] = sincos_td(u);
+    return sn / cn;
   }
 
   // sqrt: w[0]=sqrt(u[0]),  w[k] = (u[k] - Σ_{j=1}^{k-1} w[j]*w[k-j]) /
@@ -229,7 +242,14 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   }
 
   [[nodiscard]] constexpr friend TaylorDual abs(const TaylorDual &u) noexcept {
-    return u.c[0] >= S{} ? u : -u;
+    if (u.c[0] == S{}) {
+      return TaylorDual{}; // sign(0) is 0, the convention every engine shares
+    } else if (u.c[0] > S{}) {
+      return u;
+    } else if (u.c[0] < S{}) {
+      return -u;
+    }
+    return u * TaylorDual{}; // NaN value: every coefficient poisoned
   }
 
   [[nodiscard]] constexpr friend std::pair<TaylorDual, TaylorDual>
@@ -244,9 +264,24 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   [[nodiscard]] constexpr friend TaylorDual cosh(const TaylorDual &u) noexcept {
     return sinhcosh_td(u).second;
   }
+  // tanh: w' = (1 − w²)·u', seeded from libm rather than sinh/cosh -- both
+  // overflow near |u[0]| ≈ 710 where tanh is ±1.
   [[nodiscard]] constexpr friend TaylorDual tanh(const TaylorDual &u) noexcept {
-    const auto [sh, ch] = sinhcosh_td(u);
-    return sh / ch;
+    using std::tanh;
+    TaylorDual w;
+    w.c[0] = tanh(u.c[0]);
+    std::array<S, N + 1> sq{}; // w², extended as each w[k] lands
+    sq[0] = w.c[0] * w.c[0];
+    for (std::size_t k = 1; k <= N; ++k) {
+      w.c[k] = (static_cast<S>(k) * u.c[k] - dconv(sq, u.c, k)) * inv_k[k];
+      sq[k] =
+          std::ranges::fold_left(std::views::iota(0uz, k + 1) |
+                                     std::views::transform([&](std::size_t j) {
+                                       return w.c[j] * w.c[k - j];
+                                     }),
+                                 S{}, std::plus{});
+    }
+    return w;
   }
 
   // asin: sqrt(1-u²)·w' = u'  (general, composite-safe):
@@ -255,7 +290,10 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     using std::asin;
     TaylorDual one;
     one.c[0] = S{1};
-    return implicit_recurrence(u, asin(u.c[0]), sqrt(one - u * u));
+    // (1-u)(1+u), not 1-u*u: near |u| = 1 the subtraction cancels against a
+    // rounded square and costs half the significand.  Ref: Higham, "Accuracy
+    // and Stability of Numerical Algorithms" (2nd ed., SIAM, 2002) §1.7.
+    return implicit_recurrence(u, asin(u.c[0]), sqrt((one - u) * (one + u)));
   }
 
   // acos = pi/2 - asin  →  same derivative coefficients, negated for k>=1
@@ -286,26 +324,37 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     w.c[0] = w0;
     const S invu0 = S{1} / u.c[0];
     for (std::size_t n = 1; n <= N; ++n) {
-      S acc{};
-      for (std::size_t j = 1; j <= n; ++j) {
-        acc += p * static_cast<S>(j) * u.c[j] * w.c[n - j];
-      }
-      for (std::size_t j = 1; j < n; ++j) {
-        acc -= static_cast<S>(j) * w.c[j] * u.c[n - j];
-      }
-      w.c[n] = acc * inv_k[n] * invu0;
+      w.c[n] =
+          (p * dconv(w.c, u.c, n) - dconv(u.c, w.c, n, 1)) * inv_k[n] * invu0;
     }
     return w;
   }
 
   // pow(u, v) = exp(v·log u), requires u[0] > 0.  A constant exponent instead
-  // goes through powser, which needs no logarithm and allows u[0] < 0.
+  // goes through powser, which needs no logarithm and allows u[0] < 0.  At
+  // u[0] == 0 powser's recurrence is 0/0 for every exponent, but a whole
+  // non-negative one -- the only case with finite coefficients -- is the
+  // truncated product instead: d(x²)/dx at 0 is 0, not NaN.
   [[nodiscard]] friend constexpr TaylorDual pow(const TaylorDual &u,
                                                 const TaylorDual &v) noexcept {
-    using std::pow;
+    using std::pow, std::trunc;
     if (std::ranges::all_of(v.c | std::views::drop(1),
                             [](const S &e) { return e == S{}; })) {
-      return powser(u, v.c[0], pow(u.c[0], v.c[0]));
+      const S p = v.c[0];
+      if constexpr (CArithmetic<S>) {
+        if (u.c[0] == S{} && !(p < S{}) && p == trunc(p)) {
+          TaylorDual w;
+          if (p > static_cast<S>(N)) {
+            return w; // u has valuation >= 1, so u^p starts past order N
+          }
+          w.c[0] = S{1};
+          for (auto e = static_cast<std::size_t>(p); e > 0; --e) {
+            w = w * u;
+          }
+          return w;
+        }
+      }
+      return powser(u, p, pow(u.c[0], p));
     }
     return exp(v * log(u));
   }
@@ -317,36 +366,42 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   }
 
   // log10(u) = log(u) / ln(10); every coefficient scales by log10(e).
-  [[nodiscard]] friend constexpr TaylorDual log10(const TaylorDual &u) noexcept {
+  [[nodiscard]] friend constexpr TaylorDual
+  log10(const TaylorDual &u) noexcept {
     TaylorDual w = log(u);
     const S log10e = static_cast<S>(std::numbers::log10e);
-    std::ranges::transform(w.c, w.c.begin(),
-                           [log10e](S x) noexcept { return x * log10e; });
+    std::ranges::transform(
+        w.c, w.c.begin(), [log10e](const S &x) noexcept { return x * log10e; });
     return w;
   }
 
   // asinh: sqrt(1+u²)·w' = u'  (mirrors asin with s = sqrt(1 + u²)).
-  [[nodiscard]] friend constexpr TaylorDual asinh(const TaylorDual &u) noexcept {
+  [[nodiscard]] friend constexpr TaylorDual
+  asinh(const TaylorDual &u) noexcept {
     using std::asinh;
     TaylorDual one;
     one.c[0] = S{1};
     return implicit_recurrence(u, asinh(u.c[0]), sqrt(one + u * u));
   }
 
-  // acosh: sqrt(u²-1)·w' = u'  (requires u[0] > 1).
-  [[nodiscard]] friend constexpr TaylorDual acosh(const TaylorDual &u) noexcept {
+  // acosh: sqrt(u²-1)·w' = u'  (requires u[0] > 1); (u-1)(u+1) for the same
+  // cancellation reason as asin.
+  [[nodiscard]] friend constexpr TaylorDual
+  acosh(const TaylorDual &u) noexcept {
     using std::acosh;
     TaylorDual one;
     one.c[0] = S{1};
-    return implicit_recurrence(u, acosh(u.c[0]), sqrt(u * u - one));
+    return implicit_recurrence(u, acosh(u.c[0]), sqrt((u - one) * (u + one)));
   }
 
-  // atanh: (1-u²)·w' = u'  (mirrors atan with p = 1 - u²).
-  [[nodiscard]] friend constexpr TaylorDual atanh(const TaylorDual &u) noexcept {
+  // atanh: (1-u²)·w' = u'  (mirrors atan); (1-u)(1+u) for the same
+  // cancellation reason as asin.
+  [[nodiscard]] friend constexpr TaylorDual
+  atanh(const TaylorDual &u) noexcept {
     using std::atanh;
-    TaylorDual p = -(u * u);
-    p.c[0] += S{1};
-    return implicit_recurrence(u, atanh(u.c[0]), p);
+    TaylorDual one;
+    one.c[0] = S{1};
+    return implicit_recurrence(u, atanh(u.c[0]), (one - u) * (one + u));
   }
 
   // erf: erf' = (2/√π)·exp(-u²); integrate w' = (2/√π)·exp(-u²)·u'.
@@ -357,31 +412,42 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     constexpr S cc = static_cast<S>(S{2} * std::numbers::inv_sqrtpi);
     const TaylorDual g = exp(-(u * u)); // exp(-u²)
     for (std::size_t k = 1; k <= N; ++k) {
-      // coefficient (k-1) of g·u' : Σ_{i=0}^{k-1} g[i]·(k-i)·u[k-i]
-      S deriv{};
-      for (std::size_t i = 0; i < k; ++i) {
-        deriv += g.c[i] * static_cast<S>(k - i) * u.c[k - i];
-      }
-      w.c[k] = cc * deriv * inv_k[k];
+      w.c[k] = cc * dconv(g.c, u.c, k) * inv_k[k];
     }
     return w;
   }
 
-  // atan2(y, x) and atan(y/x) differ by a piecewise constant, so only the value
-  // coefficient differs; atan is composite-safe, so this is exact.
-  [[nodiscard]] friend constexpr TaylorDual atan2(const TaylorDual &y,
-                                        const TaylorDual &x) noexcept {
+  // atan2(y, x): (x² + y²)·w' = x·y' − y·x' holds everywhere atan2 is
+  // differentiable, so the recurrence never divides by x and the y-axis stays
+  // finite -- atan(y/x) does not.
+  [[nodiscard]] friend constexpr TaylorDual
+  atan2(const TaylorDual &y, const TaylorDual &x) noexcept {
     using std::atan2;
-    TaylorDual w = atan(y / x);
-    w.c[0] = atan2(y.c[0], x.c[0]);
+    // n integrates x·y' − y·x', which is all implicit_recurrence reads of u.
+    TaylorDual n;
+    for (std::size_t k = 1; k <= N; ++k) {
+      n.c[k] = (dconv(x.c, y.c, k) - dconv(y.c, x.c, k)) * inv_k[k];
+    }
+    return implicit_recurrence(n, atan2(y.c[0], x.c[0]), x * x + y * y);
+  }
+
+  // hypot(x, y) = sqrt(x² + y²), but never formed that way: the value comes
+  // from std::hypot and the coefficients from h·h' = x·x' + y·y', so no
+  // coefficient of x or y is ever squared and the result overflows only where
+  // hypot itself does.
+  [[nodiscard]] friend constexpr TaylorDual
+  hypot(const TaylorDual &x, const TaylorDual &y) noexcept {
+    using std::hypot;
+    TaylorDual w;
+    w.c[0] = hypot(x.c[0], y.c[0]);
+    const S invh = S{1} / w.c[0];
+    for (std::size_t k = 1; k <= N; ++k) {
+      w.c[k] =
+          (dconv(x.c, x.c, k) + dconv(y.c, y.c, k) - dconv(w.c, w.c, k, 1)) *
+          inv_k[k] * invh;
+    }
     return w;
   }
-
-  [[nodiscard]] friend constexpr TaylorDual hypot(const TaylorDual &x,
-                                        const TaylorDual &y) noexcept {
-    return sqrt(x * x + y * y);
-  }
-
 };
 
 static_assert(Numeric<TaylorDual<double, 3>>,
@@ -417,7 +483,8 @@ inline constexpr bool is_dual_family_v<TaylorDual<S, N>> = true;
 template <ddx::impl::Numeric S, std::size_t N>
 struct std::formatter<ddx::impl::TaylorDual<S, N>, char>
     : ddx::impl::detail::dual_formatter_base<S> {
-  auto format(const ddx::impl::TaylorDual<S, N> &t, std::format_context &ctx) const {
+  auto format(const ddx::impl::TaylorDual<S, N> &t,
+              std::format_context &ctx) const {
     this->series(ctx, t.c);
     return ctx.out();
   }

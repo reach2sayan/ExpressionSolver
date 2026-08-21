@@ -3,6 +3,7 @@
 #include "expr/expressions.hpp" // Numeric
 #include "md/layouts.hpp" // layout_leading_simplex — the symmetric packings
 #include "md/md.hpp"
+#include "util/config.hpp" // DDX_SELF
 
 #include <array>
 #include <concepts>
@@ -71,9 +72,9 @@ public:
 
   [[nodiscard]] constexpr decltype(auto)
   operator[](index_type i) const noexcept {
-    const auto next = [&]<std::size_t... K>(std::index_sequence<K...>) {
+    const auto next = index_apply<Depth>([&]<std::size_t... K>() {
       return std::array<index_type, Depth + 1>{prefix_[K]..., i};
-    }(std::make_index_sequence<Depth>{});
+    });
 
     if constexpr (Depth + 1 == kRank) {
       return tensor_->at_index(next);
@@ -158,19 +159,30 @@ public:
         *this, std::array<index_type, 1>{i});
   }
 
-  // The proxy's terminal step.
+  // The proxy's terminal step.  The two value categories differ only in the
+  // constness of data_, so P0847 writes it once; DDX_DEDUCING_THIS=off is a
+  // supported configuration, hence the pair below it.
+#if DDX_DEDUCING_THIS
+  [[nodiscard]] constexpr decltype(auto)
+  at_index(DDX_SELF, const std::array<index_type, Ext::rank()> &idx) noexcept {
+    return index_apply<Ext::rank()>([&]<std::size_t... K>() -> decltype(auto) {
+      return self.data_[static_cast<std::size_t>(kMapping(idx[K]...))];
+    });
+  }
+#else
   [[nodiscard]] constexpr reference
   at_index(const std::array<index_type, Ext::rank()> &idx) noexcept {
-    return [&]<std::size_t... K>(std::index_sequence<K...>) -> reference {
+    return index_apply<Ext::rank()>([&]<std::size_t... K>() -> reference {
       return data_[static_cast<std::size_t>(kMapping(idx[K]...))];
-    }(std::make_index_sequence<Ext::rank()>{});
+    });
   }
   [[nodiscard]] constexpr const_reference
   at_index(const std::array<index_type, Ext::rank()> &idx) const noexcept {
-    return [&]<std::size_t... K>(std::index_sequence<K...>) -> const_reference {
+    return index_apply<Ext::rank()>([&]<std::size_t... K>() -> const_reference {
       return data_[static_cast<std::size_t>(kMapping(idx[K]...))];
-    }(std::make_index_sequence<Ext::rank()>{});
+    });
   }
+#endif
 
   [[nodiscard]] friend constexpr bool operator==(const md_tensor &a,
                                                  const md_tensor &b) noexcept {

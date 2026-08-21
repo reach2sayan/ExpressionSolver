@@ -48,11 +48,11 @@ protected:
 
   // c0+c1ε+c2ε^2+..., zeros included, so the order stays legible.
   void series(std::format_context &ctx, const auto &coeffs) const {
-    for (std::size_t k = 0; k != std::ranges::size(coeffs); ++k) {
+    for (const auto [k, c] : std::views::enumerate(coeffs)) {
       if (k > 0) {
         put(ctx, "+");
       }
-      term(ctx, coeffs[k]);
+      term(ctx, c);
       if (k == 1) {
         put(ctx, eps);
       } else if (k > 1) {

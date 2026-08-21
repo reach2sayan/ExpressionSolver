@@ -2,21 +2,11 @@
 #include "expr/values.hpp"
 // CFixedString appears only as a constrained-auto NTTP placeholder, which
 // include-cleaner does not count as a reference -- hence the pragma.
+#include "expr/symbol.hpp"
 #include "util/fixed_string.hpp" // IWYU pragma: keep
-#include "util/mpl.hpp"
 #include <type_traits>
 
 namespace ddx::impl {
-
-namespace mp = ddx::impl::mpl;
-
-template <std::size_t N, typename F>
-  requires detail::index_invocable_v<F, std::make_index_sequence<N>>
-constexpr void static_for(F &&f) noexcept {
-  [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-    (std::forward<F>(f).template operator()<Is>(), ...);
-  }(std::make_index_sequence<N>{});
-}
 
 template <typename T> inline constexpr bool is_variable_v = false;
 template <Numeric T, CFixedString auto C, bool F>
@@ -26,7 +16,8 @@ template <typename T>
 concept CVariable = is_variable_v<std::remove_cvref_t<T>>;
 
 // Freezing a symbol: same leaf, same value lookup, zero derivative.  A pure
-// type transform, which is what keeps the symbolic Jacobian made of empty types.
+// type transform, which is what keeps the symbolic Jacobian made of empty
+// types.
 template <CVariable T> struct frozen_variable;
 template <Numeric T, CFixedString auto C, bool F>
 struct frozen_variable<Variable<T, C, F>> {
@@ -141,8 +132,9 @@ make_all_constant_except(const Variable<T, symbol, F> &v) noexcept {
 template <CFixedString auto symbol, Numeric T, CFixedString auto othersymbol,
           bool F>
   requires(symbol != othersymbol)
-constexpr auto make_all_constant_except(
-    const Variable<T, othersymbol, F> &) noexcept -> Variable<T, othersymbol, true> {
+constexpr auto
+make_all_constant_except(const Variable<T, othersymbol, F> &) noexcept
+    -> Variable<T, othersymbol, true> {
   return {};
 }
 
@@ -163,12 +155,14 @@ make_all_constant_except(const Expression<Op, C...> &expr) noexcept
       expr.expressions());
 }
 
-// Canonical symbol order: alphabetical by name.
-inline constexpr auto symbol_less = []<CSymbol A, CSymbol B>() consteval {
-  return A::name < B::name;
-};
-template <CSymbolList List>
-using sort_tuple_t = mp::mp_sort<List, symbol_less>;
+// Canonical symbol order: alphabetical by name.  A metafunction rather than a
+// comparison object because that is what mp_sort takes.
+template <CSymbol A, CSymbol B>
+struct symbol_less : std::bool_constant<(A::name < B::name)> {};
+
+// mp_sort is stable, which is what keeps a tie -- two symbols of the same name,
+// which mp_unique below then collapses -- from reordering the rest.
+template <CSymbolList List> using sort_tuple_t = mp::mp_sort<List, symbol_less>;
 
 template <CSymbolList List>
 using unique_tuple_t = mp::mp_unique<sort_tuple_t<List>>;
@@ -202,7 +196,8 @@ template <CExpression Expr>
 using expr_symbols_t = extract_symbols_from_expr_t<std::remove_cvref_t<Expr>>;
 
 template <CExpression Expr>
-inline constexpr std::size_t expr_arity_v = mp::mp_size(expr_symbols_t<Expr>{});
+inline constexpr std::size_t expr_arity_v =
+    mp::mp_size<expr_symbols_t<Expr>>::value;
 
 } // namespace detail
 

@@ -16,8 +16,8 @@ jobs:
         include:
           - os: ubuntu-latest
             build_type: Release
-            c_compiler: clang
-            cpp_compiler: clang++
+            c_compiler: clang-20
+            cpp_compiler: clang++-20
           - os: ubuntu-latest
             build_type: Release
             c_compiler: gcc-14
@@ -33,23 +33,33 @@ jobs:
       # g++-14, not the image's default g++/libstdc++: the library floor is
       # libstdc++ 14 (std::ranges::to), and clang on Linux compiles against the
       # newest libstdc++ installed, so this line is what feeds both Linux jobs.
+      #
+      # clang-20, not the image's default clang-18: libstdc++ gates <expected>
+      # on __cpp_concepts >= 202002L, and Clang first defines that in 19.
       - name: Install compilers (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang gcc-14 g++-14
+          sudo apt-get install -y clang-20 gcc-14 g++-14
 
-      # The library depends on nothing but the standard library, and the
-      # constexpr core could not use a matrix package in constant evaluation
-      # anyway.  Standard headers carry no '/', so any angle-include with a path
-      # is a third-party leak; the vendored mdspan copy is the one exception.
+      # The core depends on the standard library and Boost.Mp11, the header-only
+      # type-list vocabulary the symbol lists are built out of, declared on
+      # ddx::ddx and found again by ddx-config.cmake.  Standard headers carry no
+      # '/', so any other angle-include with a path is a third-party leak; the
+      # vendored mdspan copy is the one exception.
       # Recursive — the headers live in subdirectories.
-      - name: Headers stay dependency-free
+      #
+      # include/rt/ is scoped out of that rule and given its own: it is the
+      # runtime expression graph, a separate opt-in target (ddx::rt) whose
+      # dependencies are declared, and it may reach for boost and nothing
+      # else.  The core must not depend on it in either direction.
+      - name: Header dependencies stay declared
         if: runner.os == 'Linux'
         shell: bash
         run: |
           angled=$(grep -rnE '#[[:space:]]*include[[:space:]]*<[^>]*/' include --include='*.hpp' \
-                   | grep -v third_party || true)
+                   | grep -v third_party | grep -v '^include/rt/' \
+                   | grep -v '<boost/mp11/' || true)
           # A quoted include is one of ours and must resolve inside include/;
           # one that does not is a bundled dependency under another spelling.
           quoted=$( { grep -rnE '#[[:space:]]*include[[:space:]]*"' include --include='*.hpp' \
@@ -58,13 +68,22 @@ jobs:
                        h=${rest#*\"}; h=${h%%\"*}
                        [ -e "$(dirname "$f")/$h" ] || [ -e "include/$h" ] || echo "$f:$n: $h"
                      done)
-          if [ -n "$angled$quoted" ]; then
+          # ddx::rt's declared dependencies are Boost.Graph and Boost.DynamicBitset;
+          # anything else is a leak.
+          rt=$(grep -rnE '#[[:space:]]*include[[:space:]]*<[^>]*/' include/rt --include='*.hpp' \
+               | grep -vE '<boost/' || true)
+          # The core must never reach into rt/.
+          core=$(grep -rnE '#[[:space:]]*include[[:space:]]*"rt/' include --include='*.hpp' \
+                 | grep -v '^include/rt/' || true)
+          if [ -n "$angled$quoted$rt$core" ]; then
             echo "a third-party header leaked into include/:"
             [ -n "$angled" ] && echo "$angled"
             [ -n "$quoted" ] && echo "$quoted"
+            [ -n "$rt" ] && echo "include/rt/ may depend on boost only:" && echo "$rt"
+            [ -n "$core" ] && echo "the core must not depend on rt/:" && echo "$core"
             exit 1
           fi
-          echo "include/ depends on the standard library only"
+          echo "include/ depends on the standard library and Boost.Mp11 only (rt/: plus boost)"
 
       - name: Set build directory
         id: strings

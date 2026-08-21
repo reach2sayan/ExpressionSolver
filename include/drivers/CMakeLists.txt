@@ -6,10 +6,10 @@
 # (e) `coupling` the compile-time sparsity analysis that decides how few backward sweeps a graph Hessian needs.
 # (d) `common` is the vocabulary the two driver files share so they need not know about each other.
 target_sources(ddx INTERFACE
-        ${CMAKE_CURRENT_LIST_DIR}/common.hpp
-        ${CMAKE_CURRENT_LIST_DIR}/numeric.hpp
-        ${CMAKE_CURRENT_LIST_DIR}/symbolic.hpp
-        ${CMAKE_CURRENT_LIST_DIR}/hessian.hpp
-        ${CMAKE_CURRENT_LIST_DIR}/seeded_energy.hpp
-        ${CMAKE_CURRENT_LIST_DIR}/coupling.hpp
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/common.hpp>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/numeric.hpp>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/symbolic.hpp>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/hessian.hpp>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/seeded_energy.hpp>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/coupling.hpp>
 )

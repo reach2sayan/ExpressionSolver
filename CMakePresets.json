@@ -1,0 +1,224 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "with-rt",
+      "hidden": true,
+      "cacheVariables": {
+        "DDX_BUILD_RT": "ON"
+      }
+    },
+    {
+      "name": "with-jit",
+      "hidden": true,
+      "inherits": "with-rt",
+      "cacheVariables": {
+        "DDX_BUILD_JIT": "ON",
+        "LLVM_DIR": "/usr/lib/llvm-20/lib/cmake/llvm"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "no-exceptions",
+      "hidden": true,
+      "cacheVariables": {
+        "DDX_NO_EXCEPTIONS": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "The header-only core, no third-party dependencies.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "The header-only core, optimised.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "RelWithDebInfo",
+      "description": "Optimised with debug info; what the benchmarks are profiled under.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "debug_with_rt",
+      "displayName": "Debug + RT",
+      "description": "Runtime graph on the interpreter. Header-only Boost and no LLVM, so it configures anywhere the JIT presets do not.",
+      "inherits": [
+        "with-rt",
+        "debug"
+      ]
+    },
+    {
+      "name": "release_with_rt",
+      "displayName": "Release + RT",
+      "description": "Runtime graph on the interpreter, optimised. The reference the JIT is checked against, and the only path for a graph over a scalar the JIT cannot emit.",
+      "inherits": [
+        "with-rt",
+        "release"
+      ]
+    },
+    {
+      "name": "debug_with_jit",
+      "displayName": "Debug + JIT",
+      "description": "Runtime graph and LLVM backend. Kernels compile at -O1, which still vectorises.",
+      "inherits": [
+        "with-jit",
+        "debug"
+      ]
+    },
+    {
+      "name": "release_with_jit",
+      "displayName": "Release + JIT",
+      "description": "Runtime graph and LLVM backend. Kernels compile at -O3.",
+      "inherits": [
+        "with-jit",
+        "release"
+      ]
+    },
+    {
+      "name": "debug_with_jit_static",
+      "displayName": "Debug + JIT, static archive",
+      "description": "ddx::jit as a static archive instead of the default shared library. LLVM ends up inside every consumer, which is the arrangement this preset exists to keep building now that it is not what the plain JIT presets give.",
+      "inherits": [
+        "with-jit",
+        "debug"
+      ],
+      "cacheVariables": {
+        "DDX_JIT_STATIC": "ON"
+      }
+    },
+    {
+      "name": "debug_no_exceptions",
+      "displayName": "Debug + JIT, no exceptions",
+      "description": "The whole tree built -fno-exceptions. Nothing in ddx throws, so this is what keeps that true: the headers, the runtime graph and the LLVM backend all have to compile and pass here.",
+      "inherits": [
+        "no-exceptions",
+        "with-jit",
+        "debug"
+      ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "relwithdebinfo"
+    },
+    {
+      "name": "debug_with_rt",
+      "configurePreset": "debug_with_rt"
+    },
+    {
+      "name": "release_with_rt",
+      "configurePreset": "release_with_rt"
+    },
+    {
+      "name": "debug_with_jit",
+      "configurePreset": "debug_with_jit"
+    },
+    {
+      "name": "release_with_jit",
+      "configurePreset": "release_with_jit"
+    },
+    {
+      "name": "debug_with_jit_static",
+      "configurePreset": "debug_with_jit_static"
+    },
+    {
+      "name": "debug_no_exceptions",
+      "configurePreset": "debug_no_exceptions"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "configurePreset": "release"
+    },
+    {
+      "name": "relwithdebinfo",
+      "inherits": "base",
+      "configurePreset": "relwithdebinfo"
+    },
+    {
+      "name": "debug_with_rt",
+      "inherits": "base",
+      "configurePreset": "debug_with_rt"
+    },
+    {
+      "name": "release_with_rt",
+      "inherits": "base",
+      "configurePreset": "release_with_rt"
+    },
+    {
+      "name": "debug_with_jit",
+      "inherits": "base",
+      "configurePreset": "debug_with_jit"
+    },
+    {
+      "name": "release_with_jit",
+      "inherits": "base",
+      "configurePreset": "release_with_jit"
+    },
+    {
+      "name": "debug_with_jit_static",
+      "inherits": "base",
+      "configurePreset": "debug_with_jit_static"
+    },
+    {
+      "name": "debug_no_exceptions",
+      "inherits": "base",
+      "configurePreset": "debug_no_exceptions"
+    }
+  ]
+}

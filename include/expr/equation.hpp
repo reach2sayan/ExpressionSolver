@@ -4,8 +4,8 @@
 #include "expr/bound.hpp"
 #include "expr/format.hpp"
 #include "expr/simplify.hpp"
+#include "expr/symbol.hpp"
 #include "util/config.hpp"
-#include "util/mpl.hpp"
 #include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>
@@ -15,8 +15,6 @@
 #include <utility>
 
 namespace ddx::impl {
-
-namespace mp = ddx::impl::mpl;
 
 namespace detail {
 // Evaluate a tuple of expressions at one point, in canonical symbol order.
@@ -29,15 +27,16 @@ constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
 namespace detail {
 
 // The expressions are final by the time an Equation is built, so this is where
-// commutative operands get ordered; folding already happened as they were built.
+// commutative operands get ordered; folding already happened as they were
+// built.
 template <CExpression E>
 using canonical_t = decltype(canonicalise(std::declval<const E &>()));
 
 template <CSymbol... Syms, CExpression Expr>
 constexpr auto make_derivatives(mp::mp_list<Syms...>,
                                 const Expr &expr) noexcept {
-  return std::tuple(
-      canonicalise(make_all_constant_except<Syms::value>(expr).derivative())...);
+  return std::tuple(canonicalise(
+      make_all_constant_except<Syms::value>(expr).derivative())...);
 }
 
 template <CSymbol... Syms, CExpression... Exprs>
@@ -63,7 +62,7 @@ public:
                                  extract_symbols_from_expr_t<TRest>...>>;
 
   static constexpr std::size_t output_dim = 1 + sizeof...(TRest);
-  static constexpr std::size_t input_dim = mp::mp_size(symbols{});
+  static constexpr std::size_t input_dim = mp::mp_size<symbols>::value;
   static constexpr std::size_t number_of_derivatives = input_dim;
 
 private:
@@ -106,6 +105,9 @@ private:
     return J;
   }
 
+  // Forward over reverse: the dual level carries the tangent seed while the
+  // sweep carries the adjoints, so one sweep is an exact Hessian-vector
+  // product.  Ref: Pearlmutter, Neural Computation 6(1) (1994) 147.
   [[nodiscard]] constexpr auto hessian_forward_over_reverse(
       const std::array<dual_scalar_t<value_type>, input_dim> &values)
       const noexcept
@@ -140,7 +142,8 @@ private:
 
   template <std::size_t Order>
   [[nodiscard]] constexpr auto equation_derivative_tensor_impl(
-      std::array<scalar_base_t<value_type>, input_dim> values) const noexcept
+      const std::array<scalar_base_t<value_type>, input_dim> &values)
+      const noexcept
     requires(input_dim > 0 && Order > 0)
   {
     using S = scalar_base_t<value_type>;
@@ -152,7 +155,8 @@ private:
       const auto seeds = detail::mixed_seeds<S, Order>(values, idx);
 
       static_for<output_dim>([&]<std::size_t OUT>() {
-        U val = std::get<OUT>(expressions).template eval_seeded<symbols>(seeds);
+        const U val =
+            std::get<OUT>(expressions).template eval_seeded<symbols>(seeds);
         const auto stacked = [&]<std::size_t... K>(std::index_sequence<K...>) {
           return std::array<std::size_t, Order + 1>{OUT, idx[K]...};
         }(std::make_index_sequence<Order>{});
@@ -186,77 +190,102 @@ public:
     return expressions;
   }
   // Built on demand: storing it would instantiate the whole symbolic Jacobian
-  // every time Equation<E> is named, which the reverse-mode members never touch.
+  // every time Equation<E> is named, which the reverse-mode members never
+  // touch.
   [[nodiscard]] constexpr auto jacobian_rows() const noexcept {
     return detail::make_jac_rows(expressions, symbols{});
   }
 
-  // Every numeric member takes a point in any spelling eval() accepts.
+  // Every numeric member takes a point in any spelling eval() accepts.  A
+  // spelling whose length is only known at run time -- a range -- answers with
+  // result<T>; every other spelling is counted by a static_assert and answers
+  // with T.  detail::with_point is the one place that fork lives.
   template <Numeric U = value_type>
-  [[nodiscard]] static constexpr auto point(const CEvalArg auto &...args) noexcept {
+  [[nodiscard]] static constexpr auto
+  point(const CEvalArg auto &...args) noexcept {
     return detail::make_point<symbols, U, input_dim>(args...);
   }
 
-  [[nodiscard]] constexpr auto evaluate(const CEvalArg auto &...args) const noexcept {
-    const auto vals = point(args...);
-    if constexpr (output_dim == 1) {
-      return std::get<0>(expressions).template eval_seeded<symbols>(vals);
-    } else {
-      return std::apply(
-          [&](const auto &...es) {
-            return detail::eval_all<symbols>(vals, es...);
-          },
-          expressions);
-    }
+  [[nodiscard]] constexpr auto
+  evaluate(const CEvalArg auto &...args) const noexcept {
+    return detail::with_point<symbols, value_type, input_dim>(
+        [this](const auto &vals) {
+          if constexpr (output_dim == 1) {
+            return std::get<0>(expressions).template eval_seeded<symbols>(vals);
+          } else {
+            return std::apply(
+                [&](const auto &...es) {
+                  return detail::eval_all<symbols>(vals, es...);
+                },
+                expressions);
+          }
+        },
+        args...);
   }
 
   // Symbolic evaluates the stored partial trees; Reverse never builds them.
   template <DiffMode Mode = DiffMode::Reverse>
-  [[nodiscard]] constexpr auto gradient(const CEvalArg auto &...args) const noexcept
+  [[nodiscard]] constexpr auto
+  gradient(const CEvalArg auto &...args) const noexcept
     requires(output_dim == 1 && input_dim > 0)
   {
-    const auto vals = point(args...);
-    if constexpr (Mode == DiffMode::Symbolic) {
-      const auto rows = jacobian_rows();
-      const auto &row = std::get<0>(rows);
-      std::array<value_type, input_dim> grads{};
-      static_for<input_dim>([&]<std::size_t I>() {
-        grads[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
-      });
-      return detail::strip_seed(grads);
-    } else {
-      return detail::reverse_mode_gradient(std::get<0>(expressions), vals);
-    }
+    return detail::with_point<symbols, value_type, input_dim>(
+        [this](const auto &vals) {
+          if constexpr (Mode == DiffMode::Symbolic) {
+            const auto rows = jacobian_rows();
+            const auto &row = std::get<0>(rows);
+            std::array<value_type, input_dim> grads{};
+            static_for<input_dim>([&]<std::size_t I>() {
+              grads[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
+            });
+            return detail::strip_seed(grads);
+          } else {
+            return detail::reverse_mode_gradient(std::get<0>(expressions),
+                                                 vals);
+          }
+        },
+        args...);
   }
 
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
   // canonical symbol order.  Both spellings; see DDX_KEYED_ACCESSORS.
   DDX_KEYED_ACCESSORS(std::size_t N, std::size_t N, N, idx_t<N>,
-                       requires(output_dim == 1 && N <= input_dim))
+                      requires(output_dim == 1 && N <= input_dim))
 
   template <DiffMode Mode = DiffMode::Reverse>
-  [[nodiscard]] constexpr auto jacobian(const CEvalArg auto &...args) const noexcept
+  [[nodiscard]] constexpr auto
+  jacobian(const CEvalArg auto &...args) const noexcept
     requires(input_dim > 0)
   {
-    if constexpr (Mode == DiffMode::Symbolic) {
-      return jacobian_symbolic(point(args...));
-    } else {
-      return jacobian_reverse_mode(point(args...));
-    }
+    return detail::with_point<symbols, value_type, input_dim>(
+        [this](const auto &vals) {
+          if constexpr (Mode == DiffMode::Symbolic) {
+            return jacobian_symbolic(vals);
+          } else {
+            return jacobian_reverse_mode(vals);
+          }
+        },
+        args...);
   }
 
   // The leading output axis only appears with more than one output, here and in
   // derivative_tensor below.
-  template <DiffMode Mode = DiffMode::Reverse>
-  [[nodiscard]] constexpr auto hessian(const CEvalArg auto &...args) const noexcept
-    requires(Mode == DiffMode::Reverse && DualLike<value_type> && input_dim > 0)
+  // No DiffMode: there is only the reverse path.  A symbolic second derivative
+  // would be derivative_tensor<2> with extra steps, and it is the colouring
+  // that makes this worth having over that.
+  [[nodiscard]] constexpr auto
+  hessian(const CEvalArg auto &...args) const noexcept
+    requires(DualLike<value_type> && input_dim > 0)
   {
-    const auto vals = point<dual_scalar_t<value_type>>(args...);
-    if constexpr (output_dim == 1) {
-      return detail::reverse_mode_hessian(std::get<0>(expressions), vals);
-    } else {
-      return hessian_forward_over_reverse(vals);
-    }
+    return detail::with_point<symbols, dual_scalar_t<value_type>, input_dim>(
+        [this](const auto &vals) {
+          if constexpr (output_dim == 1) {
+            return detail::reverse_mode_hessian(std::get<0>(expressions), vals);
+          } else {
+            return hessian_forward_over_reverse(vals);
+          }
+        },
+        args...);
   }
 
   template <std::size_t Order>
@@ -264,13 +293,16 @@ public:
   derivative_tensor(const CEvalArg auto &...args) const noexcept
     requires(input_dim > 0 && Order > 0)
   {
-    const auto vals = point<scalar_base_t<value_type>>(args...);
-    if constexpr (output_dim == 1) {
-      return detail::derivative_tensor_impl<Order>(std::get<0>(expressions),
-                                                   vals);
-    } else {
-      return equation_derivative_tensor_impl<Order>(vals);
-    }
+    return detail::with_point<symbols, scalar_base_t<value_type>, input_dim>(
+        [this](const auto &vals) {
+          if constexpr (output_dim == 1) {
+            return detail::derivative_tensor_impl<Order>(
+                std::get<0>(expressions), vals);
+          } else {
+            return equation_derivative_tensor_impl<Order>(vals);
+          }
+        },
+        args...);
   }
 
   // One variable, one Taylor sweep: a plain number, not a one-entry tensor.
@@ -316,7 +348,8 @@ struct std::formatter<ddx::impl::Equation<Ts...>, char> {
     return ctx.begin() + static_cast<std::ptrdiff_t>(spec_.size());
   }
 
-  auto format(const ddx::impl::Equation<Ts...> &eq, std::format_context &ctx) const {
+  auto format(const ddx::impl::Equation<Ts...> &eq,
+              std::format_context &ctx) const {
     using Eq = ddx::impl::Equation<Ts...>;
     const std::string one = std::format("{{:{}}}", spec_);
     auto out = ctx.out();
@@ -332,7 +365,8 @@ struct std::formatter<ddx::impl::Equation<Ts...>, char> {
         if constexpr (J > 0) {
           out = std::format_to(out, ", ");
         }
-        out = std::vformat_to(out, one, std::make_format_args(std::get<J>(row)));
+        out =
+            std::vformat_to(out, one, std::make_format_args(std::get<J>(row)));
       });
       out = std::format_to(out, "\n");
     });
@@ -342,5 +376,3 @@ struct std::formatter<ddx::impl::Equation<Ts...>, char> {
 private:
   std::string_view spec_{};
 };
-
-

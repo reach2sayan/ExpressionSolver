@@ -29,24 +29,34 @@ auto g  = Equation{f}.gradient(1.0, 2.0);   // {∂f/∂x, ∂f/∂y}
 5. [Return types](#return-types)
 6. [Getting the most speed out of it](#getting-the-most-speed-out-of-it)
 7. [Compile-time use](#compile-time-use)
-8. [Building the project](#building-the-project)
-9. [Cheat sheet](#cheat-sheet)
-10. [Diagnostics](#diagnostics)
+8. [Runtime expressions](#runtime-expressions)
+9. [Thread safety](#thread-safety)
+10. [Building the project](#building-the-project)
+11. [Cheat sheet](#cheat-sheet)
+12. [Diagnostics](#diagnostics)
+13. [Further reading](#further-reading)
 
 ---
 
 ## Requirements and setup
 
-- A C++23 compiler with a C++23 standard library: **GCC 14+**, or **Clang 17+**
-  over libstdc++ 14+ / libc++ 17+. MSVC (VS 2022, `/std:c++latest`) is supported.
-- **CMake 3.20+** if you build through CMake.
+- A C++23 compiler with a C++23 standard library: **GCC 14+**, **Clang 19+**
+  over libstdc++ 14+, or **Clang 17+** over libc++ 17+. MSVC (VS 2022,
+  `/std:c++latest`) is supported. Clang before 19 defines `__cpp_concepts` as
+  `201907L`, below what libstdc++ asks of it before it will offer `<expected>`.
+- **CMake 3.21+** if you build through CMake.
 
 C++23 is a hard requirement — the library uses `constexpr std::bitset` inside
 `consteval` functions and the multidimensional subscript `t[i, j, k]`.
 
-The library is header-only and has no third-party dependencies. A reference
-implementation of `std::mdspan` is vendored under `include/md/third_party/` and
-is used automatically when your toolchain has no complete `<mdspan>`.
+The library is header-only, and so is what it depends on: Boost.Mp11, which the
+build fetches at a pinned version, and nothing else. Mp11 is the type-list
+vocabulary the symbol lists are built out of — header-only and standalone, so
+this is a fetch and not a link, and no other part of Boost comes with it.
+Configuring therefore wants a network the first time, or a warm `.deps`. A
+reference implementation of `std::mdspan` is vendored under
+`include/md/third_party/` and is used automatically when your toolchain has no
+complete `<mdspan>`.
 
 ### Using it
 
@@ -56,6 +66,29 @@ With CMake, link the interface target — it puts `include/` on your include pat
 add_subdirectory(ddx)
 target_link_libraries(my_app PRIVATE ddx::ddx)   # or: ddx
 ```
+
+Three targets exist, and which one you link decides how much of the library you get:
+`ddx::ddx` is the header-only core, `ddx::rt` adds
+[runtime expressions](#runtime-expressions), and `ddx::jit` is `ddx::rt` with the
+batch calls compiled rather than interpreted. `ddx::jit` is the only one that is a
+library rather than a set of headers.
+
+An installed copy works the same way, and is what a built `ddx::jit` wants — a shared
+library is worth installing where a header is only worth including:
+
+```sh
+cmake --install build/release_with_jit --prefix /opt/ddx
+```
+
+```cmake
+find_package(ddx CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE ddx::jit)   # or ddx::rt, or ddx::ddx
+```
+
+The package exports whichever of the three the build produced, and `ddx-config.cmake`
+finds Boost and LLVM again where they are needed. An installed `ddx::jit` was compiled
+against one LLVM major version and says so: configuring against a different one fails
+there rather than at link time.
 
 Then include the public header:
 
@@ -98,6 +131,10 @@ The public API is macro-free, so nothing of the library sits at global scope.
 Everything that deduces a type from a value — `constant(v)`, `var_of<"x">(v)`,
 `dual_var_of<"x">(v)` — is an ordinary function template, and obeys namespaces
 like the rest.
+
+`ddx::rt` is deliberately not among them. Its one public name is `equation`, it is
+opt-in, it carries dependencies, and `ddx.hpp` does not reach for it. See
+[Runtime expressions](#runtime-expressions).
 
 ---
 
@@ -218,9 +255,11 @@ in.** For `f(w, x, y, z)` the positional form expects `w` first — and for
 
 The positional and range forms check the count at compile time, so a missing or
 extra value is a compile error. The named form binds by name and is immune to
-ordering entirely — prefer them when the symbol set is large. A
-non-sized range that runs short throws `std::out_of_range` (a compile error
-during constant evaluation).
+ordering entirely — prefer them when the symbol set is large. A non-sized range
+brings its length with it rather than in its type, so a short one is the single
+wrong point that cannot be caught at compile time: it comes back as
+`ddx::errc::short_point` instead (and is a compile error during constant
+evaluation).
 
 ### A compile-time map
 
@@ -490,23 +529,21 @@ everything else on this page put together.
 | the K-th derivative of one variable | `univariate_derivative<K>(x0)` | one Taylor sweep, O(K²) |
 | all K-th partials of n variables | `derivative_tensor<K>(pt)` | one sweep per distinct K-index |
 
-Reverse is the default for a reason, but it is not a clean win at every size: on
-a three-symbol system here, `jacobian<DiffMode::Symbolic>` runs in 7.7 ns against
-12.5 ns for `jacobian<DiffMode::Reverse>`, because at that width the folded
-partial trees are cheaper than a sweep. Reverse pulls away as n grows. If n is
-small and the call is hot, measure both — it is a one-word change.
+Reverse is the default for a reason, but it is not a clean win at every size: on a
+system of two or three symbols the folded partial trees are cheaper than a sweep, and
+symbolic wins. Reverse pulls away as n grows. If n is small and the call is hot,
+measure both — it is a one-word change.
 
 **`hessian()` reads your problem's sparsity off the type, for free.** Two
 variables that never appear in the same second-derivative term can be seeded in
 the *same* backward sweep, so the cost is one sweep per *colour* of the coupling
 pattern rather than one per variable — and the pattern is computed from the
 expression type at compile time, so there is nothing to switch on and nothing to
-pay at run time. On an 8-variable chain (each variable coupled only to its
-neighbours, plus one long-range term) that is 5 sweeps instead of 8, measured
-here at **1.7–1.9x** faster end to end. A dense problem colours in n and costs
-exactly what it always did. The wider and more structured the problem, the more
-this wins — so prefer `hessian()` over `derivative_tensor<2>()` whenever you can
-declare the symbols `dual`.
+pay at run time. A chain in which each variable couples only to its neighbours
+colours in far fewer sweeps than it has variables; a dense problem colours in n, which
+is one sweep per variable and no saving at all. The wider and more structured the
+problem, the more this wins — so prefer `hessian()` over `derivative_tensor<2>()`
+whenever you can declare the symbols `dual`.
 
 **Prefer `univariate_derivative<K>` whenever the function really has one
 variable.** `derivative_tensor<K>` builds a rank-K tensor to hold a single
@@ -528,14 +565,22 @@ arguments cost exactly the same — the reordering is resolved at compile time.
 
 **Compile with the flags the project already sets.** `-ffp-contract=fast` and
 `-fno-math-errno` (`DDX_FP_FLAGS=ON`, the default) are both worth having.
-`-ffast-math` is **not**: it was measured at 19% *slower* here, and it changes
-derivative values. `-march=native` (`ENABLE_NATIVE_ARCH=ON`) is on by default.
+`-ffast-math` is **not**: it changes derivative values, and it does not buy speed
+here either. `-march=native` (`ENABLE_NATIVE_ARCH=ON`) is on by default.
 
 **Know where the time actually goes.** For a gradient of anything with `exp`,
 `log`, `sin` or `pow` in it, the libm call dominates — around three quarters of
 the total. Reducing the number of transcendental calls in the expression is the
 optimisation with the most left in it; shaving arithmetic nodes around them is
 not.
+
+**Many points at once is a different question.** Everything above is one point per
+call. If what you have is thousands of them, the libm call that dominates can be
+vectorised, which the compile-time path cannot do for you — see
+[Runtime expressions](#runtime-expressions) for the batch calls.
+
+The measurements behind all of this, and the workloads they were taken on, are in
+[BENCHMARKS.md](benchmarks/BENCHMARKS.md).
 
 **Move it to compile time if the point is known.** Every entry point is
 `constexpr`; see the next section.
@@ -565,6 +610,188 @@ and a value read from a file at run time.
 
 ---
 
+## Runtime expressions
+
+Everything above needs the expression written in source, because the tree lives in
+the type. An expression assembled while the program runs — terms looped over from a
+data file, a coupling read from a configuration — has no type to live in, so it is
+built into a graph instead.
+
+This half is opt-in: build with `DDX_BUILD_RT` (or `DDX_BUILD_JIT`, which implies it)
+and link `ddx::rt` or `ddx::jit`. `ddx::rt::equation` is then the entry point, and what
+it hands back is an `Equation` — the same class, the same member names, the same
+canonical symbol order.
+
+```cpp
+#include "rt/equation.hpp"
+
+const auto eq = *ddx::rt::equation([] {
+  const auto x = ddx::rt::var("x");
+  const auto y = ddx::rt::var("y");
+  return exp(x) * sin(y);
+});
+
+eq.arity();                   // 2
+eq.symbols();                 // {"x", "y"}
+*eq.evaluate(1.0, 2.0);       // f(1, 2)
+*eq.gradient(1.0, 2.0);       // {∂f/∂x, ∂f/∂y}, as a std::vector
+```
+
+Symbols are named inside the callback, with `ddx::rt::var(name)` taking a string
+rather than a template argument — that is the whole point of the runtime path, since
+a name read from a file is not a template argument. The callback returns the
+expression; return several and you get a system, exactly as passing several
+expressions to `Equation` does:
+
+```cpp
+const auto sys = *ddx::rt::equation([] {
+  const auto x = ddx::rt::var("x");
+  const auto y = ddx::rt::var("y");
+  return std::array{x * y + sin(x), exp(x) - y * y};
+});
+
+*sys.jacobian(1.3, 0.7);      // row-major, m × n
+```
+
+The arena those symbols live in is owned by the `Equation`, so one built this way can
+be returned from a function and stored:
+
+```cpp
+auto make = [](double c) {
+  return *ddx::rt::equation([c] {
+    const auto x = ddx::rt::var("x");
+    return c * x * x;
+  });
+};
+const auto eq = make(3.0);    // still valid; it owns everything it needs
+```
+
+### Every call answers with `result`
+
+The symbol list of a runtime equation exists only while the program runs, so the
+count of a point cannot be checked while it compiles. Every call therefore answers
+with `result<T>` — `std::expected<T, ddx::error>` — including the positional
+spelling, and including `equation()` itself:
+
+```cpp
+const auto eq = ddx::rt::equation([] { return ddx::rt::var("x") * 2.0; });
+if (!eq) {
+  std::println("{}", ddx::message(eq.error().code));
+}
+
+const auto g = eq->gradient(1.0, 2.0);   // two values for one symbol
+if (!g) {
+  // ddx::errc::wrong_arity
+}
+```
+
+The `*` in the examples above is that check skipped, which is fine in a program that
+built the expression itself and wrong in one that read it from a file.
+
+Points come in the same three spellings as everywhere else, and the named form is
+worth more here than anywhere: a runtime symbol list is exactly the case where
+positional order is easy to get wrong.
+
+```cpp
+*eq.gradient(1.3, 0.7);                                  // positional, canonical order
+*eq.gradient(std::array{1.3, 0.7});                      // any input range
+*eq.gradient(named<"y">(0.7), named<"x">(1.3));          // by name
+```
+
+### Batches
+
+The reason to build a graph rather than a tree is that a graph can be compiled, and
+the shape that pays for compiling is a batch. The batch calls take columns — one
+pointer per symbol, one per output, each `n` long — and fill them in one pass:
+
+```cpp
+const std::size_t n = points.size();
+const std::vector<const double *> xs{x_column, y_column};
+const std::vector<double *> values{f_column};
+const std::vector<double *> partials{dx_column, dy_column};
+
+const auto ok = eq.gradient(xs, values, partials, n);
+```
+
+`value_columns()`, `jacobian_columns()` and `hessian_columns()` say how many columns
+each block wants, which is what a caller sizes its buffers by. A count that does not
+match comes back as `ddx::errc::wrong_column_count` rather than reaching the loop —
+an unchecked mismatch there is silent memory corruption.
+
+`hessian` takes a fourth block:
+
+```cpp
+const auto ok = eq.hessian(xs, values, partials, hessians, n);
+```
+
+**Where the JIT comes in.** Built with `DDX_BUILD_JIT`, the batch calls compile the
+graph to native code on first use and vectorise the libm calls that dominate a
+gradient. Built without it, the same calls run the graph through an interpreter,
+under the same signatures and to the same answers. It is a build option, not an API:
+nothing above changes spelling either way, and there is no compiler, kernel or module
+for a caller to hold.
+
+Compiling happens once per equation, on the first batch call that needs it, and the
+result is kept for the rest of that equation's life.
+
+---
+
+## Thread safety
+
+Nothing in the library starts a thread, and nothing in it takes a lock. That is a
+deliberate reading of where the parallelism in this problem actually is: one point per
+call is nanoseconds of work, which no thread pool can pay for, and a batch of thousands
+is the caller's loop and the caller's pool. What the library owes that caller is a
+statement of what may be shared. Here it is.
+
+**The compile-time path is pure.** An `Equation` over `var<"x">` is an empty type and
+every entry point on it reads only its argument, so `evaluate`, `gradient`, `jacobian`,
+`hessian`, `derivative_tensor<K>` and `univariate_derivative<K>` may be called from any
+number of threads on the same expression. There is nothing to synchronise because
+there is nothing shared to begin with.
+
+**Two threads may build runtime equations at once.** `ddx::rt::equation` makes its
+arena current through a thread-local for the duration of the callback, so two threads
+assembling models at the same time never see each other's symbols.
+
+**A runtime `Equation` fills a cache on first use.** The graph it compiles and the
+Hessian workspace it keeps are filled by the first call that needs them, from inside a
+`const` member. So one runtime `Equation` is one thread's unless it has been warmed:
+make the first call of each kind before handing it to several threads, or give each
+thread its own. Warming it is one call, and it is what the first call of a batch does
+anyway.
+
+**A warmed batch is reentrant, and the batch is where parallelism belongs.** The
+compiled code reads no global and writes no static: every intermediate is a register,
+and the only memory it touches is the columns handed to it. So a batch splits by
+slicing the columns, with no synchronisation of any kind:
+
+```cpp
+*eq.gradient(xs, values, partials, 1);   // warm it once, on one thread
+
+const std::size_t chunk = (n + threads - 1) / threads;
+std::vector<std::jthread> pool;
+for (std::size_t t = 0; t < n; t += chunk) {
+  const std::size_t m = std::min(chunk, n - t);
+  pool.emplace_back([&, t, m] {
+    const std::vector<const double *> xs{x.data() + t, y.data() + t};
+    const std::vector<double *> values{f.data() + t};
+    const std::vector<double *> partials{dx.data() + t, dy.data() + t};
+    (void)eq.gradient(xs, values, partials, m);
+  });
+}
+```
+
+Slice on the vector width if the difference matters; the tail of a chunk is a scalar
+remainder, and one per thread rather than one per batch is the only cost of splitting.
+
+**Lifetime needs no rule.** A runtime `Equation` owns the arena its symbols live in and
+the code its batch calls run, so there is nothing to keep alive alongside it and no
+order to destroy things in. It owns that arena rather than sharing it, so it is
+move-only: move it, return it from a function, store it — what it owns goes with it.
+
+---
+
 ## Building the project
 
 ```sh
@@ -572,6 +799,43 @@ cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+Or through the presets:
+
+| Preset | Build type | Runtime graph | JIT |
+|---|---|---|---|
+| `debug` | Debug | — | — |
+| `release` | Release | — | — |
+| `relwithdebinfo` | RelWithDebInfo | — | — |
+| `debug_with_rt` | Debug | yes, interpreted | — |
+| `release_with_rt` | Release | yes, interpreted | — |
+| `debug_with_jit` | Debug | yes | kernels at `-O1` |
+| `release_with_jit` | Release | yes | kernels at `-O3` |
+| `debug_with_jit_static` | Debug | yes | kernels at `-O1`, `ddx::jit` a static archive |
+| `debug_no_exceptions` | Debug | yes | kernels at `-O1`, whole tree `-fno-exceptions` |
+
+The `_with_rt` pair is the runtime graph on the interpreter. It needs only the
+header-only Boost the build fetches, so it configures where the JIT presets do
+not — they are gated on Linux and on an LLVM install. It is also the path a
+graph over anything but `double` takes anyway: the JIT emits machine types, so
+`Equation` over a dual, a Taylor dual or a matrix interprets even in a JIT
+build.
+
+```sh
+cmake --preset release_with_jit
+cmake --build --preset release_with_jit
+ctest --preset release_with_jit
+```
+
+The two JIT presets pin `LLVM_DIR` to the Debian/Ubuntu `llvm-20` layout, because an
+unhinted `find_package(LLVM)` takes whichever it finds first — often too old. Override
+it on the command line, which wins over the preset:
+
+```sh
+cmake --preset release_with_jit -DLLVM_DIR=/opt/llvm-19/lib/cmake/llvm
+```
+
+or keep your own layout in an untracked `CMakeUserPresets.json`.
 
 Benchmarks:
 
@@ -584,6 +848,20 @@ cmake --build build --target benchmarks
 See [BENCHMARKS.md](benchmarks/BENCHMARKS.md) for the suite description and
 results, and `src/main.cpp` for a runnable tour of every entry point.
 
+[Runtime expressions](#runtime-expressions) are off by default, because they are the
+one part of the library whose dependencies are compiled rather than fetched headers:
+
+```sh
+cmake -S . -B build -DDDX_BUILD_JIT=ON -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm
+cmake --build build --target tests_rt tests_jit
+```
+
+`ddx::rt` needs Boost.Graph and Boost.DynamicBitset, fetched at the same pinned
+release as the Mp11 the core already uses. All three are header-only, so no compiled
+Boost library is linked and a system Boost is not consulted. `ddx::jit` adds LLVM
+18–20 — the ORC API is not stable across releases, so the range is checked rather
+than assumed — and is the only part of ddx that produces a library to link.
+
 ### CMake options
 
 | Option | Default | Meaning |
@@ -593,6 +871,11 @@ results, and `src/main.cpp` for a runnable tour of every entry point.
 | `DDX_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
 | `DDX_MDSPAN_MODE` | `auto` | `auto` / `std` / `vendored` — which `mdspan` to bind to |
 | `DDX_DEDUCING_THIS` | `auto` | `auto` / `on` / `off` — accessor spelling (P0847) |
+| `DDX_BUILD_RT` | `OFF` | the runtime expression graph — fetches header-only Boost.Graph and Boost.DynamicBitset |
+| `DDX_BUILD_JIT` | `OFF` | the LLVM JIT backend — implies `DDX_BUILD_RT` |
+| `DDX_JIT_STATIC` | `OFF` | build `ddx::jit` as a static archive rather than a shared library |
+| `DDX_NO_EXCEPTIONS` | `OFF` | build our own targets `-fno-exceptions` |
+| `DDX_INSTALL` | on if top-level | generate the install and `find_package` rules |
 
 `-ffast-math` is not used and is not recommended: it changes derivative values.
 
@@ -637,6 +920,15 @@ sys.derivative_tensor<2>(1.0, 2.0);            // per-output Hessians
 
 // single expression → Equation, implicitly
 Equation eq2 = x * y;                          // no braces needed
+
+// an expression whose shape is not known until the program runs.
+// Same Equation, same members; every call answers with result<T>.
+const auto rt = *ddx::rt::equation([] {
+  const auto a = ddx::rt::var("x");
+  return exp(a) * a;
+});
+*rt.gradient(1.0);                             // std::vector<double>
+(void)rt.gradient(xs, values, partials, n);    // a whole batch in one pass
 ```
 
 ---
@@ -653,11 +945,33 @@ Common compile-time messages and what they mean:
 | `Map: key not present (see keys())` | the map has no such key — `keys()` lists the ones it has |
 | `map: duplicate key` / `Map: duplicate key` | two entries name the same key |
 
-At run time the library throws only where a wrong point would otherwise pass
-silently, and always `std::out_of_range`: an input range that supplies fewer
-values than the expression has symbols.
-Nothing on the evaluation path is `noexcept` for that reason — silently
-differentiating at the wrong point is worse than an exception.
+At run time the library throws nothing at all. The cases a wrong point would
+otherwise pass silently through — an input range shorter than the expression has
+symbols, an index that names no symbol — come back as `std::expected` carrying a
+`ddx::errc`, and `ddx::message(code)` turns one into text. Silently
+differentiating at the wrong point is the thing being avoided; an error a caller
+must look at is how, and it costs no allocation and no unwinding, which is what
+lets the whole tree build `-fno-exceptions`.
+
+---
+
+## Further reading
+
+Worked walkthroughs of the algorithms, each doing one derivative by hand and
+then pointing at the code that does it:
+
+| Document | Covers |
+|---|---|
+| [docs/reverse_mode_by_example.md](docs/reverse_mode_by_example.md) | one gradient in both modes over the same graph, then the Jacobian and the Hessian |
+| [docs/ad_jacobian.md](docs/ad_jacobian.md) | the node protocol and Jacobian computation in full ([PDF](docs/ad_jacobian.pdf)) |
+| [docs/taylor_dual_by_example.md](docs/taylor_dual_by_example.md) | `TaylorDual<S, N>` — jet arithmetic and the recurrences, at `N = 3` |
+| [docs/hyperdual_nth_order_by_example.md](docs/hyperdual_nth_order_by_example.md) | the nested dual's `2ⁿ` component lattice, and why the top slot is the `n`th derivative |
+| [docs/forward_higher_order_by_example.md](docs/forward_higher_order_by_example.md) | the same higher-order derivative down both routes, compared |
+
+[NOTES.md](NOTES.md) has the design decisions that are not obvious from the
+headers. [REFERENCES.md](REFERENCES.md) is the literature: Part I is the
+mathematics — dual numbers, Taylor arithmetic, the complexity results behind the
+mode choices — and Part II is expression-tree optimisation.
 
 ---
 

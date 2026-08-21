@@ -93,23 +93,27 @@ concept CStaticExtents =
 // unparameterised CLayoutPolicy: the interesting layouts here are
 // rank-constrained, so probing them with arbitrary extents would hard-error.
 template <typename M, typename E>
-concept CLayoutMappingOf =
-    CExtents<E> && std::copyable<M> && std::equality_comparable<M> &&
-    requires(const M m) {
-      typename M::extents_type;
-      typename M::index_type;
-      typename M::rank_type;
-      typename M::layout_type;
-      // No `M(e)`: layout_stride's mapping needs the strides too.
-      { m.extents() } -> std::convertible_to<E>;
-      { m.required_span_size() } -> std::convertible_to<typename M::index_type>;
-      { M::is_always_unique() } -> std::same_as<bool>;
-      { M::is_always_exhaustive() } -> std::same_as<bool>;
-      { M::is_always_strided() } -> std::same_as<bool>;
-      { m.is_unique() } -> std::same_as<bool>;
-      { m.is_exhaustive() } -> std::same_as<bool>;
-      { m.is_strided() } -> std::same_as<bool>;
-    };
+concept CLayoutMappingOf = CExtents<E> && std::copyable<M> &&
+                           std::equality_comparable<M> && requires(const M m) {
+                             typename M::extents_type;
+                             typename M::index_type;
+                             typename M::rank_type;
+                             typename M::layout_type;
+                             // No `M(e)`: layout_stride's mapping needs the
+                             // strides too.
+                             { m.extents() } -> std::convertible_to<E>;
+                             {
+                               m.required_span_size()
+                             } -> std::convertible_to<typename M::index_type>;
+                             { M::is_always_unique() } -> std::same_as<bool>;
+                             {
+                               M::is_always_exhaustive()
+                             } -> std::same_as<bool>;
+                             { M::is_always_strided() } -> std::same_as<bool>;
+                             { m.is_unique() } -> std::same_as<bool>;
+                             { m.is_exhaustive() } -> std::same_as<bool>;
+                             { m.is_strided() } -> std::same_as<bool>;
+                           };
 
 template <typename P, typename E>
 concept CLayoutFor = CExtents<E> && requires {

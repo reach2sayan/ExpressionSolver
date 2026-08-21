@@ -31,9 +31,8 @@ constexpr void gradient_into(F &&f, dual *const dof, R &&active,
 
 // Writing form: nothing allocates once `ws` has been used once.
 template <CEnergyOf<dual> F>
-void gradient(F &&f, const std::span<const double> x,
-              CIndexRange auto &&active, GradientWorkspace &ws,
-              const std::span<double> out) {
+void gradient(F &&f, const std::span<const double> x, CIndexRange auto &&active,
+              GradientWorkspace &ws, const std::span<double> out) {
   detail::gradient_into(static_cast<F &&>(f), ws.seed(x),
                         static_cast<decltype(active) &&>(active), out);
 }
@@ -44,8 +43,8 @@ std::vector<double> gradient(F &&f, const std::span<const double> x,
                              CIndexRange auto &&active) {
   GradientWorkspace ws;
   std::vector<double> g(std::ranges::size(active));
-  gradient(static_cast<F &&>(f), x,
-           static_cast<decltype(active) &&>(active), ws, std::span<double>{g});
+  gradient(static_cast<F &&>(f), x, static_cast<decltype(active) &&>(active),
+           ws, std::span<double>{g});
   return g;
 }
 
@@ -68,8 +67,7 @@ namespace detail {
 // the sibling.
 template <CEnergyOf<dual2nd> F, CIndexRange R>
 constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
-                                     double *const grad_out,
-                                     double *const hess_out) {
+                              double *const grad_out, double *const hess_out) {
   const std::size_t m = std::ranges::size(active);
   double value{};
   for (std::size_t j = 0; j < m; ++j) {
@@ -100,12 +98,12 @@ constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
 // Writing form: nothing allocates once the buffers and scratch are warm.
 template <CEnergyOf<dual2nd> F>
 double hessian(F &&f, const std::span<const double> x,
-                      CIndexRange auto &&active, HessianWorkspace &ws,
-                      const std::span<double> grad_out,
-                      const std::span<double> hess_out) {
+               CIndexRange auto &&active, HessianWorkspace &ws,
+               const std::span<double> grad_out,
+               const std::span<double> hess_out) {
   return hessian_into(static_cast<F &&>(f), ws.seed(x),
-                             static_cast<decltype(active) &&>(active),
-                             grad_out.data(), hess_out.data());
+                      static_cast<decltype(active) &&>(active), grad_out.data(),
+                      hess_out.data());
 }
 
 // Compile-time arity: std::array throughout, so this path allocates nothing.
@@ -115,24 +113,26 @@ HessianStatic<N> hessian_static(F &&f, const std::span<const double> x) {
   std::ranges::transform(x | std::views::take(N), dof.begin(),
                          [](const double v) { return dual2nd{v}; });
   HessianStatic<N> out{};
-  std::get<0>(out) =
-      hessian_into(static_cast<F &&>(f), dof.data(), all_indices(N),
-                          std::get<1>(out).data(), std::get<2>(out).data());
+  out.value = hessian_into(static_cast<F &&>(f), dof.data(), all_indices(N),
+                           out.gradient.data(), out.hessian.data());
   return out;
 }
 
 // Owning form.
 template <CEnergyOf<dual2nd> F>
 HessianOwned hessian(F &&f, const std::span<const double> x,
-                            CIndexRange auto &&active) {
+                     CIndexRange auto &&active) {
   const std::size_t m = std::ranges::size(active);
   HessianWorkspace ws;
   auto grad = raw_buffer(m);
   auto hess = raw_buffer(m * m);
-  const double value = hessian_into(
-      static_cast<F &&>(f), ws.seed(x),
-      static_cast<decltype(active) &&>(active), grad.get(), hess.get());
-  return {value, std::move(grad), std::move(hess), m};
+  const double value = hessian_into(static_cast<F &&>(f), ws.seed(x),
+                                    static_cast<decltype(active) &&>(active),
+                                    grad.get(), hess.get());
+  return {.value = value,
+          .gradient = std::move(grad),
+          .hessian = std::move(hess),
+          .arity = m};
 }
 
 // Convenience: differentiate every variable.

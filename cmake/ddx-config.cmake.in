@@ -1,0 +1,37 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# What the installed targets need found again on the consumer's machine.
+set(DDX_BUILD_RT @DDX_BUILD_RT@)
+set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
+
+# Boost::headers rather than any component: every Boost library ddx uses --
+# Mp11 for the symbol lists, Graph and DynamicBitset for the runtime graph --
+# is header-only, so what an installed ddx needs is an include path. The build
+# fetches a pinned Boost because the colouring's quality is asserted on; a
+# consumer only compiling against the headers can use whichever one it has.
+find_dependency(Boost)
+
+if (DDX_BUILD_JIT)
+    # Unversioned, then checked by hand: LLVMConfig declares itself compatible
+    # only with an exact version request, so find_dependency(LLVM 20) fails
+    # against 20.1.2.  The major is what matters -- the ORC API is not stable
+    # across releases, and ddx::jit was compiled against one of them.
+    find_dependency(LLVM CONFIG)
+    if (NOT LLVM_VERSION_MAJOR EQUAL @LLVM_VERSION_MAJOR@)
+        message(FATAL_ERROR
+                "ddx::jit was built against LLVM @LLVM_VERSION_MAJOR@; found ${LLVM_PACKAGE_VERSION}.")
+    endif ()
+endif ()
+
+include("${CMAKE_CURRENT_LIST_DIR}/ddxTargets.cmake")
+
+# Boost is attached here rather than carried in the export: the build's Boost is
+# a fetched target that belongs to no export set, so the installed targets are
+# exported without it and given the one found above instead.  On ddx::ddx, which
+# every other target links, so Mp11 reaches all three.
+set_property(TARGET ddx::ddx APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES Boost::headers)
+
+check_required_components(ddx)

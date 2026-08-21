@@ -163,3 +163,32 @@ template <ddx::impl::CExpression E> struct std::formatter<E, char> {
 private:
   std::formatter<typename E::value_type, char> value_fmt_{};
 };
+
+// The JIT's IR prints through the same machinery.  Guarded because ddx::jit is
+// opt-in while this header is core; ddx_jit defines DDX_HAS_JIT, and
+// jit/kernel.hpp names no LLVM type, so nothing third-party arrives with it.
+#ifdef DDX_HAS_JIT
+#include "jit/kernel.hpp"
+
+template <> struct std::formatter<ddx::jit::Ir, char> {
+  constexpr auto parse(std::format_parse_context &ctx) const {
+    return ctx.begin();
+  }
+
+  // A formatter has nowhere to put an error, so a module that would not build
+  // prints why instead of the IR that does not exist.
+  auto format(const ddx::jit::Ir &ir, std::format_context &ctx) const {
+    const auto text = ir.str();
+    ddx::impl::detail::fmt_put(ctx,
+                               text ? std::string_view{*text}
+                                    : std::string_view{text.error().detail});
+    return ctx.out();
+  }
+};
+
+namespace ddx::jit {
+inline std::ostream &operator<<(std::ostream &out, const Ir &ir) {
+  return out << std::format("{}", ir);
+}
+} // namespace ddx::jit
+#endif

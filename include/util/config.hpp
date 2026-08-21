@@ -9,7 +9,7 @@
 #endif
 #endif
 
-#if DDX_DEDUCING_THIS && defined(__GNUC__) && !defined(__clang__) &&          \
+#if DDX_DEDUCING_THIS && defined(__GNUC__) && !defined(__clang__) &&           \
     !defined(__cpp_explicit_this_parameter)
 #error "DDX_DEDUCING_THIS=1, but this GCC does not implement P0847 (needs 14+)."
 #endif
@@ -33,20 +33,20 @@
 // slot(auto &&self), in whichever form this toolchain takes.  SUB_PARAM is the
 // empty tag operator[] deduces its key from; ... is a trailing requires-clause.
 #if DDX_DEDUCING_THIS
-#define DDX_KEYED_ACCESSORS(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, ...)    \
+#define DDX_KEYED_ACCESSORS(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, ...)     \
   template <GET_TPARAMS>                                                       \
-  [[nodiscard]] constexpr decltype(auto) get(DDX_SELF) noexcept __VA_ARGS__ { \
-    return slot<KEY>(DDX_FWD_SELF);                                           \
+  [[nodiscard]] constexpr decltype(auto) get(DDX_SELF) noexcept __VA_ARGS__ {  \
+    return slot<KEY>(DDX_FWD_SELF);                                            \
   }                                                                            \
   template <SUB_TPARAMS>                                                       \
-  [[nodiscard]] constexpr decltype(auto) operator[](DDX_SELF, SUB_PARAM)      \
-      noexcept __VA_ARGS__ {                                                   \
-    return slot<KEY>(DDX_FWD_SELF);                                           \
+  [[nodiscard]] constexpr decltype(auto) operator[](                           \
+      DDX_SELF, SUB_PARAM) noexcept __VA_ARGS__ {                              \
+    return slot<KEY>(DDX_FWD_SELF);                                            \
   }
 #else
 // One value category; stamped out four times below.
-#define DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM,     \
-                                 QUAL, SELF, ...)                              \
+#define DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM,      \
+                                QUAL, SELF, ...)                               \
   template <GET_TPARAMS>                                                       \
   [[nodiscard]] constexpr decltype(auto) get() QUAL noexcept __VA_ARGS__ {     \
     return slot<KEY>(SELF);                                                    \
@@ -56,13 +56,13 @@
       QUAL noexcept __VA_ARGS__ {                                              \
     return slot<KEY>(SELF);                                                    \
   }
-#define DDX_KEYED_ACCESSORS(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, ...)    \
-  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, &, *this, \
-                           __VA_ARGS__)                                        \
-  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, const &,  \
-                           *this, __VA_ARGS__)                                 \
-  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, &&,       \
-                           std::move(*this), __VA_ARGS__)                      \
-  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, const &&, \
-                           std::move(*this), __VA_ARGS__)
+#define DDX_KEYED_ACCESSORS(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, ...)     \
+  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, &, *this,  \
+                          __VA_ARGS__)                                         \
+  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, const &,   \
+                          *this, __VA_ARGS__)                                  \
+  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, &&,        \
+                          std::move(*this), __VA_ARGS__)                       \
+  DDX_KEYED_ACCESSOR_QUAL(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, const &&,  \
+                          std::move(*this), __VA_ARGS__)
 #endif

@@ -13,7 +13,10 @@
 
 using namespace ddx::impl;
 
-template <typename Eq, typename Pt>
+template <typename Eq, CNumericBuffer Pt>
+  requires requires(Eq &eq, Pt pt) {
+    eq.template gradient<ddx::DiffMode::Symbolic>(pt);
+  }
 static void run_symbolic(benchmark::State &state, Eq &eq, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
@@ -24,7 +27,7 @@ static void run_symbolic(benchmark::State &state, Eq &eq, Pt pt) {
   }
 }
 
-template <CExpression Expr, typename Pt>
+template <CExpression Expr, CNumericBuffer Pt>
 static void run_reverse(benchmark::State &state, Expr &expr, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
@@ -48,7 +51,10 @@ run_forward(benchmark::State &state, Expr &expr,
   }
 }
 
-template <typename VE, typename Pt>
+template <typename VE, CNumericBuffer Pt>
+  requires requires(VE &ve, Pt pt) {
+    ve.template jacobian<ddx::DiffMode::Symbolic>(pt);
+  }
 static void run_symbolic_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
@@ -59,7 +65,8 @@ static void run_symbolic_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   }
 }
 
-template <typename VE, typename Pt>
+template <typename VE, CNumericBuffer Pt>
+  requires requires(VE &ve, Pt pt) { ve.jacobian(pt); }
 static void run_reverse_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
@@ -70,7 +77,8 @@ static void run_reverse_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   }
 }
 
-template <typename VE, typename Pt>
+template <typename VE, CNumericBuffer Pt>
+  requires requires(VE &ve, Pt pt) { ve.template derivative_tensor<1>(pt); }
 static void run_forward_jacobian(benchmark::State &state, VE &ve, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();

@@ -1,13 +1,8 @@
 #include "tests_common.hpp"
 
-
 // ===========================================================================
-// Expression printing.
-//
-// Every one of these was unverifiable before expr/format.hpp: printing had no
-// test at all, which is how a unary node that printed only its child (sin(x)
-// as "x") survived.  The assertions are on std::format, since operator<< is a
-// forward to it.
+// Expression printing.  The assertions are on std::format, since operator<< is
+// a forward to it.
 // ===========================================================================
 
 namespace {
@@ -56,8 +51,8 @@ TEST(ExpressionPrinting, FunctionStyleOps) {
 TEST(ExpressionPrinting, FrozenVariablesPrintAsConstants) {
   EXPECT_EQ(std::format("{}", px * py), "x * y");
   EXPECT_EQ(
-      std::format("{}",
-                  make_all_constant_except<ddx::impl::FixedString{"x"}>(px * py)),
+      std::format(
+          "{}", make_all_constant_except<ddx::impl::FixedString{"x"}>(px * py)),
       "x * y_c");
 }
 
@@ -78,11 +73,16 @@ TEST(ExpressionPrinting, StreamInserterMatchesFormat) {
 // A dual-valued constant is reachable through PDV, so the leaf printer has to
 // cope with a value_type that is not an arithmetic type.
 TEST(ExpressionPrinting, DualValuedLeavesPrint) {
-  const ddx::impl::Constant<ddx::impl::Dual<double>> c{ddx::impl::Dual<double>{1.5, 2.0}};
+  const ddx::impl::Constant<ddx::impl::Dual<double>> c{
+      ddx::impl::Dual<double>{1.5, 2.0}};
   EXPECT_EQ(std::format("{}", c), "1.5+2ε");
   EXPECT_EQ(std::format("{::.2f}", c), "1.50+2.00ε");
 }
 
+#ifdef __cpp_exceptions
+// std::vformat is the thing that throws here, not ddx: a bad runtime spec is
+// std::format_error by the standard's own contract.  Under -fno-exceptions it
+// aborts instead, which is not a thing to assert on.
 TEST(ExpressionPrinting, RejectsUnparseableValueSpec) {
   // The spec is parsed at compile time for literals, so a bad one has to be
   // reached through vformat to be observable as a throw.  It is rejected by
@@ -90,6 +90,7 @@ TEST(ExpressionPrinting, RejectsUnparseableValueSpec) {
   EXPECT_THROW((void)std::vformat("{:q}", std::make_format_args(px)),
                std::format_error);
 }
+#endif
 
 TEST(ExpressionPrinting, EquationPrintsFunctionsAndGradientRows) {
   auto eq = ddx::Equation{px * py};
@@ -121,8 +122,8 @@ TEST(DualPrinting, OneSpecReachesEveryPart) {
 
 // Without bracketing, Dual<Dual<double>> reads as one four-term series.
 TEST(DualPrinting, NestedCoefficientsAreBracketed) {
-  const ddx::impl::Dual<ddx::impl::Dual<double>> d{ddx::impl::Dual<double>{1.0, 2.0},
-                                         ddx::impl::Dual<double>{3.0, 4.0}};
+  const ddx::impl::Dual<ddx::impl::Dual<double>> d{
+      ddx::impl::Dual<double>{1.0, 2.0}, ddx::impl::Dual<double>{3.0, 4.0}};
   EXPECT_EQ(std::format("{}", d), "(1+2ε)+(3+4ε)ε");
 }
 
@@ -139,10 +140,12 @@ TEST(DualPrinting, StreamInserterMatchesFormat) {
 // Every dual is reachable as an expression leaf, which is the reason both have
 // to be formattable and not just Dual.
 TEST(DualPrinting, AllThreeWorkAsExpressionLeaves) {
-  EXPECT_EQ(std::format("{}", ddx::impl::Constant<ddx::impl::Dual<double>>{
-                                  ddx::impl::Dual<double>{5.0, 1.0}}),
+  EXPECT_EQ(std::format("{}",
+                        ddx::impl::Constant<ddx::impl::Dual<double>>{
+                            ddx::impl::Dual<double>{5.0, 1.0}}),
             "5+1ε");
-  EXPECT_EQ(std::format("{}", ddx::impl::Constant<ddx::impl::TaylorDual<double, 2>>{
-                                  ddx::impl::TaylorDual<double, 2>{5.0}}),
+  EXPECT_EQ(std::format("{}",
+                        ddx::impl::Constant<ddx::impl::TaylorDual<double, 2>>{
+                            ddx::impl::TaylorDual<double, 2>{5.0}}),
             "5+0ε+0ε^2");
 }
