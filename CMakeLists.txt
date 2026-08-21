@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.26)
 
 # Newest GCC on PATH, unless the caller chose a compiler.  Must precede project().
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
@@ -50,20 +50,15 @@ endif ()
 
 # --- optional runtime graph -------------------------------------------------
 # Everything above is headers, and stays that way.  The runtime graph is what an
-# expression built at run time lives in, and it is opt-in because it pulls code
-# that is compiled and platform-dependent rather than one more header.
+# expression built at run time lives in
 option(DDX_BUILD_RT "Build the runtime expression graph (Boost.Graph)" OFF)
 option(DDX_BUILD_JIT "Build the LLVM JIT backend (implies DDX_BUILD_RT)" OFF)
 if (DDX_BUILD_JIT AND NOT DDX_BUILD_RT)
     set(DDX_BUILD_RT ON)
 endif ()
 
-# ddx::jit is the project's only compiled library, and shared is what it wants
-# to be: LLVM is the bulk of it, and a static ddx::jit puts that bulk into every
-# consumer that links it.  Static remains available for a consumer that would
-# rather have one artefact than two.
-option(DDX_JIT_STATIC "Build ddx::jit as a static archive rather than a shared library" OFF)
-
+option(DDX_JIT_STATIC
+        "Build ddx::jit as a static archive rather than a shared library" OFF)
 if (DDX_BUILD_RT)
     ddx_use_boost()
     add_subdirectory(src/rt)
@@ -72,15 +67,13 @@ endif ()
 
 # After the runtime graph rather than before it: Boost.Graph depends on Mp11, so
 # where both are wanted the superproject has already defined Boost::mp11.
-# BUILD_INTERFACE for the same reason as Boost::graph on ddx_rt: the fetched
-# target is not ours to export, so ddx-config.cmake finds Mp11 again instead.
+# BUILD_LOCAL_INTERFACE for the same reason as Boost::graph on ddx_rt: the
+# fetched target is not ours to export, so ddx-config.cmake finds Mp11 again.
 ddx_use_mp11()
-target_link_libraries(ddx INTERFACE $<BUILD_INTERFACE:Boost::mp11>)
+target_link_libraries(ddx INTERFACE $<BUILD_LOCAL_INTERFACE:Boost::mp11>)
 
 if (DDX_BUILD_JIT)
-    # The JIT's defaults follow how the project itself was built.  Contraction
-    # especially: a kernel that contracts where the compile-time path does not
-    # would return different derivative values for the same expression.
+    # The JIT's defaults follow how the project itself was built.
     if (DDX_FP_FLAGS)
         set(DDX_JIT_DEFAULT_CONTRACT 1)
     else ()
@@ -89,9 +82,9 @@ if (DDX_BUILD_JIT)
 
     # No predefined macro carries the optimisation *level* -- GCC and Clang
     # define only __OPTIMIZE__, and only as a yes/no -- so CMake is the one
-    # place that knows.  O0 is deliberately unreachable: it turns the loop
-    # vectoriser off, and vectorising is the only reason a batch kernel beats
-    # the compile-time path.  A debug build gets cheaper compiles, not scalar code.
+    # place that knows.
+    # O0 is deliberately unreachable: it turns the loop
+    # vectoriser off
     string(TOUPPER "${CMAKE_BUILD_TYPE}" DDX_BUILD_TYPE_UPPER)
     if (DDX_BUILD_TYPE_UPPER STREQUAL "DEBUG")
         set(DDX_JIT_DEFAULT_OPT 1)

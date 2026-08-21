@@ -10,10 +10,8 @@ include_guard(GLOBAL)
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_FLAGS "-std=c++23")
 
-# --- <expected> -------------------------------------------------------------
-# ddx::result is std::expected, and libstdc++ offers <expected> only where
-# __cpp_concepts is 202002L -- which Clang first defines in 19.  Unguarded, the
-# toolchain floor shows up as a missing name partway down an include stack.
+# libstdc++ offers <expected> only where __cpp_concepts is 202002L
+# -- which Clang first defines in 19.
 # MSVC is exempt because the probe's -std= is not its spelling.
 check_cxx_source_compiles(
         "#include <expected>

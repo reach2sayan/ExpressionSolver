@@ -139,8 +139,7 @@ template <CExpression Expr>
   return out;
 }
 
-// Scalar defaults to what derivative_tensor expects; override it for the
-// reverse-mode hessian path.
+// Scalar defaults to what derivative_tensor expects;
 template <CExpression Expr,
           Numeric Scalar =
               scalar_base_t<typename std::remove_cvref_t<Expr>::value_type>,

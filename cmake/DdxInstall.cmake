@@ -1,7 +1,6 @@
 # Consuming ddx by add_subdirectory() stays the documented route; this is what
-# makes a built ddx::jit installable, which a shared library has to be to be
-# worth building.  Included from the top level only once every target that can
-# be exported exists.
+# makes a built ddx::jit installable,
+#Included from the top level only once every target that can be exported exists.
 include_guard(GLOBAL)
 
 include(CMakePackageConfigHelpers)
@@ -41,3 +40,7 @@ install(FILES
         "${PROJECT_BINARY_DIR}/ddx-config.cmake"
         "${PROJECT_BINARY_DIR}/ddx-config-version.cmake"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ddx)
+
+export(EXPORT ddxTargets
+        NAMESPACE ddx::
+        FILE "${PROJECT_BINARY_DIR}/ddxTargets.cmake")

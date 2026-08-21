@@ -44,7 +44,7 @@ auto g  = Equation{f}.gradient(1.0, 2.0);   // {∂f/∂x, ∂f/∂y}
   over libstdc++ 14+, or **Clang 17+** over libc++ 17+. MSVC (VS 2022,
   `/std:c++latest`) is supported. Clang before 19 defines `__cpp_concepts` as
   `201907L`, below what libstdc++ asks of it before it will offer `<expected>`.
-- **CMake 3.21+** if you build through CMake.
+- **CMake 3.26+** if you build through CMake.
 
 C++23 is a hard requirement — the library uses `constexpr std::bitset` inside
 `consteval` functions and the multidimensional subscript `t[i, j, k]`.
@@ -85,10 +85,35 @@ find_package(ddx CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE ddx::jit)   # or ddx::rt, or ddx::ddx
 ```
 
+A build directory is consumable in the same way, without installing anything — useful
+when you are developing against ddx and want header edits picked up as you make them:
+
+```cmake
+find_package(ddx CONFIG REQUIRED PATHS /path/to/ddx/build/release_with_jit NO_DEFAULT_PATH)
+```
+
 The package exports whichever of the three the build produced, and `ddx-config.cmake`
-finds Boost and LLVM again where they are needed. An installed `ddx::jit` was compiled
-against one LLVM major version and says so: configuring against a different one fails
-there rather than at link time.
+finds Boost and LLVM again where they are needed. Ask for what you need by component and
+a build that lacks it says so at configure time:
+
+```cmake
+find_package(ddx CONFIG REQUIRED COMPONENTS jit)
+```
+
+A built `ddx::jit` was compiled against one LLVM major version and says so: configuring
+against a different one fails there rather than at link time, and the LLVM the build used
+is recorded as the default so a machine with several needs no `LLVM_DIR` from you. Boost
+is reported rather than pinned — ddx builds against a fetched Boost and a consumer uses
+whichever it has, so the configure output names both.
+
+`ddx_CODEGEN_FLAGS` and `ddx_FP_CONTRACT` carry the flags ddx itself was built with.
+Nothing is forced on you — an interface library has no business dictating your codegen —
+but FP contraction is worth matching if you use `ddx::jit`, whose kernels contract to
+agree with the compile-time path:
+
+```cmake
+target_compile_options(my_app PRIVATE ${ddx_CODEGEN_FLAGS})
+```
 
 Then include the public header:
 

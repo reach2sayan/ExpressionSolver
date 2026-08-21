@@ -1,37 +1,83 @@
 @PACKAGE_INIT@
 
+# This file serves an install prefix and a build tree alike, so it must resolve
+# nothing by path: @PACKAGE_INIT@'s PACKAGE_PREFIX_DIR is computed for the
+# install destination and is wrong in a build tree.  Anything that needs a
+# location belongs on the exported targets, which carry the right one for each
+# tree already through BUILD_INTERFACE/INSTALL_INTERFACE.
 include(CMakeFindDependencyMacro)
 
-# What the installed targets need found again on the consumer's machine.
+# What the exported targets need found again on the consumer's machine.
 set(DDX_BUILD_RT @DDX_BUILD_RT@)
 set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
 
 # Boost::headers rather than any component: every Boost library ddx uses --
 # Mp11 for the symbol lists, Graph and DynamicBitset for the runtime graph --
-# is header-only, so what an installed ddx needs is an include path. The build
-# fetches a pinned Boost because the colouring's quality is asserted on; a
-# consumer only compiling against the headers can use whichever one it has.
+# is header-only, so what a consumer needs is an include path. The build fetches
+# a pinned Boost because the colouring's quality is asserted on; a consumer only
+# compiling against the headers can use whichever one it has.  Reported rather
+# than required: demanding the pin would fail every consumer on a distro Boost
+# over a difference that is very likely immaterial, but if it ever is not, the
+# two versions are the first thing worth knowing.
 find_dependency(Boost)
+if (NOT Boost_VERSION VERSION_EQUAL "@DDX_BOOST_VERSION@")
+    message(STATUS
+            "ddx was built against Boost @DDX_BOOST_VERSION@; this consumer resolved ${Boost_VERSION}.")
+endif ()
 
 if (DDX_BUILD_JIT)
+    # Where this build found LLVM, so a machine with several does not need the
+    # consumer to guess which one ddx::jit was compiled against.
+    if (NOT DEFINED LLVM_DIR)
+        set(LLVM_DIR "@LLVM_DIR@")
+    endif ()
     # Unversioned, then checked by hand: LLVMConfig declares itself compatible
     # only with an exact version request, so find_dependency(LLVM 20) fails
-    # against 20.1.2.  The major is what matters -- the ORC API is not stable
-    # across releases, and ddx::jit was compiled against one of them.
+    # against 20.1.2.
     find_dependency(LLVM CONFIG)
+    # Deliberately stricter than the @DDX_LLVM_VERSION_MIN@-@DDX_LLVM_VERSION_MAX@
+    # range the sources build against: ddx::jit is a compiled artefact, and the
+    # ORC C++ API it is compiled against is not stable across releases.  The
+    # range is what ddx can be built with; this is what this one was.
     if (NOT LLVM_VERSION_MAJOR EQUAL @LLVM_VERSION_MAJOR@)
         message(FATAL_ERROR
-                "ddx::jit was built against LLVM @LLVM_VERSION_MAJOR@; found ${LLVM_PACKAGE_VERSION}.")
+                "ddx::jit was built against LLVM @LLVM_VERSION_MAJOR@; found ${LLVM_PACKAGE_VERSION}. "
+                "Point CMake at the matching one with -DLLVM_DIR=<prefix>/lib/cmake/llvm.")
     endif ()
 endif ()
 
 include("${CMAKE_CURRENT_LIST_DIR}/ddxTargets.cmake")
 
 # Boost is attached here rather than carried in the export: the build's Boost is
-# a fetched target that belongs to no export set, so the installed targets are
-# exported without it and given the one found above instead.  On ddx::ddx, which
+# a fetched target that belongs to no export set, so the exported targets name
+# it nowhere and are given the one found above instead.  On ddx::ddx, which
 # every other target links, so Mp11 reaches all three.
 set_property(TARGET ddx::ddx APPEND PROPERTY
         INTERFACE_LINK_LIBRARIES Boost::headers)
+
+# How ddx itself was compiled.  Not pushed onto ddx::ddx -- an INTERFACE library
+# must not force a flag on a consumer -- but a consumer whose numbers have to be
+# comparable with ddx's own needs to be able to ask.  FP contraction is the one
+# that changes results rather than speed: ddx::jit emits code contracting to
+# match, so a consumer that differs here can compute different derivatives.
+set(ddx_CODEGEN_FLAGS "@DDX_CODEGEN_FLAGS@")
+set(ddx_FP_CONTRACT @DDX_FP_FLAGS@)
+
+# Without these the check below is a no-op and a component request for a part
+# that was never built succeeds, leaving the consumer to find out at link time.
+set(ddx_ddx_FOUND TRUE)
+set(ddx_rt_FOUND ${DDX_BUILD_RT})
+set(ddx_jit_FOUND ${DDX_BUILD_JIT})
+
+# check_required_components() reports only that ddx_FOUND went false, which
+# leaves the consumer to guess which component and how to get it.
+set(DDX_rt_OPTION DDX_BUILD_RT)
+set(DDX_jit_OPTION DDX_BUILD_JIT)
+foreach (comp IN LISTS ddx_FIND_COMPONENTS)
+    if (NOT ddx_${comp}_FOUND AND DEFINED DDX_${comp}_OPTION)
+        set(ddx_NOT_FOUND_MESSAGE "this ddx was built without the '${comp}' \
+component; reconfigure it with -D${DDX_${comp}_OPTION}=ON.")
+    endif ()
+endforeach ()
 
 check_required_components(ddx)
