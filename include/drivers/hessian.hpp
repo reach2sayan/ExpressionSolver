@@ -53,10 +53,7 @@ check_graph_point(std::size_t arity, std::span<const double> x,
 // one.
 [[nodiscard]] constexpr result<void>
 check_graph_point(std::size_t arity, std::span<const double> x) noexcept {
-  if (x.size() != arity) {
-    return fail(errc::wrong_arity);
-  }
-  return {};
+  return (x.size() != arity) ? fail(errc::wrong_arity) : result<void>{};
 }
 
 // The graph driver differentiates every symbol; a strict subset keeps the probe
@@ -64,11 +61,8 @@ check_graph_point(std::size_t arity, std::span<const double> x) noexcept {
 [[nodiscard]] constexpr bool
 reverse_hessian_applies(std::size_t n, std::span<const double> x,
                         CIndexRange auto &&active) noexcept {
-  if (x.size() != n || std::ranges::size(active) != n) {
-    return false;
-  }
-
-  return std::ranges::equal(active, std::views::iota(std::size_t{0}, n));
+  return (x.size() == n) && (std::ranges::size(active) == n) &&
+         std::ranges::equal(active, std::views::iota(std::size_t{0}, n));
 }
 
 } // namespace detail

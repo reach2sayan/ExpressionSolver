@@ -32,7 +32,6 @@ enum class errc : std::uint8_t {
 // replaces.  message() recovers the text from a static table.
 struct error {
   errc code;
-
   [[nodiscard]] friend constexpr bool operator==(error,
                                                  error) noexcept = default;
 };
@@ -71,12 +70,9 @@ struct error {
   return message(e.code);
 }
 
-// What every fallible spelling returns.  The infallible ones -- positional and
-// named points, whose arity is a static_assert -- keep returning T.
 template <typename T> using result = std::expected<T, error>;
-
 [[nodiscard]] constexpr std::unexpected<error> fail(const errc c) noexcept {
-  return std::unexpected{error{c}};
+  return std::unexpected{error{.code = c}};
 }
 
 } // namespace ddx
