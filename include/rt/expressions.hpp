@@ -6,7 +6,7 @@
 #include "util/error.hpp"
 #include "util/scope_guard.hpp"
 
-#include <concepts>   // std::same_as
+#include <concepts> // std::same_as
 #include <string_view>
 #include <type_traits> // std::remove_cvref_t
 #include <utility>     // std::move

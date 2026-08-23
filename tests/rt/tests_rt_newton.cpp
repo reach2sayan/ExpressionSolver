@@ -95,8 +95,8 @@ TEST(RtNewton, OneEquationServesAWholeSweep) {
   const auto f = ddx::rt::equation(x * x - c); // root: x = sqrt(c)
 
   const auto names = *f.symbols();
-  const std::size_t z_slot = static_cast<std::size_t>(
-      std::ranges::find(names, "x") - names.begin());
+  const std::size_t z_slot =
+      static_cast<std::size_t>(std::ranges::find(names, "x") - names.begin());
 
   for (double target = 0.5; target < 8.0; target += 0.37) {
     std::vector<double> at(2, 1.0);

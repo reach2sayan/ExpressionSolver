@@ -126,7 +126,7 @@ template <Numeric T> constexpr auto val(const Dual<T> &d) noexcept {
   return val(d.template get<0>());
 }
 template <Numeric T> constexpr bool all_zero(const Dual<T> &d) noexcept {
-  const auto& [real, dual] = d;
+  const auto &[real, dual] = d;
   return all_zero(real) && all_zero(dual);
 }
 

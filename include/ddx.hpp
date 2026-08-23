@@ -16,11 +16,11 @@ using impl::dual;
 using impl::dual2nd;
 
 // var_of<"x">(v) / dual_var_of<"x">(v) take the scalar from an exemplar.
+using impl::dual_var_of;
 using impl::sym;
 using impl::var;
 using impl::var_of;
 using impl::variable;
-using impl::dual_var_of;
 namespace literals = impl::literals;
 
 // constant(3.0) -- a value stored in the tree.

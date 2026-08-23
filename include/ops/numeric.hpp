@@ -24,7 +24,7 @@ concept CFieldLike = std::default_initializable<T> &&
                      std::constructible_from<T, int> && requires(T a, T b) {
                        { a + b } -> std::convertible_to<T>;
                        { a - b } -> std::convertible_to<T>;
-                       { a *b } -> std::convertible_to<T>;
+                       { a * b } -> std::convertible_to<T>;
                        { a / b } -> std::convertible_to<T>;
                        { -a } -> std::convertible_to<T>;
                      };
