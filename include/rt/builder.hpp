@@ -262,8 +262,7 @@ private:
     // compile-time evaluator uses.
     if (unary && ca) {
       return constant(apply<T>(op, nodes_[a].value));
-    }
-    if (!unary && ca && cb) {
+    } else if (!unary && ca && cb) {
       return constant(apply<T>(op, nodes_[a].value, nodes_[b].value));
     }
 
@@ -272,18 +271,16 @@ private:
       return std::nullopt;
     }
     // First match wins, as ops/algebra.hpp is ordered.
-    for (const impl::algebra::Rule &r : impl::algebra::kRules) {
-      if (r.op != *kind || impl::algebra::is_unary(r) != unary) {
-        continue;
-      }
-      if (r.needs_commutative_multiply && !impl::CCommutativeMultiply<T>) {
-        continue;
-      }
-      if (holds_pred(r.when, a, b)) {
-        return apply_rule(r, a, b);
-      }
-    }
-    return std::nullopt;
+    const auto *const r = std::ranges::find_if(
+        impl::algebra::kRules, [&](const impl::algebra::Rule &rule) {
+          return rule.op == *kind && impl::algebra::is_unary(rule) == unary &&
+                 (!rule.needs_commutative_multiply ||
+                  impl::CCommutativeMultiply<T>) &&
+                 holds_pred(rule.when, a, b);
+        });
+    return r == std::ranges::cend(impl::algebra::kRules)
+               ? std::nullopt
+               : apply_rule(*r, a, b);
   }
 
   // (n/d) * d -> n.  On a DAG the denominator match is an id compare.
@@ -294,6 +291,9 @@ private:
   }
 
   std::vector<Node<T>> nodes_;
+  // Open-addressed by hand because interning runs inside constant evaluation
+  // and no library hash container is constexpr -- neither
+  // boost::unordered_flat_map nor std::unordered_map.
   std::vector<NodeId>
       table_; // power-of-two capacity; no_node marks a free slot
   std::vector<std::string> symbols_;

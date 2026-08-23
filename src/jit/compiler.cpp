@@ -135,7 +135,8 @@ struct Compiler::Impl {
     init_native_target_once();
     auto impl = std::make_shared<Impl>();
 
-    if (auto jtmb = llvm::orc::JITTargetMachineBuilder::detectHost(); !jtmb) {
+    auto jtmb = llvm::orc::JITTargetMachineBuilder::detectHost();
+    if (!jtmb) {
       return std::unexpected{
           as_error(errc::jit_target, "detecting the host", jtmb.takeError())};
     } else {
@@ -144,21 +145,22 @@ struct Compiler::Impl {
       for (const auto &[feature, enabled] : llvm::sys::getHostCPUFeatures()) {
         jtmb->getFeatures().AddFeature(feature, enabled);
       }
+    }
 
-      if (auto tm = jtmb->createTargetMachine(); !tm) {
-        return std::unexpected{as_error(
-            errc::jit_target, "creating a target machine", tm.takeError())};
-      } else {
-        impl->tm = std::move(*tm);
-      }
+    if (auto tm = jtmb->createTargetMachine(); !tm) {
+      return std::unexpected{as_error(
+          errc::jit_target, "creating a target machine", tm.takeError())};
+    } else {
+      impl->tm = std::move(*tm);
+    }
 
-      auto jit = llvm::orc::LLJITBuilder()
-                     .setJITTargetMachineBuilder(std::move(*jtmb))
-                     .create();
-      if (!jit) {
-        return std::unexpected{
-            as_error(errc::jit_target, "creating the JIT", jit.takeError())};
-      }
+    if (auto jit = llvm::orc::LLJITBuilder()
+                       .setJITTargetMachineBuilder(std::move(*jtmb))
+                       .create();
+        !jit) {
+      return std::unexpected{
+          as_error(errc::jit_target, "creating the JIT", jit.takeError())};
+    } else {
       impl->jit = std::move(*jit);
     }
 
@@ -172,13 +174,15 @@ struct Compiler::Impl {
           as_error(errc::jit_target, "defining libm", std::move(e))};
     }
 
-    auto procs =
-        llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(prefix);
-    if (!procs) {
+    if (auto procs =
+            llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+                prefix);
+        !procs) {
       return std::unexpected{as_error(
           errc::jit_target, "opening the process symbols", procs.takeError())};
+    } else {
+      jd.addGenerator(std::move(*procs));
     }
-    jd.addGenerator(std::move(*procs));
 
     // Not loaded in a program that never called it, so the generator above
     // cannot see it.
@@ -234,6 +238,7 @@ result<Kernel> Compiler::compile(const rt::Graph<double> &g,
     return std::unexpected{
         as_error(errc::jit_module, "adding the module", std::move(e))};
   }
+
   auto sym = impl_->jit->lookup(name);
   if (!sym) {
     return std::unexpected{

@@ -47,7 +47,7 @@ namespace detail {
 inline void for_each_set(const SymbolSet &s,
                          std::invocable<std::size_t> auto &&f) {
   for (auto i = s.find_first(); i != SymbolSet::npos; i = s.find_next(i)) {
-    f(i);
+    std::invoke(f, i);
   }
 }
 
@@ -83,10 +83,10 @@ template <impl::Numeric T>
                                       });
 
   std::vector<SymbolSet> support(b.size());
-  for (NodeId v = 0; v < b.size(); ++v) {
-    if (!live[v]) {
-      continue;
-    }
+  const auto ids = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size()));
+  const auto is_alive_node = [&live](NodeId u) { return live[u]; };
+
+  for (const NodeId v : ids | std::views::filter(is_alive_node)) {
     const auto &node = b[v];
     switch (arity_of(node.op)) {
     case 0:

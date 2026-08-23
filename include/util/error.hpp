@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <expected>
 #include <string_view>
+#include <utility>
 
 namespace ddx {
 
@@ -62,7 +63,7 @@ struct error {
   case errc::jit_lookup:
     return "the compiled kernel has no such symbol";
   }
-  return "unknown error";
+  std::unreachable();
 }
 
 [[nodiscard]] constexpr std::string_view message(const error e) noexcept {

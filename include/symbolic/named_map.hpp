@@ -139,11 +139,10 @@ template <CNamedValue... Entries> struct Map : Entries... {
   // operator[].  Unconstrained on purpose: std::invocable would instantiate a
   // generic lambda's body, and the const overload would then hard-error on an
   // `f` that writes through its second parameter.
-  template <typename F> constexpr void for_each(F &&f) const {
+  constexpr void for_each(auto &&f) const {
     (f(sym<Entries::symbol>, static_cast<const Entries &>(*this).value), ...);
   }
-
-  template <typename F> constexpr void for_each(F &&f) {
+  constexpr void for_each(auto &&f) {
     (f(sym<Entries::symbol>, static_cast<Entries &>(*this).value), ...);
   }
 
@@ -156,11 +155,12 @@ template <CNamedValue... Entries> Map(Entries...) -> Map<Entries...>;
 template <typename T>
 concept CNamedMap = requires { requires std::remove_cvref_t<T>::kNamedMap; };
 
-template <CNamedValue... Entries>
-[[nodiscard]] constexpr auto map(Entries... es) {
+[[nodiscard]] constexpr auto map(CNamedValue auto... es) {
   // Reached before a duplicate key becomes a duplicate base class.
-  static_assert(detail::keys_unique<Entries::symbol...>, "map: duplicate key");
-  return Map<Entries...>{std::move(es)...};
+  static_assert(
+      detail::keys_unique<std::remove_cvref_t<decltype(es)>::symbol...>,
+      "map: duplicate key");
+  return Map{std::move(es)...};
 }
 
 } // namespace ddx::impl

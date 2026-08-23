@@ -6,8 +6,10 @@
 #include <concepts>
 #include <cstddef>
 #include <optional>
+#include <ranges>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
 // The type-level half of the simplifier: ops/algebra.hpp's predicates answered
 // with type traits, run by the operator factories in values.hpp so a tree is
@@ -66,7 +68,7 @@ template <COperation Op>
 // The predicates, answered structurally: a tree is an empty type carrying its
 // whole shape, so type identity *is* structural identity -- no walk needed.
 template <COperation Op, CExpression A, CExpression B>
-[[nodiscard]] consteval bool holds(algebra::Pred p) noexcept {
+[[nodiscard]] constexpr bool holds(algebra::Pred p) noexcept {
   switch (p) {
   case algebra::Pred::ZeroA:
     return is_zero_v<A>;
@@ -85,7 +87,7 @@ template <COperation Op, CExpression A, CExpression B>
   case algebra::Pred::NegatedA:
     return is_negation_expr_v<A>;
   }
-  return false;
+  std::unreachable();
 }
 
 // First match wins, as the table is ordered.
@@ -95,19 +97,16 @@ template <COperation Op, CExpression A, CExpression B>
   if constexpr (!kind.has_value()) {
     return std::nullopt;
   } else {
-    for (const algebra::Rule &r : algebra::kRules) {
-      if (r.op != *kind || algebra::is_unary(r)) {
-        continue;
-      }
-      if (r.needs_commutative_multiply &&
-          !CCommutativeMultiply<typename Op::value_type>) {
-        continue;
-      }
-      if (holds<Op, A, B>(r.when)) {
-        return r;
-      }
-    }
-    return std::nullopt;
+    const auto *const r = std::ranges::find_if(
+        algebra::kRules, [kind](const algebra::Rule &rule) {
+          return rule.op == *kind && !algebra::is_unary(rule) &&
+                 (!rule.needs_commutative_multiply ||
+                  CCommutativeMultiply<typename Op::value_type>) &&
+                 holds<Op, A, B>(rule.when);
+        });
+    return r == std::ranges::cend(algebra::kRules)
+               ? std::nullopt
+               : std::optional<algebra::Rule>{*r};
   }
 }
 

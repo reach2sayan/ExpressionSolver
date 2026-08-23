@@ -51,12 +51,13 @@ Coloring color_columns(const CouplingRows &rows) {
 
   // Greedy colouring is only as good as the order it walks.
   const auto order = boost::smallest_last_vertex_ordering(conflicts);
-  out.count = static_cast<std::size_t>(boost::sequential_vertex_coloring(
+  // clang-format off
+  out.count = static_cast<std::size_t>(
+    boost::sequential_vertex_coloring(
       conflicts,
-      boost::make_iterator_property_map(order.begin(),
-                                        boost::identity_property_map()),
-      boost::make_iterator_property_map(
-          out.color.begin(), boost::get(boost::vertex_index, conflicts))));
+      boost::make_iterator_property_map(order.begin(), boost::identity_property_map()),
+      boost::make_iterator_property_map(out.color.begin(), boost::get(boost::vertex_index, conflicts))));
+  // clang-format on
 
   // scatter[colour][row] is the column that row's sweep result belongs to; the
   // colouring guarantees at most one, so the harvest needs no search.
