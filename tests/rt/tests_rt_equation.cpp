@@ -1,6 +1,7 @@
 #include "ddx.hpp"
 #include "rt/bridge.hpp"
 #include "rt/equation.hpp"
+#include "util/ranges.hpp"
 
 #include <gtest/gtest.h>
 
@@ -244,7 +245,7 @@ TEST(RtEquation, BatchHessianFillsTheCompressedColumns) {
   std::vector<std::vector<double>> blocks(columns, std::vector<double>(n));
   const auto block_ptrs =
       blocks | std::views::transform([](auto &c) { return c.data(); }) |
-      std::ranges::to<std::vector<double *>>();
+      ddx::impl::to<std::vector<double *>>();
   const double *const inputs[]{cx.data(), cy.data()};
   double *const values[]{f.data()};
   double *const partials[]{dx.data(), dy.data()};

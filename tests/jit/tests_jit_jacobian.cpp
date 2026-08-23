@@ -4,6 +4,7 @@
 #include "rt/derivative.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
+#include "util/ranges.hpp"
 
 #include <gtest/gtest.h>
 
@@ -177,7 +178,7 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
   double *const values[]{value.data()};
   const auto columns_of = [](auto &blocks) {
     return blocks | std::views::transform([](auto &c) { return c.data(); }) |
-           std::ranges::to<std::vector<double *>>();
+           ddx::impl::to<std::vector<double *>>();
   };
   auto jp = columns_of(jac);
   auto hp = columns_of(hess);

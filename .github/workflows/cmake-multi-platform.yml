@@ -37,11 +37,10 @@ jobs:
       # clang-20, not the image's default clang-18: libstdc++ gates <expected>
       # on __cpp_concepts >= 202002L, and Clang first defines that in 19.
       #
-      # libboost-dev is for the consumer rather than for us: the build fetches
-      # its own pinned Boost, but tests/package configures a separate project
-      # against the built and the installed ddx, and ddx's headers include
-      # boost's -- so that project has to find a Boost of its own, exactly as
-      # any consumer does.  Without one the two package tests skip.
+      # libboost-dev is what both the build and the consumer find: ddx finds
+      # Boost rather than fetching it, so ddx_use_boost() needs it here, and
+      # tests/package configures a separate project against the built and the
+      # installed ddx whose find_package(Boost) has to answer for itself.
       - name: Install compilers and Boost (Ubuntu)
         if: runner.os == 'Linux'
         run: |
