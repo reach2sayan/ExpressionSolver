@@ -13,16 +13,14 @@
 # variables the caller's scope is expected to see.
 include_guard(GLOBAL)
 
-# Before include(FetchContent), which defines this itself and would make the
-# guard below a no-op.
-if (NOT DEFINED CACHE{FETCHCONTENT_BASE_DIR})
-    set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/.deps" CACHE PATH
-            "Shared download cache for fetched dependencies")
-endif ()
 include(FetchContent)
 
 # --- versions ---------------------------------------------------------------
 set(DDX_BOOST_VERSION "1.92.0" CACHE STRING "Boost release to fetch")
+# Change together with DDX_BOOST_VERSION; sha256sum of the -cmake.tar.xz release.
+set(DDX_BOOST_SHA256
+        "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d"
+        CACHE STRING "SHA256 of the Boost archive")
 set(DDX_GOOGLETEST_REF "5376968f6948923e2411081fd9372e71a59d8e77"
         CACHE STRING "GoogleTest commit to fetch")
 set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release to fetch")
@@ -34,8 +32,12 @@ set(DDX_LLVM_VERSION_MAX 20)
 
 # --- declarations -----------------------------------------------------------
 # SYSTEM throughout: a fetched dependency's warnings are not ours to fix.
+# URL_HASH so a cached archive is verified rather than re-fetched: without one
+# CMake reports "File already exists but no hash specified" and downloads 150 MB
+# again every time a stamp goes missing.
 FetchContent_Declare(Boost
         URL https://github.com/boostorg/boost/releases/download/boost-${DDX_BOOST_VERSION}/boost-${DDX_BOOST_VERSION}-cmake.tar.xz
+        URL_HASH SHA256=${DDX_BOOST_SHA256}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SYSTEM
 )

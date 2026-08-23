@@ -62,22 +62,36 @@
       ]
     }
   ],
-  "buildPresets": [
-    {"name": "debug", "configurePreset": "debug"},
-    {"name": "release", "configurePreset": "release"},
-    {"name": "debug_jit", "configurePreset": "debug_jit"},
-    {"name": "release_jit", "configurePreset": "release_jit"}
-  ],
   "testPresets": [
     {
       "name": "tbase",
       "hidden": true,
-      "output": {"outputOnFailure": true},
-      "execution": {"noTestsAction": "error"}
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
     },
-    {"name": "debug", "inherits": "tbase", "configurePreset": "debug"},
-    {"name": "release", "inherits": "tbase", "configurePreset": "release"},
-    {"name": "debug_jit", "inherits": "tbase", "configurePreset": "debug_jit"},
-    {"name": "release_jit", "inherits": "tbase", "configurePreset": "release_jit"}
+    {
+      "name": "debug",
+      "inherits": "tbase",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "inherits": "tbase",
+      "configurePreset": "release"
+    },
+    {
+      "name": "debug_jit",
+      "inherits": "tbase",
+      "configurePreset": "debug_jit"
+    },
+    {
+      "name": "release_jit",
+      "inherits": "tbase",
+      "configurePreset": "release_jit"
+    }
   ]
 }
