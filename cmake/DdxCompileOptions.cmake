@@ -26,7 +26,13 @@ if (MSVC)
                      /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514 /wd4324
                      /wd5266 /wd4866)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-    list(APPEND DDX_CODEGEN_FLAGS /EHs-c- /D_HAS_EXCEPTIONS=0)
+    # C4577 with the flag that causes it rather than among the warnings: it
+    # reports `noexcept` under /EHs-c-, which is every noexcept in the project
+    # and in mdspan and Boost besides, so it describes the build ddx chose rather
+    # than a mistake in it -- and it fires at /W1, so anyone applying the
+    # recorded ddx_CODEGEN_FLAGS without our /Wall set gets it by the thousand
+    # too.  tests/package is exactly that consumer.
+    list(APPEND DDX_CODEGEN_FLAGS /EHs-c- /D_HAS_EXCEPTIONS=0 /wd4577)
 else ()
     if (ENABLE_NATIVE_ARCH)
         set(DDX_CODEGEN_FLAGS -march=native)

@@ -186,10 +186,9 @@ public:
 
   // A system: m functions over the same symbols.
   constexpr GraphBuilder &values(std::initializer_list<RTExpression<T>> roots) {
-    roots_ =
+    roots_ = std::ranges::to<std::vector<NodeId>>(
         roots |
-        std::views::transform([&](const auto &e) { return e.id(*builder_); }) |
-        std::ranges::to<std::vector<NodeId>>();
+        std::views::transform([&](const auto &e) { return e.id(*builder_); }));
     outputs_ = roots_;
     layout_.values = roots_.size();
     return *this;

@@ -62,11 +62,24 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL)
     if (DDX_BUILD_JIT)
         list(APPEND DDX_PACKAGE_COMPONENTS jit)
     endif ()
-    string(REPLACE ";" "\;" DDX_PACKAGE_COMPONENTS_ARG "${DDX_PACKAGE_COMPONENTS}")
+    # A list has to reach the nested cmake as one argument.  Escaping the
+    # separator does not survive add_test()'s own list expansion -- the generated
+    # CTestTestfile came out with "...COMPONENTS=rt" "dual", so every case but
+    # the first component was dropped on the floor and handed to cmake as a
+    # stray positional.  $<SEMICOLON> is written into the testfile literally and
+    # is a list again by the time the consumer's cache sees it.
+    string(JOIN "$<SEMICOLON>" DDX_PACKAGE_COMPONENTS_ARG ${DDX_PACKAGE_COMPONENTS})
 
+    # Boost_DIR alongside the compiler, for the same reason LLVM_DIR goes below:
+    # ddx-config.cmake re-finds Boost on the consumer's behalf, and the nested
+    # project has no toolchain file and no cache to find it with.  Where the
+    # parent was pointed at a Boost by one -- vcpkg on Windows -- an unhinted
+    # find_package(Boost CONFIG) there fails, and the install_tree case cannot
+    # even fall back on an inherited CMAKE_PREFIX_PATH because it sets its own.
     set(DDX_PACKAGE_COMMON_OPTIONS
             -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+            -DBoost_DIR=${Boost_DIR}
             -DDDX_CONSUMER_COMPONENTS=${DDX_PACKAGE_COMPONENTS_ARG})
     if (DDX_BUILD_JIT)
         list(APPEND DDX_PACKAGE_COMMON_OPTIONS -DLLVM_DIR=${LLVM_DIR})
@@ -110,6 +123,7 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL)
                 --build-generator ${CMAKE_GENERATOR}
                 --build-options -Dddx_DIR=${PROJECT_BINARY_DIR}
                                 -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                                -DBoost_DIR=${Boost_DIR}
                                 -DDDX_CONSUMER_COMPONENTS=jit)
         set_tests_properties(package.missing_component PROPERTIES WILL_FAIL TRUE)
     endif ()

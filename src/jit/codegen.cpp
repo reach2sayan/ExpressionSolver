@@ -1,9 +1,9 @@
 #include "codegen.hpp"
 
+#include <llvm/ADT/Twine.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
-#include <llvm/ADT/Twine.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Verifier.h>
 
@@ -167,13 +167,13 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
 
   const auto load_columns = [&](unsigned arg, std::size_t count,
                                 const char *stem) {
-    return std::views::iota(0uz, count) |
-           std::views::transform([&](std::size_t j) {
-             llvm::Value *const slot =
-                 b.CreateConstInBoundsGEP1_64(ptr, fn.getArg(arg), j);
-             return b.CreateLoad(ptr, slot, stem + std::to_string(j));
-           }) |
-           std::ranges::to<std::vector<llvm::Value *>>();
+    return std::ranges::to<std::vector<llvm::Value *>>(
+        std::views::iota(0uz, count) |
+        std::views::transform([&](std::size_t j) {
+          llvm::Value *const slot =
+              b.CreateConstInBoundsGEP1_64(ptr, fn.getArg(arg), j);
+          return b.CreateLoad(ptr, slot, stem + std::to_string(j));
+        }));
   };
 
   const auto &layout = g.layout();

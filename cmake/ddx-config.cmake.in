@@ -35,7 +35,7 @@ if (DDX_BUILD_JIT)
     # only with an exact version request, so find_dependency(LLVM 20) fails
     # against 20.1.2.
     find_dependency(LLVM CONFIG)
-    # Deliberately stricter than the @DDX_LLVM_VERSION_MIN@-@DDX_LLVM_VERSION_MAX@
+    # An exact major, not the @DDX_LLVM_VERSION_MIN@-@DDX_LLVM_VERSION_MAX@
     # range the sources build against: ddx::jit is a compiled artefact, and the
     # ORC C++ API it is compiled against is not stable across releases.  The
     # range is what ddx can be built with; this is what this one was.

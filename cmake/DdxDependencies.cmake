@@ -7,7 +7,7 @@
 # ddx has to be able to name them again on someone else's.
 #
 #   ddx_use_boost()            Boost.Mp11 + Graph + DynamicBitset  found, always
-#   ddx_use_llvm()             LLVM 18-20, found                   DDX_BUILD_JIT
+#   ddx_use_llvm()             LLVM 20, found                      DDX_BUILD_JIT
 #   ddx_use_googletest()       GoogleTest, fetched                 top-level only
 #   ddx_use_googlebenchmark()  Google Benchmark, fetched           DDX_BUILD_BENCHMARKS
 #
@@ -25,9 +25,19 @@ set(DDX_GOOGLETEST_REF "5376968f6948923e2411081fd9372e71a59d8e77"
         CACHE STRING "GoogleTest commit to fetch")
 set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release to fetch")
 
-# The LLVM range ddx::jit has been built against.
-# The ORC C++ API is not stable across releases, hence a range rather than a floor.
-set(DDX_LLVM_VERSION_MIN 18)
+# The LLVM range ddx::jit has been built against.  A range rather than a floor
+# because the ORC C++ API is not stable across releases; both ends currently
+# name 20, so the range is one release wide.
+#
+# 20 is a hard floor, not caution: src/jit uses three spellings that do not
+# exist below it.  Intrinsic::getOrInsertDeclaration and
+# Intrinsic::lookupIntrinsicID are absent from LLVM 18's Intrinsics.h entirely
+# -- 18 has getDeclaration and offers the lookup only as
+# Function::lookupIntrinsicID, which 20 removed, so no one spelling compiles
+# against both.  And sys::getHostCPUFeatures() returns bool through an out
+# parameter in 18 where 20 returns the StringMap by value, which compiler.cpp
+# relies on.
+set(DDX_LLVM_VERSION_MIN 20)
 set(DDX_LLVM_VERSION_MAX 20)
 
 # --- declarations -----------------------------------------------------------
@@ -70,9 +80,11 @@ FetchContent_Declare(googlebenchmark
 macro(ddx_use_boost)
     if (NOT TARGET Boost::headers)
         find_package(Boost REQUIRED CONFIG)
-        get_target_property(DDX_BOOST_INCLUDES Boost::headers
-                INTERFACE_INCLUDE_DIRECTORIES)
-        set(CMAKE_REQUIRED_INCLUDES ${DDX_BOOST_INCLUDES})
+        # The target rather than its INTERFACE_INCLUDE_DIRECTORIES scraped out of
+        # it: the probe then compiles against whatever Boost::headers carries,
+        # generator expressions and several directories included, which is
+        # exactly what the rest of the build compiles against.
+        set(CMAKE_REQUIRED_LIBRARIES Boost::headers)
         check_cxx_source_compiles("
                 #include <boost/mp11/algorithm.hpp>
                 #include <boost/mp11/list.hpp>
@@ -80,10 +92,10 @@ macro(ddx_use_boost)
                 #include <boost/dynamic_bitset.hpp>
                 int main() {}"
                 DDX_BOOST_HAS_WHAT_WE_NEED)
-        unset(CMAKE_REQUIRED_INCLUDES)
+        unset(CMAKE_REQUIRED_LIBRARIES)
         if (NOT DDX_BOOST_HAS_WHAT_WE_NEED)
             message(FATAL_ERROR
-                    "Boost ${Boost_VERSION} was found at ${DDX_BOOST_INCLUDES}, but it does not "
+                    "Boost ${Boost_VERSION} was found at ${Boost_INCLUDE_DIRS}, but it does not "
                     "have the headers ddx names: Mp11 (algorithm, list), Graph "
                     "(compressed_sparse_row_graph) and DynamicBitset.  A modular install wants "
                     "those libraries added; a distro one usually wants the whole headers package "

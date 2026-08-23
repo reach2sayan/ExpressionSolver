@@ -146,6 +146,7 @@ if (DDX_BUILD_JIT)
 
     ddx_use_llvm()
     add_subdirectory(src/jit)
+    add_subdirectory(include/jit)
 endif ()
 
 option(DDX_INSTALL "Generate install rules" ${PROJECT_IS_TOP_LEVEL})

@@ -61,7 +61,7 @@ so the same source serves every symbol type on this page.
   resolves is reported when it differs from the one ddx was built against.
 - GoogleTest and Google Benchmark are fetched at configure time, so a first
   configure that builds the tests or the benchmarks wants a network.
-- `-DDDX_BUILD_JIT=ON` additionally needs an LLVM 18–20 installation, pointed
+- `-DDDX_BUILD_JIT=ON` additionally needs an LLVM 20 installation, pointed
   at with `LLVM_DIR`.
 
 ## Using it
@@ -134,7 +134,7 @@ The JIT presets point `LLVM_DIR` at the Debian/Ubuntu `llvm-20` layout;
 override it on the command line, which wins over the preset:
 
 ```sh
-cmake --preset release_jit -DLLVM_DIR=/opt/llvm-19/lib/cmake/llvm
+cmake --preset release_jit -DLLVM_DIR=/opt/llvm-20/lib/cmake/llvm
 ```
 
 ### Options

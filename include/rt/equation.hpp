@@ -138,9 +138,9 @@ public:
       if constexpr (output_dim == 1) {
         return values[roots_[0]];
       } else {
-        return roots_ |
-               std::views::transform([&](rt::NodeId r) { return values[r]; }) |
-               std::ranges::to<std::vector<T>>();
+        return std::ranges::to<std::vector<T>>(
+            roots_ |
+            std::views::transform([&](rt::NodeId r) { return values[r]; }));
       }
     });
   }
@@ -297,8 +297,7 @@ private:
     if (it == names.end()) {
       return fail(errc::unknown_symbol);
     }
-    at[static_cast<std::size_t>(it - names.begin())] =
-        static_cast<T>(nv.value);
+    at[static_cast<std::size_t>(it - names.begin())] = static_cast<T>(nv.value);
     return {};
   }
 
@@ -315,10 +314,9 @@ private:
 
   const std::vector<rt::Hessian> &cached_hessians() const {
     if (hessians_.empty()) {
-      hessians_ = roots_ | std::views::transform([&](rt::NodeId r) {
-                    return rt::hessian(*arena_, r);
-                  }) |
-                  std::ranges::to<std::vector<rt::Hessian>>();
+      hessians_ = std::ranges::to<std::vector<rt::Hessian>>(
+          roots_ | std::views::transform(
+                       [&](rt::NodeId r) { return rt::hessian(*arena_, r); }));
     }
     return hessians_;
   }
@@ -327,9 +325,8 @@ private:
   harvest(const std::vector<rt::NodeId> &nodes,
           const std::vector<T> &at) const {
     const auto values = rt::evaluate_all(*arena_, at);
-    return nodes |
-           std::views::transform([&](rt::NodeId n) { return values[n]; }) |
-           std::ranges::to<std::vector<T>>();
+    return std::ranges::to<std::vector<T>>(
+        nodes | std::views::transform([&](rt::NodeId n) { return values[n]; }));
   }
 
   struct Compiled {
