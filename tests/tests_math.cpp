@@ -57,40 +57,40 @@ TEST(NewMathFunctions, ExprBinaryValue) {
 }
 // ---- Reverse mode (partials per variable) ---------------------------------
 TEST(NewMathFunctions, ReverseUnary) {
-  EXPECT_DOUBLE_EQ(Equation{log10(var<"x">)}.gradient(3.0)[0],
+  EXPECT_DOUBLE_EQ(Equation{log10(var<"x">)}.jacobian(3.0)[0],
                    1.0 / (3.0 * kLn10));
-  EXPECT_DOUBLE_EQ(Equation{cbrt(var<"x">)}.gradient(2.0)[0],
+  EXPECT_DOUBLE_EQ(Equation{cbrt(var<"x">)}.jacobian(2.0)[0],
                    1.0 / (3.0 * std::cbrt(2.0) * std::cbrt(2.0)));
-  EXPECT_DOUBLE_EQ(Equation{asinh(var<"x">)}.gradient(0.7)[0],
+  EXPECT_DOUBLE_EQ(Equation{asinh(var<"x">)}.jacobian(0.7)[0],
                    1.0 / std::sqrt(0.49 + 1.0));
-  EXPECT_DOUBLE_EQ(Equation{acosh(var<"x">)}.gradient(2.0)[0],
+  EXPECT_DOUBLE_EQ(Equation{acosh(var<"x">)}.jacobian(2.0)[0],
                    1.0 / std::sqrt(4.0 - 1.0));
-  EXPECT_DOUBLE_EQ(Equation{atanh(var<"x">)}.gradient(0.3)[0],
+  EXPECT_DOUBLE_EQ(Equation{atanh(var<"x">)}.jacobian(0.3)[0],
                    1.0 / (1.0 - 0.09));
-  EXPECT_DOUBLE_EQ(Equation{erf(var<"x">)}.gradient(0.5)[0],
+  EXPECT_DOUBLE_EQ(Equation{erf(var<"x">)}.jacobian(0.5)[0],
                    k2OverSqrtPi * std::exp(-0.25));
 }
 TEST(NewMathFunctions, ReverseBinaryPartials) {
   {
     auto x = var<"x">;
     auto y = var<"y">;
-    auto g = Equation{hypot(x, y)}.gradient(3.0, 4.0);
+    auto g = Equation{hypot(x, y)}.jacobian(3.0, 4.0);
     EXPECT_DOUBLE_EQ(g[0], 3.0 / 5.0);
     EXPECT_DOUBLE_EQ(g[1], 4.0 / 5.0);
   }
   {
     auto x = var<"x">;
     auto y = var<"y">;
-    auto g = Equation{pow(x, y)}.gradient(2.0, 3.0);
+    auto g = Equation{pow(x, y)}.jacobian(2.0, 3.0);
     EXPECT_DOUBLE_EQ(g[0], 3.0 * std::pow(2.0, 2.0));           // y*x^(y-1)
     EXPECT_DOUBLE_EQ(g[1], std::pow(2.0, 3.0) * std::log(2.0)); // x^y*ln x
   }
   {
-    // atan2(y, x): lhs is numerator y, rhs is x. The gradient is ordered by
+    // atan2(y, x): lhs is numerator y, rhs is x. The Jacobian is ordered by
     // symbol (x at index 0, y at index 1).
     auto y = var<"y">;
     auto x = var<"x">;
-    auto g = Equation{atan2(y, x)}.gradient(2.0, 1.0);
+    auto g = Equation{atan2(y, x)}.jacobian(2.0, 1.0);
     const double q = 1.0 + 4.0;
     EXPECT_DOUBLE_EQ(g[0], -1.0 / q); // d/dx = -y/q
     EXPECT_DOUBLE_EQ(g[1], 2.0 / q);  // d/dy =  x/q
@@ -99,10 +99,10 @@ TEST(NewMathFunctions, ReverseBinaryPartials) {
 TEST(NewMathFunctions, ReverseMaxMinSelectsBranch) {
   auto x = var<"x">;
   auto y = var<"y">;
-  auto gmax = Equation{max(x, y)}.gradient(3.0, 4.0);
+  auto gmax = Equation{max(x, y)}.jacobian(3.0, 4.0);
   EXPECT_DOUBLE_EQ(gmax[0], 0.0);
   EXPECT_DOUBLE_EQ(gmax[1], 1.0);
-  auto gmin = Equation{min(x, y)}.gradient(3.0, 4.0);
+  auto gmin = Equation{min(x, y)}.jacobian(3.0, 4.0);
   EXPECT_DOUBLE_EQ(gmin[0], 1.0);
   EXPECT_DOUBLE_EQ(gmin[1], 0.0);
 }
@@ -120,7 +120,7 @@ TEST(NewMathFunctions, ReverseMaxMinSelectsBranch) {
 // ===========================================================================
 
 // Single-variable expression: value must match eval(), tangent must match the
-// reverse-mode gradient computed by the separate backward()/adjoints() sweep.
+// reverse-mode Jacobian computed by the separate backward()/adjoints() sweep.
 // The two agree algebraically but not bit-for-bit — e.g. the quotient rule
 // evaluates (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse — so the
 // tangent is compared to a tolerance a few ULP wide rather than exactly.

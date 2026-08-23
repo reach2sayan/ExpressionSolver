@@ -6,6 +6,7 @@
 #include <cmath>
 #include <functional>
 #include <numbers>
+#include <numeric> // std::midpoint, std::transform_reduce
 #include <ranges>
 #include <utility>
 
@@ -63,11 +64,10 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   constexpr TaylorDual operator*(const TaylorDual &o) const noexcept {
     TaylorDual r;
     for (std::size_t k = 0; k <= N; ++k) {
-      S s{};
-      for (std::size_t j = 0; j <= k; ++j) {
-        s += c[j] * o.c[k - j];
-      }
-      r.c[k] = s;
+      const auto js = std::views::iota(0uz, k + 1);
+      r.c[k] = std::transform_reduce(
+          js.begin(), js.end(), S{}, std::plus{},
+          [&](std::size_t j) { return c[j] * o.c[k - j]; });
     }
     return r;
   }
@@ -77,12 +77,14 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   constexpr TaylorDual operator/(const TaylorDual &o) const noexcept {
     TaylorDual r;
     const S inv0 = S{1} / o.c[0];
+    // The k loop is a recurrence -- r.c[j] below was written by an earlier
+    // pass -- so only the inner convolution, whose j are all settled, folds.
     for (std::size_t k = 0; k <= N; ++k) {
-      S sum = c[k];
-      for (std::size_t j = 0; j < k; ++j) {
-        sum -= r.c[j] * o.c[k - j];
-      }
-      r.c[k] = sum * inv0;
+      const auto js = std::views::iota(0uz, k);
+      const S conv = std::transform_reduce(
+          js.begin(), js.end(), S{}, std::plus{},
+          [&](std::size_t j) { return r.c[j] * o.c[k - j]; });
+      r.c[k] = (c[k] - conv) * inv0;
     }
     return r;
   }
@@ -122,11 +124,10 @@ template <Numeric S, std::size_t N> struct TaylorDual {
                                          const std::array<S, N + 1> &b,
                                          std::size_t k,
                                          std::size_t j0 = 0) noexcept {
-    return std::ranges::fold_left(
-        std::views::iota(j0, k) | std::views::transform([&](std::size_t j) {
-          return a[j] * static_cast<S>(k - j) * b[k - j];
-        }),
-        S{}, std::plus{});
+    const auto js = std::views::iota(j0, k);
+    return std::transform_reduce(
+        js.begin(), js.end(), S{}, std::plus{},
+        [&](std::size_t j) { return a[j] * static_cast<S>(k - j) * b[k - j]; });
   }
 
   // Solve g·w' = u' for w, given w[0].  Differentiating and matching
@@ -225,11 +226,11 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     w.c[0] = sqrt(u.c[0]);
     const auto inv2w0 = S{1} / (S{2} * w.c[0]);
     for (std::size_t k = 1; k <= N; ++k) {
-      auto s = u.c[k];
-      for (std::size_t j = 1; j < k; ++j) {
-        s -= w.c[j] * w.c[k - j];
-      }
-      w.c[k] = s * inv2w0;
+      const auto js = std::views::iota(1uz, k);
+      const S conv = std::transform_reduce(
+          js.begin(), js.end(), S{}, std::plus{},
+          [&](std::size_t j) { return w.c[j] * w.c[k - j]; });
+      w.c[k] = (u.c[k] - conv) * inv2w0;
     }
     return w;
   }
@@ -437,6 +438,17 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 };
+
+// Linear, so it applies coefficient-wise -- the same reasoning as Dual's.
+template <Numeric S, std::size_t N>
+[[nodiscard]] constexpr TaylorDual<S, N>
+midpoint(const TaylorDual<S, N> &a, const TaylorDual<S, N> &b) noexcept {
+  using std::midpoint;
+  TaylorDual<S, N> r;
+  std::ranges::transform(a.c, b.c, r.c.begin(),
+                         [](const S &x, const S &y) { return midpoint(x, y); });
+  return r;
+}
 
 static_assert(Numeric<TaylorDual<double, 3>>,
               "TaylorDual must satisfy Numeric to nest in an expression");

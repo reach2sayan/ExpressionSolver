@@ -124,67 +124,67 @@ TEST(MathFunctionTest, TanEqualsRatio) {
 }
 TEST(ReverseModeAD, TanDerivative) {
   auto x = var<"x">;
-  auto g = Equation{tan(x)}.gradient(0.5);
+  auto g = Equation{tan(x)}.jacobian(0.5);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / (std::cos(0.5) * std::cos(0.5)));
 }
 TEST(ReverseModeAD, LogDerivative) {
   auto x = var<"x">;
-  auto g = Equation{log(x)}.gradient(0.5);
+  auto g = Equation{log(x)}.jacobian(0.5);
   ASSERT_DOUBLE_EQ(g[0], 2.0);
 }
 TEST(ReverseModeAD, SqrtDerivative) {
   auto x = var<"x">;
-  auto g = Equation{sqrt(x)}.gradient(4.0);
+  auto g = Equation{sqrt(x)}.jacobian(4.0);
   ASSERT_DOUBLE_EQ(g[0], 0.25); // 0.5/sqrt(4) = 0.25
 }
 TEST(ReverseModeAD, AsinDerivative) {
   double x0 = 0.5;
   auto x = var_of<"x">(x0);
-  auto g = Equation{asin(x)}.gradient(x0);
+  auto g = Equation{asin(x)}.jacobian(x0);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / std::sqrt(1.0 - x0 * x0));
 }
 TEST(ReverseModeAD, AcosDerivative) {
   double x0 = 0.5;
   auto x = var_of<"x">(x0);
-  auto g = Equation{acos(x)}.gradient(x0);
+  auto g = Equation{acos(x)}.jacobian(x0);
   ASSERT_DOUBLE_EQ(g[0], -1.0 / std::sqrt(1.0 - x0 * x0));
 }
 TEST(ReverseModeAD, AtanDerivative) {
   double x0 = 0.5;
   auto x = var_of<"x">(x0);
-  auto g = Equation{atan(x)}.gradient(x0);
+  auto g = Equation{atan(x)}.jacobian(x0);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / (1.0 + x0 * x0));
 }
 TEST(ReverseModeAD, SinhDerivative) {
   double x0 = 0.5;
   auto x = var_of<"x">(x0);
-  auto g = Equation{sinh(x)}.gradient(x0);
+  auto g = Equation{sinh(x)}.jacobian(x0);
   ASSERT_DOUBLE_EQ(g[0], std::cosh(x0));
 }
 TEST(ReverseModeAD, CoshDerivative) {
   double x0 = 0.5;
   auto x = var_of<"x">(x0);
-  auto g = Equation{cosh(x)}.gradient(x0);
+  auto g = Equation{cosh(x)}.jacobian(x0);
   ASSERT_DOUBLE_EQ(g[0], std::sinh(x0));
 }
 TEST(ReverseModeAD, TanhDerivative) {
   double x0 = 0.5;
   auto x = var_of<"x">(x0);
-  auto g = Equation{tanh(x)}.gradient(x0);
+  auto g = Equation{tanh(x)}.jacobian(x0);
   double c = std::cosh(x0);
   ASSERT_DOUBLE_EQ(g[0], 1.0 / (c * c));
 }
 TEST(ReverseModeAD, AbsDerivativePositive) {
   auto x = var<"x">;
-  ASSERT_DOUBLE_EQ(Equation{abs(x)}.gradient(1.0)[0], 1.0);
+  ASSERT_DOUBLE_EQ(Equation{abs(x)}.jacobian(1.0)[0], 1.0);
 }
 TEST(ReverseModeAD, AbsDerivativeNegative) {
   auto x = var<"x">;
-  ASSERT_DOUBLE_EQ(Equation{abs(x)}.gradient(-1.0)[0], -1.0);
+  ASSERT_DOUBLE_EQ(Equation{abs(x)}.jacobian(-1.0)[0], -1.0);
 }
 TEST(ReverseModeAD, AbsDerivativeAtZero) {
   auto x = var<"x">;
-  ASSERT_DOUBLE_EQ(Equation{abs(x)}.gradient(0.0)[0], 0.0);
+  ASSERT_DOUBLE_EQ(Equation{abs(x)}.jacobian(0.0)[0], 0.0);
 }
 TEST(ConceptTest, NumericSatisfied) {
   static_assert(Numeric<int>);
@@ -251,7 +251,7 @@ TEST(SymbolTest, ThreeVariables) {
 }
 // The canonical order is what turns a label into a slot index, so an expression
 // whose symbols appear out of order, more than once, and across several
-// subtrees has to come back alphabetical and deduplicated -- every gradient is
+// subtrees has to come back alphabetical and deduplicated -- every Jacobian is
 // returned in this order, and a sort that reordered them would silently return
 // the right numbers against the wrong names.
 TEST(SymbolTest, CanonicalOrderIsAlphabetical) {
@@ -467,7 +467,7 @@ TEST(EquationTest, DifferenceOfSquares) {
   constexpr auto expr = (x + y) * (x - y);
   auto eq = Equation(expr);
   auto [d1, d2] =
-      eq.template gradient<ddx::DiffMode::Symbolic>(std::array{4, 2});
+      eq.template jacobian<ddx::DiffMode::Symbolic>(std::array{4, 2});
   ASSERT_EQ(expr.eval(4, 2), 12); // (4+2)*(4-2) = 12
   ASSERT_EQ(d1, 8);               // 2x = 8
   ASSERT_EQ(d2, -4);              // -2y = -4
@@ -501,7 +501,7 @@ TEST(EquationTest, ThreeVariablePartials) {
   auto expr = x * y + y * z;
   auto eq = Equation(expr);
   auto [dx, dy, dz] =
-      eq.template gradient<ddx::DiffMode::Symbolic>(std::array{2, 3, 4});
+      eq.template jacobian<ddx::DiffMode::Symbolic>(std::array{2, 3, 4});
   ASSERT_EQ(dx, 3);
   ASSERT_EQ(dy, 6);
   ASSERT_EQ(dz, 3);
@@ -567,11 +567,11 @@ TEST(EquationTest, JacobianWithTrig) {
   ASSERT_DOUBLE_EQ(J[1][0], std::cos(2.0)); // ∂(sin(x)+y²)/∂x
   ASSERT_DOUBLE_EQ(J[1][1], 6.0);           // ∂(sin(x)+y²)/∂y = 2y
 }
-TEST(EquationTest, SingleComponentIsGradient) {
+TEST(EquationTest, SingleComponentIsJacobian) {
   auto x = var<"x">;
   auto y = var<"y">;
   auto eq = Equation(x * y);
-  auto g = eq.template gradient<ddx::DiffMode::Symbolic>(std::array{2.0, 3.0});
+  auto g = eq.template jacobian<ddx::DiffMode::Symbolic>(std::array{2.0, 3.0});
   ASSERT_DOUBLE_EQ(g[0], 3.0); // ∂(x*y)/∂x = y
   ASSERT_DOUBLE_EQ(g[1], 2.0); // ∂(x*y)/∂y = x
 }
@@ -647,7 +647,7 @@ TEST(EquationTest, ParallelReverseJacobian_FiveOutputsTrigExp) {
     for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
       ASSERT_NEAR(J_rev[i][j], J_sym[i][j], 1e-12);
 }
-TEST(EquationTest, ReverseJacobianSingleOutputMatchesGradient) {
+TEST(EquationTest, ReverseJacobianSingleOutputMatchesFlatRow) {
   auto x = var<"x">;
   auto y = var<"y">;
   auto expr = exp(x) * sin(y);
@@ -655,7 +655,7 @@ TEST(EquationTest, ReverseJacobianSingleOutputMatchesGradient) {
   auto ve = Equation(expr, exp(x) * sin(y));
 
   auto J_rev = ve.jacobian(std::array{2.0, 5.0});
-  auto g = Equation{expr}.gradient(2.0, 5.0);
+  auto g = Equation{expr}.jacobian(2.0, 5.0);
 
   for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
     ASSERT_DOUBLE_EQ(J_rev[0][j], g[j]);
@@ -675,20 +675,20 @@ TEST(ForwardModeAD, ExpressionStructuredBinding) {
 TEST(ReverseModeAD, SingleVariableLinear) {
   auto x = var<"x">;
   auto expr = constant(3.0) * x;
-  auto g = Equation{expr}.gradient(5.0);
+  auto g = Equation{expr}.jacobian(5.0);
   EXPECT_DOUBLE_EQ(g[0], 3.0);
 }
 TEST(ReverseModeAD, ProductRule) {
   Variable<double, ddx::impl::FixedString{"x"}> x;
   auto expr = x * x;
-  auto g = Equation{expr}.gradient(std::array{4.0});
+  auto g = Equation{expr}.jacobian(std::array{4.0});
   EXPECT_DOUBLE_EQ(g[0], 8.0);
 }
 TEST(ReverseModeAD, TwoVariables) {
   auto x = var<"x">;
   auto y = var<"y">;
   auto expr = x * y;
-  auto g = Equation{expr}.gradient(3.0, 4.0);
+  auto g = Equation{expr}.jacobian(3.0, 4.0);
   static_assert(g.size() == 2);
   EXPECT_DOUBLE_EQ(g[0], 4.0); // df/dx = y
   EXPECT_DOUBLE_EQ(g[1], 3.0); // df/dy = x
@@ -696,49 +696,49 @@ TEST(ReverseModeAD, TwoVariables) {
 TEST(ReverseModeAD, Sum) {
   auto x = var<"x">;
   auto y = var<"y">;
-  auto g = Equation{x + y}.gradient(2.0, 5.0);
+  auto g = Equation{x + y}.jacobian(2.0, 5.0);
   EXPECT_DOUBLE_EQ(g[0], 1.0);
   EXPECT_DOUBLE_EQ(g[1], 1.0);
 }
 TEST(ReverseModeAD, LinearCombination) {
   auto x = var<"x">;
   auto y = var<"y">;
-  auto g = Equation{constant(2.0) * x + constant(3.0) * y}.gradient(1.0, 1.0);
+  auto g = Equation{constant(2.0) * x + constant(3.0) * y}.jacobian(1.0, 1.0);
   EXPECT_DOUBLE_EQ(g[0], 2.0);
   EXPECT_DOUBLE_EQ(g[1], 3.0);
 }
 TEST(ReverseModeAD, Divide) {
   auto x = var<"x">;
   auto c = constant(3.0);
-  auto g = Equation{x / c}.gradient(6.0);
+  auto g = Equation{x / c}.jacobian(6.0);
   EXPECT_DOUBLE_EQ(g[0], 1.0 / 3.0);
 }
 TEST(ReverseModeAD, NegateViaSubtract) {
   auto x = var<"x">;
   auto y = var<"y">;
-  auto g = Equation{x - y}.gradient(5.0, 2.0);
+  auto g = Equation{x - y}.jacobian(5.0, 2.0);
   EXPECT_DOUBLE_EQ(g[0], 1.0);
   EXPECT_DOUBLE_EQ(g[1], -1.0);
 }
 TEST(ReverseModeAD, SinDerivative) {
   auto x = var<"x">;
-  auto g = Equation{sin(x)}.gradient(1.0);
+  auto g = Equation{sin(x)}.jacobian(1.0);
   EXPECT_DOUBLE_EQ(g[0], std::cos(1.0));
 }
 TEST(ReverseModeAD, CosDerivative) {
   auto x = var<"x">;
-  auto g = Equation{cos(x)}.gradient(1.0);
+  auto g = Equation{cos(x)}.jacobian(1.0);
   EXPECT_DOUBLE_EQ(g[0], -std::sin(1.0));
 }
 TEST(ReverseModeAD, ExpDerivative) {
   auto x = var<"x">;
-  auto g = Equation{exp(x)}.gradient(2.0);
+  auto g = Equation{exp(x)}.jacobian(2.0);
   EXPECT_DOUBLE_EQ(g[0], std::exp(2.0));
 }
 TEST(ReverseModeAD, ChainRuleSinOfProduct) {
   auto x = var<"x">;
   auto y = var<"y">;
-  auto g = Equation{sin(x * y)}.gradient(2.0, 3.0);
+  auto g = Equation{sin(x * y)}.jacobian(2.0, 3.0);
   EXPECT_DOUBLE_EQ(g[0], std::cos(6.0) * 3.0);
   EXPECT_DOUBLE_EQ(g[1], std::cos(6.0) * 2.0);
 }
@@ -746,21 +746,21 @@ TEST(ReverseModeAD, ThreeVariables) {
   auto x = var<"x">;
   auto y = var<"y">;
   auto z = var<"z">;
-  auto g = Equation{x * y + y * z}.gradient(2.0, 3.0, 4.0);
+  auto g = Equation{x * y + y * z}.jacobian(2.0, 3.0, 4.0);
   EXPECT_DOUBLE_EQ(g[0], 3.0);
   EXPECT_DOUBLE_EQ(g[1], 6.0);
   EXPECT_DOUBLE_EQ(g[2], 3.0);
 }
 TEST(ReverseModeAD, ScalarOnRight) {
   auto x = var<"x">;
-  auto g = Equation{x * 4.0 + 1.0}.gradient(5.0);
+  auto g = Equation{x * 4.0 + 1.0}.jacobian(5.0);
   EXPECT_DOUBLE_EQ(g[0], 4.0); // df/dx = 4
 }
 TEST(ReverseModeAD, AgreesWithForwardMode) {
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   auto x = var_of<"x">(xv);
   auto y = var_of<"y">(yv);
-  auto g = Equation{exp(x) * sin(y)}.gradient(xv, yv);
+  auto g = Equation{exp(x) * sin(y)}.jacobian(xv, yv);
   EXPECT_DOUBLE_EQ(g[0], std::exp(xv) * std::sin(yv));
   EXPECT_DOUBLE_EQ(g[1], std::exp(xv) * std::cos(yv));
 }
@@ -776,7 +776,7 @@ TEST(TutorialForward, SingleVar_ReverseMode) {
   double x0 = 2.0;
   auto x = var_of<"x">(x0);
   auto f = constant(1.0) + x + x * x + constant(1.0) / x + log(x);
-  auto g = Equation{f}.gradient(x0);
+  auto g = Equation{f}.jacobian(x0);
   EXPECT_NEAR(g[0], 1.0 + 2.0 * x0 - 1.0 / (x0 * x0) + 1.0 / x0, 1e-12);
 }
 TEST(TutorialMultiVar, Value) {
@@ -799,53 +799,53 @@ TEST(TutorialMultiVar, SymbolicPartials) {
            exp(x / y + y / z);
   auto eq = Equation(f);
   auto [dx, dy, dz] =
-      eq.template gradient<ddx::DiffMode::Symbolic>(std::array{xv, yv, zv});
+      eq.template jacobian<ddx::DiffMode::Symbolic>(std::array{xv, yv, zv});
   double e = std::exp(xv / yv + yv / zv);
   EXPECT_NEAR(dx, 1.0 + yv + zv + yv * zv + e / yv, 1e-10);
   EXPECT_NEAR(dy, 1.0 + xv + zv + xv * zv + e * (-xv / (yv * yv) + 1.0 / zv),
               1e-10);
   EXPECT_NEAR(dz, 1.0 + yv + xv + xv * yv + e * (-yv / (zv * zv)), 1e-10);
 }
-TEST(TutorialMultiVar, ReverseGradient) {
+TEST(TutorialMultiVar, ReverseJacobian) {
   double xv = 1.0, yv = 2.0, zv = 3.0;
   auto x = var_of<"x">(xv);
   auto y = var_of<"y">(yv);
   auto z = var_of<"z">(zv);
   auto f = constant(1.0) + x + y + z + x * y + y * z + x * z + x * y * z +
            exp(x / y + y / z);
-  auto g = Equation{f}.gradient(xv, yv, zv);
+  auto g = Equation{f}.jacobian(xv, yv, zv);
   double e = std::exp(xv / yv + yv / zv);
   EXPECT_NEAR(g[0], 1.0 + yv + zv + yv * zv + e / yv, 1e-10);
   EXPECT_NEAR(g[1], 1.0 + xv + zv + xv * zv + e * (-xv / (yv * yv) + 1.0 / zv),
               1e-10);
   EXPECT_NEAR(g[2], 1.0 + yv + xv + xv * yv + e * (-yv / (zv * zv)), 1e-10);
 }
-TEST(TutorialReverseConditionals, AbsGradientChangesSign) {
-  EXPECT_DOUBLE_EQ(Equation{abs(var<"x">)}.gradient(3.0)[0], 1.0);
-  EXPECT_DOUBLE_EQ(Equation{abs(var<"x">)}.gradient(-3.0)[0], -1.0);
+TEST(TutorialReverseConditionals, AbsJacobianChangesSign) {
+  EXPECT_DOUBLE_EQ(Equation{abs(var<"x">)}.jacobian(3.0)[0], 1.0);
+  EXPECT_DOUBLE_EQ(Equation{abs(var<"x">)}.jacobian(-3.0)[0], -1.0);
 }
 TEST(TutorialReverseConditionals, UpdateReevaluatesDerivatives) {
   Variable<double, FixedString{"x"}> x;
   auto eq = Equation(x * x + sin(x));
   EXPECT_NEAR(eq.evaluate(std::array{2.0}), 4.0 + std::sin(2.0), 1e-12);
-  EXPECT_NEAR(eq.template gradient<ddx::DiffMode::Symbolic>(std::array{2.0})[0],
+  EXPECT_NEAR(eq.template jacobian<ddx::DiffMode::Symbolic>(std::array{2.0})[0],
               4.0 + std::cos(2.0),
               1e-12); // 2x + cos(x)
   EXPECT_NEAR(eq.evaluate(std::array{5.0}), 25.0 + std::sin(5.0), 1e-12);
-  EXPECT_NEAR(eq.template gradient<ddx::DiffMode::Symbolic>(std::array{5.0})[0],
+  EXPECT_NEAR(eq.template jacobian<ddx::DiffMode::Symbolic>(std::array{5.0})[0],
               10.0 + std::cos(5.0), 1e-12);
 }
 TEST(TutorialReverseParams, SingleParameter) {
   double xv = 1.0, p = 3.0;
   auto x = var_of<"x">(xv);
-  auto g = Equation{constant(p) * sin(x)}.gradient(xv);
+  auto g = Equation{constant(p) * sin(x)}.jacobian(xv);
   EXPECT_NEAR(g[0], p * std::cos(xv), 1e-12);
 }
 TEST(TutorialReverseParams, MultiVarWithParameter) {
   double xv = 2.0, yv = 3.0, p = 4.0;
   auto x = var_of<"x">(xv);
   auto y = var_of<"y">(yv);
-  auto g = Equation{constant(p) * x * y}.gradient(xv, yv);
+  auto g = Equation{constant(p) * x * y}.jacobian(xv, yv);
   EXPECT_NEAR(g[0], p * yv, 1e-12);
   EXPECT_NEAR(g[1], p * xv, 1e-12);
 }
@@ -869,25 +869,6 @@ TEST(ScopedValue, RestoreIsBitExactFromAnyBase) {
   EXPECT_EQ(slot, 0.1);            // exact, not merely close
   EXPECT_NE(0.1 + 1.0 - 1.0, 0.1); // what the arithmetic undo would have given
 }
-
-#ifdef __cpp_exceptions
-// Nothing in ddx throws, but a caller's energy may, and the guarantee this
-// asserts is the reason scoped_value saves the old value rather than
-// recomputing it.  There is no unwinding to assert about under
-// -fno-exceptions, so the test is not there either -- the nesting tests around
-// it cover the rest.
-TEST(ScopedValue, RestoresWhenTheGuardedScopeThrows) {
-  // An energy that throws mid-probe must not leave the dof buffer seeded --
-  // which a hand-written `slot = 0` reset cannot guarantee.
-  double slot = 0.0;
-  auto blow_up = [&slot] {
-    const auto seed = scoped_seed<1.0>(slot);
-    throw std::runtime_error("energy blew up");
-  };
-  EXPECT_THROW(blow_up(), std::runtime_error);
-  EXPECT_DOUBLE_EQ(slot, 0.0);
-}
-#endif
 
 TEST(ScopedValue, IsPinnedByItsBase) {
   // A guard restores in its destructor, so exactly one of them may exist per
@@ -1046,6 +1027,6 @@ TEST(MapTest, NamedValueStillDrivesTheExpressionSide) {
   constexpr auto y = var<"y">;
   const auto f = x * y;
   EXPECT_DOUBLE_EQ(f.eval(named<"y">(2.0), named<"x">(4.0)), 8.0);
-  EXPECT_DOUBLE_EQ(Equation{f}.gradient(named<"y">(2.0), named<"x">(4.0))[0],
+  EXPECT_DOUBLE_EQ(Equation{f}.jacobian(named<"y">(2.0), named<"x">(4.0))[0],
                    2.0);
 }

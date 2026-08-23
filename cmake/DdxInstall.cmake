@@ -5,10 +5,7 @@ include_guard(GLOBAL)
 
 include(CMakePackageConfigHelpers)
 
-set(DDX_EXPORT_TARGETS ddx ddx_util ddx_ops ddx_md ddx_symbolic)
-if (DDX_BUILD_DUAL)
-    list(APPEND DDX_EXPORT_TARGETS ddx_dual)
-endif ()
+set(DDX_EXPORT_TARGETS ddx ddx_util ddx_ops ddx_md ddx_symbolic ddx_dual)
 # libddx itself.  The JIT objects are inside it when built, so there is nothing
 # separate to export for them -- ddx::jit is an alias of this same target.
 list(APPEND DDX_EXPORT_TARGETS ddx_rt)

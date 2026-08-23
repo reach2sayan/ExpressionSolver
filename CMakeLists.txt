@@ -37,7 +37,7 @@ include(DdxDependencies)
 #   ddx::ops       the operation vocabulary and its derivative rules
 #   ddx::md        the multidimensional storage the drivers hand back
 #   ddx::symbolic  the compile-time graph: tree, point, sweeps
-#   ddx::dual      forward mode -- the one optional piece
+#   ddx::dual      forward mode -- duals, and the Hessian entry points
 #   ddx::ddx       all of the above, which is what most consumers want
 #
 # ops/ and symbolic/ are fully constexpr and stay that way; nothing below may
@@ -72,32 +72,26 @@ set_target_properties(ddx_md PROPERTIES EXPORT_NAME md)
 target_link_libraries(ddx_md INTERFACE ddx_util ddx_ops)
 
 # Boost.Mp11 reaches exactly one header, symbolic/symbol.hpp, so it is declared
-# exactly here.  BUILD_LOCAL_INTERFACE because the fetched target is not ours to
-# export; ddx-config.cmake supplies Mp11 again for an installed consumer.
+# exactly here.  Boost::headers is the target because that is what a monolithic
+# BoostConfig offers for the header-only libraries, and an include path is all
+# any of them amount to.  It is carried in the export set like any other found
+# package: ddx-config.cmake finds Boost again and the name resolves.
 add_library(ddx_symbolic INTERFACE)
 add_library(ddx::symbolic ALIAS ddx_symbolic)
 set_target_properties(ddx_symbolic PROPERTIES EXPORT_NAME symbolic)
-target_link_libraries(ddx_symbolic INTERFACE ddx_ops ddx_md
-        $<BUILD_LOCAL_INTERFACE:Boost::mp11>)
+target_link_libraries(ddx_symbolic INTERFACE ddx_ops ddx_md Boost::headers)
 
-# Forward mode.  ops/scalar.hpp forward-declares Dual and gives every trait a
-# non-dual answer, so with this off the second-derivative entry points simply
-# constrain themselves out of existence -- no header is #if'd around a template.
-option(DDX_BUILD_DUAL "Build the dual-number forward-mode component" ON)
-if (DDX_BUILD_DUAL)
-    add_library(ddx_dual INTERFACE)
-    add_library(ddx::dual ALIAS ddx_dual)
-    set_target_properties(ddx_dual PROPERTIES EXPORT_NAME dual)
-    target_link_libraries(ddx_dual INTERFACE ddx_symbolic)
-    target_compile_definitions(ddx_dual INTERFACE DDX_HAS_DUAL=1)
-endif ()
+# Forward mode, which every build has: ddx computes derivatives both ways and
+# the second-derivative entry points are not something a configuration takes
+# away.
+add_library(ddx_dual INTERFACE)
+add_library(ddx::dual ALIAS ddx_dual)
+set_target_properties(ddx_dual PROPERTIES EXPORT_NAME dual)
+target_link_libraries(ddx_dual INTERFACE ddx_symbolic)
 
 add_library(ddx INTERFACE)
 add_library(ddx::ddx ALIAS ddx)
-target_link_libraries(ddx INTERFACE ddx_util ddx_ops ddx_md ddx_symbolic)
-if (DDX_BUILD_DUAL)
-    target_link_libraries(ddx INTERFACE ddx_dual)
-endif ()
+target_link_libraries(ddx INTERFACE ddx_util ddx_ops ddx_md ddx_symbolic ddx_dual)
 
 # Each header directory lists its own files onto its own target, for IDE
 # visibility; nothing is compiled from there.
@@ -165,13 +159,10 @@ if (NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     return ()
 endif ()
 
-# The tour walks every entry point, second derivatives included, so it is built
-# with forward mode or not at all.
-if (DDX_BUILD_DUAL)
-    add_executable(main src/main.cpp)
-    target_link_libraries(main PRIVATE ddx)
-    ddx_target_flags(main)
-endif ()
+# The tour walks every entry point, second derivatives included.
+add_executable(main src/main.cpp)
+target_link_libraries(main PRIVATE ddx)
+ddx_target_flags(main)
 
 enable_testing()
 add_subdirectory(tests)

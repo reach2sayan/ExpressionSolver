@@ -14,14 +14,10 @@ namespace ddx {
 // The only derivative entry point.
 using impl::Equation;
 
-// Symbol value types.  A `double` graph answers evaluate()/gradient()/
-// jacobian()/derivative_tensor()/univariate_derivative(); hessian() needs
-// `dual`.  Built unless DDX_BUILD_DUAL=OFF, which drops forward mode and with
-// it every second-derivative entry point.
-#if DDX_HAS_DUAL
+// Symbol value types.  A `double` graph answers evaluate(), jacobian(),
+// derivative_tensor() and univariate_derivative(); hessian() needs `dual`.
 using impl::dual;
 using impl::dual2nd;
-#endif
 
 // var<"x">, or "x"_s.  var_of<"x">(v) / dual_var_of<"x">(v) take the scalar
 // type from an exemplar value instead of naming it.
@@ -29,9 +25,7 @@ using impl::sym;
 using impl::var;
 using impl::var_of;
 using impl::variable;
-#if DDX_HAS_DUAL
 using impl::dual_var_of;
-#endif
 namespace literals = impl::literals;
 
 // constant(3.0) -- a value stored in the tree.

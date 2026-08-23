@@ -171,11 +171,11 @@ TEST(Ownership, ResultOwnsItsBuffersAndTransfersThem) {
       4.0);
 }
 TEST(Ownership, ReverseHessianAcceptsATemporaryExpression) {
-  // A temporary expression has to reach hessian(), not just gradient().
+  // A temporary expression has to reach hessian(), not just jacobian().
   using D = ddx::impl::Dual<double>;
   const auto H =
       Equation{var<"x", dual> * var<"y", dual>}.hessian(std::array{2.0, 3.0});
-  const auto g = Equation{var<"x", dual> * var<"y", dual>}.gradient(
+  const auto g = Equation{var<"x", dual> * var<"y", dual>}.jacobian(
       std::array{D{2.0}, D{3.0}});
   EXPECT_DOUBLE_EQ(H[0][1], 1.0);
   EXPECT_DOUBLE_EQ(H[0][0], 0.0);
@@ -425,6 +425,44 @@ TEST(SparseHessian, IsSymmetricAndSortedWithinEachColumn) {
     }
   }
 }
+// Both Hessian drivers have to reach a constant expression, and nothing else
+// notices if they stop: the runtime paths are unaffected, so a constexpr
+// dropped anywhere between sparse_hessian and the sweeps beneath it would leave
+// every test here green.  These fail to compile instead.
+//
+// Dual<double>, NOT dual2nd.  hessian_values_sparse harvests grad.get<1>() and
+// casts it to double, so a second-order dual fails inside sweep.hpp rather than
+// at the call -- which is a long way to travel from a scalar someone "fixed"
+// here because a Hessian is a second derivative.
+TEST(ConstexprContract, BothHessianDriversAreConstantEvaluated) {
+  using D = ddx::impl::Dual<double>;
+  using ddx::impl::FixedString;
+
+  // f(x, y) = x*y + 0.5*x*x  ->  H = [[1, 1], [1, 0]], exact in binary floating
+  // point and independent of the point, so no tolerance is involved.
+  constexpr Variable<D, FixedString{"x00"}> a;
+  constexpr Variable<D, FixedString{"x01"}> b;
+  constexpr auto expr = a * b + 0.5 * a * a;
+  constexpr std::array<double, 2> at{0.3, 0.7};
+
+  constexpr auto sparse =
+      ddx::impl::sparse_hessian(expr, std::span<const double>{at});
+  static_assert(sparse.rows == 2);
+  static_assert(sparse.structural(0, 1), "the cross term is stored");
+  static_assert(sparse[0, 1] == 1.0, "d2f/dx dy");
+  static_assert(sparse[1, 0] == 1.0, "and its mirror");
+  static_assert(sparse[0, 0] == 1.0, "d2f/dx2");
+  static_assert(sparse.values().size() == sparse.nnz);
+
+  // The dense driver, row-major, hence i * n + j where the sparse one indexes
+  // with [i, j].
+  constexpr auto dense = ddx::impl::hessian(expr, std::span<const double>{at});
+  static_assert(dense.has_value());
+  static_assert(dense->hessian[0 * 2 + 1] == 1.0);
+  static_assert(dense->hessian[0 * 2 + 0] == 1.0);
+  static_assert(dense->hessian[1 * 2 + 1] == 0.0, "y appears only linearly");
+}
+
 // The degenerate end of the storage range.  A linear expression has a
 // structurally empty Hessian, so nnz is 0 and the buffer collapses to nothing
 // but the sink cell — the one place an off-by-one in the sizing would show up
@@ -539,15 +577,15 @@ TEST(ForwardDriverReuse, AllIndicesMatchesAnExplicitSubset) {
     }
   }
 }
-TEST(ForwardDriverReuse, GradientReusingOverloadMatchesOwning) {
+TEST(ForwardDriverReuse, JacobianReusingOverloadMatchesOwning) {
   const std::array<double, 3> pt{0.4, 0.9, 1.3};
   const std::span<const double> x{pt};
 
-  const auto owned = ddx::impl::gradient(reuse_energy, x);
+  const auto owned = ddx::impl::jacobian(reuse_energy, x);
 
-  ddx::impl::GradientWorkspace ws;
+  ddx::impl::JacobianWorkspace ws;
   std::array<double, 3> out{};
-  ddx::impl::gradient(reuse_energy, x, ddx::impl::detail::all_indices(3), ws,
+  ddx::impl::jacobian(reuse_energy, x, ddx::impl::detail::all_indices(3), ws,
                       std::span<double>{out});
 
   ASSERT_EQ(out.size(), owned.size());
@@ -583,9 +621,9 @@ TEST(ForwardDriverReuse, PointAcceptsAnyContiguousSizedRange) {
     }
   }
 
-  // gradient() takes the same range set.
-  const auto gv = ddx::impl::gradient(f, v);
-  const auto ga = ddx::impl::gradient(f, a);
+  // jacobian() takes the same range set.
+  const auto gv = ddx::impl::jacobian(f, v);
+  const auto ga = ddx::impl::jacobian(f, a);
   ASSERT_EQ(gv.size(), ga.size());
   for (std::size_t i = 0; i < gv.size(); ++i)
     EXPECT_DOUBLE_EQ(gv[i], ga[i]);

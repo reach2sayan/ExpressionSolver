@@ -1,7 +1,7 @@
 #pragma once
 
 // The drivers for a runtime callable: seed a dual into a scratch buffer, hand
-// the callable a pointer to it, read the derivative back out.  gradient sweeps
+// the callable a pointer to it, read the derivative back out.  jacobian sweeps
 // once per active variable, hessian once per probe pair.
 
 #include "dual/workspace.hpp"
@@ -20,7 +20,7 @@ namespace ddx::impl {
 namespace detail {
 // Over storage the caller has already seeded.
 template <CEnergyOf<dual> F, CIndexRange R>
-constexpr void gradient_into(F &&f, dual *const dof, R &&active,
+constexpr void jacobian_into(F &&f, dual *const dof, R &&active,
                              const std::span<double> out) {
   for (auto &&[slot, dof_index] : std::views::zip(out, active)) {
     const auto seed = scoped_seed<1.0>(dof[dof_index].deriv());
@@ -31,34 +31,34 @@ constexpr void gradient_into(F &&f, dual *const dof, R &&active,
 
 // Writing form: nothing allocates once `ws` has been used once.
 template <CEnergyOf<dual> F>
-void gradient(F &&f, const std::span<const double> x, CIndexRange auto &&active,
-              GradientWorkspace &ws, const std::span<double> out) {
-  detail::gradient_into(static_cast<F &&>(f), ws.seed(x),
+void jacobian(F &&f, const std::span<const double> x, CIndexRange auto &&active,
+              JacobianWorkspace &ws, const std::span<double> out) {
+  detail::jacobian_into(static_cast<F &&>(f), ws.seed(x),
                         static_cast<decltype(active) &&>(active), out);
 }
 
 // Owning form: a local workspace.
 template <CEnergyOf<dual> F>
-std::vector<double> gradient(F &&f, const std::span<const double> x,
+std::vector<double> jacobian(F &&f, const std::span<const double> x,
                              CIndexRange auto &&active) {
-  GradientWorkspace ws;
+  JacobianWorkspace ws;
   std::vector<double> g(std::ranges::size(active));
-  gradient(static_cast<F &&>(f), x, static_cast<decltype(active) &&>(active),
+  jacobian(static_cast<F &&>(f), x, static_cast<decltype(active) &&>(active),
            ws, std::span<double>{g});
   return g;
 }
 
 // Convenience: differentiate every variable.
 template <CEnergyOf<dual> F>
-std::vector<double> gradient(F &&f, const std::span<const double> x) {
-  return gradient(static_cast<F &&>(f), x, detail::all_indices(x.size()));
+std::vector<double> jacobian(F &&f, const std::span<const double> x) {
+  return jacobian(static_cast<F &&>(f), x, detail::all_indices(x.size()));
 }
 
 namespace detail {
 
-// Value, gradient and symmetric Hessian at x w.r.t. `active`: an O(m^2)
-// forward-over-forward sweep on dual2nd.  Probe (i, j) seeds active[i] in the
-// outer derivative slot and active[j] in the inner one, so f returns
+// Value, first derivatives and symmetric Hessian at x w.r.t. `active`: an
+// O(m^2) forward-over-forward sweep on dual2nd.  Probe (i, j) seeds active[i]
+// in the outer derivative slot and active[j] in the inner one, so f returns
 // ((f, df/dx_j), (df/dx_i, d2f/dx_i dx_j)).  Only those two scalars move per
 // probe, so they are toggled in place.  Writes every cell of both outputs.
 //
@@ -107,15 +107,17 @@ double hessian(F &&f, const std::span<const double> x,
                       hess_out.data());
 }
 
-// Compile-time arity: std::array throughout, so this path allocates nothing.
+// Compile-time arity: std::array throughout, so this path allocates nothing --
+// and so it is the one Hessian driver a constant evaluation can run.
 template <std::size_t N, CEnergyOf<dual2nd> F>
-HessianStatic<N> hessian_static(F &&f, const std::span<const double> x) {
+constexpr HessianStatic<N> hessian_static(F &&f,
+                                          const std::span<const double> x) {
   std::array<dual2nd, N> dof{};
   std::ranges::transform(x | std::views::take(N), dof.begin(),
                          [](const double v) { return dual2nd{v}; });
   HessianStatic<N> out{};
   out.value = hessian_into(static_cast<F &&>(f), dof.data(), all_indices(N),
-                           out.gradient.data(), out.hessian.data());
+                           out.jacobian.data(), out.hessian.data());
   return out;
 }
 
@@ -131,7 +133,7 @@ HessianOwned hessian(F &&f, const std::span<const double> x,
                                     static_cast<decltype(active) &&>(active),
                                     grad.get(), hess.get());
   return {.value = value,
-          .gradient = std::move(grad),
+          .jacobian = std::move(grad),
           .hessian = std::move(hess),
           .arity = m};
 }

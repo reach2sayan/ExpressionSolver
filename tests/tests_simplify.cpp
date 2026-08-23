@@ -78,9 +78,9 @@ TEST(ReverseMode, MultiplyAdjointRespectsOperandSide) {
   // f = z*(x*y).  Nothing reorders it -- Mat2 never opted in -- so the adjoint
   // arriving at the inner product is Z rather than the identity, which is what
   // makes the two sidings disagree.
-  const auto g = ddx::Equation{mz * (mx * my)}.gradient(std::array{X, Y, Z});
+  const auto g = ddx::Equation{mz * (mx * my)}.jacobian(std::array{X, Y, Z});
 
-  // Gradients come back in canonical symbol order: x, y, z.
+  // Partials come back in canonical symbol order: x, y, z.
   EXPECT_EQ(g[0], Z * Y); // dx = adj*y with adj = z
   EXPECT_EQ(g[1], X * Z); // dy = x*adj  <-- the sided one; the bug gives Z*X
   EXPECT_EQ(g[2], X * Y); // dz = adj*(x*y) with adj = I
@@ -100,7 +100,7 @@ TEST(ReverseMode, DivideAdjointRespectsOperandSide) {
 
   // f = z*(x/y), so the adjoint arriving at the quotient is Z, not the
   // identity -- which is what makes the two spellings disagree.
-  const auto g = ddx::Equation{mz * (mx / my)}.gradient(std::array{X, Y, Z});
+  const auto g = ddx::Equation{mz * (mx / my)}.jacobian(std::array{X, Y, Z});
 
   const Mat2 sided = -((X / Y) * Z) / Y;    // what the sided rule must produce
   const Mat2 quotient = -(Z * X) / (Y * Y); // what the commutative rule gives
@@ -124,8 +124,8 @@ TEST(Simplify, MaxAndMinHaveASymbolicDerivative) {
           min(sx, sy))
           .derivative();
   for (auto [a, b] : {std::pair{3.0, 1.0}, std::pair{1.0, 3.0}}) {
-    const auto rmax = Equation{max(sx, sy)}.gradient(std::array{a, b});
-    const auto rmin = Equation{min(sx, sy)}.gradient(std::array{a, b});
+    const auto rmax = Equation{max(sx, sy)}.jacobian(std::array{a, b});
+    const auto rmin = Equation{min(sx, sy)}.jacobian(std::array{a, b});
     EXPECT_DOUBLE_EQ(dmax_dx.eval(ddx::named<"x">(a), ddx::named<"y">(b)),
                      rmax[0]);
     EXPECT_DOUBLE_EQ(dmin_dx.eval(ddx::named<"x">(a), ddx::named<"y">(b)),

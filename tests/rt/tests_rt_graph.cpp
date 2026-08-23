@@ -58,7 +58,7 @@ TEST(RtGraph, EverythingTheOutputsReachIsLive) {
 TEST(RtGraph, CarriesSymbolsAndOutputs) {
   ddx::rt::Builder<> b;
   const auto root = ddx::rt::to_graph(b, ddx::var<"x"> * ddx::var<"y">);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(root).gradient().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(root).jacobian().build();
 
   EXPECT_EQ(graph.symbols().size(), 2u);
   EXPECT_EQ(graph.outputs().size(), 3u); // value plus two partials
@@ -68,7 +68,7 @@ TEST(RtGraph, IdOrderIsTopological) {
   ddx::rt::Builder<> b;
   const auto root = ddx::rt::to_graph(b, sin(ddx::var<"x"> * ddx::var<"y">) +
                                              exp(ddx::var<"x">));
-  const auto graph = ddx::rt::GraphBuilder{b}.value(root).gradient().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(root).jacobian().build();
 
   // Codegen emits in id order in one pass, which is only correct if every
   // child precedes its parent.

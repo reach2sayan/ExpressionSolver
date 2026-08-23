@@ -8,6 +8,7 @@
 #include <concepts>
 #include <cstdint>
 #include <functional>
+#include <numeric> // std::midpoint
 #include <string_view>
 #include <utility>
 
@@ -198,17 +199,22 @@ struct sign_impl {
 DDX_ADL_BINARY_IMPL(pow_impl, pow)
 DDX_ADL_BINARY_IMPL(atan2_impl, atan2)
 DDX_ADL_BINARY_IMPL(hypot_impl, hypot)
+// std::midpoint for arithmetic R; Dual's and TaylorDual's own overloads for
+// the rest, which is what max/min's tie branch needs.
+DDX_ADL_BINARY_IMPL(midpoint_impl, midpoint)
 #undef DDX_ADL_BINARY_IMPL
 // A tie averages the operands and an unordered pair returns (a-b)*0, NaN from
 // either side: both are symmetric, which is what makes them stable under the
-// commutative reordering the graph builder applies.  Spelled a + (b-a)/2 so an
-// equal pair at the top of the range cannot overflow.
+// commutative reordering the graph builder applies.  Through midpoint_impl so
+// an equal pair at the top of the range cannot overflow -- std::midpoint where
+// R is arithmetic, and a == b compares only the value level on a Dual, so the
+// derivative parts still have to be averaged rather than picked from a side.
 struct max_impl {
   constexpr auto operator()(const Numeric auto &a,
                             const Numeric auto &b) const noexcept {
     using R = std::remove_cvref_t<decltype(a < b ? b : a)>;
     if (a == b) {
-      return R{a + (b - a) / R{2}};
+      return R{midpoint_impl{}(R{a}, R{b})};
     }
     if (a < b) {
       return R{b};
@@ -224,7 +230,7 @@ struct min_impl {
                             const Numeric auto &b) const noexcept {
     using R = std::remove_cvref_t<decltype(b < a ? b : a)>;
     if (a == b) {
-      return R{a + (b - a) / R{2}};
+      return R{midpoint_impl{}(R{a}, R{b})};
     }
     if (b < a) {
       return R{b};

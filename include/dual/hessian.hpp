@@ -123,9 +123,11 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
 }
 
 // Every symbol, in canonical order: the extent is compile-time for a graph, so
-// this allocates nothing but the result.
+// this allocates nothing but the result -- which is what lets a constant
+// evaluation run it.  The subset-taking form above cannot: it widens to the
+// owning shape, and that allocates.
 template <CHessianTarget F>
-auto hessian(F &&f, const std::span<const double> x) {
+constexpr auto hessian(F &&f, const std::span<const double> x) {
   return detail::check_target<F>(x).transform([&] {
     if constexpr (CExpression<F>) {
       if constexpr (detail::CGraphReverseHessian<F>) {

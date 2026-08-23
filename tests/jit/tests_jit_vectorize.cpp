@@ -20,7 +20,7 @@
 // on the IR rather than inferred from a benchmark.
 //
 // The transcendentals are the whole point: README measures the libm call at
-// around three quarters of a gradient, so a loop that vectorises the
+// around three quarters of a Jacobian, so a loop that vectorises the
 // arithmetic and leaves sin() scalar has won nothing.
 // ===========================================================================
 
@@ -117,19 +117,19 @@ TEST(JitVectorize, TranscendentalsUseVectorLibm) {
   EXPECT_TRUE(calls_vector_libm(ir, "exp")) << "exp was not vectorised";
 }
 
-TEST(JitVectorize, GradientLoopVectorises) {
+TEST(JitVectorize, JacobianLoopVectorises) {
   if constexpr (!host_has_libmvec) {
     GTEST_SKIP() << "libmvec is glibc on x86-64";
   }
-  // The gradient graph is wider and shares subexpressions; it must still
+  // The Jacobian graph is wider and shares subexpressions; it must still
   // vectorise, since that is the call anyone actually cares about.
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto graph =
-      ddx::rt::GraphBuilder{b}.value(exp(x) * sin(y)).gradient().build();
+      ddx::rt::GraphBuilder{b}.value(exp(x) * sin(y)).jacobian().build();
   const auto ir = std::format("{}", ddx::jit::Ir{compiler(), graph});
-  EXPECT_TRUE(has_vector_doubles(ir)) << "the gradient loop stayed scalar";
+  EXPECT_TRUE(has_vector_doubles(ir)) << "the Jacobian loop stayed scalar";
   EXPECT_TRUE(calls_vector_libm(ir, "sin"));
 }
 

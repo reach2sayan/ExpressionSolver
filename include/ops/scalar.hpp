@@ -7,12 +7,9 @@
 // `Dual<Inner>`, `embed_constant` only constructs one inside a template that
 // nothing instantiates unless duals are in play -- so the symbolic layer can
 // ask "is this a dual? what scalar is underneath it? how deep does it nest?"
-// and get correct answers whether or not the forward-mode component was built.
-//
-// With DDX_BUILD_DUAL=OFF nothing defines `Dual`, `DualLike` is universally
-// false, and every `requires(DualLike<value_type>)` member drops out of
-// overload resolution on its own.  That is why turning forward mode off needs
-// no `#if` around a single template.
+// and get correct answers without including the forward-mode headers.  That is
+// what keeps every `requires(DualLike<value_type>)` member a plain constraint
+// rather than something an `#if` has to wrap.
 
 #include "ops/numeric.hpp"
 

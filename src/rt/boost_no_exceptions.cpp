@@ -1,8 +1,8 @@
 // Under BOOST_NO_EXCEPTIONS boost::throw_exception is declared but not
 // defined, and the program must supply it.  Nothing in ddx routes through it:
 // it is reached only from Boost's own internals, where the alternative to
-// terminating is a container in a state Boost will not describe.  Built only
-// when DDX_NO_EXCEPTIONS is on.
+// terminating is a container in a state Boost will not describe.  Compiled
+// into libddx unconditionally: the project builds without exceptions.
 //
 // Default visibility explicitly: libddx is -fvisibility=hidden, and Boost's
 // inline code in other objects has to find these.  They live in namespace

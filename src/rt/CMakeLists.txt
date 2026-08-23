@@ -37,26 +37,17 @@ if (NOT DDX_SHARED_LIBS)
     target_compile_definitions(ddx_rt PUBLIC DDX_STATIC_LIB)
 endif ()
 
-# Boost is fetched for the build and found again by the consumer -- the fetched
-# targets belong to no export set of ours.  BUILD_LOCAL_INTERFACE, not
-# BUILD_INTERFACE: both keep them out of an install, but only this one also
-# keeps them out of export(), which retains BUILD_INTERFACE because the build
-# tree is what it exports.  ddx-config.cmake resolves Boost for either tree.
-#
-# Both are PUBLIC because both are named in include/rt: the frozen graph is a
-# compressed_sparse_row_graph and the coupling rows are dynamic_bitsets.  What
-# moved into this library is Boost.Graph's *algorithms* -- the colouring and the
-# graphviz writer -- which nothing outside these two .cpp files includes now.
-# All of it is header-only, so none of it is a link-time dependency for anyone.
-target_link_libraries(ddx_rt PUBLIC ddx
-        $<BUILD_LOCAL_INTERFACE:Boost::graph>
-        $<BUILD_LOCAL_INTERFACE:Boost::dynamic_bitset>)
+# PUBLIC because Boost is named in include/rt: the frozen graph is a
+# compressed_sparse_row_graph and the coupling rows are dynamic_bitsets, so a
+# consumer of these headers needs the include path too.  What moved into this
+# library is Boost.Graph's *algorithms* -- the colouring and the graphviz writer
+# -- which nothing outside these two .cpp files includes now.  All of it is
+# header-only, so none of it is a link-time dependency for anyone, and the
+# target names a found package, so the export set carries it as it stands.
+target_link_libraries(ddx_rt PUBLIC ddx Boost::headers)
 ddx_target_flags(ddx_rt)
 
 # Boost leaves boost::throw_exception undefined under -fno-exceptions and makes
-# it the program's to supply; see boost_no_exceptions.cpp.  It compiles straight
-# into the library now that there is one.
-if (DDX_NO_EXCEPTIONS)
-    target_sources(ddx_rt PRIVATE boost_no_exceptions.cpp)
-    target_link_libraries(ddx_rt PRIVATE $<BUILD_LOCAL_INTERFACE:Boost::throw_exception>)
-endif ()
+# it the program's to supply.  The project builds that way always, so this is
+# conditional on nothing.
+target_sources(ddx_rt PRIVATE boost_no_exceptions.cpp)

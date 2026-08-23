@@ -15,7 +15,7 @@
 //   f'(½) = 0                       exactly, by symmetry, for every c and k
 //   f''   = -2c + k/(x(1-x))        exactly
 //
-// So the gradient is checked against an exact zero and the Hessian against an
+// So the Jacobian is checked against an exact zero and the Hessian against an
 // exact expression, rather than against finite differences. And the *shape*
 // the derivatives imply -- one minimum or two -- is a physical claim a solver
 // can be made to confirm.
@@ -25,7 +25,7 @@ namespace {
 using ddx::rt::Builder;
 
 auto free_energy(Builder<> &b, double c, double k) {
-  return *ddx::rt::equation(models::regular_solution(var(b, "x"), c, k));
+  return ddx::rt::equation(models::regular_solution(var(b, "x"), c, k));
 }
 
 constexpr double second_derivative(double x, double c, double k) {
@@ -37,7 +37,7 @@ TEST(RtMiscibility, HalfIsAlwaysStationary) {
   for (const double c : {2.0, 0.4, 0.0, -1.5}) {
     for (const double k : {0.25, -0.25}) {
       Builder<> b;
-      EXPECT_DOUBLE_EQ((*free_energy(b, c, k).gradient(0.5))[0], 0.0)
+      EXPECT_DOUBLE_EQ((*free_energy(b, c, k).jacobian(0.5))[0], 0.0)
           << "c=" << c << " k=" << k;
     }
   }
@@ -84,7 +84,7 @@ TEST(RtMiscibility, NewtonFindsTwoSymmetricMinima) {
   const auto minimise_from = [&](double start) {
     double at = start;
     for (int iteration = 0; iteration < 100; ++iteration) {
-      const double slope = (*f.gradient(at))[0];
+      const double slope = (*f.jacobian(at))[0];
       if (std::abs(slope) < 1e-14) {
         break;
       }
@@ -96,8 +96,8 @@ TEST(RtMiscibility, NewtonFindsTwoSymmetricMinima) {
   const double lower = minimise_from(0.05);
   const double upper = minimise_from(0.95);
 
-  EXPECT_NEAR((*f.gradient(lower))[0], 0.0, 1e-12);
-  EXPECT_NEAR((*f.gradient(upper))[0], 0.0, 1e-12);
+  EXPECT_NEAR((*f.jacobian(lower))[0], 0.0, 1e-12);
+  EXPECT_NEAR((*f.jacobian(upper))[0], 0.0, 1e-12);
   EXPECT_GT((*f.hessian(lower))[0], 0.0)
       << "a minimum, not the central maximum";
   EXPECT_GT((*f.hessian(upper))[0], 0.0);

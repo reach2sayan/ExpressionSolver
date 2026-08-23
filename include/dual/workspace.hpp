@@ -12,7 +12,7 @@
 
 namespace ddx::impl {
 
-using GradientWorkspace = SweepWorkspace<dual>;
+using JacobianWorkspace = SweepWorkspace<dual>;
 using HessianWorkspace = SweepWorkspace<dual2nd>;
 
 } // namespace ddx::impl

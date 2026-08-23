@@ -68,6 +68,7 @@ NamedValue(const Tag &, V) -> NamedValue<detail::tag_key_t<Tag>::value, V>;
 
 // named<"x">(1.25) -- bind a value to a symbol by name.
 template <FixedString Sym, typename V>
+  requires std::is_object_v<V>
 [[nodiscard]] constexpr NamedValue<Sym, V>
 named(V v) noexcept(std::is_nothrow_move_constructible_v<V>) {
   return {std::move(v)};
@@ -75,6 +76,7 @@ named(V v) noexcept(std::is_nothrow_move_constructible_v<V>) {
 
 // named("x"_s, 1.25) / named(var<"x">, 1.25) -- keyed by a tag in hand.
 template <CSymbolTag Tag, typename V>
+  requires std::is_object_v<V>
 [[nodiscard]] constexpr auto
 named(const Tag &, V v) noexcept(std::is_nothrow_move_constructible_v<V>) {
   return NamedValue<detail::tag_key_t<Tag>::value, V>{std::move(v)};

@@ -9,9 +9,11 @@ option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
 # accuracy for speed belongs here -- in particular never -ffast-math (nor
 # /fp:fast on MSVC, which needs no flags at all).
 option(DDX_FP_FLAGS "Pin FP contraction and drop errno on libm calls" ON)
-# The headers throw nothing, so a consumer is free to build without exceptions.
-# This only turns the flag on for our own targets
-option(DDX_NO_EXCEPTIONS "Build our own targets without C++ exceptions" OFF)
+# ddx is built without exceptions and throws nothing: errors come back as values
+# -- std::expected from the drivers, jit::error from the backend -- so there is
+# no configuration in which the flag would be wrong, and none to choose.  Our own
+# targets only, as ever: the headers throw nothing either, but what a consumer
+# compiles with is the consumer's business.
 
 if (MSVC)
     # /bigobj: one TU instantiates past the 2^16 COFF section limit.
@@ -24,9 +26,7 @@ if (MSVC)
                      /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514 /wd4324
                      /wd5266 /wd4866)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-    if (DDX_NO_EXCEPTIONS)
-        list(APPEND DDX_CODEGEN_FLAGS /EHs-c- /D_HAS_EXCEPTIONS=0)
-    endif ()
+    list(APPEND DDX_CODEGEN_FLAGS /EHs-c- /D_HAS_EXCEPTIONS=0)
 else ()
     if (ENABLE_NATIVE_ARCH)
         set(DDX_CODEGEN_FLAGS -march=native)
@@ -36,10 +36,8 @@ else ()
     if (DDX_FP_FLAGS)
         list(APPEND DDX_CODEGEN_FLAGS -ffp-contract=fast -fno-math-errno)
     endif ()
-    if (DDX_NO_EXCEPTIONS)
-        # -funwind-tables with it, matching how LLVM itself is built:
-        list(APPEND DDX_CODEGEN_FLAGS -fno-exceptions -funwind-tables)
-    endif ()
+    # -funwind-tables with it, matching how LLVM itself is built:
+    list(APPEND DDX_CODEGEN_FLAGS -fno-exceptions -funwind-tables)
     set(DDX_WARNINGS -Wall -Wextra -Wpedantic -Wfatal-errors)
 endif ()
 

@@ -53,22 +53,9 @@ TEST(ExpressionPrinting, StreamInserterMatchesFormat) {
   EXPECT_EQ(oss.str(), std::format("{}", e));
 }
 
-#ifdef __cpp_exceptions
-// std::vformat is the thing that throws here, not ddx: a bad runtime spec is
-// std::format_error by the standard's own contract.  Under -fno-exceptions it
-// aborts instead, which is not a thing to assert on.
-TEST(ExpressionPrinting, RejectsUnparseableValueSpec) {
-  // The spec is parsed at compile time for literals, so a bad one has to be
-  // reached through vformat to be observable as a throw.  It is rejected by
-  // the value_type's own formatter, which is the whole grammar there is.
-  EXPECT_THROW((void)std::vformat("{:q}", std::make_format_args(px)),
-               std::format_error);
-}
-#endif
-
-TEST(ExpressionPrinting, EquationPrintsFunctionsAndGradientRows) {
+TEST(ExpressionPrinting, EquationPrintsFunctionsAndJacobianRows) {
   auto eq = ddx::Equation{px * py};
   const auto text = std::format("{}", eq);
   EXPECT_TRUE(text.starts_with("f0: x * y\n"));
-  EXPECT_NE(text.find("grad: "), std::string::npos);
+  EXPECT_NE(text.find("jac: "), std::string::npos);
 }

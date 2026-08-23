@@ -69,7 +69,10 @@ partials(OpCode op, const RTExpression<S> &l, const RTExpression<S> &r,
 
 } // namespace detail
 
-struct Gradient {
+// One root's row of the Jacobian.  A scalar function has only this row, which
+// is why jacobian() below is an overload set rather than two names: the number
+// of roots picks the shape, exactly as output_dim does on Equation.
+struct JacobianRow {
   NodeId value = no_node;      // the node for f itself
   std::vector<NodeId> partial; // one per symbol, in Builder::symbols() order
 };
@@ -79,7 +82,8 @@ struct Gradient {
 // *nodes*.  It appends to the builder it reads: new nodes land above the
 // snapshot, so reverse id order stays topological over what came before.
 template <impl::Numeric T>
-[[nodiscard]] constexpr Gradient reverse_gradient(Builder<T> &b, NodeId root) {
+[[nodiscard]] constexpr JacobianRow reverse_jacobian(Builder<T> &b,
+                                                     NodeId root) {
   const auto n = static_cast<NodeId>(b.size());
   std::vector<NodeId> adj(n, no_node);
   adj[root] = b.constant(T{1});
@@ -115,8 +119,8 @@ template <impl::Numeric T>
     }
   }
 
-  Gradient g{.value = root,
-             .partial = std::vector<NodeId>(b.symbols().size(), no_node)};
+  JacobianRow g{.value = root,
+                .partial = std::vector<NodeId>(b.symbols().size(), no_node)};
   for (const auto [v, node] : std::views::enumerate(b.nodes().first(n)) |
                                   std::views::filter([](const auto &entry) {
                                     return std::get<1>(entry).op == OpCode::Var;
@@ -133,9 +137,10 @@ template <impl::Numeric T>
 // Here to check Reverse against, not to compute with -- Reverse produces fewer
 // nodes on everything but a single-variable expression, where it loses by one.
 template <impl::Numeric T>
-[[nodiscard]] constexpr Gradient symbolic_gradient(Builder<T> &b, NodeId root) {
+[[nodiscard]] constexpr JacobianRow symbolic_jacobian(Builder<T> &b,
+                                                      NodeId root) {
   const auto nsym = b.symbols().size();
-  Gradient g{.value = root, .partial = std::vector<NodeId>(nsym, no_node)};
+  JacobianRow g{.value = root, .partial = std::vector<NodeId>(nsym, no_node)};
 
   for (std::uint32_t s = 0; s < nsym; ++s) {
     // Snapshot per pass: the previous pass appended nodes, and those are not
@@ -194,26 +199,29 @@ template <impl::Numeric T>
   // The previous rows' nodes are unreachable from this root, so the sweep
   // skips them; what they provide is subexpressions to share.
   for (const NodeId r : roots) {
-    const auto g = reverse_gradient(b, r);
+    const auto g = reverse_jacobian(b, r);
     j.partial.insert(j.partial.end(), g.partial.begin(), g.partial.end());
   }
   return j;
 }
 
-// Explicit template arguments are required, so this never competes with the
-// plain spelling below.
+// One root rather than a span: a span is not constructible from a NodeId, so
+// this and the m-root overload above never compete.  Explicit template
+// arguments are required here, which keeps it clear of the plain spelling
+// below as well -- DiffMode does not satisfy Numeric, so the other two
+// candidates drop out on the first argument.
 template <impl::DiffMode Mode, impl::Numeric T>
-[[nodiscard]] constexpr Gradient gradient(Builder<T> &b, NodeId root) {
+[[nodiscard]] constexpr JacobianRow jacobian(Builder<T> &b, NodeId root) {
   if constexpr (Mode == impl::DiffMode::Symbolic) {
-    return symbolic_gradient(b, root);
+    return symbolic_jacobian(b, root);
   } else {
-    return reverse_gradient(b, root);
+    return reverse_jacobian(b, root);
   }
 }
 
 template <impl::Numeric T>
-[[nodiscard]] constexpr Gradient gradient(Builder<T> &b, NodeId root) {
-  return reverse_gradient(b, root);
+[[nodiscard]] constexpr JacobianRow jacobian(Builder<T> &b, NodeId root) {
+  return reverse_jacobian(b, root);
 }
 
 // One sweep per colour rather than per variable.  Sweeping from the sum of a
@@ -239,7 +247,7 @@ struct Hessian {
 
 template <impl::Numeric T>
 [[nodiscard]] Hessian hessian(Builder<T> &b, NodeId root) {
-  const auto g = reverse_gradient(b, root);
+  const auto g = reverse_jacobian(b, root);
   const auto rows = coupling_pattern(b, root);
   Hessian h{.value = g.value,
             .partial = g.partial,
@@ -259,7 +267,7 @@ template <impl::Numeric T>
           return RTExpression<T>{b, h.partial[j]};
         }),
         RTExpression<T>{0}, std::plus<>{});
-    const auto row = reverse_gradient(b, seed.id(b));
+    const auto row = reverse_jacobian(b, seed.id(b));
     const auto out = by_color(h.compressed, h.coloring.count, n);
     for (const auto [i, p] : std::views::enumerate(row.partial)) {
       out[c, static_cast<std::size_t>(i)] = p;

@@ -2,10 +2,8 @@
 
 #include "ops/numeric.hpp" // compile_time_factorial
 // The univariate sweep runs on the truncated-polynomial scalar forward mode
-// supplies, and goes with it under DDX_BUILD_DUAL=OFF.
-#if DDX_HAS_DUAL
+// supplies.
 #include "dual/taylor_dual.hpp"
-#endif
 #include "md/md.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
@@ -59,30 +57,56 @@ public:
 
   // A constructor cannot answer with an error, and an expression can name no
   // graph two ways -- a bare literal, or a symbol named with no arena current.
-  // The constructors below take the graph as a precondition.
-  [[nodiscard]] static constexpr result<Equation>
-  create(rt::RTExpression<T> first, Rest... rest) {
+  // Neither is worth a result<Equation> at every call site, so the refusal
+  // rides on the Equation itself: the poison RTExpression already carries
+  // through every operator ends here rather than one layer short of it.  The
+  // constructors below still take the graph as a precondition; create() is
+  // what establishes it.
+  [[nodiscard]] static constexpr Equation create(rt::RTExpression<T> first,
+                                                 Rest... rest) {
     if (const auto bad = why_not(first, rest...)) {
-      return std::unexpected{*bad};
+      return Equation{*bad};
     }
     return Equation{first, rest...};
   }
 
-  // Owning: the Builder is heap-allocated, so the nodes survive the move.
-  [[nodiscard]] static result<Equation>
-  create(std::unique_ptr<rt::Builder<T>> owned, rt::RTExpression<T> first,
-         Rest... rest) {
+  // Owning: the Builder is heap-allocated, so the nodes survive the move.  A
+  // refusal drops `owned` here, which is the arena nobody will ever use.
+  [[nodiscard]] static Equation create(std::unique_ptr<rt::Builder<T>> owned,
+                                       rt::RTExpression<T> first,
+                                       Rest... rest) {
     if (const auto bad = why_not(first, rest...)) {
-      return std::unexpected{*bad};
+      return Equation{*bad};
     }
     return Equation{std::move(owned), first, rest...};
   }
 
-  [[nodiscard]] constexpr std::size_t arity() const {
-    return arena_->symbols().size();
+  // Why the equation could not be built, or nullopt.  poisoned() is the same
+  // question without the reason.
+  [[nodiscard]] constexpr bool poisoned() const noexcept {
+    return bad_.has_value();
   }
-  [[nodiscard]] constexpr std::span<const std::string> symbols() const {
-    return arena_->symbols();
+  [[nodiscard]] constexpr std::optional<error> status() const noexcept {
+    return bad_;
+  }
+
+  // Optional rather than a degenerate 0: an equation over a literal-only graph
+  // legitimately has no symbols and no output columns, so a plain count could
+  // not distinguish "none" from "there is no equation".  nullopt is the only
+  // spelling that cannot be mistaken for an answer -- a loop written over
+  // arity() stops compiling rather than silently running zero times.
+  [[nodiscard]] constexpr std::optional<std::size_t> arity() const {
+    return poisoned() ? std::nullopt : std::optional{symbol_count()};
+  }
+  [[nodiscard]] constexpr std::optional<std::span<const std::string>>
+  symbols() const {
+    if (poisoned()) {
+      return std::nullopt;
+    }
+    // Spelled out, not std::optional{...}: Builder::symbols() answers with a
+    // const vector&, so CTAD would deduce optional<vector>, copy it, and hand
+    // back a span into the copy as it died.
+    return std::span<const std::string>{arena_->symbols()};
   }
 
   // Every spelling make_point accepts.  The symbol list exists only at run
@@ -90,10 +114,13 @@ public:
   template <rt_detail::CPointArg<T>... Args>
   [[nodiscard]] constexpr result<std::vector<T>>
   point(const Args &...args) const {
-    std::vector<T> at(arity(), T{});
+    if (bad_) {
+      return std::unexpected{*bad_};
+    }
+    std::vector<T> at(symbol_count(), T{});
     result<void> ok{};
     if constexpr ((CNamedValue<Args> && ...) && sizeof...(Args) > 0) {
-      ((ok = ok ? assign_named(at, args) : ok), ...);
+      ((ok = ok.and_then([&] { return assign_named(at, args); })), ...);
     } else if constexpr (sizeof...(Args) == 1 &&
                          (std::ranges::input_range<Args> && ...)) {
       ok = assign_range(at, args...);
@@ -101,10 +128,7 @@ public:
       const std::array<T, sizeof...(Args)> positional{static_cast<T>(args)...};
       ok = assign_range(at, positional);
     }
-    if (!ok) {
-      return std::unexpected{ok.error()};
-    }
-    return at;
+    return ok.transform([&at] { return std::move(at); });
   }
 
   [[nodiscard]] constexpr auto
@@ -121,15 +145,8 @@ public:
     });
   }
 
-  [[nodiscard]] constexpr result<std::vector<T>>
-  gradient(const rt_detail::CPointArg<T> auto &...args) const
-    requires(output_dim == 1)
-  {
-    return point(args...).transform(
-        [this](const auto &at) { return harvest(derivative_.partial, at); });
-  }
-
-  // Row-major m x n, as Equation::jacobian's extents<output_dim, input_dim>.
+  // Row-major m x n, matching Equation::jacobian -- which drops the leading
+  // axis at m == 1, where this is simply n long.
   [[nodiscard]] constexpr result<std::vector<T>>
   jacobian(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform(
@@ -143,7 +160,7 @@ public:
     return point(args...).transform([this](const auto &at) {
       const auto &blocks = this->cached_hessians();
       const auto values = rt::evaluate_all(*arena_, at);
-      const std::size_t n = arity();
+      const std::size_t n = symbol_count();
 
       std::vector<T> out(output_dim * n * n);
       const impl::md::mdspan dense{
@@ -160,20 +177,23 @@ public:
 
   // One sweep per colour, not per symbol.  A mixing rule couples everything
   // and colours in n, so it is not always a win.
-  [[nodiscard]] std::size_t hessian_colors() const
+  [[nodiscard]] std::optional<std::size_t> hessian_colors() const
     requires(output_dim == 1)
   {
-    return this->cached_hessians().front().colors();
+    return poisoned() ? std::nullopt
+                      : std::optional{this->cached_hessians().front().colors()};
   }
 
-#if DDX_HAS_DUAL
   // One Taylor sweep rather than K nested duals: seed c[0] = x0, c[1] = 1,
   // then un-normalise c[Order], since TaylorDual stores f^(k)/k!.
   template <std::size_t Order>
   [[nodiscard]] result<T> univariate_derivative(T x0) const
     requires(output_dim == 1 && Order > 0)
   {
-    if (arity() != 1) {
+    if (bad_) {
+      return std::unexpected{*bad_};
+    }
+    if (symbol_count() != 1) {
       return fail(errc::not_univariate);
     }
     using Taylor = impl::TaylorDual<T, Order>;
@@ -186,23 +206,12 @@ public:
     return values[roots_[0]].c[Order] *
            static_cast<T>(impl::detail::compile_time_factorial(Order));
   }
-#endif // DDX_HAS_DUAL
 
   // --- batch ---------------------------------------------------------------
   //
   // `xs[j]` is the column for symbol j; each output span holds one pointer per
   // output column, every column n long.  A column-count mismatch that went
   // unchecked would be silent memory corruption.
-
-  [[nodiscard]] result<void>
-  gradient(const rt_detail::CColumns<const T *> auto &xs,
-           const rt_detail::CColumns<T *> auto &f,
-           const rt_detail::CColumns<T *> auto &g, std::size_t n) const
-    requires(output_dim == 1)
-  {
-    return dispatch(compiled(false), as_columns(xs), as_columns(f),
-                    as_columns(g), {}, n);
-  }
 
   [[nodiscard]] result<void>
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
@@ -224,20 +233,33 @@ public:
   }
 
   // What a caller sizes its buffers by.
-  [[nodiscard]] std::size_t value_columns() const {
-    return compiled(false).graph.layout().values;
+  [[nodiscard]] std::optional<std::size_t> value_columns() const {
+    return poisoned() ? std::nullopt
+                      : std::optional{compiled(false).graph.layout().values};
   }
-  [[nodiscard]] std::size_t jacobian_columns() const {
-    return compiled(false).graph.layout().jacobian;
+  [[nodiscard]] std::optional<std::size_t> jacobian_columns() const {
+    return poisoned() ? std::nullopt
+                      : std::optional{compiled(false).graph.layout().jacobian};
   }
-  [[nodiscard]] std::size_t hessian_columns() const
+  [[nodiscard]] std::optional<std::size_t> hessian_columns() const
     requires(output_dim == 1)
   {
-    return compiled(true).graph.layout().hessian;
+    return poisoned() ? std::nullopt
+                      : std::optional{compiled(true).graph.layout().hessian};
   }
 
 private:
+  // Past the poison guard every caller of this has already passed, so the
+  // arena is known good.  arity() is the checked spelling, for callers.
+  [[nodiscard]] constexpr std::size_t symbol_count() const {
+    return arena_->symbols().size();
+  }
+
   // Both take a graph as a precondition; create() above is what establishes it.
+  // The third construction: none at all.  arena_ stays null, roots_ empty and
+  // derivative_ default -- every accessor short-circuits before reading them.
+  constexpr explicit Equation(error why) noexcept : bad_(why) {}
+
   constexpr explicit Equation(rt::RTExpression<T> first, Rest... rest)
       : arena_(first.builder(), borrow) {
     roots_.reserve(output_dim);
@@ -270,11 +292,12 @@ private:
   [[nodiscard]] constexpr result<void> assign_named(std::vector<T> &at,
                                                     const V &nv) const {
     const auto name = std::remove_cvref_t<V>::symbol.view();
-    const auto it = std::ranges::find(symbols(), name);
-    if (it == symbols().end()) {
+    const auto names = arena_->symbols();
+    const auto it = std::ranges::find(names, name);
+    if (it == names.end()) {
       return fail(errc::unknown_symbol);
     }
-    at[static_cast<std::size_t>(it - symbols().begin())] =
+    at[static_cast<std::size_t>(it - names.begin())] =
         static_cast<T>(nv.value);
     return {};
   }
@@ -330,6 +353,12 @@ private:
   }
 
   Compiled freeze(bool want_hessian) const {
+    // Poisoned: no arena to build from.  An empty Graph reports zero columns
+    // of every kind, which is what the *_columns() accessors should answer;
+    // has_hessian spares compiled() from re-freezing it on every call.
+    if (bad_) {
+      return Compiled{.graph = {}, .has_hessian = true};
+    }
     rt::GraphBuilder<T> gb{*arena_};
     gb.values_from(roots_);
     gb.jacobian_from(derivative_.partial);
@@ -364,7 +393,7 @@ private:
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
     const auto blocks = c.graph.output_blocks();
-    std::vector<T> at(arity());
+    std::vector<T> at(symbol_count());
 
     for (const std::size_t i : std::views::iota(0uz, n)) {
       for (const auto [j, column] : std::views::enumerate(xs)) {
@@ -394,8 +423,11 @@ private:
   dispatch(const Compiled &c, std::span<const T *const> xs,
            std::span<T *const> f, std::span<T *const> g, std::span<T *const> h,
            std::size_t n) const {
+    if (bad_) {
+      return std::unexpected{*bad_};
+    }
     const auto blocks = c.graph.output_blocks();
-    if (xs.size() != arity() || f.size() != blocks.values.size() ||
+    if (xs.size() != symbol_count() || f.size() != blocks.values.size() ||
         g.size() != blocks.jacobian.size() ||
         h.size() != blocks.hessian.size()) {
       return fail(errc::wrong_column_count);
@@ -433,6 +465,8 @@ private:
   // Lazy, being ~1.2M nodes and 350 ms for a 50-species mixture.
   mutable std::vector<rt::Hessian> hessians_;
   mutable std::optional<Compiled> compiled_;
+  // Set exactly when why_not() refused, so poisoned() <=> arena_ == nullptr.
+  std::optional<error> bad_{};
 };
 
 } // namespace ddx::impl

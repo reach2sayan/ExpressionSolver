@@ -36,11 +36,17 @@ jobs:
       #
       # clang-20, not the image's default clang-18: libstdc++ gates <expected>
       # on __cpp_concepts >= 202002L, and Clang first defines that in 19.
-      - name: Install compilers (Ubuntu)
+      #
+      # libboost-dev is for the consumer rather than for us: the build fetches
+      # its own pinned Boost, but tests/package configures a separate project
+      # against the built and the installed ddx, and ddx's headers include
+      # boost's -- so that project has to find a Boost of its own, exactly as
+      # any consumer does.  Without one the two package tests skip.
+      - name: Install compilers and Boost (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang-20 gcc-14 g++-14
+          sudo apt-get install -y clang-20 gcc-14 g++-14 libboost-dev
 
       # The core depends on the standard library and Boost.Mp11, the header-only
       # type-list vocabulary the symbol lists are built out of, declared on
@@ -99,6 +105,14 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -S ${{ github.workspace }}
 
+      # The runner's own vcpkg, which is preinstalled: ddx no longer fetches a
+      # Boost of its own, and the Windows image ships none.  Headers only --
+      # every Boost library ddx names is header-only.
+      - name: Install Boost (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install boost-mp11 boost-graph boost-dynamic-bitset --triplet x64-windows
+
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -107,6 +121,7 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -S "${{ github.workspace }}"
 
       - name: Build

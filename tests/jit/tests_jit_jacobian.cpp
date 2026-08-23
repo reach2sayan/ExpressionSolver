@@ -13,10 +13,10 @@
 #include <vector>
 
 // ===========================================================================
-// JIT'd gradients
+// JIT'd partials
 //
 // A kernel computes exactly the outputs its graph was frozen with, so freezing
-// {value, partials...} is all it takes to get the gradient columns; the checks
+// {value, partials...} is all it takes to get the Jacobian columns; the checks
 // here are that those columns land in the right buffers and hold what the
 // interpreter says they should.
 // ===========================================================================
@@ -42,7 +42,7 @@ ddx::jit::Kernel must_compile(auto &&...args) {
   return k ? std::move(*k) : ddx::jit::Kernel{};
 }
 
-void expect_gradient_matches_interpreter(auto build, std::size_t nvars,
+void expect_jacobian_matches_interpreter(auto build, std::size_t nvars,
                                          std::size_t n = 32) {
   Builder<> b;
   std::vector<ddx::rt::RTExpression<>> vars;
@@ -52,9 +52,9 @@ void expect_gradient_matches_interpreter(auto build, std::size_t nvars,
   }
   const auto root = build(b, vars);
   // The sweep is repeated for the reference values; the builder runs its own.
-  const auto reference_gradient = ddx::rt::gradient(b, root.id(b));
+  const auto reference_jacobian = ddx::rt::jacobian(b, root.id(b));
   const auto kernel =
-      must_compile(ddx::rt::GraphBuilder{b}.value(root).gradient().build());
+      must_compile(ddx::rt::GraphBuilder{b}.value(root).jacobian().build());
   ASSERT_EQ(kernel.outputs(), nvars + 1);
 
   std::vector<std::vector<double>> columns(nvars, std::vector<double>(n));
@@ -83,39 +83,39 @@ void expect_gradient_matches_interpreter(auto build, std::size_t nvars,
       point[j] = columns[j][i];
     }
     const auto reference = ddx::rt::evaluate_all(b, point);
-    EXPECT_NEAR(value[i], reference[reference_gradient.value], 1e-12);
+    EXPECT_NEAR(value[i], reference[reference_jacobian.value], 1e-12);
     for (std::size_t j = 0; j < nvars; ++j) {
-      const double want = reference[reference_gradient.partial[j]];
+      const double want = reference[reference_jacobian.partial[j]];
       EXPECT_NEAR(grad[j][i], want, 1e-12 * std::max(1.0, std::abs(want)))
           << "d/d" << names[j] << " at point " << i;
     }
   }
 }
 
-TEST(JitGradient, MatchesTheInterpreter) {
-  expect_gradient_matches_interpreter(
+TEST(JitJacobian, MatchesTheInterpreter) {
+  expect_jacobian_matches_interpreter(
       [](Builder<> &, auto &v) { return exp(v[0]) * sin(v[1]); }, 2);
-  expect_gradient_matches_interpreter(
+  expect_jacobian_matches_interpreter(
       [](Builder<> &, auto &v) { return v[0] / v[1]; }, 2);
-  expect_gradient_matches_interpreter(
+  expect_jacobian_matches_interpreter(
       [](Builder<> &, auto &v) { return pow(v[0], v[1]); }, 2);
-  expect_gradient_matches_interpreter(
+  expect_jacobian_matches_interpreter(
       [](Builder<> &, auto &v) { return log(v[0]) * sqrt(v[1]) + tanh(v[2]); },
       3);
-  expect_gradient_matches_interpreter(
+  expect_jacobian_matches_interpreter(
       [](Builder<> &, auto &v) { return erf(v[0]) + cbrt(v[1]); }, 2);
-  // abs and max/min put sign nodes in the gradient graph, which codegen emits
+  // abs and max/min put sign nodes in the Jacobian graph, which codegen emits
   // as compare-and-select rather than a libm call.
-  expect_gradient_matches_interpreter(
+  expect_jacobian_matches_interpreter(
       [](Builder<> &, auto &v) { return abs(v[0] - v[1]) * v[1]; }, 2);
-  expect_gradient_matches_interpreter(
+  expect_jacobian_matches_interpreter(
       [](Builder<> &, auto &v) {
         return max(v[0] * v[0], v[1]) + min(v[0], v[1]);
       },
       2);
 }
 
-TEST(JitGradient, MatchesDdxThroughTheBridge) {
+TEST(JitJacobian, MatchesDdxThroughTheBridge) {
   constexpr auto x = ddx::var<"x">;
   constexpr auto y = ddx::var<"y">;
   const auto f = exp(x) * sin(y) + x * y;
@@ -123,7 +123,7 @@ TEST(JitGradient, MatchesDdxThroughTheBridge) {
   Builder<> b;
   const auto root = ddx::rt::to_graph(b, f);
   const auto kernel =
-      must_compile(ddx::rt::GraphBuilder{b}.value(root).gradient().build());
+      must_compile(ddx::rt::GraphBuilder{b}.value(root).jacobian().build());
 
   const std::array cx{1.0, 0.25, 2.5};
   const std::array cy{2.0, 1.75, 0.5};
@@ -136,7 +136,7 @@ TEST(JitGradient, MatchesDdxThroughTheBridge) {
   kernel(xs, value_columns, gp, {}, value.size());
 
   for (std::size_t i = 0; i < value.size(); ++i) {
-    const auto expected = ddx::Equation{f}.gradient(cx[i], cy[i]);
+    const auto expected = ddx::Equation{f}.jacobian(cx[i], cy[i]);
     EXPECT_NEAR(value[i], ddx::Equation{f}.evaluate(cx[i], cy[i]), 1e-12);
     EXPECT_NEAR(dx[i], expected[0], 1e-12);
     EXPECT_NEAR(dy[i], expected[1], 1e-12);
@@ -157,7 +157,7 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
   const auto f = exp(x) * sin(y) + x * x * y;
 
   const auto graph =
-      ddx::rt::GraphBuilder{b}.value(f).gradient().hessian().build();
+      ddx::rt::GraphBuilder{b}.value(f).jacobian().hessian().build();
   const auto kernel = must_compile(graph);
 
   ASSERT_EQ(kernel.values(), 1u);

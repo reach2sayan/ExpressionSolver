@@ -10,8 +10,8 @@
 
 // What the JIT is and is not for.  Per point it cannot beat AOT-compiled ddx:
 // the expression is already straight-line code there, and README measures the
-// libm call at around three quarters of a gradient.  The batch kernel wins by
-// vectorising exactly that call, so these run the same gradient both ways over
+// libm call at around three quarters of a Jacobian.  The batch kernel wins by
+// vectorising exactly that call, so these run the same Jacobian both ways over
 // the same points and report items/s.
 
 namespace {
@@ -35,25 +35,26 @@ struct Batch {
       : x(ramp(n, 0.3)), y(ramp(n, 0.7)), f(n), dx(n), dy(n) {}
 };
 
-// Compile the gradient of a compile-time expression, through the bridge.
-ddx::jit::Kernel compile_gradient(ddx::jit::Compiler &c, const auto &expr,
+// Compile the Jacobian of a compile-time expression, through the bridge.
+ddx::jit::Kernel compile_jacobian(ddx::jit::Compiler &c, const auto &expr,
                                   Builder<> &b) {
   const auto root = ddx::rt::to_graph(b, expr);
-  return *c.compile(ddx::rt::GraphBuilder{b}.value(root).gradient().build());
+  return *c.compile(ddx::rt::GraphBuilder{b}.value(root).jacobian().build());
 }
 
-template <ddx::impl::CExpression E> void aot_gradient(benchmark::State &state, E expr) {
+template <ddx::impl::CExpression E>
+void aot_jacobian(benchmark::State &state, E expr) {
   const auto n = static_cast<std::size_t>(state.range(0));
   Batch data(n);
   // Store the results rather than discarding them: the kernel has to write its
   // columns, and at a million points that traffic outweighs the arithmetic, so
   // a loop that keeps its answer in a register is not the same measurement.
-  // One gradient() call, which is ddx's natural shape -- the kernel also hands
+  // One jacobian() call, which is ddx's natural shape -- the kernel also hands
   // back f from the same pass, which ddx would need a second sweep for, so this
   // comparison is if anything generous to the AOT side.
   for (auto _ : state) {
     for (std::size_t i = 0; i < n; ++i) {
-      const auto g = ddx::Equation{expr}.gradient(data.x[i], data.y[i]);
+      const auto g = ddx::Equation{expr}.jacobian(data.x[i], data.y[i]);
       data.dx[i] = g[0];
       data.dy[i] = g[1];
     }
@@ -62,12 +63,13 @@ template <ddx::impl::CExpression E> void aot_gradient(benchmark::State &state, E
   state.SetItemsProcessed(static_cast<std::int64_t>(n) * state.iterations());
 }
 
-template <ddx::impl::CExpression E> void jit_gradient(benchmark::State &state, E expr) {
+template <ddx::impl::CExpression E>
+void jit_jacobian(benchmark::State &state, E expr) {
   const auto n = static_cast<std::size_t>(state.range(0));
   Batch data(n);
   auto compiler = *ddx::jit::Compiler::create();
   Builder<> b;
-  const auto kernel = compile_gradient(compiler, expr, b);
+  const auto kernel = compile_jacobian(compiler, expr, b);
 
   const std::array<const double *, 2> xs{data.x.data(), data.y.data()};
   std::array<double *, 2> gp{data.dx.data(), data.dy.data()};
@@ -84,7 +86,7 @@ void jit_compile_time(benchmark::State &state) {
   auto compiler = *ddx::jit::Compiler::create();
   for (auto _ : state) {
     Builder<> b;
-    auto k = compile_gradient(compiler, exp(sym_x) * sin(sym_y), b);
+    auto k = compile_jacobian(compiler, exp(sym_x) * sin(sym_y), b);
     benchmark::DoNotOptimize(k);
   }
 }
@@ -94,19 +96,19 @@ const auto polynomial = sym_x * sym_x * sym_x + sym_y * sym_y - sym_x * sym_y;
 
 } // namespace
 
-BENCHMARK_CAPTURE(aot_gradient, transcendental, transcendental)
+BENCHMARK_CAPTURE(aot_jacobian, transcendental, transcendental)
     ->Arg(1)
     ->Arg(1000)
     ->Arg(1000000);
-BENCHMARK_CAPTURE(jit_gradient, transcendental, transcendental)
+BENCHMARK_CAPTURE(jit_jacobian, transcendental, transcendental)
     ->Arg(1)
     ->Arg(1000)
     ->Arg(1000000);
-BENCHMARK_CAPTURE(aot_gradient, polynomial, polynomial)
+BENCHMARK_CAPTURE(aot_jacobian, polynomial, polynomial)
     ->Arg(1)
     ->Arg(1000)
     ->Arg(1000000);
-BENCHMARK_CAPTURE(jit_gradient, polynomial, polynomial)
+BENCHMARK_CAPTURE(jit_jacobian, polynomial, polynomial)
     ->Arg(1)
     ->Arg(1000)
     ->Arg(1000000);

@@ -7,6 +7,7 @@
 #include <concepts>
 #include <cstddef>
 #include <memory>
+#include <numeric> // std::midpoint
 #include <ranges>
 #include <span>
 #include <tuple>
@@ -16,8 +17,8 @@
 namespace ddx::impl {
 
 // An energy called with a pointer into the driver's seed buffer.  D is `dual`
-// for the gradient sweep and `dual2nd` for the Hessian when forward mode is
-// built; the concept itself asks only that the scalar be Numeric.
+// for the first-derivative sweep and `dual2nd` for the Hessian when forward
+// mode is built; the concept itself asks only that the scalar be Numeric.
 template <typename F, typename D>
 concept CEnergyOf =
     std::invocable<F &, const D *> &&
@@ -36,7 +37,7 @@ namespace detail {
 }
 } // namespace detail
 
-// What a second-order sweep hands back: f(x), n gradient entries, and n*n
+// What a second-order sweep hands back: f(x), n Jacobian entries, and n*n
 // row-major Hessian entries -- (i, j) is hessian[i * n + j].
 //
 // Named members rather than a tuple: `arity` is the only thing telling a caller
@@ -45,7 +46,7 @@ namespace detail {
 // are -- reads one way.
 struct HessianOwned {
   double value = 0.0;
-  std::unique_ptr<double[]> gradient;
+  std::unique_ptr<double[]> jacobian;
   std::unique_ptr<double[]> hessian;
   std::size_t arity = 0;
 };
@@ -53,7 +54,7 @@ struct HessianOwned {
 // Compile-time extent: no allocation, and constant-evaluable.
 template <std::size_t N> struct HessianStatic {
   double value = 0.0;
-  std::array<double, N> gradient{};
+  std::array<double, N> jacobian{};
   std::array<double, N * N> hessian{};
   static constexpr std::size_t arity = N;
 };
@@ -68,7 +69,7 @@ constexpr void symmetrize(std::span<double> h, const std::size_t n) noexcept {
   const md::mdspan m{h.data(), md::dextents<std::size_t, 2>{n, n}};
   for (const std::size_t i : std::views::iota(0uz, n)) {
     for (const std::size_t j : std::views::iota(i + 1, n)) {
-      const double s = 0.5 * (m[i, j] + m[j, i]);
+      const double s = std::midpoint(m[i, j], m[j, i]);
       m[i, j] = s;
       m[j, i] = s;
     }
@@ -80,10 +81,10 @@ template <std::size_t N>
 [[nodiscard]] inline HessianOwned to_owned(const HessianStatic<N> &h) {
   auto grad = std::make_unique_for_overwrite<double[]>(N);
   auto hess = std::make_unique_for_overwrite<double[]>(N * N);
-  std::ranges::copy(h.gradient, grad.get());
+  std::ranges::copy(h.jacobian, grad.get());
   std::ranges::copy(h.hessian, hess.get());
   return {.value = h.value,
-          .gradient = std::move(grad),
+          .jacobian = std::move(grad),
           .hessian = std::move(hess),
           .arity = N};
 }

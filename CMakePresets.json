@@ -62,6 +62,24 @@
       ]
     }
   ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "debug_jit",
+      "configurePreset": "debug_jit"
+    },
+    {
+      "name": "release_jit",
+      "configurePreset": "release_jit"
+    }
+  ],
   "testPresets": [
     {
       "name": "tbase",

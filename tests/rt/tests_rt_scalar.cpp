@@ -96,7 +96,6 @@ TEST(RtScalar, UnsupportedOpsDoNotBreakTheInstantiation) {
 
 namespace {
 
-#if DDX_HAS_DUAL
 // Forward mode falls out of the interpreter rather than being a second engine,
 // exactly as it does on the compile-time side: eval_seeded instantiated at
 // Dual<T> is what makes ddx's forward mode, and evaluate_all takes its
@@ -115,10 +114,9 @@ TEST(RtScalar, ADualPointCarriesDerivativesThroughTheSameWalk) {
   EXPECT_NEAR(v.deriv(), std::exp(1.0) * std::sin(2.0), 1e-14);
 
   // And it agrees with the reverse sweep over the same graph.
-  const auto g = ddx::rt::gradient(b, f.id(b));
+  const auto g = ddx::rt::jacobian(b, f.id(b));
   const auto plain = ddx::rt::evaluate_all(b, std::array{1.0, 2.0});
   EXPECT_NEAR(plain[g.partial[0]], v.deriv(), 1e-14);
 }
-#endif // DDX_HAS_DUAL
 
 } // namespace

@@ -17,7 +17,7 @@
 // interpreter, which shares no code with the reverse sweep.
 //
 // Two structural facts these tests pin down, both of which affect what the JIT
-// is worth on this workload: the gradient stays cheap as species are added,
+// is worth on this workload: the Jacobian stays cheap as species are added,
 // and the Hessian does not, because a mixing rule couples every species to
 // every other and there is nothing for the colouring to exploit.
 // ===========================================================================
@@ -50,8 +50,8 @@ std::vector<double> composition(std::size_t n) {
 
 // Central differences on the interpreter: an independent path to the same
 // number, sharing nothing with the sweep that built the derivative nodes.
-void expect_gradient_matches_differences(Builder<> &b, ddx::rt::NodeId root,
-                                         const ddx::rt::Gradient &g,
+void expect_jacobian_matches_differences(Builder<> &b, ddx::rt::NodeId root,
+                                         const ddx::rt::JacobianRow &g,
                                          std::vector<double> pt,
                                          double tol = 2e-6) {
   const auto values = ddx::rt::evaluate_all(b, pt);
@@ -68,31 +68,31 @@ void expect_gradient_matches_differences(Builder<> &b, ddx::rt::NodeId root,
   }
 }
 
-TEST(RtEnergy, UniquacGradient) {
+TEST(RtEnergy, UniquacJacobian) {
   Builder<> b;
   const auto x = species(b, 8);
   const auto f = models::uniquac(x);
-  const auto g = ddx::rt::gradient(b, f.id(b));
-  expect_gradient_matches_differences(b, f.id(b), g, composition(8));
+  const auto g = ddx::rt::jacobian(b, f.id(b));
+  expect_jacobian_matches_differences(b, f.id(b), g, composition(8));
 }
 
-TEST(RtEnergy, PengRobinsonGradient) {
+TEST(RtEnergy, PengRobinsonJacobian) {
   Builder<> b;
   auto x = species(b, 6);
   const auto Z = var(b, "Z");
   const auto f = models::peng_robinson(x, Z);
-  const auto g = ddx::rt::gradient(b, f.id(b));
+  const auto g = ddx::rt::jacobian(b, f.id(b));
   auto pt = composition(6);
   pt.push_back(0.93); // Z is the last symbol
-  expect_gradient_matches_differences(b, f.id(b), g, pt);
+  expect_jacobian_matches_differences(b, f.id(b), g, pt);
 }
 
-TEST(RtEnergy, MseGradient) {
+TEST(RtEnergy, MseJacobian) {
   Builder<> b;
   const auto x = species(b, 6);
   const auto f = models::mse(x);
-  const auto g = ddx::rt::gradient(b, f.id(b));
-  expect_gradient_matches_differences(b, f.id(b), g, composition(6));
+  const auto g = ddx::rt::jacobian(b, f.id(b));
+  expect_jacobian_matches_differences(b, f.id(b), g, composition(6));
 }
 
 // A trace species is the normal case, not the edge case: an electrolyte model
@@ -103,7 +103,7 @@ TEST(RtEnergy, StableDownToTraceMoleFractions) {
   Builder<> b;
   const auto x = species(b, n);
   const auto f = models::uniquac(x);
-  const auto g = ddx::rt::gradient(b, f.id(b));
+  const auto g = ddx::rt::jacobian(b, f.id(b));
 
   double previous_value = 0;
   double previous_trace = 0;
@@ -132,7 +132,7 @@ TEST(RtEnergy, StableDownToTraceMoleFractions) {
   }
 }
 
-TEST(RtEnergy, HessianMatchesDifferencesOfTheGradient) {
+TEST(RtEnergy, HessianMatchesDifferencesOfTheJacobian) {
   constexpr std::size_t n = 4;
   Builder<> b;
   const auto x = species(b, n);
@@ -180,24 +180,24 @@ TEST(RtEnergy, MixingRulesGiveADenseHessian) {
   }
 }
 
-// The gradient stays proportional to the expression; the Hessian does not.
+// The Jacobian stays proportional to the expression; the Hessian does not.
 // This is the number that decides whether a full Hessian is worth compiling.
-TEST(RtEnergy, GradientStaysCheapAsSpeciesAreAdded) {
+TEST(RtEnergy, JacobianStaysCheapAsSpeciesAreAdded) {
   std::size_t previous_ratio = 0;
   for (const std::size_t n : {5u, 10u, 20u}) {
     Builder<> b;
     const auto x = species(b, n);
     const auto f = models::uniquac(x);
     const std::size_t built = b.size();
-    (void)ddx::rt::gradient(b, f.id(b));
+    (void)ddx::rt::jacobian(b, f.id(b));
     const std::size_t added = b.size() - built;
 
-    // One reverse sweep, so the gradient costs a small multiple of the
+    // One reverse sweep, so the Jacobian costs a small multiple of the
     // function however many species there are -- not a multiple of n.
     EXPECT_LT(added, 3 * built) << "n=" << n;
     const std::size_t ratio = added / built;
     if (previous_ratio != 0) {
-      EXPECT_LE(ratio, previous_ratio + 1) << "gradient cost is growing with n";
+      EXPECT_LE(ratio, previous_ratio + 1) << "Jacobian cost is growing with n";
     }
     previous_ratio = ratio;
   }

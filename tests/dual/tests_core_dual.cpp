@@ -266,7 +266,7 @@ TEST(ReverseModeAD, ScalarLiteralCoercion) {
   auto y = var<"y", dual>;
   auto z = var<"z", dual>;
   auto expe = 3.0 * x * y + y * z;
-  auto g = Equation{expe}.gradient(
+  auto g = Equation{expe}.jacobian(
       Dual<double>{2.0, 0.0}, Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 9.0);  // df/dx = 3*y = 9
   EXPECT_DOUBLE_EQ(g[1], 10.0); // df/dy = 3*x + z = 10
@@ -298,14 +298,14 @@ TEST(DualCompoundAssign, DivEq) {
 }
 TEST(ReverseModeAD_Dual, SingleVariable) {
   auto x = var<"x", dual>;
-  auto g = Equation{3.0 * x}.gradient(Dual<double>{5.0, 0.0});
+  auto g = Equation{3.0 * x}.jacobian(Dual<double>{5.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 3.0);
 }
 TEST(ReverseModeAD_Dual, TwoVariables) {
   auto x = var<"x", dual>;
   auto y = var<"y", dual>;
   auto g =
-      Equation{x * y}.gradient(Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0});
+      Equation{x * y}.jacobian(Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 4.0);
   EXPECT_DOUBLE_EQ(g[1], 3.0);
 }
@@ -313,7 +313,7 @@ TEST(ReverseModeAD_Dual, ThreeVariables) {
   auto x = var<"x", dual>;
   auto y = var<"y", dual>;
   auto z = var<"z", dual>;
-  auto g = Equation{3.0 * x * y + y * z}.gradient(
+  auto g = Equation{3.0 * x * y + y * z}.jacobian(
       Dual<double>{2.0, 0.0}, Dual<double>{3.0, 0.0}, Dual<double>{4.0, 0.0});
   EXPECT_DOUBLE_EQ(g[0], 9.0);
   EXPECT_DOUBLE_EQ(g[1], 10.0);
@@ -323,7 +323,7 @@ TEST(ReverseModeAD_Dual, TrigExp) {
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   auto x = dual_var_of<"x">(xv);
   auto y = dual_var_of<"y">(yv);
-  auto g = Equation{exp(x) * sin(y)}.gradient(Dual<double>{xv, 0.0},
+  auto g = Equation{exp(x) * sin(y)}.jacobian(Dual<double>{xv, 0.0},
                                               Dual<double>{yv, 0.0});
   EXPECT_DOUBLE_EQ(g[0], std::exp(xv) * std::sin(yv));
   EXPECT_DOUBLE_EQ(g[1], std::exp(xv) * std::cos(yv));
@@ -335,8 +335,8 @@ TEST(ReverseModeAD_Dual, AgreesWithPVResult) {
   auto xd = dual_var_of<"x">(xv);
   auto yd = dual_var_of<"y">(yv);
   auto gp =
-      Equation{xp * yp + sin(xp) + yp * yp + exp(xp + yp)}.gradient(xv, yv);
-  auto gd = Equation{xd * yd + sin(xd) + yd * yd + exp(xd + yd)}.gradient(
+      Equation{xp * yp + sin(xp) + yp * yp + exp(xp + yp)}.jacobian(xv, yv);
+  auto gd = Equation{xd * yd + sin(xd) + yd * yd + exp(xd + yd)}.jacobian(
       Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0});
   EXPECT_DOUBLE_EQ(gd[0], gp[0]);
   EXPECT_DOUBLE_EQ(gd[1], gp[1]);
@@ -559,7 +559,7 @@ TEST(DerivativeTensorTest, Order1_ScalarVariable) {
   auto T1 = Equation{expr}.template derivative_tensor<1>(std::array{3.0});
   EXPECT_NEAR(T1[0], 27.0, 1e-12);
 }
-TEST(DerivativeTensorTest, Order1_MatchesGradient) {
+TEST(DerivativeTensorTest, Order1_MatchesJacobian) {
   double xv = 1.5, yv = 2.5;
   (void)xv;
   (void)yv;
@@ -665,7 +665,7 @@ TEST(TutorialForward, SingleVar_DualNumbers) {
   EXPECT_NEAR(fv, 1.0 + x0 + x0 * x0 + 1.0 / x0 + std::log(x0), 1e-12);
   EXPECT_NEAR(df, 1.0 + 2.0 * x0 - 1.0 / (x0 * x0) + 1.0 / x0, 1e-12);
 }
-TEST(TutorialMultiVar, ForwardReverseGradientAgree) {
+TEST(TutorialMultiVar, ForwardReverseJacobianAgree) {
   double xv = 1.0, yv = 2.0, zv = 3.0;
   Variable<double, FixedString{"x"}> xf;
   Variable<double, FixedString{"y"}> yf;
@@ -679,12 +679,12 @@ TEST(TutorialMultiVar, ForwardReverseGradientAgree) {
   auto zr = var_of<"z">(zv);
   auto f_rev = constant(1.0) + xr + yr + zr + xr * yr + yr * zr + xr * zr +
                xr * yr * zr + exp(xr / yr + yr / zr);
-  auto g = Equation{f_rev}.gradient(xv, yv, zv);
+  auto g = Equation{f_rev}.jacobian(xv, yv, zv);
   EXPECT_NEAR(T1[0], g[0], 1e-10);
   EXPECT_NEAR(T1[1], g[1], 1e-10);
   EXPECT_NEAR(T1[2], g[2], 1e-10);
 }
-TEST(TutorialGradient, ForwardModeDerivativeTensor) {
+TEST(TutorialJacobian, ForwardModeDerivativeTensor) {
   double xv = 1.0, yv = 0.5;
   Variable<double, FixedString{"x"}> x;
   Variable<double, FixedString{"y"}> y;
@@ -695,7 +695,7 @@ TEST(TutorialGradient, ForwardModeDerivativeTensor) {
   EXPECT_NEAR(g[1], -std::sin(xv) * std::sin(yv) + xv * std::exp(xv * yv),
               1e-12);
 }
-TEST(TutorialGradient, ForwardReverseAgree) {
+TEST(TutorialJacobian, ForwardReverseAgree) {
   double xv = 1.0, yv = 0.5;
   Variable<double, FixedString{"x"}> xf;
   Variable<double, FixedString{"y"}> yf;
@@ -704,7 +704,7 @@ TEST(TutorialGradient, ForwardReverseAgree) {
           std::array{xv, yv});
   auto xr = var_of<"x">(xv);
   auto yr = var_of<"y">(yv);
-  auto g = Equation{sin(xr) * cos(yr) + exp(xr * yr)}.gradient(xv, yv);
+  auto g = Equation{sin(xr) * cos(yr) + exp(xr * yr)}.jacobian(xv, yv);
   EXPECT_NEAR(T1[0], g[0], 1e-12);
   EXPECT_NEAR(T1[1], g[1], 1e-12);
 }
@@ -760,7 +760,7 @@ TEST(TutorialDirectional, FirstOrder_DualSeeding) {
   EXPECT_NEAR(fv, std::exp(xv) * std::sin(yv), 1e-12);
   EXPECT_NEAR(dfdu, std::exp(xv), 1e-12);
 }
-TEST(TutorialDirectional, FirstOrder_ViaGradientDot) {
+TEST(TutorialDirectional, FirstOrder_ViaJacobianDot) {
   double xv = 1.0, yv = std::numbers::pi / 4.0;
   double u = 1.0 / std::sqrt(2.0);
   Variable<double, FixedString{"x"}> x;
@@ -842,13 +842,13 @@ TEST(TutorialReverseHessian, TrigFunction) {
   EXPECT_NEAR(H[1][0], -std::cos(xv) * std::sin(yv), 1e-12);
   EXPECT_NEAR(H[1][1], -std::sin(xv) * std::cos(yv), 1e-12);
 }
-TEST(TutorialReverseHessian, GradientFromSameExpression) {
+TEST(TutorialReverseHessian, JacobianFromSameExpression) {
   using D = Dual<double>;
   double xv = 2.0, yv = 3.0;
   Variable<D, FixedString{"x"}> x;
   Variable<D, FixedString{"y"}> y;
   auto f = x * x + x * y + y * y;
-  auto g = Equation{f}.gradient(D{xv}, D{yv});
+  auto g = Equation{f}.jacobian(D{xv}, D{yv});
   EXPECT_NEAR(g[0], 2.0 * xv + yv, 1e-12); // df/dx = 2x + y
   EXPECT_NEAR(g[1], xv + 2.0 * yv, 1e-12); // df/dy = x + 2y
 }
@@ -930,7 +930,7 @@ TEST(DualScalarContract, ImplicitConstantFromScalarAtDepth) {
   EXPECT_DOUBLE_EQ(b.get<0>().get<1>(), 0.0);
   EXPECT_DOUBLE_EQ(b.get<1>().get<1>(), 0.0);
 }
-TEST(ForwardDriver, GradientAndHessianCrossTerm) {
+TEST(ForwardDriver, JacobianAndHessianCrossTerm) {
   auto f = [](const auto *x) {
     return x[0] * x[0] * x[1] + x[1] * x[1] * x[1];
   };
@@ -947,7 +947,7 @@ TEST(ForwardDriver, GradientAndHessianCrossTerm) {
   EXPECT_DOUBLE_EQ(hess_at(H, 1, 0), 4.0);
   EXPECT_DOUBLE_EQ(hess_at(H, 1, 1), 18.0); // 6 x1
 
-  const auto g = ddx::impl::gradient(f, xs);
+  const auto g = ddx::impl::jacobian(f, xs);
   EXPECT_DOUBLE_EQ(g[0], 12.0);
   EXPECT_DOUBLE_EQ(g[1], 31.0);
 }
@@ -990,7 +990,7 @@ TEST(ScopedValue, NestedGuardsOverSiblingScalarsOfOneDual) {
 }
 
 TEST(ScopedValue, UsableDuringConstantEvaluation) {
-  // gradient.hpp's reverse_mode_hessian and equation.hpp's
+  // sweep.hpp's reverse_mode_hessian and equation.hpp's
   // hessian_forward_over_reverse are constexpr, so the guard must be too.
   static constexpr auto probe = []() constexpr {
     double slot = 3.0;
@@ -1013,8 +1013,8 @@ TEST(ForwardDriver, RepeatedCallsDoNotLeakSeeds) {
   const std::array<double, 2> x{2.0, 3.0};
   const std::span<const double> xs{x.data(), x.size()};
 
-  const auto g1 = ddx::impl::gradient(f, xs);
-  const auto g2 = ddx::impl::gradient(f, xs);
+  const auto g1 = ddx::impl::jacobian(f, xs);
+  const auto g2 = ddx::impl::jacobian(f, xs);
   EXPECT_DOUBLE_EQ(g1[0], g2[0]);
   EXPECT_DOUBLE_EQ(g1[1], g2[1]);
 

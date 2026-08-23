@@ -16,7 +16,7 @@
 template <typename T>
 concept CHessianResult = requires(const T &H) {
   { H.value } -> std::convertible_to<double>;
-  H.gradient;
+  H.jacobian;
   H.hessian;
   { T::arity } -> std::convertible_to<std::size_t>;
 } || requires(const T &H) {

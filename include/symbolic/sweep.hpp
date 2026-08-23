@@ -4,10 +4,8 @@
 #include "symbolic/workspace.hpp" // HessianStatic, symmetrize
 
 // Forward mode supplies the truncated-polynomial scalar the univariate sweep
-// runs on, and that entry point goes with it under DDX_BUILD_DUAL=OFF.
-#if DDX_HAS_DUAL
+// runs on.
 #include "dual/taylor_dual.hpp"
-#endif
 #include "md/tensor.hpp"
 #include "ops/mode.hpp"
 #include "ops/scalar.hpp"
@@ -62,7 +60,7 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 }
 
 // Fill the primal cache from `seeds`, then push adjoints back from a root
-// adjoint of 1.  Returns the root value; `grads` receives the gradient.
+// adjoint of 1.  Returns the root value; `grads` receives the partials.
 // Ref: Linnainmaa, BIT 16(2) (1976) 146.  docs/reverse_mode_by_example.md
 // walks one of these by hand.
 template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds,
@@ -169,7 +167,7 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
 
 namespace detail {
 
-// A dual-valued gradient carries the seed in its dual part; the gradient proper
+// A dual-valued row carries the seed in its dual part; the derivative proper
 // is the real part.
 template <Numeric T, std::size_t N>
 [[nodiscard]] constexpr auto
@@ -184,12 +182,12 @@ strip_seed(const std::array<T, N> &grads) noexcept {
   }
 }
 
-// Reverse-mode gradient.  A dual-valued expression sweeps identically and hands
-// back the value level of each entry.
+// One reverse-mode Jacobian row.  A dual-valued expression sweeps identically
+// and hands back the value level of each entry.
 template <CExpression Expr, Numeric T = typename Expr::value_type,
           std::size_t N = detail::expr_arity_v<Expr>>
 [[nodiscard]] constexpr auto
-reverse_mode_gradient(const Expr &expr, const std::array<T, N> &vals) noexcept {
+reverse_mode_jacobian(const Expr &expr, const std::array<T, N> &vals) noexcept {
   using Syms = detail::expr_symbols_t<Expr>;
   std::array<T, N> grads{};
   reverse_sweep<Syms>(expr, vals, grads);
@@ -346,7 +344,6 @@ derivative_tensor_impl(const Expr &expr,
 
 namespace detail {
 
-#if DDX_HAS_DUAL
 // One Taylor sweep, then undo the 1/Order! normalisation.  Ref: Griewank,
 // Utke & Walther, "Evaluating Higher Derivative Tensors by Forward Propagation
 // of Univariate Taylor Series", Math. Comp. 69(231) (2000) 1117.
@@ -369,7 +366,6 @@ univariate_derivative_impl(const Expr &expr, S x0) noexcept {
   constexpr S factorial = static_cast<S>(compile_time_factorial(Order));
   return result.c[Order] * factorial;
 }
-#endif // DDX_HAS_DUAL
 
 } // namespace detail
 
@@ -377,7 +373,7 @@ namespace detail {
 
 // Forward-over-reverse: seeding column j and running one backward sweep yields
 // that whole Hessian column -- N sweeps against the scalar driver's N(N+1)/2
-// probes, with value and gradient free from the j == 0 sweep.
+// probes, with value and first derivatives free from the j == 0 sweep.
 template <CExpression Expr>
 constexpr HessianStatic<
     mp::mp_size<detail::expr_symbols_t<std::remove_cvref_t<Expr>>>::value>
@@ -393,7 +389,7 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
   static constexpr auto kColors = color_columns<N>(kPattern);
   // Value-initialised is load-bearing: the scatter writes only the pattern.
   HessianStatic<N> res{};
-  auto &res_gradient = res.gradient;
+  auto &res_jacobian = res.jacobian;
   auto &res_hessian = res.hessian;
 
   color_sweeps<kColors>(
@@ -402,7 +398,7 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
         if (c == 0) {
           // Neither depends on the tangent seeding, so any sweep yields both.
           res.value = static_cast<double>(root.template get<0>());
-          std::ranges::transform(grads, res_gradient.begin(), [](const T &g) {
+          std::ranges::transform(grads, res_jacobian.begin(), [](const T &g) {
             return static_cast<double>(g.template get<0>());
           });
         }
@@ -428,8 +424,8 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
 // so the buffer is an array and this path does not allocate.
 template <CExpression Expr,
           std::size_t NNZ = hessian_nnz<std::remove_cvref_t<Expr>>()>
-std::array<double, NNZ + 1> hessian_values_sparse(const Expr &expr,
-                                                  std::span<const double> x) {
+constexpr std::array<double, NNZ + 1>
+hessian_values_sparse(const Expr &expr, std::span<const double> x) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using Syms = detail::expr_symbols_t<E>;
@@ -470,7 +466,8 @@ public:
   static constexpr std::size_t rows = kN;
   static constexpr std::size_t nnz = kNnz;
 
-  explicit SparseHessian(const std::array<double, kNnz + 1> &values) noexcept
+  explicit constexpr SparseHessian(
+      const std::array<double, kNnz + 1> &values) noexcept
       : values_(values) {}
 
   // Column j occupies [outer()[j], outer()[j + 1]); inner()[k] is the row of
@@ -481,16 +478,17 @@ public:
   [[nodiscard]] static constexpr std::span<const int> inner() noexcept {
     return kLayout.inner;
   }
-  [[nodiscard]] std::span<const double> values() const & noexcept {
+  [[nodiscard]] constexpr std::span<const double> values() const & noexcept {
     return std::span<const double>{values_}.first(nnz);
   }
   auto values() const && = delete;
 
-  [[nodiscard]] auto view() const & noexcept {
+  [[nodiscard]] constexpr auto view() const & noexcept {
     return sparse_matrix_view<E>(values_);
   }
   auto view() const && = delete;
-  [[nodiscard]] double operator[](std::size_t i, std::size_t j) const noexcept {
+  [[nodiscard]] constexpr double operator[](std::size_t i,
+                                            std::size_t j) const noexcept {
     return view()[i, j];
   }
   // In the pattern, as opposed to reading 0.0 because it cannot be otherwise.
@@ -504,8 +502,8 @@ public:
 
 // The sparse counterpart of hessian(graph, x).
 template <CExpression Expr>
-[[nodiscard]] SparseHessian<Expr> sparse_hessian(const Expr &expr,
-                                                 std::span<const double> x) {
+[[nodiscard]] constexpr SparseHessian<Expr>
+sparse_hessian(const Expr &expr, std::span<const double> x) {
   return SparseHessian<Expr>{detail::hessian_values_sparse(expr, x)};
 }
 

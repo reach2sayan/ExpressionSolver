@@ -6,7 +6,6 @@
 #include "rt/opcode.hpp"
 
 #include <boost/graph/compressed_sparse_row_graph.hpp>
-#include <boost/range/iterator_range_core.hpp>
 
 #include <algorithm>
 #include <initializer_list>
@@ -102,8 +101,9 @@ public:
   [[nodiscard]] bool live(NodeId v) const { return live_[v]; }
 
   [[nodiscard]] auto operand_edges(NodeId v) const {
-    return boost::make_iterator_range(
-        boost::out_edges(static_cast<vertex_type>(v), children_));
+    const auto [first, last] =
+        boost::out_edges(static_cast<vertex_type>(v), children_);
+    return std::ranges::subrange(first, last);
   }
 
   // In id order, which is topological, so a consumer emits them in one pass.
@@ -141,12 +141,9 @@ public:
   // Operands in slot order; arity is at most two, hence a pair.
   [[nodiscard]] std::array<NodeId, 2> operands(NodeId v) const {
     std::array out{no_node, no_node};
-    const auto [first, last] =
-        boost::out_edges(static_cast<vertex_type>(v), children_);
-    std::ranges::for_each(
-        std::ranges::subrange(first, last), [&](const auto &e) {
-          out[children_[e]] = static_cast<NodeId>(boost::target(e, children_));
-        });
+    for (const auto &e : operand_edges(v)) {
+      out[children_[e]] = static_cast<NodeId>(boost::target(e, children_));
+    }
     return out;
   }
 
@@ -173,9 +170,9 @@ private:
 // Each step names one block of output columns; `build` is the only thing that
 // produces a Graph.
 //
-//   GraphBuilder{b}.value(f).gradient().build()
+//   GraphBuilder{b}.value(f).jacobian().build()
 //   GraphBuilder{b}.values({f0, f1}).jacobian().build()
-//   GraphBuilder{b}.value(f).gradient().hessian().build()
+//   GraphBuilder{b}.value(f).jacobian().hessian().build()
 //
 // The class template argument is deduced from the builder.
 template <impl::Numeric T = double> class GraphBuilder {
@@ -220,9 +217,6 @@ public:
     layout_.jacobian = j.partial.size();
     return *this;
   }
-
-  // The scalar spelling of the same thing.
-  constexpr GraphBuilder &gradient() { return jacobian(); }
 
   // Compressed by colour, not n x n: a handful of columns when banded.
   GraphBuilder &hessian() {

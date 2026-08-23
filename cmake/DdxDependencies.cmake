@@ -1,26 +1,26 @@
-# Every third-party dependency ddx uses, in one place: what it is, which version,
-# and where it comes from.  Declaring is cheap -- FetchContent downloads nothing
-# until the matching ddx_use_*() macro asks for it -- so the whole manifest can
-# live here while a build still fetches only what its options turned on.
+# Every third-party dependency ddx uses, in one place: what it is, where it comes
+# from, and what asks for it.  The two the build tools need are fetched, and
+# declaring those is cheap -- FetchContent downloads nothing until the matching
+# ddx_use_*() macro asks -- so the whole manifest can live here while a build
+# still fetches only what its options turned on.  The two that reach ddx's own
+# headers or its binaries are found on the machine instead, because an installed
+# ddx has to be able to name them again on someone else's.
 #
-#   ddx_use_boost()            Boost.Mp11 + Graph + DynamicBitset  always
-#   ddx_use_llvm()             LLVM 18-20, found not fetched       DDX_BUILD_JIT
-#   ddx_use_googletest()       GoogleTest                          top-level only
-#   ddx_use_googlebenchmark()  Google Benchmark                    DDX_BUILD_BENCHMARKS
+#   ddx_use_boost()            Boost.Mp11 + Graph + DynamicBitset  found, always
+#   ddx_use_llvm()             LLVM 18-20, found                   DDX_BUILD_JIT
+#   ddx_use_googletest()       GoogleTest, fetched                 top-level only
+#   ddx_use_googlebenchmark()  Google Benchmark, fetched           DDX_BUILD_BENCHMARKS
 #
 # Each is idempotent and safe to call from wherever the dependency is first
 # needed.  Macros rather than functions: FetchContent_MakeAvailable() defines
 # variables the caller's scope is expected to see.
 include_guard(GLOBAL)
 
+include(CheckCXXSourceCompiles)
 include(FetchContent)
 
 # --- versions ---------------------------------------------------------------
-set(DDX_BOOST_VERSION "1.92.0" CACHE STRING "Boost release to fetch")
-# Change together with DDX_BOOST_VERSION; sha256sum of the -cmake.tar.xz release.
-set(DDX_BOOST_SHA256
-        "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d"
-        CACHE STRING "SHA256 of the Boost archive")
+# The fetched two only; Boost and LLVM are whatever the machine has.
 set(DDX_GOOGLETEST_REF "5376968f6948923e2411081fd9372e71a59d8e77"
         CACHE STRING "GoogleTest commit to fetch")
 set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release to fetch")
@@ -35,12 +35,6 @@ set(DDX_LLVM_VERSION_MAX 20)
 # URL_HASH so a cached archive is verified rather than re-fetched: without one
 # CMake reports "File already exists but no hash specified" and downloads 150 MB
 # again every time a stamp goes missing.
-FetchContent_Declare(Boost
-        URL https://github.com/boostorg/boost/releases/download/boost-${DDX_BOOST_VERSION}/boost-${DDX_BOOST_VERSION}-cmake.tar.xz
-        URL_HASH SHA256=${DDX_BOOST_SHA256}
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        SYSTEM
-)
 FetchContent_Declare(googletest
         URL https://github.com/google/googletest/archive/${DDX_GOOGLETEST_REF}.zip
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
@@ -55,19 +49,46 @@ FetchContent_Declare(googlebenchmark
 # --- Boost -------------------------------------------------------------------
 # Mp11 is the type-list vocabulary the symbol lists are built out of, Boost.Graph
 # supplies the colouring the runtime graph needs, and Boost.DynamicBitset the
-# coupling rows.  All header-only, so no compiled Boost library is linked and a
-# system Boost is never consulted.
+# coupling rows.  All header-only, so nothing links a compiled Boost library and
+# what a build needs of it is an include path.
 #
-# One fetch rather than two.  Mp11 used to be declared separately and pulled in
-# after Boost.Graph, because Graph depends on Mp11 and defining `Boost::mp11`
-# twice is an error rather than a merge -- an ordering constraint that had to be
-# honoured at every call site.  Naming all three in BOOST_INCLUDE_LIBRARIES
-# retires it.
+# Found, not fetched, and the same find ddx-config.cmake makes: ddx's public
+# headers include boost's, so whatever a build compiles against is what its
+# consumers compile against too.  A fetched Boost could be neither -- it belongs
+# to no export set, so no installed ddx could name it.
+#
+# Config mode.  BoostConfig.cmake has shipped with Boost since 1.70 and is the
+# only mode CMake 4 has left, FindBoost being removed there and deprecated since
+# 3.30, which is what makes an unqualified find_package(Boost) warn under
+# CMP0167.
+#
+# No version floor: these three have been stable for a decade, so a release
+# number would turn working Boosts away to answer a question the headers
+# themselves answer.  What does go wrong is a partial install -- vcpkg and the
+# distros that split Boost up can have Mp11 and not Graph -- and that is a
+# missing header, which is what this asks about.
 macro(ddx_use_boost)
-    if (NOT TARGET Boost::mp11)
-        set(BOOST_INCLUDE_LIBRARIES mp11 graph dynamic_bitset CACHE STRING "" FORCE)
-        set(BOOST_ENABLE_CMAKE ON CACHE BOOL "" FORCE)
-        FetchContent_MakeAvailable(Boost)
+    if (NOT TARGET Boost::headers)
+        find_package(Boost REQUIRED CONFIG)
+        get_target_property(DDX_BOOST_INCLUDES Boost::headers
+                INTERFACE_INCLUDE_DIRECTORIES)
+        set(CMAKE_REQUIRED_INCLUDES ${DDX_BOOST_INCLUDES})
+        check_cxx_source_compiles("
+                #include <boost/mp11/algorithm.hpp>
+                #include <boost/mp11/list.hpp>
+                #include <boost/graph/compressed_sparse_row_graph.hpp>
+                #include <boost/dynamic_bitset.hpp>
+                int main() {}"
+                DDX_BOOST_HAS_WHAT_WE_NEED)
+        unset(CMAKE_REQUIRED_INCLUDES)
+        if (NOT DDX_BOOST_HAS_WHAT_WE_NEED)
+            message(FATAL_ERROR
+                    "Boost ${Boost_VERSION} was found at ${DDX_BOOST_INCLUDES}, but it does not "
+                    "have the headers ddx names: Mp11 (algorithm, list), Graph "
+                    "(compressed_sparse_row_graph) and DynamicBitset.  A modular install wants "
+                    "those libraries added; a distro one usually wants the whole headers package "
+                    "(libboost-dev).")
+        endif ()
     endif ()
 endmacro()
 
@@ -127,3 +148,4 @@ function(_ddx_silence_dependency)
         endif ()
     endforeach ()
 endfunction()
+

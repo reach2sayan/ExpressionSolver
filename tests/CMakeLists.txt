@@ -7,10 +7,10 @@ include(GoogleTest)
 # One TU per anonymous-namespace helper block, so `-j` can build them at once.
 #
 # `tests` is the compile-time suite with forward mode taken out of it, so it is
-# what proves DDX_BUILD_DUAL=OFF is a configuration and not just an option:
-# every case in it compiles and runs without a dual in the build.  The cases
-# that do want one moved to tests/dual/, which is the same split the tiering
-# above already makes for Boost.Graph and LLVM.
+# what keeps the core honest about not needing one: every case in it compiles
+# and runs without a dual in sight.  The cases that do want one live in
+# tests/dual/, which is the same split the tiering above already makes for
+# Boost.Graph and LLVM.
 file(GLOB DDX_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 add_executable(tests ${DDX_TEST_SOURCES})
 target_include_directories(tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -18,15 +18,13 @@ target_link_libraries(tests PRIVATE gtest_main ddx)
 ddx_target_flags(tests)
 gtest_discover_tests(tests)
 
-if (DDX_BUILD_DUAL)
-    file(GLOB DDX_DUAL_TEST_SOURCES CONFIGURE_DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/dual/*.cpp")
-    add_executable(tests_dual ${DDX_DUAL_TEST_SOURCES})
-    target_include_directories(tests_dual PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(tests_dual PRIVATE gtest_main ddx)
-    ddx_target_flags(tests_dual)
-    gtest_discover_tests(tests_dual)
-endif ()
+file(GLOB DDX_DUAL_TEST_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/dual/*.cpp")
+add_executable(tests_dual ${DDX_DUAL_TEST_SOURCES})
+target_include_directories(tests_dual PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(tests_dual PRIVATE gtest_main ddx)
+ddx_target_flags(tests_dual)
+gtest_discover_tests(tests_dual)
 
 # The batch tests are written once and have to give the same answers whether
 # they run interpreted or JIT-compiled, which is only checked if they actually
@@ -59,10 +57,8 @@ endif ()
 # everything it needs is passed explicitly below.
 option(DDX_TEST_PACKAGE "Build the out-of-tree consumer tests" ${PROJECT_IS_TOP_LEVEL})
 if (DDX_TEST_PACKAGE AND DDX_INSTALL)
-    set(DDX_PACKAGE_COMPONENTS "")
-    if (DDX_BUILD_RT)
-        list(APPEND DDX_PACKAGE_COMPONENTS rt)
-    endif ()
+    # rt and dual are in every build; only the backend is a question.
+    set(DDX_PACKAGE_COMPONENTS rt dual)
     if (DDX_BUILD_JIT)
         list(APPEND DDX_PACKAGE_COMPONENTS jit)
     endif ()

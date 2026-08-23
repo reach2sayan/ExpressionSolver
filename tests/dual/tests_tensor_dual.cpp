@@ -12,7 +12,7 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
   for (int i = 1; i <= 120; ++i) {
     const double a = 0.01 * i, b = 0.02 * i + 0.3, c = 0.015 * i + 0.5;
     const std::array<double, 3> p{a, b, c};
-    for (double v : Equation{e}.gradient(p))
+    for (double v : Equation{e}.jacobian(p))
       feed(v);
     const auto g1 = Equation{e}.template derivative_tensor<1>(p);
     for (std::size_t k = 0; k < 3; ++k)
@@ -38,7 +38,7 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
     for (std::size_t r = 0; r < 3; ++r)
       for (std::size_t cc = 0; cc < 3; ++cc)
         feed(hess_at(H, r, cc));
-    for (auto v : ddx::impl::gradient(fn, std::span<const double>{xs}))
+    for (auto v : ddx::impl::jacobian(fn, std::span<const double>{xs}))
       feed(v);
 
     const auto u = sin(x * x) + exp(x) + atan(x) + asinh(x);
@@ -73,12 +73,12 @@ TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
   constexpr Variable<double, FixedString{"x"}> x;
   constexpr Variable<double, FixedString{"y"}> y;
 
-  constexpr auto g = Equation{x * y}.gradient(std::array{3.0, 4.0});
-  static_assert(g[0] == 4.0 && g[1] == 3.0, "reverse gradient of x*y");
+  constexpr auto g = Equation{x * y}.jacobian(std::array{3.0, 4.0});
+  static_assert(g[0] == 4.0 && g[1] == 3.0, "reverse Jacobian of x*y");
 
   constexpr auto gf =
       Equation{x * y}.template derivative_tensor<1>(std::array{3.0, 4.0});
-  static_assert(gf[0] == 4.0 && gf[1] == 3.0, "forward gradient of x*y");
+  static_assert(gf[0] == 4.0 && gf[1] == 3.0, "forward Jacobian of x*y");
 
   constexpr auto H =
       Equation{x * y}.template derivative_tensor<2>(std::array{3.0, 4.0});
@@ -90,13 +90,13 @@ TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
       Equation{x * x * x}.template univariate_derivative<2>(2.0);
   static_assert(d2 == 12.0, "d2(x^3)/dx2 at x=2");
 
-  // A three-variable gradient, which also has to be usable in constant
+  // A three-variable Jacobian, which also has to be usable in constant
   // evaluation.
   constexpr Variable<double, FixedString{"z"}> z;
   constexpr auto g3 = Equation{x * y * z}.template derivative_tensor<1>(
       std::array{2.0, 3.0, 4.0});
   static_assert(g3[0] == 12.0 && g3[1] == 8.0 && g3[2] == 6.0,
-                "forward gradient path is constexpr");
+                "forward Jacobian path is constexpr");
 
   // Forward-over-reverse seeds tangents, so its expression carries Dual<double>
   // numbers.

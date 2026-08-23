@@ -74,35 +74,60 @@ private:
 
   using point_t = std::array<value_type, input_dim>;
 
+  // Every row goes through detail::strip_seed, so a dual-valued expression
+  // answers with the derivative proper rather than one still carrying its seed
+  // -- the same thing the one-output path has always done.  dual_scalar_t is
+  // the identity on a plain scalar, so this is only a rename there.
+  using jacobian_tensor_t =
+      md_tensor<dual_scalar_t<value_type>,
+                md::extents<std::size_t, output_dim, input_dim>>;
+
   [[nodiscard]] constexpr auto
   jacobian_symbolic(const point_t &vals) const noexcept
-    requires(input_dim > 0)
+    requires(output_dim > 1 && input_dim > 0)
   {
-    md_tensor<value_type, md::extents<std::size_t, output_dim, input_dim>> J{};
+    jacobian_tensor_t J{};
     const auto rows = jacobian_rows();
     static_for<output_dim>([&]<std::size_t I>() {
       assign_row(J, I,
-                 std::apply(
+                 detail::strip_seed(std::apply(
                      [&](const auto &...ds) {
                        return detail::eval_all<symbols>(vals, ds...);
                      },
-                     std::get<I>(rows)));
+                     std::get<I>(rows))));
     });
     return J;
   }
 
   [[nodiscard]] constexpr auto
   jacobian_reverse_mode(const point_t &vals) const noexcept
-    requires(input_dim > 0)
+    requires(output_dim > 1 && input_dim > 0)
   {
-    md_tensor<value_type, md::extents<std::size_t, output_dim, input_dim>> J{};
+    jacobian_tensor_t J{};
     static_for<output_dim>([&]<std::size_t I>() {
       // reverse_sweep fills a plain array; the row lands in the tensor after.
       std::array<value_type, input_dim> row{};
       reverse_sweep<symbols>(std::get<I>(expressions), vals, row);
-      assign_row(J, I, row);
+      assign_row(J, I, detail::strip_seed(row));
     });
     return J;
+  }
+
+  // The one-output symbolic path: row 0, without the leading axis.  Reverse
+  // has no counterpart here because detail::reverse_mode_jacobian already is
+  // one -- see the dispatch in jacobian() below.
+  [[nodiscard]] constexpr auto symbolic_row(const point_t &vals) const noexcept
+    requires(output_dim == 1 && input_dim > 0)
+  {
+    // Held by value: jacobian_rows() builds on demand, so a reference into
+    // std::get<0>(jacobian_rows()) would outlive the tuple it names.
+    const auto rows = jacobian_rows();
+    const auto &row = std::get<0>(rows);
+    std::array<value_type, input_dim> grads{};
+    static_for<input_dim>([&]<std::size_t I>() {
+      grads[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
+    });
+    return detail::strip_seed(grads);
   }
 
   // Forward over reverse: the dual level carries the tangent seed while the
@@ -224,35 +249,23 @@ public:
         args...);
   }
 
-  // Symbolic evaluates the stored partial trees; Reverse never builds them.
-  template <DiffMode Mode = DiffMode::Reverse>
-  [[nodiscard]] constexpr auto
-  gradient(const CEvalArg auto &...args) const noexcept
-    requires(output_dim == 1 && input_dim > 0)
-  {
-    return detail::with_point<symbols, value_type, input_dim>(
-        [this](const auto &vals) {
-          if constexpr (Mode == DiffMode::Symbolic) {
-            const auto rows = jacobian_rows();
-            const auto &row = std::get<0>(rows);
-            std::array<value_type, input_dim> grads{};
-            static_for<input_dim>([&]<std::size_t I>() {
-              grads[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
-            });
-            return detail::strip_seed(grads);
-          } else {
-            return detail::reverse_mode_gradient(std::get<0>(expressions),
-                                                 vals);
-          }
-        },
-        args...);
-  }
-
   // Slot 0 is the expression itself; slot k>0 is d/d(k-1 th symbol), in
   // canonical symbol order.  Both spellings; see DDX_KEYED_ACCESSORS.
   DDX_KEYED_ACCESSORS(std::size_t N, std::size_t N, N, idx_t<N>,
                       requires(output_dim == 1 && N <= input_dim))
 
+  // Symbolic evaluates the stored partial trees; Reverse never builds them.
+  //
+  // The leading output axis only appears with more than one output, here as in
+  // hessian() and derivative_tensor() below: one function answers with its n
+  // partials as a flat array, m functions with an m x n tensor.  One name, and
+  // output_dim picks which -- see jacobian_t.
+  //
+  // The two reverse branches sweep over different symbol lists: the m == 1 one
+  // over the canonicalised expression's own symbols, the m > 1 one over the
+  // Equation's.  They part company only when canonicalisation folds a symbol
+  // away, which is what input_dim staying derived from what the user wrote is
+  // there to prevent from shrinking the point.
   template <DiffMode Mode = DiffMode::Reverse>
   [[nodiscard]] constexpr auto
   jacobian(const CEvalArg auto &...args) const noexcept
@@ -260,7 +273,14 @@ public:
   {
     return detail::with_point<symbols, value_type, input_dim>(
         [this](const auto &vals) {
-          if constexpr (Mode == DiffMode::Symbolic) {
+          if constexpr (output_dim == 1) {
+            if constexpr (Mode == DiffMode::Symbolic) {
+              return symbolic_row(vals);
+            } else {
+              return detail::reverse_mode_jacobian(std::get<0>(expressions),
+                                                   vals);
+            }
+          } else if constexpr (Mode == DiffMode::Symbolic) {
             return jacobian_symbolic(vals);
           } else {
             return jacobian_reverse_mode(vals);
@@ -310,7 +330,6 @@ public:
   // Unlike hessian() and derivative_tensor(), which constrain on DualLike and
   // so disappear on their own without forward mode, this one is spelled over a
   // plain scalar and has to be guarded.
-#if DDX_HAS_DUAL
   template <std::size_t Order>
   [[nodiscard]] DDX_ALWAYS_INLINE constexpr auto
   univariate_derivative(scalar_base_t<value_type> x0) const noexcept
@@ -319,11 +338,38 @@ public:
     return detail::univariate_derivative_impl<Order>(std::get<0>(expressions),
                                                      x0);
   }
-#endif
 };
 
 template <CExpression T, CExpression... Ts>
 Equation(T, Ts...) -> Equation<T, Ts...>;
+
+// What the derivative members answer with, spelled once.  Same shape as
+// std::ranges::borrowed_iterator_t: a conditional_t the caller can name,
+// rather than a return type only decltype can recover.
+//
+// These name the *unwrapped* result.  The members stay `auto` because
+// detail::with_point wraps them in result<> for a point whose length is only
+// known at run time; every other spelling answers with exactly these.
+template <typename Eq>
+using jacobian_t = std::conditional_t<
+    Eq::output_dim == 1,
+    std::array<dual_scalar_t<typename Eq::value_type>, Eq::input_dim>,
+    md_tensor<dual_scalar_t<typename Eq::value_type>,
+              md::extents<std::size_t, Eq::output_dim, Eq::input_dim>>>;
+
+template <typename Eq>
+using hessian_t = std::conditional_t<
+    Eq::output_dim == 1,
+    nd_tensor_t<dual_scalar_t<typename Eq::value_type>, Eq::input_dim, 2>,
+    nd_stack_t<dual_scalar_t<typename Eq::value_type>, Eq::output_dim,
+               Eq::input_dim, 2>>;
+
+template <typename Eq, std::size_t Order>
+using derivative_tensor_t = std::conditional_t<
+    Eq::output_dim == 1,
+    nd_tensor_t<scalar_base_t<typename Eq::value_type>, Eq::input_dim, Order>,
+    nd_stack_t<scalar_base_t<typename Eq::value_type>, Eq::output_dim,
+               Eq::input_dim, Order>>;
 
 // Declared back in expr/expressions.hpp, where Equation was still incomplete.
 template <typename Derived>
@@ -340,7 +386,7 @@ std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
 
 } // namespace ddx::impl
 
-// One block per output: the function, then its gradient row in canonical
+// One block per output: the function, then its Jacobian row in canonical
 // symbol order.  The spec is forwarded to every expression printed.
 template <ddx::impl::CExpression... Ts>
 struct std::formatter<ddx::impl::Equation<Ts...>, char> {
@@ -365,7 +411,7 @@ struct std::formatter<ddx::impl::Equation<Ts...>, char> {
       out = std::format_to(out, "f{}: ", I);
       out = std::vformat_to(out, one,
                             std::make_format_args(std::get<I>(eq.functions())));
-      out = std::format_to(out, "\n  grad: ");
+      out = std::format_to(out, "\n  jac: ");
       const auto &row = std::get<I>(rows);
       ddx::impl::static_for<Eq::input_dim>([&]<std::size_t J>() {
         if constexpr (J > 0) {

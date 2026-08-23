@@ -9,7 +9,7 @@
 // Both give the same numbers; see the last two sections for the difference.
 
 #include "ddx.hpp"               // the public surface: Equation, var, named
-#include "dual/hessian.hpp"      // hessian(), gradient()
+#include "dual/hessian.hpp"      // hessian(), jacobian()
 #include "symbolic/bound.hpp"    // eval(), bind(), named<>()
 #include "symbolic/coupling.hpp" // hessian_pattern(), color_columns()
 #include "symbolic/equation.hpp" // Equation: vector-valued f, Jacobians
@@ -163,16 +163,16 @@ int main() {
 
   // ---- GRADIENT
   println("\nGRADIENT");
-  row("lambda  gradient(f, xs)           [0]",
-      ddx::impl::gradient(lambda, xs)[0],
-      bench_ns([&] { return ddx::impl::gradient(lambda, xs)[0]; }, 2000));
-  row("graph   gradient<Reverse>(expr,p) [0]", Equation{gplain}.gradient(p)[0],
-      bench_ns([&] { return Equation{gplain}.gradient(p)[0]; }));
+  row("lambda  jacobian(f, xs)           [0]",
+      ddx::impl::jacobian(lambda, xs)[0],
+      bench_ns([&] { return ddx::impl::jacobian(lambda, xs)[0]; }, 2000));
+  row("graph   jacobian<Reverse>(expr,p) [0]", Equation{gplain}.jacobian(p)[0],
+      bench_ns([&] { return Equation{gplain}.jacobian(p)[0]; }));
   row("graph   ...bound by name          [0]",
-      Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]),
+      Equation{gplain}.jacobian(named<"x">(p[0]), named<"y">(p[1]),
                                 named<"z">(p[2]))[0],
       bench_ns([&] {
-        return Equation{gplain}.gradient(named<"x">(p[0]), named<"y">(p[1]),
+        return Equation{gplain}.jacobian(named<"x">(p[0]), named<"y">(p[1]),
                                          named<"z">(p[2]))[0];
       }));
 
@@ -302,10 +302,10 @@ int main() {
   constexpr auto ct = [] {
     const Variable<double, FixedString{"a"}> a;
     const Variable<double, FixedString{"b"}> b;
-    return Equation{a * b}.gradient(std::array{3.0, 4.0});
+    return Equation{a * b}.jacobian(std::array{3.0, 4.0});
   }();
   static_assert(ct[0] == 4.0 && ct[1] == 3.0,
                 "the symbolic path must be constant-evaluable");
   println("\nCOMPILE TIME                                        0.0 ns");
-  println("  static_assert(gradient<Reverse>(a*b, {{3,4}})[0] == 4.0)  OK");
+  println("  static_assert(jacobian<Reverse>(a*b, {{3,4}})[0] == 4.0)  OK");
 }

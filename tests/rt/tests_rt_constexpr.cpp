@@ -53,26 +53,26 @@ consteval std::size_t nodes_for_repeated_subtree() {
 }
 static_assert(nodes_for_repeated_subtree() == 5);
 
-// A gradient, swept and evaluated entirely during constant evaluation.
+// A Jacobian, swept and evaluated entirely during constant evaluation.
 consteval double partial_of_product() {
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto f = x * y;
-  const auto g = ddx::rt::gradient(b, f.id(b));
+  const auto g = ddx::rt::jacobian(b, f.id(b));
   return ddx::rt::evaluate_all(b, std::array{3.0, 4.0})[g.partial[0]];
 }
 static_assert(partial_of_product() == 4.0);
 
-consteval double transcendental_gradient() {
+consteval double transcendental_jacobian() {
   Builder<> b;
   const auto x = var(b, "x");
   const auto f = sin(x) * x;
-  const auto g = ddx::rt::gradient(b, f.id(b));
+  const auto g = ddx::rt::jacobian(b, f.id(b));
   const auto v = ddx::rt::evaluate_all(b, std::array{0.0});
   return v[g.partial[0]]; // d(x sin x)/dx at 0 is sin 0 + 0 cos 0
 }
-static_assert(transcendental_gradient() == 0.0);
+static_assert(transcendental_jacobian() == 0.0);
 
 // Lowering a typed tree into a graph is a constant expression as well, so the
 // two representations can be compared without running anything.

@@ -58,7 +58,7 @@ raw(const std::unique_ptr<double[]> &p) noexcept {
 }
 
 [[nodiscard]] constexpr const double *grad_ptr(const auto &h) noexcept {
-  return raw(deref(h).gradient);
+  return raw(deref(h).jacobian);
 }
 
 [[nodiscard]] constexpr double grad_at(const auto &h, std::size_t i) noexcept {

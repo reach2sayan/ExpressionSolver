@@ -5,7 +5,7 @@ TEST(NewMathFunctions, MaxMinTiesAverageAndNaNPropagatesSymmetrically) {
   auto x = var<"x">;
   auto y = var<"y">;
   // A tie is the mean of the two subgradients in every engine.
-  auto tie = Equation{max(x, y)}.gradient(2.0, 2.0);
+  auto tie = Equation{max(x, y)}.jacobian(2.0, 2.0);
   EXPECT_DOUBLE_EQ(tie[0], 0.5);
   EXPECT_DOUBLE_EQ(tie[1], 0.5);
   // A NaN operand propagates from either side -- fmax-style dropping would
@@ -16,7 +16,7 @@ TEST(NewMathFunctions, MaxMinTiesAverageAndNaNPropagatesSymmetrically) {
   EXPECT_TRUE(std::isnan(max(x, y).eval(2.0, qnan)));
   EXPECT_TRUE(std::isnan(min(x, y).eval(qnan, 2.0)));
   EXPECT_TRUE(std::isnan(min(x, y).eval(2.0, qnan)));
-  auto gnan = Equation{max(x, y)}.gradient(2.0, qnan);
+  auto gnan = Equation{max(x, y)}.jacobian(2.0, qnan);
   EXPECT_TRUE(std::isnan(gnan[0]));
   EXPECT_TRUE(std::isnan(gnan[1]));
   // abs: sign(0) is 0 and sign(NaN) is NaN.
@@ -196,7 +196,7 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
 // ===========================================================================
 
 // Single-variable expression: value must match eval(), tangent must match the
-// reverse-mode gradient computed by the separate backward()/adjoints() sweep.
+// reverse-mode Jacobian computed by the separate backward()/adjoints() sweep.
 // The two agree algebraically but not bit-for-bit — e.g. the quotient rule
 // evaluates (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse — so the
 // tangent is compared to a tolerance a few ULP wide rather than exactly.
@@ -206,7 +206,7 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
     const std::array<double, 1> pt_{xv_};                                      \
     const auto t_ = e_.template eval_with_tangent<"x">(xv_);                   \
     EXPECT_DOUBLE_EQ(t_.value(), e_.eval(xv_));                                \
-    EXPECT_NEAR(t_.deriv(), Equation{e_}.gradient(pt_)[0], 1e-12);             \
+    EXPECT_NEAR(t_.deriv(), Equation{e_}.jacobian(pt_)[0], 1e-12);             \
   } while (0)
 
 TEST(ForwardTangentSweep, LeafSeeding) {
@@ -279,7 +279,7 @@ TEST(ForwardTangentSweep, BinaryMathRules) {
   auto x = var_of<"x">(x0);
   auto y = var_of<"y">(y0);
 
-  // Symbols sort alphabetically, so gradient slot 0 is x and slot 1 is y.
+  // Symbols sort alphabetically, so Jacobian slot 0 is x and slot 1 is y.
   const auto check = [x0, y0](const auto &e, double dx, double dy) {
     EXPECT_DOUBLE_EQ(e.template eval_with_tangent<"x">(x0, y0).value(),
                      e.eval(x0, y0));
@@ -306,7 +306,7 @@ TEST(ForwardTangentSweep, MultiVariableMatchesReverseMode) {
   const auto e = sin(x * y) * exp(x + y) + log(y * y + 1.0) / (x + 2.0) -
                  hypot(x, y) * tanh(x);
 
-  const auto g = Equation{e}.gradient(0.8, 1.3);
+  const auto g = Equation{e}.jacobian(0.8, 1.3);
   const auto tx = e.eval_with_tangent<"x">(0.8, 1.3);
   const auto ty = e.eval_with_tangent<"y">(0.8, 1.3);
 
@@ -358,7 +358,7 @@ TEST(FrozenVariable, EveryEngineSeesZeroDerivative) {
 
 // derivative_tensor<1> has to support every unary math function at any arity:
 // each one below must *instantiate* at 3 variables and agree with reverse mode.
-TEST(ForwardGradient, CoversEveryUnaryMathFunction) {
+TEST(ForwardJacobian, CoversEveryUnaryMathFunction) {
   [[maybe_unused]] const std::array<double, 3> pt{0.6, 0.4, 1.3};
   [[maybe_unused]] auto y = var<"y">;
   [[maybe_unused]] auto z = var<"z">;

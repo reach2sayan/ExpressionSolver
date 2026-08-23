@@ -9,20 +9,20 @@ include(CMakeFindDependencyMacro)
 
 # What the exported targets need found again on the consumer's machine.
 set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
-set(DDX_BUILD_DUAL @DDX_BUILD_DUAL@)
 
 # Boost::headers rather than any component: every Boost library ddx uses --
-# Mp11 for the symbol lists, Graph and DynamicBitset for the runtime graph --
-# is header-only, so what a consumer needs is an include path. The build fetches
-# a pinned Boost because the colouring's quality is asserted on; a consumer only
-# compiling against the headers can use whichever one it has.  Reported rather
-# than required: demanding the pin would fail every consumer on a distro Boost
-# over a difference that is very likely immaterial, but if it ever is not, the
-# two versions are the first thing worth knowing.
-find_dependency(Boost)
-if (NOT Boost_VERSION VERSION_EQUAL "@DDX_BOOST_VERSION@")
+# Mp11 for the symbol lists, Graph and DynamicBitset for the runtime graph -- is
+# header-only, so what a consumer needs is an include path.  The same find the
+# build itself made, in config mode for the same reason (CMP0167: the module is
+# deprecated since CMake 3.30 and removed in 4).  No version pinned: ddx checked
+# at configure time that the headers it names are there, and a consumer's Boost
+# has to answer for itself, so a release number here would only turn away Boosts
+# that work.  Reported when it differs, because if it ever does matter the two
+# versions are the first thing worth knowing.
+find_dependency(Boost CONFIG)
+if (NOT Boost_VERSION VERSION_EQUAL "@Boost_VERSION@")
     message(STATUS
-            "ddx was built against Boost @DDX_BOOST_VERSION@; this consumer resolved ${Boost_VERSION}.")
+            "ddx was built against Boost @Boost_VERSION@; this consumer resolved ${Boost_VERSION}.")
 endif ()
 
 if (DDX_BUILD_JIT)
@@ -57,13 +57,6 @@ if (DDX_BUILD_JIT AND NOT TARGET ddx::jit)
     set_target_properties(ddx::jit PROPERTIES INTERFACE_LINK_LIBRARIES ddx::rt)
 endif ()
 
-# Boost is attached here rather than carried in the export: the build's Boost is
-# a fetched target that belongs to no export set, so the exported targets name
-# it nowhere and are given the one found above instead.  On ddx::ddx, which
-# every other target links, so Mp11 reaches all three.
-set_property(TARGET ddx::ddx APPEND PROPERTY
-        INTERFACE_LINK_LIBRARIES Boost::headers)
-
 # How ddx itself was compiled.  Not pushed onto ddx::ddx -- an INTERFACE library
 # must not force a flag on a consumer -- but a consumer whose numbers have to be
 # comparable with ddx's own needs to be able to ask.  FP contraction is the one
@@ -79,14 +72,13 @@ set(ddx_util_FOUND TRUE)
 set(ddx_ops_FOUND TRUE)
 set(ddx_md_FOUND TRUE)
 set(ddx_symbolic_FOUND TRUE)
-# The runtime graph is always built; only forward mode and the backend are not.
+# The runtime graph and forward mode are in every build; only the backend is not.
 set(ddx_rt_FOUND TRUE)
-set(ddx_dual_FOUND ${DDX_BUILD_DUAL})
+set(ddx_dual_FOUND TRUE)
 set(ddx_jit_FOUND ${DDX_BUILD_JIT})
 
 # check_required_components() reports only that ddx_FOUND went false, which
 # leaves the consumer to guess which component and how to get it.
-set(DDX_dual_OPTION DDX_BUILD_DUAL)
 set(DDX_jit_OPTION DDX_BUILD_JIT)
 foreach (comp IN LISTS ddx_FIND_COMPONENTS)
     if (NOT ddx_${comp}_FOUND AND DEFINED DDX_${comp}_OPTION)

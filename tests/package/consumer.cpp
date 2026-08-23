@@ -38,9 +38,9 @@ int main() {
   const auto y = var_of<"y">(0.5);
   const auto eq = Equation(x * y + sin(x));
 
-  const auto g = eq.gradient(named<"x">(1.25), named<"y">(0.5));
+  const auto g = eq.jacobian(named<"x">(1.25), named<"y">(0.5));
   if (!close(g[0], 0.5 + std::cos(1.25)) || !close(g[1], 1.25)) {
-    return fail("compile-time gradient is wrong");
+    return fail("compile-time jacobian is wrong");
   }
 
 #ifdef DDX_CONSUMER_RT
@@ -48,11 +48,11 @@ int main() {
   // that needs Boost, so it is what proves the consumer resolved Boost at all.
   rt::Builder<> b;
   const auto root = rt::to_graph(b, x * y + sin(x));
-  const auto rg = rt::gradient(b, root.id(b));
+  const auto rg = rt::jacobian(b, root.id(b));
   const auto values = rt::evaluate_all(b, std::array{1.25, 0.5});
   if (!close(values[rg.partial[0]], 0.5 + std::cos(1.25)) ||
       !close(values[rg.partial[1]], 1.25)) {
-    return fail("runtime-graph gradient is wrong");
+    return fail("runtime-graph jacobian is wrong");
   }
 #endif
 
@@ -64,7 +64,7 @@ int main() {
     return fail(compiler.error().detail.c_str());
   }
   auto kernel =
-      compiler->compile(rt::GraphBuilder{b}.value(root).gradient().build());
+      compiler->compile(rt::GraphBuilder{b}.value(root).jacobian().build());
   if (!kernel) {
     return fail(kernel.error().detail.c_str());
   }
@@ -74,7 +74,7 @@ int main() {
   double *const outs[] = {&out_f, &out_gx, &out_gy};
   (*kernel)(in, std::span{outs, 1}, std::span{outs + 1, 2}, {}, 1);
   if (!close(out_gx, 0.5 + std::cos(1.25)) || !close(out_gy, 1.25)) {
-    return fail("JIT-compiled gradient is wrong");
+    return fail("JIT-compiled jacobian is wrong");
   }
 #endif
 

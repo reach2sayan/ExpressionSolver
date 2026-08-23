@@ -1,8 +1,8 @@
 #include "ddx.hpp"
-#include "symbolic/sweep.hpp"
 #include "dual/dual.hpp"
 #include "symbolic/bound.hpp"
 #include "symbolic/equation.hpp"
+#include "symbolic/sweep.hpp"
 #include "symbolic/values.hpp"
 #define _USE_MATH_DEFINES
 #include <array>
@@ -15,14 +15,14 @@ using namespace ddx::impl;
 
 template <typename Eq, CNumericBuffer Pt>
   requires requires(Eq &eq, Pt pt) {
-    eq.template gradient<ddx::DiffMode::Symbolic>(pt);
+    eq.template jacobian<ddx::DiffMode::Symbolic>(pt);
   }
 static void run_symbolic(benchmark::State &state, Eq &eq, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto gradients = eq.template gradient<ddx::DiffMode::Symbolic>(pt);
-    benchmark::DoNotOptimize(gradients);
+    auto partials = eq.template jacobian<ddx::DiffMode::Symbolic>(pt);
+    benchmark::DoNotOptimize(partials);
     benchmark::ClobberMemory();
   }
 }
@@ -32,8 +32,8 @@ static void run_reverse(benchmark::State &state, Expr &expr, Pt pt) {
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(pt);
-    auto gradients = Equation{expr}.gradient(pt);
-    benchmark::DoNotOptimize(gradients);
+    auto partials = Equation{expr}.jacobian(pt);
+    benchmark::DoNotOptimize(partials);
     benchmark::ClobberMemory();
   }
 }
@@ -45,8 +45,8 @@ run_forward(benchmark::State &state, Expr &expr,
   for (auto _ : state) {
     benchmark::ClobberMemory();
     benchmark::DoNotOptimize(values);
-    auto gradients = Equation{expr}.template derivative_tensor<1>(values);
-    benchmark::DoNotOptimize(gradients);
+    auto partials = Equation{expr}.template derivative_tensor<1>(values);
+    benchmark::DoNotOptimize(partials);
     benchmark::ClobberMemory();
   }
 }
@@ -326,7 +326,8 @@ static void BM_Symbolic_Batched_F4(benchmark::State &state) {
   constexpr auto y = var<"y">;
   constexpr auto z = var<"z">;
   constexpr auto w = var<"w">;
-  auto eq = Equation((x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w);
+  auto eq =
+      Equation((x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w);
 
   using point_type = std::array<double, 4>; // canonical order: w, x, y, z
   std::vector<point_type> points;
@@ -338,7 +339,7 @@ static void BM_Symbolic_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (const auto &pt : points) {
-      auto grads = eq.template gradient<ddx::DiffMode::Symbolic>(pt);
+      auto grads = eq.template jacobian<ddx::DiffMode::Symbolic>(pt);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();
@@ -371,7 +372,7 @@ static void BM_Reverse_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (const auto &pt : points) {
-      auto grads = Equation{expr}.gradient(pt);
+      auto grads = Equation{expr}.jacobian(pt);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();
@@ -414,7 +415,8 @@ static void BM_Forward_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (std::size_t i = 0; i < count; ++i) {
-      auto grads = Equation{expressions[i]}.template derivative_tensor<1>(points[i]);
+      auto grads =
+          Equation{expressions[i]}.template derivative_tensor<1>(points[i]);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();
@@ -447,7 +449,8 @@ static void BM_Reverse_Dual_F2_Bivariate(benchmark::State &state) {
   auto x = dual_var_of<"x">(xv);
   auto y = dual_var_of<"y">(yv);
   auto expr = x * y + sin(x) + y * y + exp(x + y);
-  run_reverse(state, expr, std::array{Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0}});
+  run_reverse(state, expr,
+              std::array{Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0}});
 }
 BENCHMARK(BM_Reverse_Dual_F2_Bivariate);
 
@@ -462,7 +465,9 @@ static void BM_Reverse_Dual_F4_FourVariables(benchmark::State &state) {
   auto z = dual_var_of<"z">(zv);
   auto w = dual_var_of<"w">(wv);
   auto expr = (x + y) * (z - w) + exp(x * z) + sin(y * w) + x * y * z * w;
-  run_reverse(state, expr, std::array{Dual<double>{wv, 0.0}, Dual<double>{xv, 0.0}, Dual<double>{yv, 0.0}, Dual<double>{zv, 0.0}});
+  run_reverse(state, expr,
+              std::array{Dual<double>{wv, 0.0}, Dual<double>{xv, 0.0},
+                         Dual<double>{yv, 0.0}, Dual<double>{zv, 0.0}});
 }
 BENCHMARK(BM_Reverse_Dual_F4_FourVariables);
 
@@ -486,7 +491,7 @@ static void BM_Reverse_Dual_Batched_F4(benchmark::State &state) {
 
   for (auto _ : state) {
     for (const auto &pt : points) {
-      auto grads = Equation{expr}.gradient(pt);
+      auto grads = Equation{expr}.jacobian(pt);
       benchmark::DoNotOptimize(grads);
     }
     benchmark::ClobberMemory();

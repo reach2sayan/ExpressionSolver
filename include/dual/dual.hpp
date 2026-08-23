@@ -3,13 +3,15 @@
 #include "ops/scalar.hpp"
 #include "ops/unary_math.hpp"
 #include "symbolic/expressions.hpp" // Variable, for dual_var_of
-#include "util/config.hpp"          // DDX_ALWAYS_INLINE
+#include "util/config.hpp"          // DDX_ALWAYS_INLINE, DDX_SELF
 #include "util/fmt.hpp"
 #include <array>
 #include <cmath>
 #include <format>
+#include <numeric> // std::midpoint
 #include <tuple>
 #include <type_traits>
+#include <utility> // std::forward, std::move
 
 namespace ddx::impl {
 
@@ -49,28 +51,74 @@ public:
     return *this;
   }
 
-  [[nodiscard]] constexpr const T &value() const noexcept { return val_; }
-  [[nodiscard]] constexpr T &value() noexcept { return val_; }
-  [[nodiscard]] constexpr const T &deriv() const noexcept { return deriv_; }
-  [[nodiscard]] constexpr T &deriv() noexcept { return deriv_; }
-
+private:
+  // One place that says which member an index names, and the only one that has
+  // to get the value category right: a member of an rvalue Dual is an rvalue,
+  // and the parentheses are what make decltype(auto) a reference to it rather
+  // than a copy.  std::forward_like would say the same thing more directly, but
+  // it is a libstdc++ 14 addition and this compiles under 13.
   template <std::size_t Index>
-  [[nodiscard]] constexpr const T &get() const noexcept {
+  [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     static_assert(Index < 2, "Dual index out of bounds");
     if constexpr (Index == 0) {
-      return val_;
+      return (std::forward<decltype(self)>(self).val_);
     } else {
-      return deriv_;
+      return (std::forward<decltype(self)>(self).deriv_);
     }
   }
-  template <std::size_t Index> [[nodiscard]] constexpr T &get() noexcept {
-    static_assert(Index < 2, "Dual index out of bounds");
-    if constexpr (Index == 0) {
-      return val_;
-    } else {
-      return deriv_;
-    }
+
+public:
+  // The four value categories differ only in what slot() hands back, so P0847
+  // writes each accessor once; DDX_DEDUCING_THIS=off is a supported
+  // configuration, hence the quartets below.
+#if DDX_DEDUCING_THIS
+  [[nodiscard]] constexpr decltype(auto) value(DDX_SELF) noexcept {
+    return slot<0>(DDX_FWD_SELF);
   }
+  [[nodiscard]] constexpr decltype(auto) deriv(DDX_SELF) noexcept {
+    return slot<1>(DDX_FWD_SELF);
+  }
+#else
+  [[nodiscard]] constexpr const T &value() const & noexcept { return val_; }
+  [[nodiscard]] constexpr T &value() & noexcept { return val_; }
+  [[nodiscard]] constexpr const T &&value() const && noexcept {
+    return std::move(val_);
+  }
+  [[nodiscard]] constexpr T &&value() && noexcept { return std::move(val_); }
+  [[nodiscard]] constexpr const T &deriv() const & noexcept { return deriv_; }
+  [[nodiscard]] constexpr T &deriv() & noexcept { return deriv_; }
+  [[nodiscard]] constexpr const T &&deriv() const && noexcept {
+    return std::move(deriv_);
+  }
+  [[nodiscard]] constexpr T &&deriv() && noexcept { return std::move(deriv_); }
+#endif
+
+  // The tuple protocol's accessor, in the same two forms.  get() on an rvalue
+  // yields an rvalue, which is what std::get does and what a consumer that
+  // forwards a decomposed Dual expects.
+#if DDX_DEDUCING_THIS
+  template <std::size_t Index>
+  [[nodiscard]] constexpr decltype(auto) get(DDX_SELF) noexcept {
+    return slot<Index>(DDX_FWD_SELF);
+  }
+#else
+  template <std::size_t Index>
+  [[nodiscard]] constexpr decltype(auto) get() const & noexcept {
+    return slot<Index>(*this);
+  }
+  template <std::size_t Index>
+  [[nodiscard]] constexpr decltype(auto) get() & noexcept {
+    return slot<Index>(*this);
+  }
+  template <std::size_t Index>
+  [[nodiscard]] constexpr decltype(auto) get() const && noexcept {
+    return slot<Index>(std::move(*this));
+  }
+  template <std::size_t Index>
+  [[nodiscard]] constexpr decltype(auto) get() && noexcept {
+    return slot<Index>(std::move(*this));
+  }
+#endif
 };
 
 // The dual-family flag's primary lives in util/fmt.hpp, next to the formatter
@@ -84,7 +132,8 @@ template <Numeric T> constexpr auto val(const Dual<T> &d) noexcept {
   return val(d.template get<0>());
 }
 template <Numeric T> constexpr bool all_zero(const Dual<T> &d) noexcept {
-  return all_zero(d.template get<0>()) && all_zero(d.template get<1>());
+  const auto& [real, dual] = d;
+  return all_zero(real) && all_zero(dual);
 }
 
 // dual_var_of<"x">(v) — dual-valued, which is what hessian() needs.  Here
@@ -286,10 +335,8 @@ constexpr auto pow(A &&a, B &&b) noexcept {
   // eval_seeded promotes every leaf.  Its b' ln a term would still be
   // 0 * log(0) = NaN at av <= 0, so the direct form takes over exactly when
   // b' is identically zero.
-  if (all_zero(bd)) {
-    return DT{p, pow(av, bv - T{1}) * (bv * ad)};
-  }
-  return DT{p, p * (bd * log(av) + bv * ad / av)};
+  return (all_zero(bd)) ? DT{p, pow(av, bv - T{1}) * (bv * ad)}
+                        : DT{p, p * (bd * log(av) + bv * ad / av)};
 }
 
 // pow(a, s), s a constant exponent.  d(a^s) = s a^(s-1) a', spent as a second
@@ -329,11 +376,9 @@ constexpr auto max(A &&a, B &&b) noexcept {
   // the commutative reordering the graph builder applies.
   if (val(a) == val(b)) {
     return DT{a + (b - a) / 2};
-  }
-  if (val(a) < val(b)) {
+  } else if (val(a) < val(b)) {
     return DT{b};
-  }
-  if (val(b) < val(a)) {
+  } else if (val(b) < val(a)) {
     return DT{a};
   }
   return DT{(a - b) * DT{}};
@@ -344,11 +389,9 @@ constexpr auto min(A &&a, B &&b) noexcept {
   using DT = std::remove_cvref_t<A>;
   if (val(a) == val(b)) {
     return DT{a + (b - a) / 2};
-  }
-  if (val(b) < val(a)) {
+  } else if (val(b) < val(a)) {
     return DT{b};
-  }
-  if (val(a) < val(b)) {
+  } else if (val(a) < val(b)) {
     return DT{a};
   }
   return DT{(a - b) * DT{}};
@@ -360,11 +403,9 @@ template <DualLike A, CArithmetic U> constexpr auto max(A &&a, U s) noexcept {
   using DT = std::remove_cvref_t<A>;
   if (val(a) == s) {
     return DT{a + (s - a) / 2};
-  }
-  if (val(a) < s) {
+  } else if (val(a) < s) {
     return DT{s};
-  }
-  if (s < val(a)) {
+  } else if (s < val(a)) {
     return DT{a};
   }
   return DT{(a - s) * DT{}};
@@ -373,11 +414,9 @@ template <DualLike A, CArithmetic U> constexpr auto max(U s, A &&a) noexcept {
   using DT = std::remove_cvref_t<A>;
   if (val(a) == s) {
     return DT{a + (s - a) / 2};
-  }
-  if (s < val(a)) {
+  } else if (s < val(a)) {
     return DT{a};
-  }
-  if (val(a) < s) {
+  } else if (val(a) < s) {
     return DT{s};
   }
   return DT{(a - s) * DT{}};
@@ -386,11 +425,9 @@ template <DualLike A, CArithmetic U> constexpr auto min(A &&a, U s) noexcept {
   using DT = std::remove_cvref_t<A>;
   if (val(a) == s) {
     return DT{a + (s - a) / 2};
-  }
-  if (s < val(a)) {
+  } else if (s < val(a)) {
     return DT{s};
-  }
-  if (val(a) < s) {
+  } else if (val(a) < s) {
     return DT{a};
   }
   return DT{(a - s) * DT{}};
@@ -399,11 +436,9 @@ template <DualLike A, CArithmetic U> constexpr auto min(U s, A &&a) noexcept {
   using DT = std::remove_cvref_t<A>;
   if (val(a) == s) {
     return DT{a + (s - a) / 2};
-  }
-  if (val(a) < s) {
+  } else if (val(a) < s) {
     return DT{a};
-  }
-  if (s < val(a)) {
+  } else if (s < val(a)) {
     return DT{s};
   }
   return DT{(a - s) * DT{}};
@@ -420,6 +455,19 @@ constexpr auto atan2(A &&y, B &&x) noexcept {
   using DT = std::remove_cvref_t<A>;
   const auto h = hypot(xv, yv);
   return DT{atan2(yv, xv), ((xv / h) * yd - (yv / h) * xd) / h};
+}
+
+// midpoint is linear, so it is its own derivative rule: the midpoint of the
+// values, and the midpoint of the derivatives.  std::midpoint takes arithmetic
+// types only, which is why max/min could not just call it -- see midpoint_impl
+// in ops/operations.hpp, whose `using std::midpoint` finds this by ADL.
+template <DualLike A, DualCompatible<A> B>
+constexpr auto midpoint(A &&a, B &&b) noexcept {
+  using std::midpoint;
+  const auto &[xv, xd] = a;
+  const auto &[yv, yd] = b;
+  using DT = std::remove_cvref_t<A>;
+  return DT{midpoint(xv, yv), midpoint(xd, yd)};
 }
 
 // hypot(x, y) = sqrt(x² + y²).  d hypot = (x/h)*dx + (y/h)*dy: the quotients

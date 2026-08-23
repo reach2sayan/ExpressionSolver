@@ -4,8 +4,8 @@
 # An OBJECT library rather than a second shared library: ddx produces one binary,
 # libddx, and these objects are linked into it.  The indirection buys the one
 # thing a plain target_sources() on ddx_rt could not -- these two files need
-# their own flags (-fno-exceptions unconditionally) and their own private
-# include path (LLVM's), neither of which should reach the rest of the library.
+# their own private include path (LLVM's), which should not reach the rest of
+# the library.
 add_library(ddx_jit_objs OBJECT codegen.cpp compiler.cpp)
 
 # PIC unconditionally: required when libddx is shared, and it costs the static
@@ -22,26 +22,18 @@ target_include_directories(ddx_jit_objs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(ddx_jit_objs SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 # The same header dependencies ddx_rt has, not ddx_rt itself: these objects are
 # linked *into* it, so naming it here would be circular.
-target_link_libraries(ddx_jit_objs PRIVATE ddx
-        $<BUILD_LOCAL_INTERFACE:Boost::graph>
-        $<BUILD_LOCAL_INTERFACE:Boost::dynamic_bitset>)
+target_link_libraries(ddx_jit_objs PRIVATE ddx Boost::headers)
 
 # Deliberately no -fno-rtti, even against an LLVM built without it.  The flag is
 # only needed by code that derives from an LLVM polymorphic class or applies
 # typeid/dynamic_cast to one; isa<>/cast<> use LLVM's own RTTI, not the
 # language's, and nothing here inherits from LLVM.
 #
-# -fno-exceptions, on the other hand, unconditionally: this is the one place the
-# project meets LLVM, LLVM is itself built -fno-exceptions -funwind-tables
-# (llvm-config --cxxflags), and nothing here throws -- llvm::Error comes out as
-# jit::error instead.  Independent of DDX_NO_EXCEPTIONS, which is about the rest
-# of the tree.
+# Exceptions are off through ddx_target_flags() like everywhere else, which
+# suits this file particularly: it is the one place the project meets LLVM, LLVM
+# is itself built -fno-exceptions -funwind-tables (llvm-config --cxxflags), and
+# nothing here throws -- llvm::Error comes out as jit::error instead.
 ddx_target_flags(ddx_jit_objs)
-if (NOT MSVC)
-    target_compile_options(ddx_jit_objs PRIVATE -fno-exceptions -funwind-tables)
-else ()
-    target_compile_options(ddx_jit_objs PRIVATE /EHs-c-)
-endif ()
 
 # Into libddx, and ddx::jit is that same library under the name a consumer asks
 # for the backend by.
