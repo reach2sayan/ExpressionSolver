@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <memory>
 #include <optional>
@@ -375,27 +376,69 @@ private:
   }
 #endif
 
+  // Points per block sweep.  Two AVX2 registers of doubles: wide enough that
+  // the per-node switch is amortised, narrow enough that the tape stays a
+  // handful of nodes' worth per lane.
+  static constexpr std::size_t kLanes = 8;
+
   void interpret(const Compiled &c, std::span<const T *const> xs,
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
     const auto blocks = c.graph.output_blocks();
-    std::vector<T> at(symbol_count());
+    const auto order = c.graph.live_order();
+    const std::size_t symbols = symbol_count();
 
-    for (const std::size_t i : std::views::iota(0uz, n)) {
-      for (const auto [j, column] : std::views::enumerate(xs)) {
-        at[static_cast<std::size_t>(j)] = column[i];
-      }
-      const auto values = rt::evaluate_all(*arena_, at);
-
-      const auto fill = [&](std::span<T *const> columns,
-                            std::span<const rt::NodeId> block) {
-        for (const auto [column, o] : std::views::zip(columns, block)) {
-          column[i] = values[o];
+    // Tapes are sized by the arena rather than the graph: a borrowed builder
+    // may have grown since the freeze, and live ids index below that.
+    if (n < kLanes) {
+      std::vector<T> at(symbols);
+      std::vector<T> tape(arena_->size());
+      for (const std::size_t i : std::views::iota(0uz, n)) {
+        for (const auto [j, column] : std::views::enumerate(xs)) {
+          at[static_cast<std::size_t>(j)] = column[i];
         }
-      };
-      fill(f, blocks.values);
-      fill(g, blocks.jacobian);
-      fill(h, blocks.hessian);
+        rt::evaluate_into(*arena_, at, order, std::span<T>{tape});
+        for (const auto [columns, block] :
+             std::views::zip(std::array{f, g, h},
+                             std::array{blocks.values, blocks.jacobian,
+                                        blocks.hessian})) {
+          for (const auto [column, o] : std::views::zip(columns, block)) {
+            column[i] = tape[o];
+          }
+        }
+      }
+      return;
+    }
+
+    // kLanes points per sweep: the switch is paid once per node per block, and
+    // each operation becomes a lane loop wide enough to vectorise.  A short
+    // final block repeats its last point rather than falling back to a scalar
+    // path; the repeated lanes are never read back.
+    std::vector<T> lanes(symbols * kLanes);
+    std::vector<T> tape(arena_->size() * kLanes);
+
+    for (std::size_t base = 0; base < n; base += kLanes) {
+      const std::size_t width = std::min(kLanes, n - base);
+      for (const auto [j, column] : std::views::enumerate(xs)) {
+        T *const dst = lanes.data() + static_cast<std::size_t>(j) * kLanes;
+        for (const std::size_t l : std::views::iota(0uz, kLanes)) {
+          dst[l] = column[base + std::min(l, width - 1)];
+        }
+      }
+      rt::evaluate_block<kLanes>(*arena_, std::span<const T>{lanes}, order,
+                                 std::span<T>{tape});
+
+      for (const auto [columns, block] :
+           std::views::zip(std::array{f, g, h},
+                           std::array{blocks.values, blocks.jacobian,
+                                      blocks.hessian})) {
+        for (const auto [column, o] : std::views::zip(columns, block)) {
+          const T *const src = tape.data() + std::size_t{o} * kLanes;
+          for (const std::size_t l : std::views::iota(0uz, width)) {
+            column[base + l] = src[l];
+          }
+        }
+      }
     }
   }
 

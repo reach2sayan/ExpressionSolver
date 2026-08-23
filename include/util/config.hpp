@@ -29,6 +29,15 @@
 #define DDX_ALWAYS_INLINE inline
 #endif
 
+// What the JIT spells NoAlias on the kernel's columns.  A tape reached through
+// a span carries no such promise, and without it every lane store is assumed
+// to land in the node array the next lane load reads.
+#if defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)
+#define DDX_RESTRICT __restrict
+#else
+#define DDX_RESTRICT
+#endif
+
 // get<Key>() and operator[](tag) for a class with a private static
 // slot(auto &&self).  SUB_PARAM is the empty tag operator[] deduces its key
 // from; ... is a trailing requires-clause.

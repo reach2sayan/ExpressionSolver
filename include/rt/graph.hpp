@@ -113,9 +113,13 @@ public:
            std::views::filter([this](NodeId v) { return live_[v]; });
   }
 
-  [[nodiscard]] std::size_t live_count() const {
-    return static_cast<std::size_t>(std::ranges::distance(live_nodes()));
+  // The same ids materialised, for a consumer that walks them once per point
+  // rather than once per graph.  The view must not outlive this graph.
+  [[nodiscard]] std::span<const NodeId> live_order() const {
+    return live_order_;
   }
+
+  [[nodiscard]] std::size_t live_count() const { return live_order_.size(); }
 
   // Derived once, for codegen, the interpreter and the ABI size checks.
   struct Blocks {
@@ -155,6 +159,7 @@ private:
             mark(static_cast<NodeId>(boost::target(edge, children_)));
           }
         });
+    live_order_ = std::ranges::to<std::vector<NodeId>>(live_nodes());
   }
 
   std::vector<Property> properties_;
@@ -164,6 +169,7 @@ private:
   Coloring coloring_;
   std::vector<std::string> symbols_;
   std::vector<bool> live_;
+  std::vector<NodeId> live_order_;
 };
 
 // Each step names one block of output columns; `build` is the only thing that
