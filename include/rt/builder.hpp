@@ -131,8 +131,10 @@ private:
   static constexpr std::size_t hash_of(const Node<T> &n) {
     std::uint64_t h = static_cast<std::uint64_t>(n.op);
     const auto mix = [&h](std::uint64_t v) {
-      h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-      h *= 0xff51afd7ed558ccdULL;
+      constexpr std::uint64_t golden_ratio_64 = 0x9e3779b97f4a7c15ULL;
+      constexpr std::uint64_t murmur_mix_64 = 0xff51afd7ed558ccdULL;
+      h ^= v + golden_ratio_64 + (h << 6) + (h >> 2);
+      h *= murmur_mix_64;
       h ^= h >> 33;
     };
     mix(n.a);
@@ -141,31 +143,40 @@ private:
     return static_cast<std::size_t>(h);
   }
 
+  // The linear probe run from a hash, written once.  Unbounded because the
+  // table is kept at most half full: every run reaches an empty slot.
+  constexpr auto probe(std::size_t h) const {
+    return std::views::iota(h) |
+           std::views::transform(
+               [mask = table_.size() - 1](std::size_t k) { return k & mask; });
+  }
+
   constexpr void rehash() {
-    table_.assign(table_.empty() ? 64 : table_.size() * 2, no_node);
-    const std::size_t mask = table_.size() - 1;
-    for (NodeId id = 0; id < nodes_.size(); ++id) {
-      std::size_t i = hash_of(nodes_[id]) & mask;
-      while (table_[i] != no_node) {
-        i = (i + 1) & mask;
-      }
-      table_[i] = id;
+    // bit_ceil, not doubling: the size is the invariant the mask needs, and
+    // half full is the load factor linear probing degrades sharply past.
+    table_.assign(
+        std::bit_ceil(std::max<std::size_t>(64, 2 * (nodes_.size() + 1))),
+        no_node);
+    for (const auto [id, n] : std::views::enumerate(nodes_)) {
+      auto run = probe(hash_of(n));
+      table_[*std::ranges::find_if(run, [this](std::size_t i) {
+        return table_[i] == no_node;
+      })] = static_cast<NodeId>(id);
     }
   }
 
   constexpr NodeId intern(const Node<T> &n) {
-    // Keep the table at most half full; linear probing degrades sharply past
-    // that.
     if ((nodes_.size() + 1) * 2 > table_.size()) {
       rehash();
     }
-    const std::size_t mask = table_.size() - 1;
-    std::size_t i = hash_of(n) & mask;
-    while (table_[i] != no_node) {
-      if (same(nodes_[table_[i]], n)) {
-        return table_[i];
-      }
-      i = (i + 1) & mask;
+    // The run stops at whichever comes first, the node itself or the empty
+    // slot it would take.
+    auto run = probe(hash_of(n));
+    const std::size_t i = *std::ranges::find_if(run, [this, &n](std::size_t k) {
+      return table_[k] == no_node || same(nodes_[table_[k]], n);
+    });
+    if (table_[i] != no_node) {
+      return table_[i];
     }
     const auto id = static_cast<NodeId>(nodes_.size());
     nodes_.push_back(n);
@@ -278,9 +289,8 @@ private:
                   impl::CCommutativeMultiply<T>) &&
                  holds_pred(rule.when, a, b);
         });
-    return r == std::ranges::cend(impl::algebra::kRules)
-               ? std::nullopt
-               : apply_rule(*r, a, b);
+    return r == std::ranges::cend(impl::algebra::kRules) ? std::nullopt
+                                                         : apply_rule(*r, a, b);
   }
 
   // (n/d) * d -> n.  On a DAG the denominator match is an id compare.

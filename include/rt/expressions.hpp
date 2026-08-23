@@ -170,10 +170,9 @@ template <impl::Numeric T>
 // The spelling a model uses; the two-argument form above is the primitive.
 template <impl::Numeric T = double>
 [[nodiscard]] RTExpression<T> var(std::string_view name) noexcept {
-  if (detail::current_arena<T> == nullptr) {
-    return RTExpression<T>::poison();
-  }
-  return var(*detail::current_arena<T>, name);
+  return (detail::current_arena<T> == nullptr)
+             ? RTExpression<T>::poison()
+             : var(*detail::current_arena<T>, name);
 }
 
 } // namespace ddx::rt
