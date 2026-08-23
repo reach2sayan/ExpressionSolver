@@ -272,7 +272,7 @@ public:
     requires(input_dim > 0)
   {
     return detail::with_point<symbols, value_type, input_dim>(
-        [this](const auto &vals) {
+        [&](const auto &vals) {
           if constexpr (output_dim == 1) {
             if constexpr (Mode == DiffMode::Symbolic) {
               return symbolic_row(vals);
@@ -299,7 +299,7 @@ public:
     requires(DualLike<value_type> && input_dim > 0)
   {
     return detail::with_point<symbols, dual_scalar_t<value_type>, input_dim>(
-        [this](const auto &vals) {
+        [&](const auto &vals) {
           if constexpr (output_dim == 1) {
             return detail::reverse_mode_hessian(std::get<0>(expressions), vals);
           } else {
@@ -315,7 +315,7 @@ public:
     requires(input_dim > 0 && Order > 0)
   {
     return detail::with_point<symbols, scalar_base_t<value_type>, input_dim>(
-        [this](const auto &vals) {
+        [&](const auto &vals) {
           if constexpr (output_dim == 1) {
             return detail::derivative_tensor_impl<Order>(
                 std::get<0>(expressions), vals);
