@@ -41,6 +41,11 @@ if (DDX_BUILD_JIT)
     file(GLOB DDX_JIT_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/jit/*.cpp")
     add_executable(tests_jit ${DDX_JIT_TEST_SOURCES})
     target_link_libraries(tests_jit PRIVATE gtest_main ddx::jit)
+    # The partitioner is internal to the backend and names no LLVM type, so the
+    # unit test compiles that translation unit rather than reaching into libddx
+    # for a symbol hidden visibility keeps out of it.
+    target_sources(tests_jit PRIVATE ${CMAKE_SOURCE_DIR}/src/jit/partition.cpp)
+    target_include_directories(tests_jit PRIVATE ${CMAKE_SOURCE_DIR}/src/jit)
     ddx_target_flags(tests_jit)
     ddx_runtime_deps(tests_jit)
     gtest_discover_tests(tests_jit)

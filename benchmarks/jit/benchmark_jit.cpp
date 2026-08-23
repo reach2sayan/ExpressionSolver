@@ -9,7 +9,9 @@
 #include <vector>
 
 // Per point the JIT cannot beat AOT-compiled ddx; the batch kernel wins by
-// vectorising the libm call, which is ~3/4 of a Jacobian.
+// vectorising the arithmetic and amortising the call over the batch.  The libm
+// calls stay scalar unless a caller asks for VecLib::Libmvec, so a
+// transcendental-heavy graph is where the margin is thinnest.
 
 namespace {
 using ddx::rt::Builder;

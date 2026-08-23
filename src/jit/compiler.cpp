@@ -5,13 +5,23 @@
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/Mangling.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/PassInstrumentation.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/PassTimingInfo.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <llvm/ExecutionEngine/Orc/Core.h>
+
+#include <boost/hof/pipable.hpp>
+
 #include <atomic>
+#include <chrono>
+#include <concepts>
+#include <thread>
 #include <cmath>
 #include <string>
 #include <utility>
@@ -64,6 +74,8 @@ void init_native_target_once() {
 
 // Whether libmvec resolves in *this process*, not whether the target could have
 // one: promising the vectoriser a vector sin it cannot call fails at link.
+// Nothing is registered unless asked for -- see VecLib in kernel.hpp for why
+// the default declines.
 llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
                                                 const Options &opt,
                                                 const bool have) {
@@ -80,6 +92,19 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
   return tlii;
 }
 
+// Auto is decided here rather than by the caller, because the count it turns on
+// is a property of the emitted module.
+[[nodiscard]] bool lean_for(const llvm::Module &m, const Options &opt) {
+  switch (opt.pipeline) {
+  case Pipeline::Lean:
+    return true;
+  case Pipeline::Default:
+    return false;
+  default:
+    return m.getInstructionCount() > opt.lean_above;
+  }
+}
+
 void optimize(llvm::Module &m, llvm::TargetMachine &tm, const Options &opt,
               const bool have_libmvec) {
   const llvm::Triple triple(m.getTargetTriple());
@@ -91,7 +116,20 @@ void optimize(llvm::Module &m, llvm::TargetMachine &tm, const Options &opt,
   llvm::CGSCCAnalysisManager cgam;
   llvm::ModuleAnalysisManager mam;
 
-  llvm::PassBuilder pb(&tm);
+  // Enabled only when asked; a disabled handler registers nothing, so the
+  // instrumented and uninstrumented pipelines are the same pipeline.
+  llvm::PassInstrumentationCallbacks pic;
+  llvm::TimePassesHandler timers(opt.time_passes);
+  timers.setOutStream(llvm::errs());
+  timers.registerCallbacks(pic);
+
+  llvm::PipelineTuningOptions pto;
+  if (lean_for(m, opt)) {
+    pto.LoopVectorization = false;
+    pto.SLPVectorization = false;
+  }
+
+  llvm::PassBuilder pb(&tm, pto, std::nullopt, &pic);
   // Before registerFunctionAnalyses, which would otherwise install the default
   // llvm::TargetLibraryAnalysis and with it an empty vector-function table.
   fam.registerPass([&] { return llvm::TargetLibraryAnalysis(tlii); });
@@ -119,6 +157,36 @@ void optimize(llvm::Module &m, llvm::TargetMachine &tm, const Options &opt,
                                     ? pb.buildO0DefaultPipeline(level)
                                     : pb.buildPerModuleDefaultPipeline(level);
   mpm.run(m, mam);
+}
+
+// --- the compile pipeline ----------------------------------------------------
+// A phase is In -> result<Out>.  `stage` lifts one into a pipe step that a
+// failure upstream skips, and records how long it took where the caller asked.
+// The pipe is Boost.HOF's rather than an operator| of our own; what it buys
+// over a bare and_then chain is that a phase is a *value*, so render_ir is this
+// pipeline with its last step dropped rather than a second copy of it.
+template <std::invocable F>
+[[nodiscard]] auto measure(std::chrono::nanoseconds &into, F step) {
+  const auto start = std::chrono::steady_clock::now();
+  auto out = step();
+  into = std::chrono::steady_clock::now() - start;
+  return out;
+}
+
+// The source of the pipeline is measure(); everything downstream is a stage,
+// and both time the same way because one is written in terms of the other.
+template <std::move_constructible F>
+[[nodiscard]] auto stage(std::chrono::nanoseconds &into, F step) {
+  // The pipe's input is whatever the stage above returned, so what is required
+  // of it is spelled here rather than named: an expected-like carrying either.
+  return boost::hof::pipable([&into, step](auto up)
+    requires requires { *up; up.error(); } {
+    using Out = decltype(step(std::move(*up)));
+    if (!up) {
+      return Out{std::unexpected{std::move(up.error())}};
+    }
+    return measure(into, [&] { return step(std::move(*up)); });
+  })();
 }
 
 } // namespace
@@ -154,8 +222,14 @@ struct Compiler::Impl {
       impl->tm = std::move(*tm);
     }
 
+    // Slabs are separate modules so that they can be compiled at the same
+    // time; without a pool they would be compiled one after another on
+    // whichever thread called lookup.
+    const auto threads =
+        std::min(std::thread::hardware_concurrency(), 8u);
     if (auto jit = llvm::orc::LLJITBuilder()
                        .setJITTargetMachineBuilder(std::move(*jtmb))
+                       .setNumCompileThreads(threads)
                        .create();
         !jit) {
       return std::unexpected{
@@ -185,7 +259,8 @@ struct Compiler::Impl {
     }
 
     // Not loaded in a program that never called it, so the generator above
-    // cannot see it.
+    // cannot see it.  Loaded even though the default declines to use it: a
+    // caller that opts in must find the symbols already resolvable.
     if (auto vec = llvm::orc::DynamicLibrarySearchGenerator::Load(
             "libmvec.so.1", prefix)) {
       jd.addGenerator(std::move(*vec));
@@ -197,20 +272,77 @@ struct Compiler::Impl {
     return impl;
   }
 
-  [[nodiscard]] result<std::unique_ptr<llvm::Module>>
-  build(llvm::LLVMContext &ctx, const rt::Graph<double> &g, const Options &opt,
-        const std::string &name) const {
-    auto m = detail::emit_module(ctx, g, opt, name);
-    if (!m) {
-      // emit_module has already written the verifier's own diagnosis to stderr.
-      return std::unexpected{
-          error{errc::jit_verify, "the emitted module failed verification"}};
-    }
-    m->setDataLayout(jit->getDataLayout());
-    m->setTargetTriple(tm->getTargetTriple().str());
-    optimize(*m, *tm, opt, libmvec);
-    return m;
+  // One module per slab, each with the context that must outlive it -- a
+  // context is not shared, because that is what lets the slabs compile on
+  // different threads.  An unsplit graph is one module, and nothing about it
+  // differs from what it was before there were slabs.
+  struct Staged {
+    std::vector<llvm::orc::ThreadSafeModule> modules;
+    std::vector<std::string> names;
+    std::size_t scratch = 0; // slots crossing a boundary
+    bool split = false;      // emitted as slabs, which is a different signature
+  };
+
+  // A slab target from the graph rather than a constant: a cut costs the
+  // wavefront, so sizing the slab against the wavefront bounds traffic per node
+  // at 2 / slab_factor whatever shape the graph is.
+  [[nodiscard]] static std::size_t slab_target(const detail::Partition &probe,
+                                               const Options &opt) {
+    return std::max(opt.min_slab, opt.slab_factor * probe.peak_wavefront);
   }
+
+  [[nodiscard]] result<Staged> emit(const rt::Graph<double> &g,
+                                    const Options &opt, const std::string &name,
+                                    CompileReport &rep) const {
+    Staged out;
+    const bool big = opt.split_above != 0 && g.live_count() > opt.split_above;
+
+    // The unpartitioned probe is only read for its wavefront, which is a
+    // property of the order and costs one linear pass.
+    const auto p =
+        big ? detail::partition(g, ~std::size_t{0}) : detail::Partition{};
+    const auto cut =
+        big ? detail::partition(g, slab_target(p, opt)) : detail::Partition{};
+
+    // A wavefront wide enough that one slab covers the graph is the graph
+    // saying it will not be cut cheaply.  Emit it whole rather than as a slab
+    // of one, which would carry the slab signature and its per-block call for
+    // no benefit at all.
+    const bool split = big && cut.slabs.size() > 1;
+    const std::size_t count = split ? cut.slabs.size() : 1;
+    rep.slabs = count;
+    rep.scratch_slots = split ? cut.scratch : 0;
+
+    for (const std::size_t i : std::views::iota(std::size_t{0}, count)) {
+      auto ctx = std::make_unique<llvm::LLVMContext>();
+      std::string slab_name = count == 1 ? name : name + "_s" + std::to_string(i);
+      auto m = split ? detail::emit_slab(*ctx, g, cut, i, opt, slab_name)
+                     : detail::emit_module(*ctx, g, opt, slab_name);
+      if (!m) {
+        // The emitter has already written the verifier's own diagnosis.
+        return std::unexpected{
+            error{errc::jit_verify, "the emitted module failed verification"}};
+      }
+      m->setDataLayout(jit->getDataLayout());
+      m->setTargetTriple(tm->getTargetTriple().str());
+      rep.instructions += m->getInstructionCount();
+      out.modules.emplace_back(std::move(m),
+                               llvm::orc::ThreadSafeContext{std::move(ctx)});
+      out.names.push_back(std::move(slab_name));
+    }
+    out.scratch = split ? cut.scratch : 0;
+    out.split = split;
+    return out;
+  }
+
+  [[nodiscard]] result<Staged> optimized(Staged s, const Options &opt) const {
+    for (auto &m : s.modules) {
+      m.withModuleDo(
+          [&](llvm::Module &mod) { optimize(mod, *tm, opt, libmvec); });
+    }
+    return s;
+  }
+
 };
 
 Compiler::Compiler(std::shared_ptr<Impl> impl) noexcept
@@ -225,44 +357,87 @@ Compiler::Compiler(Compiler &&) noexcept = default;
 Compiler &Compiler::operator=(Compiler &&) noexcept = default;
 
 result<Kernel> Compiler::compile(const rt::Graph<double> &g,
-                                 const Options &opt) {
+                                 const Options &opt, CompileReport *report) {
+  CompileReport ignored;
+  CompileReport &rep = report != nullptr ? *report : ignored;
+  rep.nodes = g.live_count();
+
   const std::string name = "ddx_kernel_" + std::to_string(impl_->counter++);
-  auto ctx = std::make_unique<llvm::LLVMContext>();
-  auto m = impl_->build(*ctx, g, opt, name);
-  if (!m) {
-    return std::unexpected{m.error()};
-  }
+  Impl &impl = *impl_;
 
-  if (auto e = impl_->jit->addIRModule(
-          llvm::orc::ThreadSafeModule(std::move(*m), std::move(ctx)))) {
-    return std::unexpected{
-        as_error(errc::jit_module, "adding the module", std::move(e))};
-  }
+  // The backend runs on materialisation, not on addIRModule, so the lookup is
+  // inside the codegen stage or its number would be the wrong one.
+  const auto lower = [&](Impl::Staged s) -> result<Kernel> {
+    for (auto &m : s.modules) {
+      if (auto e = impl.jit->addIRModule(std::move(m))) {
+        return std::unexpected{
+            as_error(errc::jit_module, "adding the module", std::move(e))};
+      }
+    }
 
-  auto sym = impl_->jit->lookup(name);
-  if (!sym) {
-    return std::unexpected{
-        as_error(errc::jit_lookup, "looking up " + name, sym.takeError())};
-  }
+    // One lookup naming every slab, not one lookup each: materialisation is
+    // what runs the backend, and asking for them together is what lets the
+    // compile threads run them at the same time.
+    llvm::orc::SymbolLookupSet wanted;
+    for (const auto &n : s.names) {
+      wanted.add(impl.jit->mangleAndIntern(n));
+    }
+    auto syms = impl.jit->getExecutionSession().lookup(
+        llvm::orc::makeJITDylibSearchOrder(&impl.jit->getMainJITDylib()),
+        std::move(wanted));
+    if (!syms) {
+      return std::unexpected{
+          as_error(errc::jit_lookup, "looking up " + name, syms.takeError())};
+    }
 
-  const auto &layout = g.layout();
-  // The Impl owns the code, so the Kernel holds a share of it.
-  return Kernel{sym->toPtr<Kernel::function_type>(),
-                g.symbols().size(),
-                layout.values,
-                layout.jacobian,
-                layout.hessian,
-                impl_};
+    const auto &layout = g.layout();
+    // The Impl owns the code, so the Kernel holds a share of it.
+    if (!s.split) {
+      return Kernel{syms->at(impl.jit->mangleAndIntern(s.names.front()))
+                        .getAddress()
+                        .toPtr<Kernel::function_type>(),
+                    g.symbols().size(),
+                    layout.values,
+                    layout.jacobian,
+                    layout.hessian,
+                    impl_};
+    }
+    const auto slabs =
+        s.names | std::views::transform([&](const std::string &n) {
+          return syms->at(impl.jit->mangleAndIntern(n))
+              .getAddress()
+              .toPtr<Kernel::slab_type>();
+        }) |
+        std::ranges::to<std::vector<Kernel::slab_type>>();
+    return Kernel{slabs,          s.scratch,       g.symbols().size(),
+                  layout.values,  layout.jacobian, layout.hessian,
+                  impl_};
+  };
+
+  return measure(rep.emit, [&] { return impl.emit(g, opt, name, rep); })
+         | stage(rep.optimize,
+                 [&](Impl::Staged m) {
+                   return impl.optimized(std::move(m), opt);
+                 })
+         | stage(rep.codegen, lower);
 }
 
 result<std::string> Compiler::render_ir(const rt::Graph<double> &g,
                                         const Options &opt) const {
-  auto ctx = std::make_unique<llvm::LLVMContext>();
-  return impl_->build(*ctx, g, opt, "ddx_kernel_dump")
-      .transform([](const std::unique_ptr<llvm::Module> &m) {
+  CompileReport rep;
+  const Impl &impl = *impl_;
+  return (measure(rep.emit,
+                  [&] { return impl.emit(g, opt, "ddx_kernel_dump", rep); })
+          | stage(rep.optimize,
+                  [&](Impl::Staged m) {
+                    return impl.optimized(std::move(m), opt);
+                  }))
+      .transform([](Impl::Staged s) {
         std::string out;
         llvm::raw_string_ostream os(out);
-        m->print(os, nullptr);
+        for (auto &m : s.modules) {
+          m.withModuleDo([&](llvm::Module &mod) { mod.print(os, nullptr); });
+        }
         return out;
       });
 }

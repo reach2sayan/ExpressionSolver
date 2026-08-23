@@ -12,8 +12,8 @@
 #include <string>
 
 // A scalar fallback is silent -- right answers, slowly -- so vectorisation is
-// asserted on the IR, not inferred from a benchmark.  The transcendentals are
-// the point: the libm call is ~3/4 of a Jacobian.
+// asserted on the IR, not inferred from a benchmark.  Transcendentals are
+// asserted both ways: scalar under the default, vector when a caller opts in.
 
 namespace {
 using ddx::rt::Builder;
@@ -44,6 +44,13 @@ bool calls_vector_libm(const std::string &ir, const std::string &fn) {
                            std::regex{"_ZGV[a-z]N[0-9]+v+_" + fn + R"(\()"});
 }
 
+constexpr bool host_has_libmvec =
+#if defined(__x86_64__) && defined(__linux__)
+    true;
+#else
+    false;
+#endif
+
 std::string ir_for(auto build, std::size_t nvars, ddx::jit::Options opt = {}) {
   Builder<> b;
   std::vector<ddx::rt::RTExpression<>> vars;
@@ -55,13 +62,6 @@ std::string ir_for(auto build, std::size_t nvars, ddx::jit::Options opt = {}) {
   const auto graph = Graph<>::freeze(b, std::array{root.id(b)});
   return std::format("{}", ddx::jit::Ir{compiler(), graph, opt});
 }
-
-constexpr bool host_has_libmvec =
-#if defined(__x86_64__) && defined(__linux__)
-    true;
-#else
-    false;
-#endif
 
 // nounwind is what Kernel::operator()'s noexcept rests on; willreturn and
 // memory(argmem: readwrite) let the optimiser move code across the call.
@@ -93,43 +93,43 @@ TEST(JitVectorize, ArithmeticLoopVectorises) {
   EXPECT_TRUE(has_vector_doubles(ir)) << "the arithmetic loop stayed scalar";
 }
 
-TEST(JitVectorize, TranscendentalsUseVectorLibm) {
+// The default declines the vector library, so a transcendental is the scalar
+// libm one -- the same routine the interpreter calls.  This is the assertion
+// that keeps the two on one implementation unless someone says otherwise.
+TEST(JitVectorize, TranscendentalsStayScalarByDefault) {
+  const auto ir = ir_for([](auto &v) { return exp(v[0]) * sin(v[1]); }, 2);
+  EXPECT_FALSE(calls_vector_libm(ir, "sin")) << "sin took a vector route";
+  EXPECT_FALSE(calls_vector_libm(ir, "exp")) << "exp took a vector route";
+}
+
+// And the opt-in still works: the machinery is kept, only its default changed.
+TEST(JitVectorize, VecLibLibmvecUsesVectorLibm) {
   if constexpr (!host_has_libmvec) {
     GTEST_SKIP() << "libmvec is glibc on x86-64";
   }
-  const auto ir = ir_for([](auto &v) { return exp(v[0]) * sin(v[1]); }, 2);
+  ddx::jit::Options on;
+  on.veclib = ddx::jit::VecLib::Libmvec;
+  const auto ir = ir_for([](auto &v) { return exp(v[0]) * sin(v[1]); }, 2, on);
   EXPECT_TRUE(has_vector_doubles(ir)) << "loop stayed scalar";
   EXPECT_TRUE(calls_vector_libm(ir, "sin")) << "sin was not vectorised";
   EXPECT_TRUE(calls_vector_libm(ir, "exp")) << "exp was not vectorised";
 }
 
 TEST(JitVectorize, JacobianLoopVectorises) {
-  if constexpr (!host_has_libmvec) {
-    GTEST_SKIP() << "libmvec is glibc on x86-64";
-  }
-  // Wider and sharing subexpressions, and still has to vectorise.
+  // Wider and sharing subexpressions, and still has to vectorise.  Arithmetic
+  // only: a loop carrying a transcendental has no vector form to call and is
+  // left scalar by design, so it could not answer this question.
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto graph =
-      ddx::rt::GraphBuilder{b}.value(exp(x) * sin(y)).jacobian().build();
+      ddx::rt::GraphBuilder{b}.value(x * y + x * x - y).jacobian().build();
   const auto ir = std::format("{}", ddx::jit::Ir{compiler(), graph});
   EXPECT_TRUE(has_vector_doubles(ir)) << "the Jacobian loop stayed scalar";
-  EXPECT_TRUE(calls_vector_libm(ir, "sin"));
 }
 
-// The escape hatch must actually disable it: a mapping can name a symbol the
-// host's glibc lacks.
-TEST(JitVectorize, VecLibNoneLeavesTranscendentalsScalar) {
-  ddx::jit::Options off;
-  off.veclib = ddx::jit::VecLib::None;
-  const auto ir = ir_for([](auto &v) { return exp(v[0]) * sin(v[1]); }, 2, off);
-  EXPECT_FALSE(calls_vector_libm(ir, "sin"));
-  EXPECT_FALSE(calls_vector_libm(ir, "exp"));
-}
-
-// LLVM's table is written against a newer glibc than some hosts ship, so every
-// symbol the vectoriser chose has to resolve.
+// LLVM's table is written against a newer glibc than some hosts ship, so under
+// the opt-in every symbol the vectoriser chose has to resolve.
 TEST(JitVectorize, EveryVectorSymbolResolves) {
   if constexpr (!host_has_libmvec) {
     GTEST_SKIP() << "libmvec is glibc on x86-64";
@@ -140,7 +140,9 @@ TEST(JitVectorize, EveryVectorSymbolResolves) {
   f = f + atan(x) + asinh(x) + pow(x, ddx::rt::RTExpression<>{3});
 
   const auto graph = Graph<>::freeze(b, std::array{f.id(b)});
-  const auto kernel = must_compile(graph);
+  ddx::jit::Options on;
+  on.veclib = ddx::jit::VecLib::Libmvec;
+  const auto kernel = must_compile(graph, on);
   ASSERT_TRUE(static_cast<bool>(kernel));
 
   const std::array col{0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
