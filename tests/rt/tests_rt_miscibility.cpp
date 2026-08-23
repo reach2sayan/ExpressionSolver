@@ -12,13 +12,12 @@
 // This one is worth having because both derivatives have closed forms:
 //
 //   f(x)  = c x(1-x) + k( x ln x + (1-x) ln(1-x) )
-//   f'(½) = 0                       exactly, by symmetry, for every c and k
+//   f'(½) = 0                       by symmetry, for every c and k
 //   f''   = -2c + k/(x(1-x))        exactly
 //
-// So the Jacobian is checked against an exact zero and the Hessian against an
-// exact expression, rather than against finite differences. And the *shape*
-// the derivatives imply -- one minimum or two -- is a physical claim a solver
-// can be made to confirm.
+// So both derivatives are checked against closed forms rather than against
+// finite differences. And the *shape* the derivatives imply -- one minimum or
+// two -- is a physical claim a solver can be made to confirm.
 // ===========================================================================
 
 namespace {
@@ -32,12 +31,15 @@ constexpr double second_derivative(double x, double c, double k) {
   return -2.0 * c + k / (x * (1.0 - x));
 }
 
-// Symmetry is exact, so this is an equality rather than a tolerance.
+// The zero is exact in the reals but not in the graph: the reverse sweep sums
+// the two halves in node order, and node order follows the order the operands
+// of an overloaded operator happen to be evaluated in, which is unspecified.
+// So the halves cancel to rounding, not to the bit.
 TEST(RtMiscibility, HalfIsAlwaysStationary) {
   for (const double c : {2.0, 0.4, 0.0, -1.5}) {
     for (const double k : {0.25, -0.25}) {
       Builder<> b;
-      EXPECT_DOUBLE_EQ((*free_energy(b, c, k).jacobian(0.5))[0], 0.0)
+      EXPECT_NEAR((*free_energy(b, c, k).jacobian(0.5))[0], 0.0, 1e-15)
           << "c=" << c << " k=" << k;
     }
   }
