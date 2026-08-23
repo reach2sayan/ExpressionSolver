@@ -29,21 +29,11 @@ namespace ddx::jit {
 // ones.  Asking for one is asking for that trade.
 enum class VecLib : std::uint8_t { None, Auto, Libmvec };
 
-// Which optimisation pipeline a graph goes through.
-//
-// Default is LLVM's own per-module pipeline.  Lean drops the two vectorisers,
-// which is where nearly all of a large graph's compile time goes: the loop
-// vectoriser cost-models a body holding one instruction per node, and that is
-// superlinear in the node count.  Measured on the gradient of rss, uniquac and
-// mse, LoopVectorizePass is 95% of the pass pipeline at 12k instructions, and
-// dropping it takes mse at 64 species from 17.6s to 0.3s.
-//
-// It is not free to drop, which is why Auto exists rather than a flag day: on a
-// *small* body the vectoriser succeeds and is worth 1.5x to 2.2x of kernel
-// throughput.  Above roughly two thousand instructions it stops succeeding and
-// only the analysis cost is left -- kernel throughput there is within 3%
-// either way.  Auto errs high on purpose: choosing Default where Lean would
-// have done costs compile time, and the other way costs kernel speed.
+// Lean drops the two vectorisers.  On a large body the loop vectoriser is 95%
+// of the pass pipeline and then declines to vectorise -- dropping it took one
+// measured graph from 17.6s to 0.3s at no cost to throughput.  On a small one
+// it succeeds and is worth 1.5-2.2x, so Auto keeps it there and errs high:
+// choosing Default wrongly costs compile time, the reverse costs kernel speed.
 enum class Pipeline : std::uint8_t { Auto, Default, Lean };
 
 // Carries text where the library's other errors do not: LLVM's are not one of
@@ -78,23 +68,19 @@ struct Options {
   // Where Auto turns over, in IR instructions after emission.
   std::size_t lean_above = 2000;
 
-  // Emit as several slabs above this many live nodes; 0 never splits.  A slab
-  // is register allocated on its own and compiled on its own thread, which is
-  // what a graph too large to allocate in one piece needs -- at the price of
-  // its crossing values travelling through memory.
+  // Emit as slabs above this many live nodes; 0 never splits.  Each is
+  // allocated and compiled on its own, at the price of crossing values going
+  // through memory.  Off by default: it measured as a loss at every size
+  // reachable in reasonable time.
   std::size_t split_above = 0;
-  // Slab size as a multiple of the graph's peak wavefront.  Traffic per node is
-  // bounded by 2 / slab_factor whatever the graph looks like, since a cut costs
-  // the wavefront and a slab covers slab_factor times as many nodes.
+  // Slab size as a multiple of the peak wavefront, which bounds traffic per
+  // node at 2 / slab_factor whatever the graph looks like.
   std::size_t slab_factor = 10;
   std::size_t min_slab = 4096;
 };
 
-// Where a compile spent its time, for a caller measuring the cost of the
-// compile rather than of the kernel.  The three phases are the pipeline's
-// stages; `codegen` brackets the symbol lookup as well as the module add,
-// because LLJIT compiles lazily on materialisation and the lookup is what
-// forces the backend to run.
+// Where a compile spent its time.  `codegen` brackets the symbol lookup too:
+// LLJIT compiles lazily, so the lookup is what forces the backend to run.
 struct CompileReport {
   std::size_t nodes = 0;        // live nodes in the graph
   std::size_t instructions = 0; // IR instructions after emission
@@ -117,11 +103,8 @@ public:
                              double *const *, double *const *, double *,
                              std::size_t, std::size_t);
 
-  // Points per block of a split kernel.  Scratch is slots * block, so the
-  // block is what keeps it in cache: whole-batch scratch on a large graph is
-  // tens of megabytes and costs more than the compile it saves.  Chosen per
-  // kernel against a level-two-sized budget, and never so small that a slab's
-  // code is reloaded for a handful of points.
+  // Scratch is slots * block, so the block is what keeps it in cache --
+  // whole-batch scratch on a large graph is tens of megabytes.
   static constexpr std::size_t kScratchBudget = 1u << 18; // 256 KiB
 
   Kernel() = default;
@@ -135,11 +118,12 @@ public:
          std::size_t values, std::size_t jacobian, std::size_t hessian,
          std::shared_ptr<void> code) noexcept
       : code_(std::move(code)), slabs_(std::move(slabs)), slots_(slots),
-        block_(slots == 0 ? std::size_t{256}
-                          : std::clamp(kScratchBudget / (slots * sizeof(double)),
-                                       std::size_t{8}, std::size_t{256})),
-        arity_(arity), values_(values), jacobian_(jacobian),
-        hessian_(hessian) {}
+        block_(slots == 0
+                   ? std::size_t{256}
+                   : std::clamp(kScratchBudget / (slots * sizeof(double)),
+                                std::size_t{8}, std::size_t{256})),
+        arity_(arity), values_(values), jacobian_(jacobian), hessian_(hessian) {
+  }
 
   // xs[j] is the column for symbol j, g[j] the partial in it, each of length n;
   // a block that was not requested is `{}`.  noexcept because codegen marks the
@@ -151,9 +135,8 @@ public:
       fn_(xs.data(), f.data(), g.data(), h.data(), n);
       return;
     }
-    // One buffer per thread, so a split kernel stays callable from as many
-    // threads as an unsplit one.  A caller who will not have this allocated
-    // under it passes its own through the overload below.
+    // One buffer per thread, so a split kernel stays as callable as an unsplit
+    // one; a caller who cannot allocate here passes its own below.
     static thread_local std::vector<double> scratch;
     if (scratch.size() < scratch_size(n)) {
       scratch.resize(scratch_size(n));
@@ -161,9 +144,8 @@ public:
     (*this)(xs, f, g, h, n, scratch);
   }
 
-  // Slabs run in order over the whole batch, not per point: at these sizes the
-  // code is far larger than the instruction cache, so touching one slab's code
-  // once per batch beats touching all of it once per point.
+  // Every slab over one block, then the next: crossings stay hot in scratch,
+  // and a slab's code is touched once per block rather than once per point.
   void operator()(std::span<const double *const> xs, std::span<double *const> f,
                   std::span<double *const> g, std::span<double *const> h,
                   std::size_t n, std::span<double> scratch) const noexcept {
@@ -171,10 +153,6 @@ public:
       fn_(xs.data(), f.data(), g.data(), h.data(), n);
       return;
     }
-    // Every slab over one block, then the next block: a value crossing a slab
-    // boundary is written and read within the block, so scratch stays hot,
-    // while each slab's code is still touched once per block rather than once
-    // per point.
     for (std::size_t base = 0; base < n; base += block_) {
       const std::size_t len = std::min(block_, n - base);
       for (const slab_type slab : slabs_) {
@@ -184,8 +162,7 @@ public:
     }
   }
 
-  // What the overload above needs for a batch of n, in doubles.  Zero for a
-  // kernel that was not split, which is every kernel below Options::split_above.
+  // What the overload above needs for a batch of n, in doubles; zero unsplit.
   [[nodiscard]] std::size_t scratch_size(std::size_t n) const noexcept {
     return slots_ * std::min(block_, n);
   }
@@ -233,9 +210,9 @@ public:
 
   // The report is filled where one is given; nothing else observes it, so a
   // caller that does not measure pays nothing.
-  [[nodiscard]] DDX_JIT_API result<Kernel> compile(const rt::Graph<double> &g,
-                                                   const Options &opt = {},
-                                                   CompileReport *report = nullptr);
+  [[nodiscard]] DDX_JIT_API result<Kernel>
+  compile(const rt::Graph<double> &g, const Options &opt = {},
+          CompileReport *report = nullptr);
 
 private:
   struct Impl;

@@ -11,6 +11,7 @@
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
 #include "symbolic/equation.hpp"
+#include "util/ranges.hpp" // to<C>(), piped by us -- see the header for why
 
 // Optional: without it the batch calls run the interpreter, under the same
 // signatures.
@@ -49,19 +50,11 @@ concept CColumns = std::ranges::contiguous_range<R> &&
 
 } // namespace rt_detail
 
-// Whether an equation compiles its graph, where a backend was built in at all.
-//
-// Not named Auto, because nothing here decides: Compile compiles whenever it
-// can, and that is the default only because it was the behaviour before there
-// was a choice.  Deciding would need what the equation does not have -- how
-// many times the kernel will be called.  Compiling costs more than linearly in
-// the graph, so a large graph evaluated a million times repays it and the same
-// graph evaluated twice does not, and only the caller knows which.
-//
-// Interpret is a real alternative rather than a fallback: the block sweep needs
-// no compiler and no LLVM, and on the graphs measured in compare/ it runs
-// within about 1.4x of the compiled kernel.  It is also the only way to compare
-// the two paths on a build that has the backend.
+// Whether an equation compiles its graph.  Not named Auto: nothing decides,
+// and deciding would need the one thing an equation does not know -- how many
+// times the kernel will be called, which is what a compile has to repay.
+// Interpret is a real alternative, the block sweep running within ~1.4x of a
+// kernel with no compiler involved.
 enum class Backend : std::uint8_t { Compile, Interpret };
 
 template <Numeric T, typename... Rest>
@@ -149,9 +142,9 @@ public:
       if constexpr (output_dim == 1) {
         return values[roots_[0]];
       } else {
-        return std::ranges::to<std::vector<T>>(
-            roots_ |
-            std::views::transform([&](rt::NodeId r) { return values[r]; }));
+        return roots_ |
+               std::views::transform([&](rt::NodeId r) { return values[r]; }) |
+               to<std::vector<T>>();
       }
     });
   }
@@ -187,9 +180,7 @@ public:
 
   // One sweep per colour, not per symbol.  A mixing rule couples everything
   // and colours in n, so it is not always a win.
-  // Choosing the backend discards anything already compiled, so the choice
-  // holds however late it is made.  Returns *this, since a caller most often
-  // wants it on the way to a batch call.
+  // Discards anything already compiled, so the choice holds however late.
   constexpr Equation &backend(Backend which) noexcept {
     if (which != backend_) {
       backend_ = which;
@@ -199,8 +190,8 @@ public:
   }
   [[nodiscard]] constexpr Backend backend() const noexcept { return backend_; }
 
-  // Whether a batch call will go through compiled code.  False on a build with
-  // no backend, on a refused compile, and wherever Interpret was asked for.
+  // Whether a batch call goes through compiled code: false with no backend,
+  // on a refused compile, and under Interpret.
   [[nodiscard]] bool uses_kernel() const {
     if (poisoned() || backend_ == Backend::Interpret) {
       return false;
@@ -357,8 +348,9 @@ private:
   harvest(const std::vector<rt::NodeId> &nodes,
           const std::vector<T> &at) const {
     const auto values = rt::evaluate_all(*arena_, at);
-    return std::ranges::to<std::vector<T>>(
-        nodes | std::views::transform([&](rt::NodeId n) { return values[n]; }));
+    return nodes |
+           std::views::transform([&](rt::NodeId n) { return values[n]; }) |
+           to<std::vector<T>>();
   }
 
   struct Compiled {
@@ -438,10 +430,9 @@ private:
           at[static_cast<std::size_t>(j)] = column[i];
         }
         rt::evaluate_into(*arena_, at, order, std::span<T>{tape});
-        for (const auto [columns, block] :
-             std::views::zip(std::array{f, g, h},
-                             std::array{blocks.values, blocks.jacobian,
-                                        blocks.hessian})) {
+        for (const auto [columns, block] : std::views::zip(
+                 std::array{f, g, h},
+                 std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
           for (const auto [column, o] : std::views::zip(columns, block)) {
             column[i] = tape[o];
           }
@@ -468,10 +459,9 @@ private:
       rt::evaluate_block<kLanes>(*arena_, std::span<const T>{lanes}, order,
                                  std::span<T>{tape});
 
-      for (const auto [columns, block] :
-           std::views::zip(std::array{f, g, h},
-                           std::array{blocks.values, blocks.jacobian,
-                                      blocks.hessian})) {
+      for (const auto [columns, block] : std::views::zip(
+               std::array{f, g, h},
+               std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
         for (const auto [column, o] : std::views::zip(columns, block)) {
           const T *const src = tape.data() + std::size_t{o} * kLanes;
           for (const std::size_t l : std::views::iota(0uz, width)) {

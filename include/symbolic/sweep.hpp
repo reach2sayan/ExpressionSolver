@@ -9,8 +9,8 @@
 #include "md/tensor.hpp"
 #include "ops/mode.hpp"
 #include "ops/scalar.hpp"
-#include "symbolic/expressions.hpp"
 #include "symbolic/entry.hpp"
+#include "symbolic/expressions.hpp"
 #include "symbolic/symbol.hpp"
 #include "symbolic/traits.hpp"
 #include "util/config.hpp"
@@ -111,7 +111,7 @@ DDX_ALWAYS_INLINE constexpr void color_sweeps(const Expr &expr, const Point &x,
                        std::views::filter(
                            [c](const auto &p) { return std::get<1>(p) == c; }) |
                        std::views::keys;
-      for (auto&& seed : seed_view) {
+      for (auto &&seed : seed_view) {
         seed.deriv() = v;
       }
     }

@@ -1,5 +1,7 @@
 #include "partition.hpp"
 
+#include "util/ranges.hpp"
+
 #include <boost/property_map/property_map.hpp>
 
 #include <algorithm>
@@ -13,8 +15,7 @@ namespace {
 // Vertex-indexed storage addressed the way the rest of the project addresses
 // this graph -- rt/coupling.cpp's colouring reads its ordering and writes its
 // colours through the same pair.
-template <std::semiregular V>
-[[nodiscard]] auto by_vertex(std::vector<V> &v) {
+template <std::semiregular V> [[nodiscard]] auto by_vertex(std::vector<V> &v) {
   return boost::make_iterator_property_map(v.begin(),
                                            boost::identity_property_map{});
 }
@@ -77,11 +78,10 @@ std::vector<std::size_t> wavefront(const rt::Graph<double> &g,
   }
 
   std::partial_sum(delta.begin(), delta.end(), delta.begin());
-  return delta | std::views::take(m) |
-         std::views::transform([](long long v) {
+  return delta | std::views::take(m) | std::views::transform([](long long v) {
            return static_cast<std::size_t>(v);
          }) |
-         std::ranges::to<std::vector<std::size_t>>();
+         impl::to<std::vector<std::size_t>>();
 }
 
 Partition partition(const rt::Graph<double> &g, std::size_t target) {
@@ -100,17 +100,15 @@ Partition partition(const rt::Graph<double> &g, std::size_t target) {
   if (target > 0 && m > target) {
     // A few hundred nodes either side of the nominal boundary is free, and the
     // wavefront there is exactly what the cut costs, so take the narrowest.
-    for (const std::size_t at : std::views::iota(std::size_t{1}, m / target + 1) |
-                                    std::views::transform([&](std::size_t k) {
-                                      return k * target;
-                                    }) |
-                                    std::views::take_while(
-                                        [m](std::size_t at) { return at < m; })) {
-      const auto window = std::views::iota(at - target / 4,
-                                           std::min(at + target / 4, m - 1));
-      cuts.push_back(*std::ranges::min_element(
-                         window, {}, [&](std::size_t i) { return width[i]; }) +
-                     1);
+    for (const std::size_t at :
+         std::views::iota(std::size_t{1}, m / target + 1) |
+             std::views::transform([&](std::size_t k) { return k * target; }) |
+             std::views::take_while([m](std::size_t at) { return at < m; })) {
+      const auto window =
+          std::views::iota(at - target / 4, std::min(at + target / 4, m - 1));
+      cuts.push_back(*std::ranges::min_element(window, {}, [&](std::size_t i) {
+        return width[i];
+      }) + 1);
     }
   }
   cuts.push_back(m);

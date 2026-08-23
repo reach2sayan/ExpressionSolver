@@ -1,27 +1,14 @@
 #pragma once
 
-// Cutting a graph into slabs that can be emitted, compiled and register
-// allocated independently.
+// Cutting a graph into slabs that emit, compile and register allocate
+// independently.  A cut costs its *wavefront* -- the values live across it --
+// which is also what the register allocator is superlinear in.
 //
-// The one quantity that matters is the *wavefront*: how many values are live
-// across a given point of the emission order.  It is what a cut has to carry
-// through memory, and it is what the register allocator is superlinear in --
-// which is where a large graph's compile time goes once the vectoriser is out
-// of the way.
-//
-// Two properties of the wavefront decide the whole design, and neither is a
-// property of any particular model:
-//
-//   It is intrinsic.  Reordering does not help -- a Boost.Graph DFS post-order,
-//   which finishes each subexpression before starting the next, moves the peak
-//   by 0-6% on every graph measured.  Reverse mode holds an adjoint live per
-//   variable and no schedule avoids that, so a cut costs what it costs.
-//
-//   It grows slower than the graph.  For a model whose cost is quadratic in its
-//   variable count the wavefront is linear in it, so cutting gets *cheaper* as
-//   the graph grows: traffic per node is 2 * wavefront / slab, and the ratio
-//   improves with size.  That is why this exists for large graphs and stays out
-//   of the way of small ones.
+// Two measured facts shape this, neither specific to any model.  The wavefront
+// is intrinsic: a Boost.Graph DFS post-order moves the peak by 0-6%, because
+// reverse mode holds an adjoint live per variable whatever the schedule.  And
+// it grows slower than the graph, so traffic per node -- 2 * wavefront / slab
+// -- improves with size, which is why this is for large graphs only.
 
 #include "rt/graph.hpp"
 

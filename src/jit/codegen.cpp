@@ -175,9 +175,8 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
           .hessian = load_columns(3, layout.hessian, "h")};
 }
 
-// Ids are topological, so one pass needs no worklist: every operand is already
-// a llvm::Value when read.  `value` is carried in rather than returned so that
-// a slab can seed it with what it loads from scratch first.
+// Ids are topological, so one pass needs no worklist.  `value` is carried in
+// so a slab can seed it from scratch first.
 void emit_nodes_into(const Emitter &emit, llvm::IRBuilder<> &b,
                      const rt::Graph<double> &g,
                      std::span<const rt::NodeId> nodes, const Columns &cols,
@@ -204,10 +203,11 @@ void emit_nodes_into(const Emitter &emit, llvm::IRBuilder<> &b,
   }
 }
 
-[[nodiscard]] std::vector<llvm::Value *>
-emit_nodes(const Emitter &emit, llvm::IRBuilder<> &b,
-           const rt::Graph<double> &g, const Columns &cols,
-           llvm::Value *index) {
+[[nodiscard]] std::vector<llvm::Value *> emit_nodes(const Emitter &emit,
+                                                    llvm::IRBuilder<> &b,
+                                                    const rt::Graph<double> &g,
+                                                    const Columns &cols,
+                                                    llvm::Value *index) {
   std::vector<llvm::Value *> value(g.size(), nullptr);
   emit_nodes_into(emit, b, g, g.live_order(), cols, index, value);
   return value;
@@ -230,11 +230,9 @@ void emit_stores(llvm::IRBuilder<> &b, const rt::Graph<double> &g,
   store_block(cols.hessian, blocks.hessian);
 }
 
-// xs, f, g, h, scratch, offset, n.  A slab runs over a *block* of the batch:
-// `offset` is where the block starts in the caller's columns, and `n` is how
-// long it is, so scratch is sized by the block rather than by the batch and
-// stays in cache.  That is the difference between a split kernel that is worth
-// compiling and one that streams tens of megabytes past every cache.
+// xs, f, g, h, scratch, offset, n.  A slab runs over a block of the batch, so
+// scratch is sized by the block and stays in cache; sizing it by the batch
+// streams tens of megabytes past every cache instead.
 llvm::Function *declare_slab(llvm::Module &m, llvm::StringRef name) {
   llvm::LLVMContext &ctx = m.getContext();
   llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
@@ -244,7 +242,7 @@ llvm::Function *declare_slab(llvm::Module &m, llvm::StringRef name) {
   auto *const fn =
       llvm::Function::Create(fty, llvm::Function::ExternalLinkage, name, m);
 
-  static constexpr std::array names{"xs", "f",      "g", "h",
+  static constexpr std::array names{"xs",      "f",      "g", "h",
                                     "scratch", "offset", "n"};
   for (const auto [i, arg_name] : names | std::views::enumerate) {
     fn->getArg(static_cast<unsigned>(i))->setName(arg_name);
@@ -260,8 +258,7 @@ llvm::Function *declare_slab(llvm::Module &m, llvm::StringRef name) {
   return fn;
 }
 
-// scratch[slot * n + point]: slot-major, so one slot's points are contiguous
-// and a slab reads and writes them the way it walks them.
+// slot-major, so one slot's points are contiguous the way a slab walks them.
 llvm::Value *scratch_at(llvm::IRBuilder<> &b, llvm::Value *scratch,
                         std::size_t slot, llvm::Value *count,
                         llvm::Value *index) {
@@ -307,7 +304,8 @@ std::unique_ptr<llvm::Module> emit_slab(llvm::LLVMContext &ctx,
   // What earlier slabs left, before anything reads it.
   std::vector<llvm::Value *> value(g.size(), nullptr);
   for (const rt::NodeId v : s.live_in) {
-    value[v] = b.CreateLoad(f64, scratch_at(b, scratch, p.slot[v], count, index));
+    value[v] =
+        b.CreateLoad(f64, scratch_at(b, scratch, p.slot[v], count, index));
   }
 
   llvm::Value *const column_index = b.CreateAdd(offset, index);
@@ -318,16 +316,14 @@ std::unique_ptr<llvm::Module> emit_slab(llvm::LLVMContext &ctx,
     b.CreateStore(value[v], scratch_at(b, scratch, p.slot[v], count, index));
   }
 
-  // Only the columns this slab defines: every output is stored exactly once,
-  // by whichever slab computes it.
+  // Every output stored exactly once, by whichever slab computes it.
   const auto mine = [&](rt::NodeId v) { return value[v] != nullptr; };
   const auto blocks = g.output_blocks();
   const auto store_block = [&](const std::vector<llvm::Value *> &columns,
                                std::span<const rt::NodeId> block) {
     for (const auto [column, o] : std::views::zip(columns, block)) {
       if (mine(o)) {
-        b.CreateStore(value[o],
-                      b.CreateInBoundsGEP(f64, column, column_index));
+        b.CreateStore(value[o], b.CreateInBoundsGEP(f64, column, column_index));
       }
     }
   };

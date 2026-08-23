@@ -418,9 +418,10 @@ TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
 
 } // namespace
 
-// --- choosing the backend -----------------------------------------------------
-// Compiling is not free and its cost grows faster than the graph, so a caller
-// has to be able to decline it on a build that has the backend.
+// --- choosing the backend
+// ----------------------------------------------------- Compiling is not free
+// and its cost grows faster than the graph, so a caller has to be able to
+// decline it on a build that has the backend.
 
 TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   ddx::rt::Builder<> b;

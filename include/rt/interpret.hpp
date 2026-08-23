@@ -30,7 +30,7 @@ constexpr void lanes_unary(OpCode op, const T *DDX_RESTRICT u,
 #define DDX_RT_LANES(fn, Op, label, functor, ...)                              \
   case OpCode::Op:                                                             \
     for (std::size_t k = 0; k < W; ++k) {                                      \
-      out[k] = supported<functor, T, probes_##Op<T>>(u[k]);    \
+      out[k] = supported<functor, T, probes_##Op<T>>(u[k]);                    \
     }                                                                          \
     return;
     DDX_RT_UNARY_TABLE(DDX_RT_LANES)
@@ -38,8 +38,7 @@ constexpr void lanes_unary(OpCode op, const T *DDX_RESTRICT u,
 #define DDX_RT_LANES(fn, Op, label)                                            \
   case OpCode::Op:                                                             \
     for (std::size_t k = 0; k < W; ++k) {                                      \
-      out[k] = supported<impl::detail::Op##Fn<T>, T,                        \
-                         probes_##Op<T>>(u[k]);                \
+      out[k] = supported<impl::detail::Op##Fn<T>, T, probes_##Op<T>>(u[k]);    \
     }                                                                          \
     return;
     DDX_UNARY_MATH_TABLE(DDX_RT_LANES)
@@ -60,7 +59,7 @@ constexpr void lanes_binary(OpCode op, const T *DDX_RESTRICT l,
 #define DDX_RT_LANES(fn, Op, label, functor, ...)                              \
   case OpCode::Op:                                                             \
     for (std::size_t k = 0; k < W; ++k) {                                      \
-      out[k] = supported<functor, T, probes_##Op<T>>(l[k], r[k]);            \
+      out[k] = supported<functor, T, probes_##Op<T>>(l[k], r[k]);              \
     }                                                                          \
     return;
     DDX_RT_BINARY_TABLE(DDX_RT_LANES)
@@ -98,7 +97,8 @@ constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
           out[k] = static_cast<U>(n.value);
         }
       } else {
-        const auto src = at + static_cast<std::ptrdiff_t>(std::size_t{n.slot} * W);
+        const auto src =
+            at + static_cast<std::ptrdiff_t>(std::size_t{n.slot} * W);
         for (std::size_t k = 0; k < W; ++k) {
           out[k] = src[static_cast<std::ptrdiff_t>(k)];
         }
@@ -121,7 +121,6 @@ template <impl::Numeric T, std::ranges::random_access_range R>
                                       const R &point) {
   return evaluate_all(b, point)[root];
 }
-
 
 // The nodes named by `order`, one point at a time, into caller-owned scratch
 // indexed by node id.  `order` must be topological and closed under operands,
@@ -154,6 +153,5 @@ template <impl::Numeric T, std::ranges::random_access_range R>
                 std::span<U>{v});
   return v;
 }
-
 
 } // namespace ddx::rt

@@ -27,8 +27,8 @@
 namespace {
 using ddx::jit::detail::Partition;
 using ddx::rt::Builder;
-using ddx::rt::NodeId;
 using ddx::rt::no_node;
+using ddx::rt::NodeId;
 using RE = ddx::rt::RTExpression<double>;
 
 // A graph with enough coupling to have a wavefront worth cutting: every
@@ -164,8 +164,7 @@ TEST(Partition, WavefrontMatchesTheDefinition) {
         continue;
       }
       const bool used_later =
-          outputs.contains(v) ||
-          std::ranges::any_of(order, [&](NodeId w) {
+          outputs.contains(v) || std::ranges::any_of(order, [&](NodeId w) {
             if (position[w] <= at) {
               return false;
             }
@@ -207,7 +206,8 @@ struct Batch {
         gs(vars) {
     for (std::size_t i = 0; i < n; ++i) {
       for (std::size_t p = 0; p < points; ++p) {
-        in[i][p] = 0.05 + 0.9 * static_cast<double>((i * 37 + p * 11) % 97) / 97.0;
+        in[i][p] =
+            0.05 + 0.9 * static_cast<double>((i * 37 + p * 11) % 97) / 97.0;
       }
       xs[i] = in[i].data();
       gs[i] = partial[i].data();
@@ -227,8 +227,8 @@ TEST(SplitKernel, MatchesTheUnsplitKernelBitForBit) {
 
   ddx::jit::Options whole;
   ddx::jit::Options split;
-  split.split_above = 1;   // always
-  split.min_slab = 128;    // and finely, to cross as many boundaries as we can
+  split.split_above = 1; // always
+  split.min_slab = 128;  // and finely, to cross as many boundaries as we can
   split.slab_factor = 1;
 
   ddx::jit::CompileReport plain_report, split_report;
