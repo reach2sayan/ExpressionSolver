@@ -108,12 +108,15 @@ TEST(MathFunctionTest, ExpLogIdentity) {
   }
 }
 TEST(MathFunctionTest, QuotientSelfIsConstant) {
-  for (double v : {1.0, 2.0, 5.0}) {
-    auto x = var_of<"x">(v);
-    auto expr = x / x;
-    ASSERT_NEAR(expr.eval(v), 1.0, 1e-12);
-    ASSERT_NEAR(expr.derivative().eval(v), 0.0, 1e-12);
-  }
+  auto x = var_of<"x">(2.0);
+  auto expr = x / x;
+  // Folded structurally rather than numerically: x/x is the literal 1, so it
+  // names no symbol and takes no point.  The runtime builder has always done
+  // this; ops/algebra.hpp is what made both simplifiers agree.
+  static_assert(std::same_as<decltype(expr), ddx::impl::Lit<double, 1>>,
+                "x / x folds to the literal 1 while the tree is built");
+  ASSERT_NEAR(expr.eval(), 1.0, 1e-12);
+  ASSERT_NEAR(expr.derivative().eval(), 0.0, 1e-12);
 }
 TEST(MathFunctionTest, TanEqualsRatio) {
   double x0 = 0.7;

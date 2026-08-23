@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ops/algebra.hpp"
 #include "rt/apply.hpp"
 #include "rt/opcode.hpp"
 
@@ -175,10 +176,8 @@ private:
     return id;
   }
 
-  // The rewrites of expr/simplify.hpp.  x*0 -> 0, 0/x -> 0 and (n/d)*d -> n
-  // are not IEEE-faithful; as there, they cancel arithmetic the derivative
-  // rules manufactured rather than anything a caller wrote.  A scalar with no
-  // equality never matches, and the identity rewrites stop firing for it.
+  // Is this node the literal k?  A scalar with no equality never matches, so
+  // the identity rewrites in ops/algebra.hpp simply stop firing for it.
   constexpr bool holds(NodeId id, int k) const {
     if (id == no_node || nodes_[id].op != OpCode::Const) {
       return false;
@@ -190,67 +189,103 @@ private:
     }
   }
 
+  // Which RuleOp an opcode is, or none for one carrying no identities.
+  static constexpr std::optional<impl::algebra::RuleOp>
+  rule_op_of(OpCode op) noexcept {
+    switch (op) {
+    case OpCode::Add:
+      return impl::algebra::RuleOp::Add;
+    case OpCode::Mul:
+      return impl::algebra::RuleOp::Mul;
+    case OpCode::Div:
+      return impl::algebra::RuleOp::Div;
+    case OpCode::Pow:
+      return impl::algebra::RuleOp::Pow;
+    case OpCode::Neg:
+      return impl::algebra::RuleOp::Neg;
+    default:
+      return std::nullopt;
+    }
+  }
+
+  // The same predicates simplify.hpp answers with type traits, answered here
+  // by id compare -- interning makes structural identity an id equality.
+  constexpr bool holds_pred(impl::algebra::Pred p, NodeId a,
+                            NodeId b) const noexcept {
+    using impl::algebra::Pred;
+    switch (p) {
+    case Pred::ZeroA:
+      return holds(a, 0);
+    case Pred::ZeroB:
+      return holds(b, 0);
+    case Pred::OneA:
+      return holds(a, 1);
+    case Pred::OneB:
+      return holds(b, 1);
+    case Pred::Same:
+      return a == b;
+    case Pred::AOverB:
+      return cancel_quotient(a, b).has_value();
+    case Pred::BOverA:
+      return cancel_quotient(b, a).has_value();
+    case Pred::NegatedA:
+      return a != no_node && nodes_[a].op == OpCode::Neg;
+    }
+    return false;
+  }
+
+  constexpr std::optional<NodeId> apply_rule(const impl::algebra::Rule &r,
+                                             NodeId a, NodeId b) {
+    using impl::algebra::Take;
+    switch (r.then) {
+    case Take::LitZero:
+      return constant(T{0});
+    case Take::LitOne:
+      return constant(T{1});
+    case Take::OperandA:
+      return a;
+    case Take::OperandB:
+      return b;
+    case Take::NumeratorOfA:
+      return cancel_quotient(a, b);
+    case Take::NumeratorOfB:
+      return cancel_quotient(b, a);
+    case Take::OperandOfA:
+      return nodes_[a].a;
+    }
+    return std::nullopt;
+  }
+
   constexpr std::optional<NodeId> fold(OpCode op, NodeId a, NodeId b) {
     const bool ca = a != no_node && nodes_[a].op == OpCode::Const;
     const bool cb = b != no_node && nodes_[b].op == OpCode::Const;
+    const bool unary = arity_of(op) == 1;
 
-    if (arity_of(op) == 1) {
-      if (ca) {
-        return constant(apply<T>(op, nodes_[a].value));
-      } else if (op == OpCode::Neg && nodes_[a].op == OpCode::Neg) {
-        return nodes_[a].a;
-      }
-      return std::nullopt;
+    // Constant arithmetic first: it runs the same *_impl functor the
+    // compile-time evaluator does, so a folded node and an evaluated one
+    // cannot disagree.
+    if (unary && ca) {
+      return constant(apply<T>(op, nodes_[a].value));
     }
-    if (ca && cb) {
+    if (!unary && ca && cb) {
       return constant(apply<T>(op, nodes_[a].value, nodes_[b].value));
     }
 
-    switch (op) {
-    case OpCode::Add:
-      if (holds(a, 0)) {
-        return b;
-      } else if (holds(b, 0)) {
-        return a;
+    const auto kind = rule_op_of(op);
+    if (!kind) {
+      return std::nullopt;
+    }
+    // First match wins, as ops/algebra.hpp is ordered.
+    for (const impl::algebra::Rule &r : impl::algebra::kRules) {
+      if (r.op != *kind || impl::algebra::is_unary(r) != unary) {
+        continue;
       }
-      break;
-    case OpCode::Mul:
-      if (holds(a, 0) || holds(b, 0)) {
-        return constant(T{0});
+      if (r.needs_commutative_multiply && !impl::CCommutativeMultiply<T>) {
+        continue;
       }
-      if (holds(a, 1)) {
-        return b;
+      if (holds_pred(r.when, a, b)) {
+        return apply_rule(r, a, b);
       }
-      if (holds(b, 1)) {
-        return a;
-      }
-      // (n/d) * d -> n holds for any T; d * (n/d) is d n d^-1, which is n
-      // only when the factors commute -- the same split simplify.hpp makes.
-      if (const auto n = cancel_quotient(a, b).or_else([&] {
-            return impl::CCommutativeMultiply<T> ? cancel_quotient(b, a)
-                                                 : std::nullopt;
-          })) {
-        return n;
-      }
-      break;
-    case OpCode::Div:
-      if (a == b) {
-        return constant(T{1});
-      } else if (holds(a, 0)) {
-        return constant(T{0});
-      } else if (holds(b, 1)) {
-        return a;
-      }
-      break;
-    case OpCode::Pow:
-      if (holds(b, 0)) {
-        return constant(T{1});
-      } else if (holds(b, 1)) {
-        return a;
-      }
-      break;
-    default:
-      break;
     }
     return std::nullopt;
   }

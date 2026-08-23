@@ -3,6 +3,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/ADT/Twine.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Verifier.h>
 
@@ -18,49 +19,30 @@ namespace {
 
 // Which LLVM intrinsic, if any, covers an op.  Whatever is missing here goes
 // out as a libm call under label_of(op), already the libm spelling.
+//
+// Three are named rather than looked up, because for these the label is not
+// the intrinsic's name and the difference is a decision, not a spelling:
+// llvm.abs is the *integer* intrinsic and would silently be wrong, and
+// maximum/minimum are the NaN-propagating pair the interpreter matches, where
+// maxnum/minnum are not.  A select chain does not survive InstCombine.
+//
+// Everything else is derived from the op's own label, so DDX_UNARY_MATH_TABLE
+// stays the single place the operation set is written down -- a row added
+// there picks up its intrinsic here with no edit, and one LLVM has no
+// intrinsic for falls through to libm on its own.
 llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
   switch (op) {
   case rt::OpCode::Abs:
     return llvm::Intrinsic::fabs;
-  // maximum/minimum, not maxnum/minnum: NaN propagates from either side, as
-  // the interpreter has it.  A select chain does not survive InstCombine.
   case rt::OpCode::Max:
     return llvm::Intrinsic::maximum;
   case rt::OpCode::Min:
     return llvm::Intrinsic::minimum;
-  case rt::OpCode::Pow:
-    return llvm::Intrinsic::pow;
-  case rt::OpCode::Atan2:
-    return llvm::Intrinsic::atan2;
-  case rt::OpCode::SineOp:
-    return llvm::Intrinsic::sin;
-  case rt::OpCode::CosineOp:
-    return llvm::Intrinsic::cos;
-  case rt::OpCode::TanOp:
-    return llvm::Intrinsic::tan;
-  case rt::OpCode::AsinOp:
-    return llvm::Intrinsic::asin;
-  case rt::OpCode::AcosOp:
-    return llvm::Intrinsic::acos;
-  case rt::OpCode::AtanOp:
-    return llvm::Intrinsic::atan;
-  case rt::OpCode::SinhOp:
-    return llvm::Intrinsic::sinh;
-  case rt::OpCode::CoshOp:
-    return llvm::Intrinsic::cosh;
-  case rt::OpCode::TanhOp:
-    return llvm::Intrinsic::tanh;
-  case rt::OpCode::ExpOp:
-    return llvm::Intrinsic::exp;
-  case rt::OpCode::LogOp:
-    return llvm::Intrinsic::log;
-  case rt::OpCode::Log10Op:
-    return llvm::Intrinsic::log10;
-  case rt::OpCode::SqrtOp:
-    return llvm::Intrinsic::sqrt;
   default:
-    return llvm::Intrinsic::not_intrinsic;
+    break;
   }
+  return llvm::Intrinsic::lookupIntrinsicID(
+      llvm::Twine("llvm.").concat(rt::label_of(op)).str());
 }
 
 // memory(none) is the IR spelling of -fno-math-errno: without it a call is

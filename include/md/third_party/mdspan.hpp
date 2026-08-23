@@ -4122,6 +4122,11 @@ public:
   // [mdspan.basic.mapping], mdspan mapping domain multidimensional index to
   // access codomain element
 
+// LOCAL PATCH (ddx): the three at() overloads are the only code in this header
+// that throws, and ddx builds -fno-exceptions -- where clang rejects a throw
+// even in a template nobody instantiates.  Guarded, not rewritten: with
+// exceptions on, this is upstream verbatim.
+#if defined(__cpp_exceptions) || defined(_CPPUNWIND)
   MDSPAN_TEMPLATE_REQUIRES(
       class... SizeTypes,
       /* requires */ (extents_type::rank() == sizeof...(SizeTypes) &&
@@ -4184,6 +4189,7 @@ public:
                                                                  indices);
   }
 #endif // __cpp_lib_span
+#endif // LOCAL PATCH (ddx): at() overloads
 
 #if MDSPAN_USE_BRACKET_OPERATOR
   MDSPAN_TEMPLATE_REQUIRES(
