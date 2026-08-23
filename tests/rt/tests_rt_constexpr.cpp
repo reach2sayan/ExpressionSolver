@@ -64,6 +64,12 @@ consteval double partial_of_product() {
 }
 static_assert(partial_of_product() == 4.0);
 
+// Evaluating a transcendental during constant evaluation needs the compiler to
+// fold a libm call, which is a GCC extension rather than something the standard
+// requires -- <cmath> is not constexpr.  Clang rejects `std::sin(0.0)` in a
+// constant expression outright, so this one sweep is GCC-only.  Everything else
+// in this file is arithmetic and holds on both.
+#if defined(__GNUC__) && !defined(__clang__)
 consteval double transcendental_jacobian() {
   Builder<> b;
   const auto x = var(b, "x");
@@ -73,6 +79,7 @@ consteval double transcendental_jacobian() {
   return v[g.partial[0]]; // d(x sin x)/dx at 0 is sin 0 + 0 cos 0
 }
 static_assert(transcendental_jacobian() == 0.0);
+#endif
 
 // Lowering a typed tree into a graph is a constant expression as well, so the
 // two representations can be compared without running anything.

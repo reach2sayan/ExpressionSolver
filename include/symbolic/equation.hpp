@@ -235,7 +235,7 @@ public:
   [[nodiscard]] constexpr auto
   evaluate(const CEvalArg auto &...args) const noexcept {
     return detail::with_point<symbols, value_type, input_dim>(
-        [this](const auto &vals) {
+        [&](const auto &vals) {
           if constexpr (output_dim == 1) {
             return std::get<0>(expressions).template eval_seeded<symbols>(vals);
           } else {

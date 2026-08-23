@@ -6,8 +6,10 @@
 #include "util/error.hpp"
 #include "util/scope_guard.hpp"
 
+#include <concepts>   // std::same_as
 #include <string_view>
-#include <utility> // std::move
+#include <type_traits> // std::remove_cvref_t
+#include <utility>     // std::move
 
 namespace ddx::rt {
 
@@ -24,7 +26,17 @@ public:
 
   // By value, not a forwarding reference: RTExpression is itself Numeric, and
   // a Numeric&& would out-match the copy constructor for a non-const lvalue.
-  template <impl::Numeric V>
+  //
+  // The same-type exclusion is first, and load-bearing rather than an
+  // optimisation: conjunction short-circuits, so writing it here stops
+  // Numeric<V> from ever being asked about RTExpression itself.  Without it
+  // the check is circular -- RTExpression is Numeric, so Numeric<RTExpression>
+  // asks whether `a + b` converts to RTExpression, conversion considers this
+  // constructor, and the constructor asks Numeric again.  Clang diagnoses the
+  // cycle outright; GCC happens to accept it, which is why it survived.
+  template <typename V>
+    requires(!std::same_as<std::remove_cvref_t<V>, RTExpression> &&
+             impl::Numeric<V>)
   constexpr RTExpression(V v) : lit_(static_cast<T>(std::move(v))) {}
 
   constexpr RTExpression(Builder<T> &b, NodeId id) noexcept
