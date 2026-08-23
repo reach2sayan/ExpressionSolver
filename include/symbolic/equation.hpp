@@ -1,9 +1,9 @@
 #pragma once
-#include "symbolic/sweep.hpp"
 #include "ops/scalar.hpp"
 #include "symbolic/bound.hpp"
 #include "symbolic/format.hpp"
 #include "symbolic/simplify.hpp"
+#include "symbolic/sweep.hpp"
 #include "symbolic/symbol.hpp"
 #include "util/config.hpp"
 #include "util/scope_guard.hpp"
@@ -121,8 +121,9 @@ private:
     std::ranges::transform(values, seeds.begin(),
                            [](const S &v) { return value_type{v, S{}}; });
 
-    for (std::size_t j = 0; j < input_dim; ++j) {
-      const auto seed = scoped_seed<1>(seeds[j].deriv());
+    for (auto &&[index, seeded] : std::views::enumerate(seeds)) {
+      const auto j = static_cast<std::size_t>(index);
+      const auto seed = scoped_seed<1>(seeded.deriv());
       static_for<output_dim>([&]<std::size_t K>() {
         point_t grads{};
         reverse_sweep<symbols>(std::get<K>(expressions), seeds, grads);

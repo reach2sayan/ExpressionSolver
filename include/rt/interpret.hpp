@@ -8,18 +8,15 @@
 
 namespace ddx::rt {
 
-// Evaluate every node once, in id order.  Ids are assigned as subexpressions
-// are formed, so a child always precedes its parent and one forward pass
-// suffices; shared subexpressions are computed once because they are one node.
-// This is the reference the JIT is checked against.
+// Every node once, in id order: a child always precedes its parent, so one
+// forward pass suffices.  This is the reference the JIT is checked against.
 //
-// The point's element type chooses the arithmetic, exactly as eval_seeded does
-// on the compile-time side: hand it doubles and it computes values, hand it
-// Dual<double> and the same walk carries derivatives.  The graph's own scalar
-// only has to convert into it.
+// The point's element type chooses the arithmetic, as eval_seeded does on the
+// compile-time side: doubles compute values, Dual<double> carries derivatives
+// through the same walk.  The graph's own scalar only has to convert into it.
 //
-// The loop is indexed rather than a transform because it is not one: v[i] reads
-// entries the same pass wrote, so it is a fold over a dependence order.
+// Indexed rather than a transform because v[i] reads entries the same pass
+// wrote -- a fold over a dependence order, not a map.
 template <impl::Numeric T, std::ranges::random_access_range R>
   requires impl::Numeric<std::ranges::range_value_t<R>>
 [[nodiscard]] constexpr auto evaluate_all(const Builder<T> &b, const R &point) {

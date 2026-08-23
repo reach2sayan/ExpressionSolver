@@ -1,22 +1,20 @@
-// The Hessian column colouring.  Compiled once here rather than inlined into
-// rt/coupling.hpp: it names no `T`, so a header definition would have every
-// scalar the runtime graph is instantiated at emit its own copy of the same
-// Boost.Graph machinery.  Keeping it out also keeps the conflict graph, the
-// smallest-last ordering and the graph algorithms off the include path of every
-// translation unit that only wants to evaluate an expression.
+// The Hessian column colouring.  Here rather than in rt/coupling.hpp because
+// it names no `T`: a header definition would emit one copy of the Boost.Graph
+// machinery per scalar, and put it on every consumer's include path.
 
 #include "rt/coupling.hpp"
 
 #include <boost/graph/adjacency_list.hpp>
-// shared_array_property_map first: smallest_last_ordering.hpp uses
-// make_shared_array_property_map without including it, still true as of 1.92.
-// Not an unused include, and not safe to sort into the block below.
+// First, and not sortable into the block below: smallest_last_ordering.hpp
+// uses make_shared_array_property_map without including it, as of Boost 1.92.
 #include <boost/property_map/shared_array_property_map.hpp>
 
 #include <boost/graph/sequential_vertex_coloring.hpp>
 #include <boost/graph/smallest_last_ordering.hpp>
 
 #include <cstddef>
+#include <ranges>
+#include <utility>
 #include <vector>
 
 namespace ddx::rt {
@@ -36,17 +34,22 @@ Coloring color_columns(const CouplingRows &rows) {
     return out;
   }
 
-  ConflictGraph conflicts(n);
-  for (std::size_t j = 0; j < n; ++j) {
-    for (std::size_t k = j + 1; k < n; ++k) {
-      if (rows[j].intersects(rows[k])) {
-        boost::add_edge(j, k, conflicts);
-      }
-    }
+  ConflictGraph conflicts{n};
+  const auto conflicting = [&rows, n](const std::size_t j) {
+    return std::views::iota(j + 1, n) |
+           std::views::filter([&rows, j](const std::size_t k) {
+             return rows[j].intersects(rows[k]);
+           }) |
+           std::views::transform(
+               [j](const std::size_t k) { return std::pair{j, k}; });
+  };
+  for (const auto [j, k] : std::views::iota(0uz, n) |
+                               std::views::transform(conflicting) |
+                               std::views::join) {
+    boost::add_edge(j, k, conflicts);
   }
 
-  // Smallest-last rather than natural vertex order: greedy colouring is only as
-  // good as the order it walks, and this is the one that pairs with it.
+  // Greedy colouring is only as good as the order it walks.
   const auto order = boost::smallest_last_vertex_ordering(conflicts);
   out.count = static_cast<std::size_t>(boost::sequential_vertex_coloring(
       conflicts,
@@ -55,14 +58,14 @@ Coloring color_columns(const CouplingRows &rows) {
       boost::make_iterator_property_map(
           out.color.begin(), boost::get(boost::vertex_index, conflicts))));
 
-  // scatter[colour][row] is the column that row's sweep result belongs to.  The
-  // colouring guarantees at most one such column, so the harvest needs no
-  // search.
+  // scatter[colour][row] is the column that row's sweep result belongs to; the
+  // colouring guarantees at most one, so the harvest needs no search.
   out.scatter.assign(out.count * n, no_column);
-  for (std::size_t j = 0; j < n; ++j) {
-    detail::for_each_set(rows[j],
-                         [&, scatter = by_color(out.scatter, out.count, n)](
-                             std::size_t i) { scatter[out.color[j], i] = j; });
+  const auto scatter = by_color(out.scatter, out.count, n);
+  for (const auto [index, row] : std::views::enumerate(rows)) {
+    const auto j = static_cast<std::size_t>(index);
+    detail::for_each_set(row,
+                         [&](std::size_t i) { scatter[out.color[j], i] = j; });
   }
   return out;
 }

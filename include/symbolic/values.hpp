@@ -1,7 +1,7 @@
 #pragma once
+#include "ops/operations.hpp"
 #include "ops/scalar.hpp"
 #include "symbolic/expressions.hpp"
-#include "ops/operations.hpp"
 #include "symbolic/simplify.hpp"
 #include "symbolic/symbol.hpp"
 #include <utility>
@@ -37,8 +37,7 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
 //
 // Folding keeps a literal-only subtree from becoming a node.  A T-valued
 // template argument exists only for structural T, so a dual scalar can put back
-// only 0 and 1 (the int spelling) -- which are the only values differentiation
-// manufactures.
+// only 0 and 1 -- the only values differentiation manufactures.
 #define DDX_EXPR_BINOP(OP, ...)                                                \
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
@@ -124,10 +123,9 @@ DDX_EXPR_BINFN(min, MinOp)
 
 namespace detail {
 
-// Both forms of constant answer every sweep identically, so read() is the only
-// member a specialisation supplies.  CRTP rather than a data member: the
-// compile-time form has to stay std::is_empty_v, which is what selects the
-// stateless node storage, and a member defeats it even when empty.
+// Both forms answer every sweep identically, so read() is the only member a
+// specialisation supplies.  CRTP rather than a data member: the compile-time
+// form has to stay std::is_empty_v to select the stateless node storage.
 template <typename Derived, Numeric T>
 class ConstantOps : public EquationConvertible<Derived> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
@@ -236,7 +234,7 @@ public:
   using value_type = T;
 
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    return Lit<T, Frozen ? 0 : 1>{};
+    return Lit < T, Frozen ? 0 : 1 > {};
   }
 
   template <std::size_t Base = 0>
@@ -309,16 +307,12 @@ template <FixedString S, Numeric T>
   return Variable<T, S>{};
 }
 
-// The same two, keyed by a symbol in hand rather than by a template argument:
+// The same two, keyed by a symbol in hand rather than by a template argument,
+// so nothing here needs the caller to write an angle bracket:
 //
 //   variable("x"_s)              // Variable<double, "x">
 //   variable<dual>("x"_s)        // and over another scalar
 //   var_of("x"_s, v)             // exemplar supplies the scalar
-//
-// "x"_s is already the standard spelling of a symbol -- a C++20 string-literal
-// operator template over a class-type NTTP -- so this is only the other half of
-// it: nothing here needs the caller to write an angle bracket.  named() has had
-// its tag-taking overload all along.
 template <Numeric T = double, FixedString S>
 [[nodiscard]] constexpr auto variable(symbol_type<S>) noexcept {
   return Variable<T, S>{};

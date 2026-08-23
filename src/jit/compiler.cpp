@@ -19,11 +19,8 @@
 namespace ddx::jit {
 namespace {
 
-// llvm::InitializeNativeTarget is global state, and a process may hold more
-// than one Compiler.
+// Global LLVM state, and a process may hold more than one Compiler.
 void init_native_target_once() {
-  // A function-local static is initialised once and thread-safely, which is the
-  // whole of what call_once was here for.
   [[maybe_unused]] static const bool ready = [] {
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
@@ -31,34 +28,24 @@ void init_native_target_once() {
   }();
 }
 
-// The one seam between LLVM's error model and ours.  llvm::Error carries the
-// only text that says what actually went wrong on this host, so it is kept.
+// The one seam between LLVM's error model and ours; its text is the whole of
+// what a caller can act on, so it is kept.
 [[nodiscard]] error as_error(const errc code, const llvm::Twine &what,
                              llvm::Error e) {
   return error{code, (what + ": " + llvm::toString(std::move(e))).str()};
 }
 
 // Every libm entry point an emitted kernel can call, defined outright rather
-// than left to the process.  Two reasons.  GetForCurrentProcess resolves only
-// what a loaded module exports, which on a statically linked CRT -- Windows
-// /MT, or any -static build -- is none of these, and a kernel with a sine in it
-// would fail to link at all.  And where the process does export them, nothing
-// says the one it hands back is the one this translation unit was compiled
-// against; defining them pins a kernel and the interpreter to the same libm, so
-// the two agree to the last bit.
-//
-// The unary half is DDX_UNARY_MATH_TABLE, whose labels are already the libm
-// spellings -- codegen calls them under label_of(op), and the intrinsics it
-// prefers lower to the same names.  The other four are what Abs and the
-// non-arithmetic binary ops come out as.  Anything else the optimiser
-// synthesises -- exp2, fmod, memcpy, the libmvec vector forms -- is still the
-// generators' business.
+// than left to the process: GetForCurrentProcess resolves only what a loaded
+// module exports -- none of these under a static CRT -- and where the process
+// does export them, nothing says it is the libm this TU was compiled against.
+// Defining them pins a kernel and the interpreter to the same one.
 [[nodiscard]] llvm::Error define_libm(llvm::orc::ExecutionSession &es,
                                       llvm::orc::JITDylib &jd,
                                       const llvm::DataLayout &dl) {
   llvm::orc::MangleAndInterner mangle(es, dl);
   llvm::orc::SymbolMap syms;
-  // The unary + is what turns each lambda into a plain function pointer.
+  // The unary + turns each lambda into a plain function pointer.
   const auto def = [&](const char *name, auto *fn) {
     syms[mangle(name)] = {llvm::orc::ExecutorAddr::fromPtr(fn),
                           llvm::JITSymbolFlags::Exported |
@@ -75,12 +62,9 @@ void init_native_target_once() {
   return jd.define(llvm::orc::absoluteSymbols(std::move(syms)));
 }
 
-// `have` is whether libmvec is actually resolvable in this process, not
-// whether the target could have one.  The two differ on a statically linked
-// binary or a host that ships no libmvec.so.1, and promising the vectoriser a
-// vector sin it cannot then call is the same failure define_libm exists to
-// prevent -- only it lands on _ZGVdN4v_sin instead of sin.  Scalar code for a
-// transcendental beats a kernel that will not link.
+// `have` is whether libmvec resolves in this process, not whether the target
+// could have one: promising the vectoriser a vector sin it cannot then call
+// fails at link, and scalar transcendentals beat a kernel that will not load.
 llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
                                                 const Options &opt,
                                                 const bool have) {
@@ -90,8 +74,7 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
                (opt.veclib == VecLib::Auto && triple.isOSLinux() &&
                 triple.getArch() == llvm::Triple::x86_64));
   if (want) {
-    // Without this the loop vectoriser has no vector form for sin/exp/... and
-    // bails out of any loop containing one -- which is most of them here.
+    // Without this the vectoriser bails out of any loop with a sin/exp in it.
     tlii.addVectorizableFunctionsFromVecLib(
         llvm::TargetLibraryInfoImpl::LIBMVEC_X86, triple);
   }
@@ -144,16 +127,11 @@ void optimize(llvm::Module &m, llvm::TargetMachine &tm, const Options &opt,
 struct Compiler::Impl {
   std::unique_ptr<llvm::orc::LLJIT> jit;
   std::unique_ptr<llvm::TargetMachine> tm;
-  // Two threads compiling through one Compiler would otherwise race here and,
-  // worse, hand the JIT two modules under one name.  LLJIT itself is
-  // internally synchronised, so this counter is the only shared mutable state.
+  // The only shared mutable state: LLJIT is internally synchronised, but two
+  // threads naming a module alike would hand it a duplicate symbol.
   std::atomic<unsigned> counter{0};
-  // Whether the vector forms resolve here; see target_library_info.
-  bool libmvec = false;
+  bool libmvec = false; // Whether the vector forms resolve here
 
-  // Every step returns an llvm::Expected and any of them can fail on a host
-  // with no native target, so bring-up is a factory: a constructor has nowhere
-  // to put the reason.
   [[nodiscard]] static std::expected<std::shared_ptr<Impl>, error> bring_up() {
     init_native_target_once();
     auto impl = std::make_shared<Impl>();
@@ -203,9 +181,8 @@ struct Compiler::Impl {
     }
     jd.addGenerator(std::move(*procs));
 
-    // GetForCurrentProcess only sees what is already loaded, and libmvec is not
-    // linked into a program that never called it; without this the vector
-    // symbols the vectoriser emits have nowhere to resolve.
+    // Not loaded in a program that never called it, so the generator above
+    // cannot see it.
     if (auto vec = llvm::orc::DynamicLibrarySearchGenerator::Load(
             "libmvec.so.1", prefix)) {
       jd.addGenerator(std::move(*vec));
@@ -265,8 +242,7 @@ result<Kernel> Compiler::compile(const rt::Graph<double> &g,
   }
 
   const auto &layout = g.layout();
-  // The Impl is what owns the code, so the Kernel holds a share of it: a
-  // Compiler that goes out of scope no longer takes live kernels with it.
+  // The Impl owns the code, so the Kernel holds a share of it.
   return Kernel{sym->toPtr<Kernel::function_type>(),
                 g.symbols().size(),
                 layout.values,

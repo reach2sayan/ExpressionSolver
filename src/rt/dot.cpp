@@ -1,9 +1,7 @@
-// The graphviz writer.  Compiled once here rather than inlined into rt/dot.hpp
-// so that boost/graph/graphviz.hpp -- which carries the DOT *reader* as well as
-// the writer -- reaches this translation unit and no other.  What it draws is
-// decided by the caller: rt::Dot resolves the scalar-dependent parts (how a
-// constant prints, whether an operand order is worth showing) into DotNode, so
-// nothing below names a `T`.
+// Here rather than in rt/dot.hpp so that boost/graph/graphviz.hpp -- which
+// carries the DOT *reader* as well as the writer -- reaches this translation
+// unit and no other.  rt::Dot resolves the scalar-dependent parts into
+// DotNode, so nothing below names a `T`.
 
 #include "rt/dot.hpp"
 
@@ -17,8 +15,7 @@
 namespace ddx::rt {
 namespace {
 
-// Only vertices are filtered: an edge out of a live node lands on a live node,
-// because reaching a node is what made its operands live.
+// Only vertices are filtered: reaching a node is what made its operands live.
 struct IsLive {
   std::span<const DotNode> nodes;
   bool operator()(Vertex v) const { return nodes[v].live; }
@@ -31,26 +28,28 @@ auto vertex_map(std::invocable<NodeId> auto f) {
       [f = std::move(f)](Vertex v) { return f(static_cast<NodeId>(v)); });
 }
 
-// Attributes go in through dynamic_properties rather than a hand-written label
-// writer, so the names are the ones graphviz knows and BGL does the quoting.
+// dynamic_properties rather than a hand-written label writer, so the names are
+// the ones graphviz knows and BGL does the quoting.
 boost::dynamic_properties properties(const Adjacency &adj,
                                      std::span<const DotNode> nodes) {
   boost::dynamic_properties dp;
   dp.property("node_id", boost::get(boost::vertex_index, adj));
-  dp.property("label", vertex_map([nodes](NodeId v) { return nodes[v].label; }));
-  dp.property("shape", vertex_map([nodes](NodeId v) { return nodes[v].shape; }));
+  dp.property("label",
+              vertex_map([nodes](NodeId v) { return nodes[v].label; }));
+  dp.property("shape",
+              vertex_map([nodes](NodeId v) { return nodes[v].shape; }));
   dp.property("style", vertex_map([nodes](NodeId v) {
                 return std::string(nodes[v].live ? "solid" : "dashed");
               }));
-  dp.property(
-      "label",
-      boost::make_function_property_map<Edge, std::string>(
-          [&adj, nodes, slot = boost::get(boost::edge_bundle, adj)](
-              const Edge &e) -> std::string {
-            const auto v = static_cast<NodeId>(boost::source(e, adj));
-            return nodes[v].show_slots ? std::to_string(boost::get(slot, e))
-                                       : std::string{};
-          }));
+  dp.property("label",
+              boost::make_function_property_map<Edge, std::string>(
+                  [&adj, nodes, slot = boost::get(boost::edge_bundle, adj)](
+                      const Edge &e) -> std::string {
+                    const auto v = static_cast<NodeId>(boost::source(e, adj));
+                    return nodes[v].show_slots
+                               ? std::to_string(boost::get(slot, e))
+                               : std::string{};
+                  }));
   return dp;
 }
 
@@ -63,9 +62,8 @@ std::string to_dot(const Adjacency &adj, std::span<const DotNode> nodes,
   if (scope == Scope::All) {
     boost::write_graphviz_dp(out, adj, dp);
   } else {
-    // An adaptor over the liveness bits the freeze already computed, so the
-    // live view costs a predicate and no traversal, and the vertices keep their
-    // original ids.
+    // An adaptor over the liveness bits the freeze already computed: a
+    // predicate, no traversal, and the vertices keep their ids.
     boost::write_graphviz_dp(
         out,
         boost::filtered_graph<Adjacency, boost::keep_all, IsLive>{

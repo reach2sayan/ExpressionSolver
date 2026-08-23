@@ -10,18 +10,11 @@ namespace ddx::rt {
 
 namespace detail {
 
-// A switch instantiates every case, so a scalar with no `sin` would fail to
-// compile the whole table even for a graph that never mentions one.  Numeric
-// admits matrices and quaternions, for which most of the table is meaningless,
-// while Dual supports all of it -- that is what forward mode is.  So the test
-// has to be per operation, not per category.
-//
-// It probes the free function, not the functor.  pow_impl takes `Numeric auto`,
-// so a matrix satisfies its signature and the failure lands in the body, which
-// is not the immediate context and is a hard error.  `pow(a, b)` simply does
-// not resolve for a matrix, which is substitution failure and detectable.
-// Arithmetic short-circuits because a fundamental type has no associated
-// namespace for argument-dependent lookup to search.
+// A switch instantiates every case, so support has to be probed per operation
+// rather than per category.  It probes the free function, not the functor: a
+// matrix satisfies pow_impl's `Numeric auto` and fails in the body, which is a
+// hard error, where `pow(a, b)` simply does not resolve.  Arithmetic
+// short-circuits -- a fundamental type gives ADL no namespace to search.
 template <typename Fn> inline constexpr bool is_field_op_v = false;
 template <> inline constexpr bool is_field_op_v<std::plus<>> = true;
 template <> inline constexpr bool is_field_op_v<std::minus<>> = true;
@@ -47,8 +40,7 @@ template <impl::Numeric T>
 inline constexpr bool probes_Abs =
     impl::CArithmetic<T> || requires(const T &u) { abs(u); };
 template <impl::Numeric T> inline constexpr bool probes_Neg = true;
-// sign_impl branches on comparisons rather than calling anything, so ordering
-// is the whole requirement.
+// sign_impl only compares, so ordering is the whole requirement.
 template <impl::Numeric T>
 inline constexpr bool probes_Sign =
     impl::CArithmetic<T> || std::totally_ordered<T>;
@@ -64,11 +56,9 @@ template <typename Fn, impl::Numeric T, bool Ok, impl::Numeric... Args>
 
 } // namespace detail
 
-// Dispatch an OpCode onto ddx's own functors.  Templated on the scalar so the
-// interpreter, constant folding and the graph builder all share one definition:
-// at T = double it computes, at T = RTExpression it builds nodes.  Overloaded
-// on arity rather than numbered, because the argument list already says which
-// is which.
+// Dispatch an OpCode onto ddx's own functors.  Templated on the scalar, so the
+// interpreter, constant folding and the graph builder share one definition: at
+// T = double it computes, at T = RTExpression it builds nodes.
 template <impl::Numeric T>
 [[nodiscard]] constexpr T apply(OpCode op, const T &u) noexcept {
   switch (op) {

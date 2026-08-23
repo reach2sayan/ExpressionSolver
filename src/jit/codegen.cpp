@@ -16,17 +16,14 @@
 namespace ddx::jit::detail {
 namespace {
 
-// Which LLVM intrinsic, if any, covers an op.  LLVM 20 has f64 intrinsics for
-// most of the set; cbrt, asinh, acosh, atanh, erf and hypot have none and go
-// out as libm calls instead -- under label_of(op), which is already the libm
-// spelling for every one of them.
+// Which LLVM intrinsic, if any, covers an op.  Whatever is missing here goes
+// out as a libm call under label_of(op), already the libm spelling.
 llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
   switch (op) {
   case rt::OpCode::Abs:
     return llvm::Intrinsic::fabs;
-  // IEEE-754 maximum/minimum, not maxnum/minnum: a NaN operand propagates
-  // from either side, as the interpreter's max_impl has it.  A hand-rolled
-  // select chain does not survive InstCombine with its NaN arm intact.
+  // maximum/minimum, not maxnum/minnum: NaN propagates from either side, as
+  // the interpreter has it.  A select chain does not survive InstCombine.
   case rt::OpCode::Max:
     return llvm::Intrinsic::maximum;
   case rt::OpCode::Min:
@@ -66,9 +63,8 @@ llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
   }
 }
 
-// A libm declaration the optimiser is allowed to move.  memory(none) is the IR
-// spelling of -fno-math-errno: without it every call is assumed to write errno,
-// which blocks hoisting and vectorisation outright.
+// memory(none) is the IR spelling of -fno-math-errno: without it a call is
+// assumed to write errno, which blocks hoisting and vectorisation outright.
 llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
                           unsigned args) {
   llvm::Type *f64 = llvm::Type::getDoubleTy(m.getContext());
@@ -92,9 +88,8 @@ public:
       return b_.CreateFNeg(u);
     }
     if (op == rt::OpCode::Sign) {
-      // u > 0 ? 1 : u < 0 ? -1 : u - u -- there is no libm spelling of sign.
-      // The u - u arm reaches only ±0 and NaN, giving 0 and NaN as sign_impl
-      // does.
+      // u > 0 ? 1 : u < 0 ? -1 : u - u.  The last arm reaches only ±0 and
+      // NaN, giving 0 and NaN as sign_impl does.
       llvm::Type *const f64 = b_.getDoubleTy();
       llvm::Value *const zero = llvm::ConstantFP::get(f64, 0.0);
       return b_.CreateSelect(b_.CreateFCmpOGT(u, zero),
@@ -120,8 +115,6 @@ public:
   }
 
 private:
-  // Intrinsic where LLVM has one, libm call where it does not; the arity is the
-  // argument count, so the two callers need not repeat the choice.
   llvm::Value *call(rt::OpCode op, llvm::ArrayRef<llvm::Value *> args) const {
     const llvm::Intrinsic::ID id = intrinsic_for(op);
     if (id != llvm::Intrinsic::not_intrinsic) {
@@ -138,8 +131,6 @@ private:
   llvm::IRBuilder<> &b_;
 };
 
-// The kernel's signature, and the promises about its pointers that decide
-// whether the loop can be vectorised at all.
 llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   llvm::LLVMContext &ctx = m.getContext();
   llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
@@ -154,19 +145,16 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   for (const auto [i, arg_name] : names | std::views::enumerate) {
     fn->getArg(static_cast<unsigned>(i))->setName(arg_name);
   }
-  // The columns never alias the outputs; saying so is what lets the vectoriser
-  // skip the runtime overlap check it would otherwise need.
+  // Saying the columns never alias is what lets the vectoriser skip its
+  // runtime overlap check.
   for (const unsigned i : std::views::iota(0u, 4u)) {
     fn->addParamAttr(i, llvm::Attribute::NoAlias);
     fn->addParamAttr(i, llvm::Attribute::NoCapture);
   }
   fn->addParamAttr(0, llvm::Attribute::ReadOnly);
 
-  // The body is floating-point arithmetic over those pointers and calls that
-  // are themselves nounwind and memory(none), so all three hold.  nounwind is
-  // the IR spelling of noexcept -- without it the kernel is assumed to unwind,
-  // which costs it an unwind table entry and stops the optimiser moving code
-  // across the libm calls.  Kernel::operator() is noexcept to match.
+  // nounwind is the IR spelling of noexcept, and without it the optimiser
+  // cannot move code across the libm calls.  Kernel::operator() matches.
   fn->setDoesNotThrow();
   fn->setWillReturn();
   fn->setMemoryEffects(llvm::MemoryEffects::argMemOnly());
@@ -174,9 +162,8 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
 }
 
 llvm::FastMathFlags flags_for(const Options &opt) {
-  // Contraction only, matching the project's -ffp-contract=fast.  Nothing here
-  // enables reassociation: an elementwise map has no reduction to reassociate,
-  // and it would change derivative values.
+  // Contraction only, matching -ffp-contract=fast.  Reassociation would change
+  // derivative values and has no reduction here to win on anyway.
   llvm::FastMathFlags fmf;
   if (opt.contract) {
     fmf.setAllowContract();
@@ -184,8 +171,7 @@ llvm::FastMathFlags flags_for(const Options &opt) {
   return fmf;
 }
 
-// The pointers every iteration would otherwise reload.  Loading them once in
-// the entry block is what makes them loop-invariant.
+// Loaded once in the entry block, so they are loop-invariant.
 struct Columns {
   std::vector<llvm::Value *> inputs;
   std::vector<llvm::Value *> values;   // f[k]
@@ -215,9 +201,8 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
           .hessian = load_columns(3, layout.hessian, "h")};
 }
 
-// One value per node, in id order.  Ids are topological, so a single pass needs
-// no recursion and no worklist: every operand is already a llvm::Value when
-// read.
+// Ids are topological, so one pass needs no worklist: every operand is already
+// a llvm::Value when read.
 std::vector<llvm::Value *> emit_nodes(const Emitter &emit, llvm::IRBuilder<> &b,
                                       const rt::Graph<double> &g,
                                       const Columns &cols, llvm::Value *index) {

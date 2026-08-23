@@ -2,18 +2,17 @@
 
 #include "ops/numeric.hpp" // compile_time_factorial
 // The univariate sweep runs on the truncated-polynomial scalar forward mode
-// supplies; with DDX_BUILD_DUAL=OFF that member goes with it.  Every other
-// entry point here is interpreted or JIT-compiled and needs none of it.
+// supplies, and goes with it under DDX_BUILD_DUAL=OFF.
 #if DDX_HAS_DUAL
 #include "dual/taylor_dual.hpp"
 #endif
-#include "symbolic/equation.hpp"
 #include "md/md.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expr.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
+#include "symbolic/equation.hpp"
 
 // Optional: without it the batch calls run the interpreter, under the same
 // signatures.
@@ -30,10 +29,9 @@
 #include <string>
 #include <vector>
 
-// The runtime half of Equation.  Keyed on the RTExpression<T> *pattern* rather
-// than a constraint: a `requires` over <TFirst, TRest...> would be ambiguous
-// with the compile-time specialisation, since CExpression and a runtime concept
-// do not subsume one another.
+// Keyed on the RTExpression<T> *pattern* rather than a constraint: a
+// `requires` over <TFirst, TRest...> would be ambiguous with the compile-time
+// specialisation, since the two concepts do not subsume one another.
 namespace ddx::impl {
 
 namespace rt_detail {
@@ -44,8 +42,8 @@ concept CPointArg =
     (std::ranges::input_range<A> &&
      Numeric<std::remove_cvref_t<std::ranges::range_value_t<A>>>);
 
-// Keeps the batch overloads apart from the per-point ones: CEvalArg admits any
-// input_range, so a span of columns would otherwise try to become a scalar.
+// CEvalArg admits any input_range, so without this a span of columns would try
+// to become a scalar.
 template <typename R, typename Ptr>
 concept CColumns = std::ranges::contiguous_range<R> &&
                    std::convertible_to<std::ranges::range_value_t<R>, Ptr>;
@@ -59,11 +57,9 @@ public:
   using value_type = T;
   static constexpr std::size_t output_dim = 1 + sizeof...(Rest);
 
-  // A constructor cannot answer with an error and there are two ways to hand
-  // one an expression that names no graph -- a bare literal, and a symbol named
-  // while no arena was current -- so construction goes through here.  The
-  // constructors below take the graph as a precondition and are private for
-  // that reason.
+  // A constructor cannot answer with an error, and an expression can name no
+  // graph two ways -- a bare literal, or a symbol named with no arena current.
+  // The constructors below take the graph as a precondition.
   [[nodiscard]] static constexpr result<Equation>
   create(rt::RTExpression<T> first, Rest... rest) {
     if (const auto bad = why_not(first, rest...)) {
@@ -72,8 +68,7 @@ public:
     return Equation{first, rest...};
   }
 
-  // Owning: the Builder is heap-allocated, so the node pointers inside the
-  // expressions stay valid across this move.
+  // Owning: the Builder is heap-allocated, so the nodes survive the move.
   [[nodiscard]] static result<Equation>
   create(std::unique_ptr<rt::Builder<T>> owned, rt::RTExpression<T> first,
          Rest... rest) {
@@ -90,10 +85,8 @@ public:
     return arena_->symbols();
   }
 
-  // Every spelling make_point accepts, resolved against a run-time symbol list.
-  // Unlike the typed Equation, no spelling here is counted at compile time --
-  // the symbol list only exists at run time -- so every one of them, positional
-  // included, answers with result<T>.
+  // Every spelling make_point accepts.  The symbol list exists only at run
+  // time, so every one of them, positional included, answers with result<T>.
   template <rt_detail::CPointArg<T>... Args>
   [[nodiscard]] constexpr result<std::vector<T>>
   point(const Args &...args) const {
@@ -143,8 +136,8 @@ public:
         [this](const auto &at) { return harvest(derivative_.partial, at); });
   }
 
-  // Dense row-major m x n x n, as Equation::hessian returns.  The graph holds
-  // each block compressed by colour; scattering here hides that from callers.
+  // Dense row-major m x n x n, as Equation::hessian returns; the graph holds
+  // it compressed by colour and the scatter hides that from callers.
   [[nodiscard]] result<std::vector<T>>
   hessian(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform([this](const auto &at) {
@@ -165,8 +158,8 @@ public:
     });
   }
 
-  // How many sweeps the Hessian costs: one per colour, not one per symbol.  A
-  // mixing rule couples everything and colours in n, so it is not always a win.
+  // One sweep per colour, not per symbol.  A mixing rule couples everything
+  // and colours in n, so it is not always a win.
   [[nodiscard]] std::size_t hessian_colors() const
     requires(output_dim == 1)
   {
@@ -174,9 +167,8 @@ public:
   }
 
 #if DDX_HAS_DUAL
-  // One Taylor sweep rather than K nested duals: seed c[0] = x0, c[1] = 1, then
-  // un-normalise c[Order] -- TaylorDual stores f^(k)/k!.  The arity is checked
-  // rather than constrained because input_dim is not in the type here.
+  // One Taylor sweep rather than K nested duals: seed c[0] = x0, c[1] = 1,
+  // then un-normalise c[Order], since TaylorDual stores f^(k)/k!.
   template <std::size_t Order>
   [[nodiscard]] result<T> univariate_derivative(T x0) const
     requires(output_dim == 1 && Order > 0)
@@ -196,12 +188,11 @@ public:
   }
 #endif // DDX_HAS_DUAL
 
-
   // --- batch ---------------------------------------------------------------
   //
   // `xs[j]` is the column for symbol j; each output span holds one pointer per
-  // output column, every column n long.  Sizes are checked against the graph:
-  // an unchecked column-count mismatch is silent memory corruption.
+  // output column, every column n long.  A column-count mismatch that went
+  // unchecked would be silent memory corruption.
 
   [[nodiscard]] result<void>
   gradient(const rt_detail::CColumns<const T *> auto &xs,
@@ -263,7 +254,7 @@ private:
 
   // The graph an expression names, or why it names none.  Poison first: a
   // symbol named with no arena current is a different mistake from a literal
-  // that simply never reached a graph, and only one of them has a fix.
+  // that never reached a graph.
   [[nodiscard]] static constexpr std::optional<error>
   why_not(const rt::RTExpression<T> &first, const Rest &...rest) noexcept {
     if (first.poisoned() || (rest.poisoned() || ...)) {
@@ -321,11 +312,10 @@ private:
   struct Compiled {
     rt::Graph<T> graph;
     // Not readable back off the graph: a zero-arity equation compresses to no
-    // Hessian columns at all, and would re-freeze on every call.
+    // Hessian columns and would re-freeze on every call.
     bool has_hessian = false;
 #ifdef DDX_HAS_JIT
-    // Empty until freeze() fills it, and empty for good where T is not the
-    // scalar the JIT emits.
+    // Empty until freeze(), and for good where T is not the JIT's scalar.
     jit::Kernel kernel{};
 #endif
   };
@@ -349,10 +339,8 @@ private:
     Compiled out{.graph = gb.build(), .has_hessian = want_hessian};
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
-      // A host the JIT will not come up on, or a graph it will not take, is not
-      // an error a caller has to handle: run() falls back to interpret(), which
-      // is the reference the JIT is tested against anyway.  The kernel stays
-      // empty and nothing else changes.
+      // Not an error a caller has to handle: run() falls back to interpret(),
+      // which is the reference the JIT is tested against anyway.
       if (auto *const c = compiler()) {
         if (auto k = c->compile(out.graph)) {
           out.kernel = std::move(*k);
@@ -364,24 +352,21 @@ private:
   }
 
 #ifdef DDX_HAS_JIT
-  // A Kernel does not own its code, so the compiler has to outlive every kernel
-  // it produced.  Null if this host has no JIT to bring up -- asked once, since
-  // a second attempt would fail for the same reason.
+  // A Kernel does not own its code, so the compiler outlives every kernel it
+  // produced.  Null on a host with no JIT, asked once.
   static jit::Compiler *compiler() {
     static jit::result<jit::Compiler> instance = jit::Compiler::create();
     return instance ? &*instance : nullptr;
   }
 #endif
 
-  // The fallback when there is no JIT, and the reference the JIT is tested
-  // against.
   void interpret(const Compiled &c, std::span<const T *const> xs,
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
     const auto blocks = c.graph.output_blocks();
     std::vector<T> at(arity());
 
-    for (std::size_t i = 0; i < n; ++i) {
+    for (const std::size_t i : std::views::iota(0uz, n)) {
       for (const auto [j, column] : std::views::enumerate(xs)) {
         at[static_cast<std::size_t>(j)] = column[i];
       }
@@ -433,8 +418,8 @@ private:
     interpret(c, xs, f, g, h, n);
   }
 
-  // Maybe-owning: the deleter is the only difference between an arena the
-  // caller keeps and one this Equation was handed.
+  // The deleter is the only difference between an arena the caller keeps and
+  // one this Equation was handed.
   using ArenaPtr = std::unique_ptr<rt::Builder<T>, void (*)(rt::Builder<T> *)>;
   static constexpr void borrow(rt::Builder<T> *) noexcept {}
   static constexpr void reclaim(rt::Builder<T> *b) noexcept { delete b; }
@@ -442,11 +427,10 @@ private:
   ArenaPtr arena_{nullptr, borrow};
   std::vector<rt::NodeId> roots_;
 
-  // Eager: one reverse sweep costs microseconds, and building it in the
-  // constructor keeps every per-point accessor const and constexpr.
+  // Eager: one reverse sweep costs microseconds, and building it here keeps
+  // every per-point accessor const and constexpr.
   rt::Jacobian derivative_;
-  // Lazy, being three orders of magnitude dearer: ~1.2M nodes and 350 ms for a
-  // 50-species mixture.  Same reason the compiled kernel is lazy.
+  // Lazy, being ~1.2M nodes and 350 ms for a 50-species mixture.
   mutable std::vector<rt::Hessian> hessians_;
   mutable std::optional<Compiled> compiled_;
 };
@@ -457,8 +441,7 @@ namespace ddx::rt {
 
 // Over expressions already built in a caller's own arena.  Partial
 // specialisations contribute no deduction guides and create() is a static
-// member, so this is what deduces the parameters -- the CTAD surface a runtime
-// equation would otherwise have.
+// member, so this is the whole of the CTAD surface.
 template <impl::Numeric T, typename... Ts>
   requires(std::same_as<Ts, RTExpression<T>> && ...)
 [[nodiscard]] constexpr auto equation(RTExpression<T> first, Ts... rest) {
@@ -474,9 +457,8 @@ template <impl::Numeric T, typename... Ts>
 //   });
 //
 // The arena is moved into the Equation, so it can be returned and stored where
-// one built over a caller's Builder cannot.  The callback takes nothing:
-// equation() makes an arena current for its duration.  Return a range of
-// expressions instead of one and you get a system.
+// one over a caller's Builder cannot.  The callback takes nothing: equation()
+// makes an arena current for its duration.  A range of expressions is a system.
 template <impl::Numeric T = double, std::invocable Assemble>
 [[nodiscard]] auto equation(Assemble &&assemble) {
   auto arena = std::make_unique<Builder<T>>();
@@ -489,8 +471,7 @@ template <impl::Numeric T = double, std::invocable Assemble>
   if constexpr (std::same_as<Built, RTExpression<T>>) {
     return impl::Equation<RTExpression<T>>::create(std::move(arena), built);
   } else {
-    // output_dim lives in the type, so the size has to come from the type too
-    // -- which std::array has and a vector does not.
+    // output_dim lives in the type, so the size must too -- array, not vector.
     constexpr std::size_t outputs = std::tuple_size_v<Built>;
     static_assert(outputs > 0,
                   "equation: a system needs at least one function");

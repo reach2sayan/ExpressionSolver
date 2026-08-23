@@ -10,9 +10,9 @@
 // symbols in canonical order -- which is what a point of an expression is.
 
 #include "symbolic/expressions.hpp" // symbol_type, for operator[]
-#include "symbolic/symbol.hpp"      // mp
 #include "symbolic/named_value.hpp"
-#include "util/config.hpp" // DDX_KEYED_ACCESSORS
+#include "symbolic/symbol.hpp" // mp
+#include "util/config.hpp"     // DDX_KEYED_ACCESSORS
 #include "util/fixed_string.hpp"
 
 #include <array>
@@ -28,14 +28,11 @@ template <CNamedValue... Entries> struct Map;
 
 namespace detail {
 
-// The keys are lifted to symbol_type before anything asks about them, which is
-// what lets Mp11 answer: it compares types, and two symbol_type<S> are the same
-// type exactly when their FixedStrings are template-argument-equivalent.  A
-// fold over `==` between class-type NTTPs would be the direct spelling, but gcc
-// 14 miscounts one -- it answers 2 for key_count<"n", "n", "x">() -- and type
-// identity never goes near that.  A length difference is a different
-// FixedString<N> and so a different type, so "x" and "xy" still never collide.
-template <FixedString... Keys> using key_list = mp::mp_list<symbol_type<Keys>...>;
+// Keys are lifted to symbol_type so Mp11 can answer by type identity.  The
+// direct spelling, a fold over `==` between class-type NTTPs, is what gcc 14
+// miscounts: it answers 2 for key_count<"n", "n", "x">().
+template <FixedString... Keys>
+using key_list = mp::mp_list<symbol_type<Keys>...>;
 
 template <FixedString Key, FixedString... Keys>
 inline constexpr std::size_t key_count =
@@ -68,12 +65,10 @@ map_from_entries(const std::tuple<Es...> &es) {
 
 } // namespace detail
 
-// The entries are base classes, not a tuple member: that is what keeps Map an
-// aggregate over them, so Map{named<"n">(3), ...} and Map<E...>{{3}, ...} are
-// one initialisation.
+// Base classes, not a tuple member: that is what keeps Map an aggregate, so
+// Map{named<"n">(3), ...} and Map<E...>{{3}, ...} are one initialisation.
 template <CNamedValue... Entries> struct Map : Entries... {
-  static_assert(detail::keys_unique<Entries::symbol...>,
-                "Map: duplicate key");
+  static_assert(detail::keys_unique<Entries::symbol...>, "Map: duplicate key");
 
   using entry_types = std::tuple<Entries...>;
 
@@ -144,12 +139,10 @@ template <CNamedValue... Entries> struct Map : Entries... {
   }
 
   // f(key, value) in entry order; the key is a symbol_type, so key.name is the
-  // label and it can be fed straight back to operator[].
-  // Unconstrained on purpose.  The natural argument is a generic lambda with a
-  // deduced return type, and std::invocable has to deduce that return type --
-  // which instantiates the body.  Constraining the const overload would then
-  // hard-error on any `f` that writes through its second parameter, before
-  // overload resolution ever got to prefer the non-const one.
+  // label and it feeds straight back into operator[].  Unconstrained on
+  // purpose: std::invocable would instantiate a generic lambda's body, and
+  // constraining the const overload then hard-errors on an `f` that writes
+  // through its second parameter, before the non-const one is preferred.
   template <typename F> constexpr void for_each(F &&f) const {
     (f(sym<Entries::symbol>, static_cast<const Entries &>(*this).value), ...);
   }
@@ -171,8 +164,7 @@ template <CNamedValue... Entries>
 [[nodiscard]] constexpr auto map(Entries... es) {
   // Reached before a duplicate key becomes a duplicate base class, which is
   // the less legible complaint.
-  static_assert(detail::keys_unique<Entries::symbol...>,
-                "map: duplicate key");
+  static_assert(detail::keys_unique<Entries::symbol...>, "map: duplicate key");
   return Map<Entries...>{std::move(es)...};
 }
 

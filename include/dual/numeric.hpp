@@ -70,12 +70,13 @@ constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
                               double *const grad_out, double *const hess_out) {
   const std::size_t m = std::ranges::size(active);
   double value{};
-  for (std::size_t j = 0; j < m; ++j) {
-    const std::size_t aj = active[j];
+  for (const auto [index, aj] : std::views::enumerate(active)) {
+    const auto j = static_cast<std::size_t>(index);
     // Inner seed e_j is constant across the i-loop.
     const auto inner_seed = scoped_seed<1.0>(dof[aj].value().deriv());
-    for (std::size_t i = 0; i <= j; ++i) {
-      const std::size_t ai = active[i];
+    for (const auto [inner, ai] :
+         std::views::enumerate(active | std::views::take(index + 1))) {
+      const auto i = static_cast<std::size_t>(inner);
 
       // When ai == aj this lands in aj's other slot.
       const auto outer_seed = scoped_seed<1.0>(dof[ai].deriv().value());

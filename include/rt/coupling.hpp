@@ -13,34 +13,27 @@
 #include <ranges>
 #include <vector>
 
-// The runtime analogue of drivers/coupling.hpp, which answers the same question
-// `consteval` from the expression type.  `n` is a run-time value here, so its
-// std::bitset<N> rows become packed words.
+// The runtime analogue of drivers/coupling.hpp, which answers the same
+// question `consteval`.  `n` is run-time here, so its bitset rows become words.
 namespace ddx::rt {
 
 inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
 
 // boost::dynamic_bitset, not vector<bool>: the colouring's pairwise overlap
-// test is the hot loop, and `intersects` is a word-at-a-time AND where a
-// vector<bool> scan would be O(n) per pair.  find_first/find_next likewise walk
-// only the set bits -- a term in an energy touches two species, not five
-// hundred.
+// test is the hot loop, and `intersects` is a word-at-a-time AND.
 using SymbolSet = boost::dynamic_bitset<>;
 using CouplingRows = std::vector<SymbolSet>;
 
-// Compressed-by-colour storage is always colours-major and n wide -- the
-// scatter table, and every Hessian block harvested against it.  Saying the
-// shape once here is what keeps `c * n + i` from being written out at each of
-// the places that read or fill one.  Constness follows the range's.
+// Compressed-by-colour storage is always colours-major and n wide.  Saying the
+// shape once keeps `c * n + i` out of every place that reads or fills one.
 [[nodiscard]] constexpr auto by_color(auto &&flat, std::size_t colors,
                                       std::size_t n) {
   return impl::md::mdspan{std::ranges::data(flat),
                           impl::md::dextents<std::size_t, 2>{colors, n}};
 }
 
-// A colouring of the Hessian's columns: two columns share a colour only when no
-// row couples them, so one sweep can seed all of a colour's columns at once and
-// the results still separate.
+// Two columns share a colour only when no row couples them, so one sweep can
+// seed all of a colour's columns and the results still separate.
 struct Coloring {
   std::vector<std::size_t> color; // per symbol
   std::size_t count = 0;
@@ -52,7 +45,6 @@ struct Coloring {
 
 namespace detail {
 
-// Iterating the set bits only, which is what find_first/find_next are for.
 inline void for_each_set(const SymbolSet &s,
                          std::invocable<std::size_t> auto &&f) {
   for (auto i = s.find_first(); i != SymbolSet::npos; i = s.find_next(i)) {
@@ -131,20 +123,13 @@ template <impl::Numeric T>
   return rows;
 }
 
-// Columns j and k conflict iff their coupling rows overlap -- the CPR colouring
-// color_columns runs at compile time (symbolic/coupling.hpp), which carries the
-// citations.
+// Columns j and k conflict iff their coupling rows overlap -- the CPR
+// colouring color_columns runs at compile time (symbolic/coupling.hpp), which
+// carries the citations.  An invalid colouring corrupts the Hessian rather than
+// degrading it: two columns sharing a colour sum into one cell.
 //
-// An invalid colouring does not degrade the Hessian, it corrupts it: two
-// columns sharing a colour have their second derivatives summed into one cell
-// with no way to separate them.  Hence the test that a complete graph colours
-// in n.
-//
-// Compiled into libddx rather than inlined here: it is the one part of the
-// runtime graph that carries no `T` at all, so a header definition would have
-// every scalar the library is instantiated at emit its own copy of the same
-// Boost.Graph colouring.  src/rt/coupling.cpp is also where the conflict graph,
-// the smallest-last ordering and their include-order quirk now live.
+// In src/rt/coupling.cpp because it carries no `T`, so a header definition
+// would emit one copy of the Boost.Graph machinery per scalar.
 [[nodiscard]] DDX_API Coloring color_columns(const CouplingRows &rows);
 
 } // namespace ddx::rt

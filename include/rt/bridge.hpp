@@ -1,18 +1,17 @@
 #pragma once
 
-#include "symbolic/expressions.hpp"
 #include "ops/operations.hpp"
-#include "symbolic/traits.hpp"
 #include "rt/expr.hpp"
+#include "symbolic/expressions.hpp"
+#include "symbolic/traits.hpp"
 
 #include <array>
 #include <tuple>
 #include <utility>
 
-// Lowering a compile-time ddx tree into the runtime graph.  The structure lives
-// in the type, so the walk is a compile-time recursion that emits nodes; what
-// it buys is a differential test, since the same expression can then be
-// evaluated by Equation and by the graph and the two must agree.
+// Lowering a compile-time ddx tree into the runtime graph: the structure lives
+// in the type, so the walk is a compile-time recursion that emits nodes.  What
+// it buys is a differential test of the two paths against each other.
 namespace ddx::rt {
 
 namespace detail {

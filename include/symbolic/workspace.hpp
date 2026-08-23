@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ops/scalar.hpp"
 #include "md/md.hpp"
+#include "ops/scalar.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -66,8 +66,8 @@ namespace detail {
 // expression the reader has to check.
 constexpr void symmetrize(std::span<double> h, const std::size_t n) noexcept {
   const md::mdspan m{h.data(), md::dextents<std::size_t, 2>{n, n}};
-  for (std::size_t i = 0; i < n; ++i) {
-    for (std::size_t j = i + 1; j < n; ++j) {
+  for (const std::size_t i : std::views::iota(0uz, n)) {
+    for (const std::size_t j : std::views::iota(i + 1, n)) {
       const double s = 0.5 * (m[i, j] + m[j, i]);
       m[i, j] = s;
       m[j, i] = s;

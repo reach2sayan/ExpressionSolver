@@ -359,8 +359,7 @@ TEST(FrozenVariable, EveryEngineSeesZeroDerivative) {
 // derivative_tensor<1> has to support every unary math function at any arity:
 // each one below must *instantiate* at 3 variables and agree with reverse mode.
 TEST(ForwardGradient, CoversEveryUnaryMathFunction) {
-  const std::array<double, 3> pt{0.6, 0.4, 1.3};
-  auto y = var<"y">;
-  auto z = var<"z">;
-
+  [[maybe_unused]] const std::array<double, 3> pt{0.6, 0.4, 1.3};
+  [[maybe_unused]] auto y = var<"y">;
+  [[maybe_unused]] auto z = var<"z">;
 }

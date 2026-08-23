@@ -15,9 +15,8 @@ namespace ddx::rt {
 
 namespace detail {
 
-// A template, so `if constexpr` actually discards: several descriptors define
-// deriv_from_value, which reuses the primal node instead of recomputing it --
-// d(exp)/du becomes the exp node itself rather than a second one.
+// A template, so `if constexpr` actually discards: deriv_from_value reuses the
+// primal node, and d(exp)/du becomes the exp node itself.
 template <typename Fn, impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> rule(const RTExpression<T> &u,
                                              const RTExpression<T> &fu) {
@@ -28,12 +27,9 @@ template <typename Fn, impl::Numeric T>
   }
 }
 
-// d/du of a one-argument op.  The eighteen transcendentals come from the
-// descriptors in expr/unary_math.hpp instantiated at RTExpression: the rule
-// bodies are written against Numeric, so at T = RTExpression they build nodes
-// instead of computing.  `neg` and `abs` come from rt/opcode.hpp's table, which
-// carries their partials for the same reason -- there is no second copy of the
-// chain rule anywhere.
+// d/du of a one-argument op.  The rule bodies are written against Numeric, so
+// at T = RTExpression the same descriptors build nodes instead of computing --
+// there is no second copy of the chain rule anywhere.
 template <impl::Numeric S>
 [[nodiscard]] constexpr RTExpression<S>
 partial(OpCode op, const RTExpression<S> &u, const RTExpression<S> &f) {
@@ -78,13 +74,10 @@ struct Gradient {
   std::vector<NodeId> partial; // one per symbol, in Builder::symbols() order
 };
 
-// One reverse sweep over the whole graph, pushing adjoints from each node to
-// its children -- the structural analogue of reverse_sweep in
-// drivers/symbolic.hpp, accumulating *nodes* rather than values.  The result
-// shares every subexpression it can, because the builder interns.
-//
-// The sweep appends to the same builder it reads: new nodes land above the
-// snapshot, so reverse id order stays a topological order of what came before.
+// One reverse sweep pushing adjoints from each node to its children -- the
+// structural analogue of reverse_sweep in drivers/symbolic.hpp, accumulating
+// *nodes*.  It appends to the builder it reads: new nodes land above the
+// snapshot, so reverse id order stays topological over what came before.
 template <impl::Numeric T>
 [[nodiscard]] constexpr Gradient reverse_gradient(Builder<T> &b, NodeId root) {
   const auto n = static_cast<NodeId>(b.size());
@@ -98,9 +91,8 @@ template <impl::Numeric T>
                      : (RTExpression{b, adj[child]} + RTExpression{b, c}).id(b);
   };
 
-  // Explicitly indexed, not a filtered view: the body writes adjoints into
-  // entries this traversal has not reached yet, and a lazy filter would be
-  // reading state the loop is still changing.
+  // Not a filtered view: the body writes adjoints into entries this traversal
+  // has not reached, which a lazy filter would read mid-write.
   for (NodeId v = n; v-- > 0;) {
     if (adj[v] == no_node) {
       continue;
@@ -123,8 +115,6 @@ template <impl::Numeric T>
     }
   }
 
-  // One pass to collect the leaves, rather than re-scanning the graph per
-  // symbol.
   Gradient g{.value = root,
              .partial = std::vector<NodeId>(b.symbols().size(), no_node)};
   for (const auto [v, node] : std::views::enumerate(b.nodes().first(n)) |
@@ -140,11 +130,8 @@ template <impl::Numeric T>
 }
 
 // Forward accumulation: one pass per symbol, carrying d[v]/dx_s up the graph.
-// Here to check Reverse against, not to compute with -- on the graph Reverse
-// produces fewer nodes on everything except a single-variable expression, where
-// it loses by exactly one.  (README's "Symbolic wins at n=3" is a different
-// cost model: there Symbolic evaluates pre-folded partial trees against a sweep
-// that pays for a node_cache_t, and on a graph both are simply nodes.)
+// Here to check Reverse against, not to compute with -- Reverse produces fewer
+// nodes on everything but a single-variable expression, where it loses by one.
 template <impl::Numeric T>
 [[nodiscard]] constexpr Gradient symbolic_gradient(Builder<T> &b, NodeId root) {
   const auto nsym = b.symbols().size();
@@ -183,9 +170,8 @@ template <impl::Numeric T>
   return g;
 }
 
-// A system: m functions over the same symbols, so m sweeps sharing one graph.
-// The partials are row-major by function, matching Equation::jacobian's
-// md_tensor<value_type, extents<m, n>>.
+// m functions over the same symbols: m sweeps sharing one graph, row-major by
+// function to match Equation::jacobian.
 struct Jacobian {
   std::vector<NodeId> value;   // m
   std::vector<NodeId> partial; // m * n, row-major
@@ -205,9 +191,8 @@ template <impl::Numeric T>
              .rows = roots.size(),
              .columns = b.symbols().size()};
   j.partial.reserve(j.rows * j.columns);
-  // Each sweep snapshots a builder that already holds the previous rows' nodes.
-  // Those are unreachable from this root, so their adjoints stay unset and the
-  // sweep skips them; what they do provide is subexpressions to share.
+  // The previous rows' nodes are unreachable from this root, so the sweep
+  // skips them; what they provide is subexpressions to share.
   for (const NodeId r : roots) {
     const auto g = reverse_gradient(b, r);
     j.partial.insert(j.partial.end(), g.partial.begin(), g.partial.end());
@@ -231,11 +216,10 @@ template <impl::Numeric T>
   return reverse_gradient(b, root);
 }
 
-// The Hessian, one sweep per colour rather than one per variable.  Colouring
-// survives a sweep that builds expressions rather than scattering numbers:
-// sweeping from the sum of a colour's partials gives, for row i, the sum over j
-// in the colour of d2f/dxi dxj, of which the colouring guarantees at most one
-// term is not structurally zero.  The rest fold away as the nodes are formed.
+// One sweep per colour rather than per variable.  Sweeping from the sum of a
+// colour's partials gives, for row i, the sum over j in the colour of
+// d2f/dxi dxj, of which the colouring guarantees at most one is not
+// structurally zero; the rest fold away as the nodes are formed.
 struct Hessian {
   NodeId value = no_node;
   std::vector<NodeId> partial;    // n

@@ -11,16 +11,13 @@
 
 namespace ddx::impl {
 
-// TaylorDual<S, N>: flat N+1 normalized coefficients c[k] = f^(k)(x)/k! for
-// univariate higher-order AD.  Multiply is truncated convolution, O(N^2)
-// against the O(2^N) of nested Dual.  Reach it via univariate_derivative<N>().
+// Flat N+1 normalized coefficients c[k] = f^(k)(x)/k!.  Multiply is truncated
+// convolution, O(N^2) against the O(2^N) of nested Dual.
 //
-// Ref: Berz, Particle Accelerators 24 (1989) 109 for the truncated-polynomial
-// (differential algebra) view, and Griewank & Walther, "Evaluating
-// Derivatives" (2nd ed., SIAM, 2008) Ch. 13.  Every transcendental below is
-// derived the way Jorba & Zou, Exp. Math. 14(1) (2005) 99 §2 derive theirs:
-// write the ODE the function satisfies, differentiate, match coefficients --
-// never Faa di Bruno, whose term count is the set partitions of k.
+// Every transcendental below is derived the way Jorba & Zou, Exp. Math. 14(1)
+// (2005) 99 §2 derive theirs: write the ODE the function satisfies,
+// differentiate, match coefficients -- never Faa di Bruno, whose term count is
+// the set partitions of k.  Ref: Berz, Particle Accelerators 24 (1989) 109.
 
 // The coefficient product is a convolution, sum_i a_i b_(k-i), so it commutes
 // exactly when the scalar underneath does.
@@ -32,8 +29,7 @@ inline constexpr bool is_commutative_multiply_v<TaylorDual<S, N>> =
 template <Numeric S, std::size_t N> struct TaylorDual {
   std::array<S, N + 1> c{};
 
-  // 1/k for the recurrences below: folded once rather than issued as a
-  // ~13-cycle vdivsd on the dependency chain.
+  // 1/k, folded once rather than a ~13-cycle vdivsd on the dependency chain.
   static constexpr std::array<S, N + 1> inv_k = []() consteval {
     std::array<S, N + 1> r{};
     for (auto &&[k, rk] : r | std::views::enumerate | std::views::drop(1)) {
@@ -62,8 +58,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   }
 
   // Truncated polynomial multiplication: (uv)[k] = Σ_{j=0}^{k} u[j]*v[k-j]
-  // Ref: Knuth, TAOCP Vol. 2 (3rd ed.) §4.7.  O(N²); the sub-quadratic forms
-  // (Brent & Kung, JACM 25(4) (1978) 581) only pay off far above this N.
+  // Ref: Knuth, TAOCP Vol. 2 (3rd ed.) §4.7.  The sub-quadratic forms only
+  // pay off far above this N.
   constexpr TaylorDual operator*(const TaylorDual &o) const noexcept {
     TaylorDual r;
     for (std::size_t k = 0; k <= N; ++k) {
@@ -120,10 +116,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return a.c[0] == b.c[0];
   }
 
-  // Coefficient k-1 of a·b': Σ_{j=j0}^{k-1} a[j]·(k-j)·b[k-j].  The
-  // recurrences below all read a product-with-a-derivative in this shape;
-  // j0 = 1 drops the a[0] term a recurrence has already moved to the left.
-  // (coupled_pair stays a fused loop: its two sums share the j·u[j] factor.)
+  // Coefficient k-1 of a·b': Σ_{j=j0}^{k-1} a[j]·(k-j)·b[k-j].  j0 = 1 drops
+  // the a[0] term a recurrence has already moved to the left.
   [[nodiscard]] static constexpr S dconv(const std::array<S, N + 1> &a,
                                          const std::array<S, N + 1> &b,
                                          std::size_t k,
@@ -139,9 +133,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
   // coefficients gives, for k >= 1:
   //   g[0]·k·w[k] = k·u[k] − Σ_{j=1}^{k-1} (k-j)·g[j]·w[k-j]
   //
-  // Composite-safe: stated in terms of the whole series g, so it holds when u
-  // is a composite rather than a bare seed.  Every inverse function below is
-  // this recurrence with a different g.
+  // Stated in terms of the whole series g, so it holds for a composite u.
+  // Every inverse function below is this recurrence with a different g.
   [[nodiscard]] static constexpr TaylorDual
   implicit_recurrence(const TaylorDual &u, S w0, const TaylorDual &g) noexcept {
     TaylorDual w;
@@ -291,8 +284,7 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     TaylorDual one;
     one.c[0] = S{1};
     // (1-u)(1+u), not 1-u*u: near |u| = 1 the subtraction cancels against a
-    // rounded square and costs half the significand.  Ref: Higham, "Accuracy
-    // and Stability of Numerical Algorithms" (2nd ed., SIAM, 2002) §1.7.
+    // rounded square.  Ref: Higham, "Accuracy and Stability" §1.7.
     return implicit_recurrence(u, asin(u.c[0]), sqrt((one - u) * (one + u)));
   }
 
@@ -330,11 +322,10 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // pow(u, v) = exp(v·log u), requires u[0] > 0.  A constant exponent instead
-  // goes through powser, which needs no logarithm and allows u[0] < 0.  At
-  // u[0] == 0 powser's recurrence is 0/0 for every exponent, but a whole
-  // non-negative one -- the only case with finite coefficients -- is the
-  // truncated product instead: d(x²)/dx at 0 is 0, not NaN.
+  // pow(u, v) = exp(v·log u), requires u[0] > 0.  A constant exponent goes
+  // through powser, which needs no logarithm and allows u[0] < 0.  At u[0] == 0
+  // powser is 0/0 for every exponent, so a whole non-negative one -- the only
+  // case with finite coefficients -- is the truncated product: d(x²)/dx is 0.
   [[nodiscard]] friend constexpr TaylorDual pow(const TaylorDual &u,
                                                 const TaylorDual &v) noexcept {
     using std::pow, std::trunc;
@@ -417,9 +408,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return w;
   }
 
-  // atan2(y, x): (x² + y²)·w' = x·y' − y·x' holds everywhere atan2 is
-  // differentiable, so the recurrence never divides by x and the y-axis stays
-  // finite -- atan(y/x) does not.
+  // atan2(y, x): (x² + y²)·w' = x·y' − y·x', so the recurrence never divides
+  // by x and the y-axis stays finite where atan(y/x) does not.
   [[nodiscard]] friend constexpr TaylorDual
   atan2(const TaylorDual &y, const TaylorDual &x) noexcept {
     using std::atan2;
@@ -431,10 +421,8 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return implicit_recurrence(n, atan2(y.c[0], x.c[0]), x * x + y * y);
   }
 
-  // hypot(x, y) = sqrt(x² + y²), but never formed that way: the value comes
-  // from std::hypot and the coefficients from h·h' = x·x' + y·y', so no
-  // coefficient of x or y is ever squared and the result overflows only where
-  // hypot itself does.
+  // Never formed as sqrt(x² + y²): the value comes from std::hypot and the
+  // coefficients from h·h' = x·x' + y·y', so nothing is ever squared.
   [[nodiscard]] friend constexpr TaylorDual
   hypot(const TaylorDual &x, const TaylorDual &y) noexcept {
     using std::hypot;
@@ -477,9 +465,8 @@ inline constexpr bool is_dual_family_v<TaylorDual<S, N>> = true;
 
 } // namespace ddx::impl
 
-// The shared series renderer over the coefficient array.  These are the
-// normalized coefficients f^(k)/k!; univariate_derivative puts the factorial
-// back, not this.
+// The shared series renderer, over the normalized coefficients f^(k)/k!;
+// univariate_derivative is what puts the factorial back.
 template <ddx::impl::Numeric S, std::size_t N>
 struct std::formatter<ddx::impl::TaylorDual<S, N>, char>
     : ddx::impl::detail::dual_formatter_base<S> {

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "symbolic/expressions.hpp"
+#include "md/md.hpp"
 #include "ops/operations.hpp"
+#include "symbolic/expressions.hpp"
 #include "symbolic/symbol.hpp"
 #include "symbolic/traits.hpp"
-#include "md/md.hpp"
 
 #include <algorithm>
 #include <array>
@@ -126,11 +126,9 @@ template <std::size_t N> struct column_coloring {
 };
 
 // Two columns may share a seed only if no row has a nonzero in both -- the
-// distance-1 colouring of the column intersection graph that CPR uses.  Greedy.
-// Ref: Curtis, Powell & Reid, J. Inst. Math. Appl. 13(1) (1974) 117 (CPR);
-// Coleman & More, SIAM J. Numer. Anal. 20(1) (1983) 187 for the colouring
-// formulation; Gebremedhin, Manne & Pothen, "What Color Is Your Jacobian?",
-// SIAM Review 47(4) (2005) 629 for the survey.
+// greedy distance-1 colouring of the column intersection graph that CPR uses.
+// Ref: Curtis, Powell & Reid, J. Inst. Math. Appl. 13(1) (1974) 117; Coleman &
+// More, SIAM J. Numer. Anal. 20(1) (1983) 187.
 template <std::size_t N>
 consteval column_coloring<N>
 color_columns(const coupling_rows<N> &rows) noexcept {
@@ -167,8 +165,7 @@ template <std::size_t N> consteval scatter_map<N> unmapped() noexcept {
   return map;
 }
 
-// The colouring guarantees at most one column per (colour, row), so the driver
-// scatters in one pass over rows and the sweep loop carries no search.
+// At most one column per (colour, row), so the driver scatters in one pass.
 template <std::size_t N>
 consteval scatter_map<N>
 scatter_targets(const coupling_rows<N> &rows,
@@ -237,11 +234,16 @@ struct compressed_entry {
 template <std::size_t N, std::size_t NNZ>
 consteval auto compressed_entries(const sparse_layout_t<N, NNZ> &layout) {
   std::vector<compressed_entry> out;
-  for (std::size_t j = 0; j < N; ++j) {
-    for (auto k = static_cast<std::size_t>(layout.outer[j]);
-         k < static_cast<std::size_t>(layout.outer[j + 1]); ++k) {
-      out.push_back({j, static_cast<std::size_t>(layout.inner[k]), k});
-    }
+  const auto stored = [&layout](const std::size_t j) {
+    return std::views::iota(static_cast<std::size_t>(layout.outer[j]),
+                            static_cast<std::size_t>(layout.outer[j + 1])) |
+           std::views::transform(
+               [j](const std::size_t k) { return std::pair{j, k}; });
+  };
+  for (const auto [j, k] : std::views::iota(0uz, N) |
+                               std::views::transform(stored) |
+                               std::views::join) {
+    out.push_back({j, static_cast<std::size_t>(layout.inner[k]), k});
   }
   return out;
 }
@@ -264,10 +266,9 @@ consteval scatter_map<N> sparse_slots() noexcept {
 
 // layout_sparse_pattern<Expr>: the compressed Hessian, indexed as if dense.
 //
-// An mdspan mapping must be total, and a structural zero has no slot -- so the
-// span is nnz + 1 cells and every structural zero maps to the last one, which
-// the owner keeps at zero.  Reads give 0.0; writes are discarded.  That costs
-// uniqueness, hence is_always_unique() == false.
+// An mdspan mapping must be total and a structural zero has no slot, so the
+// span is nnz + 1 cells and every structural zero maps onto the last -- read
+// as 0.0, written and discarded.  Hence is_always_unique() == false.
 template <CExpression Expr, std::size_t N = detail::expr_arity_v<Expr>,
           std::size_t NNZ = hessian_nnz<Expr>()>
 consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {

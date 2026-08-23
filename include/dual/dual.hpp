@@ -1,9 +1,9 @@
 #pragma once
 
-#include "symbolic/expressions.hpp" // Variable, for dual_var_of
 #include "ops/scalar.hpp"
 #include "ops/unary_math.hpp"
-#include "util/config.hpp" // DDX_ALWAYS_INLINE
+#include "symbolic/expressions.hpp" // Variable, for dual_var_of
+#include "util/config.hpp"          // DDX_ALWAYS_INLINE
 #include "util/fmt.hpp"
 #include <array>
 #include <cmath>
@@ -20,8 +20,7 @@ template <Numeric T>
 inline constexpr bool is_commutative_multiply_v<Dual<T>> =
     is_commutative_multiply_v<T>;
 
-// Ref: Clifford, Proc. LMS s1-4 (1873) 381 -- adjoin ε with ε² = 0, so the ε
-// part of a product is the product rule and no truncation is ever taken.
+// Ref: Clifford, Proc. LMS s1-4 (1873) 381 -- adjoin ε with ε² = 0.
 template <Numeric T> class Dual {
 private:
   T val_{};
@@ -88,9 +87,8 @@ template <Numeric T> constexpr bool all_zero(const Dual<T> &d) noexcept {
   return all_zero(d.template get<0>()) && all_zero(d.template get<1>());
 }
 
-// dual_var_of<"x">(v) — dual-valued, which is what hessian() needs.  It lives
-// here rather than beside var_of() in expr/values.hpp because it is the one
-// symbol factory that needs Dual complete rather than merely declared.
+// dual_var_of<"x">(v) — dual-valued, which is what hessian() needs.  Here
+// rather than beside var_of() because it needs Dual complete, not declared.
 template <FixedString S, Numeric T>
 [[nodiscard]] constexpr auto dual_var_of(const T &) noexcept {
   return Variable<Dual<T>, S>{};
@@ -184,10 +182,9 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s,
 }
 
 // All three shapes of each operator: (Dual, Dual), (Dual, scalar) and
-// (scalar, Dual).  LEFT spells the last, the only shape that differs between
-// operators.  The scalar shapes are separate kernels, never a promotion to a
-// zero-derivative Dual: promotion leaves an `ad + 0` IEEE will not let the
-// compiler fold.
+// (scalar, Dual); LEFT spells the last, the only one that differs between
+// operators.  The scalar shapes are separate kernels rather than a promotion,
+// which would leave an `ad + 0` IEEE will not let the compiler fold.
 #define DDX_DUAL_BINOP(OP, COMB, LEFT)                                         \
   template <DualLike A, DualCompatible<A> B>                                   \
   constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
@@ -221,9 +218,8 @@ template <template <Numeric> class Fn> struct unary_dual_combine {
   operator()(const DualLike auto &x) const noexcept {
     const auto &[v, d] = x;
     // Comp types the primal and the result, and must stay a Dual at depth >= 2
-    // or fv truncates.  S is the base scalar, and the only thing the descriptor
-    // may be instantiated at -- at Comp its constants would become
-    // zero-derivative duals and leave a `0.0 - x` behind.
+    // or fv truncates.  The descriptor is instantiated at the base scalar S:
+    // at Comp its constants would become duals and leave a `0.0 - x` behind.
     using Comp = std::remove_cvref_t<decltype(v)>;
     using DT = std::remove_cvref_t<decltype(x)>;
     using S = scalar_base_t<Comp>;
@@ -235,9 +231,8 @@ template <template <Numeric> class Fn> struct unary_dual_combine {
     }
   }
 };
-// Not a unary_dual_combine: the derivative is a sign, and at 0 it is taken as
-// 0.  v - v reaches only ±0 and NaN: 0 for the first, NaN for the second, so
-// a NaN value carries a NaN derivative.
+// Not a unary_dual_combine: the derivative is a sign, 0 at 0.  v - v reaches
+// only ±0 and NaN, so a NaN value carries a NaN derivative.
 struct abs_combine {
   constexpr auto operator()(const DualLike auto &x) const noexcept {
     using std::abs;
@@ -298,11 +293,9 @@ constexpr auto pow(A &&a, B &&b) noexcept {
 }
 
 // pow(a, s), s a constant exponent.  d(a^s) = s a^(s-1) a', spent as a second
-// pow rather than folded into a^s (s a'/a): the quotient form is 0/0 at
-// av == 0 where this one is exact -- d(x^2)/dx at 0 is 0.  The b' ln a term is
-// identically absent, so there is no `log` at any depth, and at av < 0 with an
-// integral exponent the derivative stays finite where `0 * log(-2)` would be
-// NaN.
+// pow rather than folded into a^s (s a'/a): the quotient form is 0/0 at av == 0
+// where this one is exact.  With no b' ln a term there is no `log` at any
+// depth, so a negative av with an integral exponent stays finite too.
 template <DualLike A, CArithmetic U> constexpr auto pow(A &&a, U s) noexcept {
   using std::pow;
   if constexpr (std::unsigned_integral<std::remove_cvref_t<U>>) {
@@ -331,11 +324,9 @@ template <DualLike A, CArithmetic U> constexpr auto pow(U s, A &&a) noexcept {
 template <DualLike A, DualCompatible<A> B>
 constexpr auto max(A &&a, B &&b) noexcept {
   using DT = std::remove_cvref_t<A>;
-  // A tie averages the operands -- value unchanged, derivative the mean of
-  // the two subgradients -- and an unordered pair is (a-b)*0, NaN in every
-  // component from either side.  Both choices are symmetric, the shared
-  // convention: the only one stable under the commutative reordering the
-  // graph builder applies.
+  // A tie averages the operands and an unordered pair is (a-b)*0, NaN from
+  // either side.  Both are symmetric, which is what makes them stable under
+  // the commutative reordering the graph builder applies.
   if (val(a) == val(b)) {
     return DT{a + (b - a) / 2};
   }
@@ -418,10 +409,9 @@ template <DualLike A, CArithmetic U> constexpr auto min(U s, A &&a) noexcept {
   return DT{(a - s) * DT{}};
 }
 
-// atan2(y, x): the first operand is the numerator y, the second is x.
+// atan2(y, x), numerator first:
 //   d atan2 = ((x/h)*dy - (y/h)*dx) / h  with h = hypot(x, y).
-// Scaled by hypot rather than divided by x² + y², which overflows past 1e154
-// and underflows the derivative to zero.
+// Scaled by hypot rather than divided by x² + y², which overflows past 1e154.
 template <DualLike A, DualCompatible<A> B>
 constexpr auto atan2(A &&y, B &&x) noexcept {
   using std::atan2, std::hypot;

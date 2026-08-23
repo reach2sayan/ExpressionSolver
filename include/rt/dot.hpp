@@ -18,21 +18,15 @@
 //   std::cout << ddx::rt::Dot{g};          // or `... | dot -Tsvg`
 //
 // Its own header, not part of graph.hpp: boost/graph/graphviz.hpp carries the
-// reader as well as the writer, and nothing that only evaluates a graph should
-// pay for it.  Here that separation is a link rather than an include -- the
-// writer lives in src/rt/dot.cpp, so graphviz reaches no translation unit but
-// that one.
+// reader as well as the writer, and the writer lives in src/rt/dot.cpp, so
+// graphviz reaches that translation unit and no other.
 namespace ddx::rt {
 
-// What to draw.  Live is what codegen emits; All is for the times the question
-// is what the freeze pruned, and draws the dead nodes dashed rather than
-// dropping them.
+// Live is what codegen emits; All draws what the freeze pruned, dashed.
 enum class Scope : std::uint8_t { Live, All };
 
-// What the writer needs to know about a node that the CSR does not say.  Every
-// field is decided by the graph's scalar type -- how a constant prints, whether
-// an operand order is worth showing -- which is why they are resolved here and
-// the writer itself carries no `T`.
+// What the CSR does not say.  Every field is decided by the graph's scalar, so
+// resolving them here is what leaves the writer carrying no `T`.
 struct DotNode {
   std::string label;
   std::string shape;
@@ -40,17 +34,14 @@ struct DotNode {
   bool show_slots = false;
 };
 
-[[nodiscard]] DDX_API std::string to_dot(const Adjacency &adj,
-                                         std::span<const DotNode> nodes,
-                                         Scope scope);
+[[nodiscard]] DDX_API std::string
+to_dot(const Adjacency &adj, std::span<const DotNode> nodes, Scope scope);
 
-// Borrows both ends and renders on demand, the same shape as jit::Ir -- the
-// graph has to outlive the handle, which the deleted overload makes the
-// compiler check.
+// Borrows and renders on demand, the same shape as jit::Ir; the deleted
+// overload makes the compiler check that the graph outlives the handle.
 //
 // Edges point from a node to its operands, the direction codegen walks, and
-// carry the operand slot wherever the two are not interchangeable: a CSR row is
-// a set, and `a / b` is not `b / a`.
+// carry the operand slot where the two are not interchangeable.
 template <impl::Numeric T = double> class Dot {
 public:
   explicit Dot(const Graph<T> &g, Scope scope = Scope::Live) noexcept
@@ -74,20 +65,19 @@ private:
         std::views::transform([&](NodeId v) {
           const auto op = graph_[v].op;
           return DotNode{.label = text(v),
-                         .shape = is_output[v]      ? "doubleoctagon"
-                                  : is_leaf(op)     ? "box"
-                                                    : "ellipse",
+                         .shape = is_output[v]  ? "doubleoctagon"
+                                  : is_leaf(op) ? "box"
+                                                : "ellipse",
                          .live = graph_.live(v),
-                         // The slot, but only where reading it back matters: on
-                         // a commutative node the number would say nothing, and
-                         // on a unary one there is nothing to tell apart.
+                         // Only where reading it back matters: nothing to tell
+                         // apart on a commutative or unary node.
                          .show_slots =
                              arity_of(op) == 2 && !is_commutative<T>(op)};
         }));
   }
 
-  // `id: what it is` -- the id because codegen, the interpreter and every error
-  // message name nodes by it.
+  // `id: what it is` -- codegen, the interpreter and errors all name nodes by
+  // the id.
   [[nodiscard]] std::string text(NodeId v) const {
     const auto &p = graph_[v];
     const auto id = std::to_string(v) + ": ";

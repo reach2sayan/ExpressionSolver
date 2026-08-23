@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ops/numeric.hpp"
-#include "util/fixed_string.hpp"
 #include "ops/unary_math.hpp"
+#include "util/fixed_string.hpp"
 #include <array>
 #include <cmath>
 #include <concepts>
@@ -123,11 +123,10 @@ struct NegateOp
 template <Numeric T>
 struct DivideOp
     : BinaryOp<T, std::divides<void>, FixedString{"/"}, Notation::Infix, 20> {
-  // `a / b` means a * b^-1 -- RIGHT division.  CFieldLike cannot distinguish
-  // the two, so the side is a stated convention.  Under it
-  // dc = da*b^-1 - a*b^-1*db*b^-1, which does not fold into one division by
-  // b*b; the familiar quotient rule is that with the factors commuted, so both
-  // spellings are kept and selected by if constexpr.
+  // `a / b` means a * b^-1 -- RIGHT division, a stated convention CFieldLike
+  // cannot express.  Under it dc = da*b^-1 - a*b^-1*db*b^-1, which does not
+  // fold into one division by b*b; the familiar quotient rule is that with the
+  // factors commuted, so both spellings are kept and chosen by if constexpr.
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -178,8 +177,8 @@ struct abs_impl {
   }
 };
 // sign(0) is 0: the abs/max/min subgradient convention every engine shares.
-// a - a reaches only ±0 and NaN, giving 0 for the first and NaN for the
-// second, so a NaN operand poisons the derivative instead of picking a side.
+// a - a reaches only ±0 and NaN, so a NaN operand poisons the derivative
+// rather than picking a side.
 struct sign_impl {
   constexpr auto operator()(const Numeric auto &a) const noexcept {
     using T = std::remove_cvref_t<decltype(a)>;
@@ -200,12 +199,10 @@ DDX_ADL_BINARY_IMPL(pow_impl, pow)
 DDX_ADL_BINARY_IMPL(atan2_impl, atan2)
 DDX_ADL_BINARY_IMPL(hypot_impl, hypot)
 #undef DDX_ADL_BINARY_IMPL
-// A tie averages the operands: the value is unchanged, but a dual or Taylor
-// operand carries the mean of the two subgradients.  An unordered pair -- at
-// least one NaN -- returns (a-b)*0, NaN in every component from either side.
-// Both choices are symmetric, the only convention stable under the
-// commutative reordering the graph builder applies.  The tie is spelled
-// a + (b-a)/2 so an equal pair at the top of the range cannot overflow.
+// A tie averages the operands and an unordered pair returns (a-b)*0, NaN from
+// either side: both are symmetric, which is what makes them stable under the
+// commutative reordering the graph builder applies.  Spelled a + (b-a)/2 so an
+// equal pair at the top of the range cannot overflow.
 struct max_impl {
   constexpr auto operator()(const Numeric auto &a,
                             const Numeric auto &b) const noexcept {
@@ -241,8 +238,8 @@ struct min_impl {
 } // namespace detail
 
 // Generated from the registry: each op pulls value and derivative from its
-// descriptor in unary_math.hpp.  Forward mode needs no member here -- it is the
-// ordinary eval() sweep seeded with Dual, through the same descriptor.
+// descriptor.  Forward mode needs no member here -- it is the ordinary eval()
+// sweep seeded with Dual, through the same descriptor.
 #define DDX_UNARY_MATH_OP(FN, NAME, LABEL)                                     \
   template <Numeric T>                                                         \
     requires(!detail::needs_real_constants_v<detail::NAME##Fn<T>> ||           \
@@ -263,9 +260,8 @@ struct min_impl {
 DDX_UNARY_MATH_TABLE(DDX_UNARY_MATH_OP)
 #undef DDX_UNARY_MATH_OP
 
-// Piecewise constant, so its derivative is identically zero.  Not public API:
-// it exists so the derivative trees of abs, max and min stay finite at the
-// kink, where a u/|u| quotient is 0/0.
+// Not public API: it exists so the derivative trees of abs, max and min stay
+// finite at the kink, where a u/|u| quotient is 0/0.
 template <Numeric T>
   requires std::totally_ordered<T>
 struct SignOp : UnaryOp<T, detail::sign_impl, FixedString{"sign"}> {
@@ -330,8 +326,7 @@ struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"},
     using std::hypot;
     const T y = cache[cb[0]];
     const T x = cache[cb[1]];
-    // Scaled by hypot rather than divided by x² + y², which overflows past
-    // 1e154 and underflows the adjoints to zero.
+    // Scaled by hypot: x² + y² overflows past 1e154.
     const T h = hypot(x, y);
     return {adj * (x / h) / h, -adj * (y / h) / h};
   }
@@ -351,8 +346,7 @@ struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"},
     const T x = cache[cb[0]];
     const T y = cache[cb[1]];
     const T h = hypot(x, y);
-    // x / h first: x * adj can overflow where the quotient, in [-1, 1], never
-    // does.
+    // x / h first: the quotient is in [-1, 1] where x * adj can overflow.
     return {adj * (x / h), adj * (y / h)};
   }
 };
@@ -365,8 +359,7 @@ struct MaxOp
   // max(a, b) = (a + b + |a - b|) / 2, so with s = sign(a - b),
   //   max' = (a' + b' + s*(a' - b')) / 2
   // Branch-free of necessity: a runtime conditional would have to choose
-  // between two different *types*.  sign(0) = 0 makes a tie the mean of the
-  // two branches, the shared convention.
+  // between two different *types*.  sign(0) = 0 makes a tie the mean.
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -438,9 +431,8 @@ struct MinOp
 template <Numeric T>
 constexpr auto PowOp<T>::derivative(const CExpression auto &lhs,
                                     const CExpression auto &rhs) noexcept {
-  // Split form, not a^b * (b' ln a + b a'/a): the a'/a quotient is 0/0 at
-  // a == 0 where a^(b-1) is exact, and with a constant exponent the b' term
-  // folds away without leaving a log node behind.
+  // Split form, not a^b * (b' ln a + b a'/a): that quotient is 0/0 at a == 0
+  // where a^(b-1) is exact, and a constant exponent folds away with no log.
   return rhs.derivative() * log(lhs) * pow(lhs, rhs) +
          rhs * pow(lhs, rhs - Lit<T, 1>{}) * lhs.derivative();
 }

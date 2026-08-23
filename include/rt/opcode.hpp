@@ -2,13 +2,13 @@
 
 #include "ops/unary_math.hpp" // DDX_UNARY_MATH_TABLE
 
+#include <array>
 #include <cstdint>
 #include <string_view>
 
-// The runtime mirror of the compile-time operation set.  Rows are
-// (factory spelling, enumerator, label) -- the same shape as
-// DDX_UNARY_MATH_TABLE, so the eighteen transcendentals come straight from
-// expr/unary_math.hpp and the two sets cannot drift.
+// The runtime mirror of the compile-time operation set.  Rows are (factory
+// spelling, enumerator, label), the shape DDX_UNARY_MATH_TABLE already has, so
+// the two sets cannot drift.
 namespace ddx::rt {
 
 #define DDX_RT_LEAF_TABLE(X)                                                   \
@@ -55,37 +55,48 @@ inline constexpr std::size_t op_count = [] {
   return n;
 }();
 
+namespace detail {
+
+struct OpInfo {
+  std::string_view label;
+  std::uint8_t arity;
+};
+
+// Arity is a property of which sub-table a row sits in, not a column any row
+// carries, so the three groups fill one array in three passes.  Each row lands
+// at its own enumerator rather than at a running index, so nothing here depends
+// on the table order matching the enum's.
+inline constexpr std::array<OpInfo, op_count> op_info = [] {
+  std::array<OpInfo, op_count> t{};
+#define DDX_RT_ROW(fn, Op, label, ...)                                         \
+  t[static_cast<std::size_t>(OpCode::Op)] = {label, 0};
+  DDX_RT_LEAF_TABLE(DDX_RT_ROW)
+#undef DDX_RT_ROW
+#define DDX_RT_ROW(fn, Op, label, ...)                                         \
+  t[static_cast<std::size_t>(OpCode::Op)] = {label, 1};
+  DDX_RT_UNARY_TABLE(DDX_RT_ROW)
+  DDX_UNARY_MATH_TABLE(DDX_RT_ROW)
+#undef DDX_RT_ROW
+#define DDX_RT_ROW(fn, Op, label, ...)                                         \
+  t[static_cast<std::size_t>(OpCode::Op)] = {label, 2};
+  DDX_RT_BINARY_TABLE(DDX_RT_ROW)
+#undef DDX_RT_ROW
+  return t;
+}();
+
+} // namespace detail
+
+// An OpCode reaching these from outside the builder -- a deserialised graph, a
+// cast byte -- need not name a row, so both answer out of range rather than
+// index past the table.
 [[nodiscard]] constexpr std::string_view label_of(OpCode op) noexcept {
-  switch (op) {
-#define DDX_RT_LABEL(fn, Op, label, ...)                                       \
-  case OpCode::Op:                                                             \
-    return label;
-    DDX_RT_OP_TABLE(DDX_RT_LABEL)
-#undef DDX_RT_LABEL
-  }
-  return "?";
+  const auto i = static_cast<std::size_t>(op);
+  return i < op_count ? detail::op_info[i].label : "?";
 }
 
 [[nodiscard]] constexpr std::uint8_t arity_of(OpCode op) noexcept {
-  switch (op) {
-#define DDX_RT_ARITY(fn, Op, label, ...)                                       \
-  case OpCode::Op:                                                             \
-    return 0;
-    DDX_RT_LEAF_TABLE(DDX_RT_ARITY)
-#undef DDX_RT_ARITY
-#define DDX_RT_ARITY(fn, Op, label, ...)                                       \
-  case OpCode::Op:                                                             \
-    return 1;
-    DDX_RT_UNARY_TABLE(DDX_RT_ARITY)
-    DDX_UNARY_MATH_TABLE(DDX_RT_ARITY)
-#undef DDX_RT_ARITY
-#define DDX_RT_ARITY(fn, Op, label, ...)                                       \
-  case OpCode::Op:                                                             \
-    return 2;
-    DDX_RT_BINARY_TABLE(DDX_RT_ARITY)
-#undef DDX_RT_ARITY
-  }
-  return 0;
+  const auto i = static_cast<std::size_t>(op);
+  return i < op_count ? detail::op_info[i].arity : std::uint8_t{0};
 }
 
 template <impl::Numeric T>

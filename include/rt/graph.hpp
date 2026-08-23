@@ -19,18 +19,15 @@
 
 namespace ddx::rt {
 
-// The frozen edge set.  Named at namespace scope rather than inside Graph
-// because it carries no `T`: every scalar a graph is built over freezes to the
-// same CSR type, which is what lets the graphviz writer be compiled once
-// against it instead of once per scalar.
+// At namespace scope rather than inside Graph because it carries no `T`: every
+// scalar freezes to the same CSR, so the graphviz writer compiles once.
 using Adjacency =
     boost::compressed_sparse_row_graph<boost::directedS, boost::no_property,
                                        std::uint32_t>;
 using Vertex = boost::graph_traits<Adjacency>::vertex_descriptor;
 
-// The static graph: a builder frozen into CSR, which is the form codegen walks.
-// Operand position rides along as an edge attribute, because a CSR row is a set
-// and `a / b` is not `b / a`.
+// A builder frozen into CSR, the form codegen walks.  Operand position rides
+// along as an edge attribute, because a CSR row is a set.
 template <impl::Numeric T = double> class Graph {
 public:
   using adjacency_type = Adjacency;
@@ -38,9 +35,8 @@ public:
 
   using value_type = T;
 
-  // What the output columns are, in the order they are stored: values first,
-  // then Jacobian entries, then Hessian entries.  Codegen and the caller agree
-  // on the meaning of a column from this, not from a positional convention.
+  // What the output columns are, in the order stored.  Codegen and the caller
+  // agree on a column's meaning from this, not by positional convention.
   struct Layout {
     std::size_t values = 0;   // m
     std::size_t jacobian = 0; // m * n, row-major by function
@@ -72,7 +68,7 @@ public:
     edges.reserve(b.size() * 2);
     slots.reserve(b.size() * 2);
 
-    for (const auto [v, n] : std::views::enumerate(b.nodes())) {
+    for (const auto [v, n] : b.nodes() | std::views::enumerate) {
       g.properties_.push_back({.op = n.op, .value = n.value, .slot = n.slot});
       const auto id = static_cast<std::size_t>(v);
       if (arity_of(n.op) >= 1) {
@@ -105,15 +101,13 @@ public:
   }
   [[nodiscard]] bool live(NodeId v) const { return live_[v]; }
 
-  // A range, so the walks below are range-for and compose with the algorithms.
   [[nodiscard]] auto operand_edges(NodeId v) const {
     return boost::make_iterator_range(
         boost::out_edges(static_cast<vertex_type>(v), children_));
   }
 
-  // The nodes some output depends on, in id order -- which is topological, so a
-  // consumer emits them in one pass and never has to skip anything itself.
-  // The view refers to this graph; it must not outlive it.
+  // In id order, which is topological, so a consumer emits them in one pass.
+  // The view refers to this graph and must not outlive it.
   [[nodiscard]] auto live_nodes() const {
     return std::views::iota(NodeId{0}, static_cast<NodeId>(size())) |
            std::views::filter([this](NodeId v) { return live_[v]; });
@@ -123,9 +117,8 @@ public:
     return static_cast<std::size_t>(std::ranges::distance(live_nodes()));
   }
 
-  // The three column blocks of outputs(), in the order the layout names them.
-  // Codegen, the interpreter and the ABI size checks all need the same split,
-  // and deriving it here is what keeps them from each walking one flat list.
+  // Codegen, the interpreter and the ABI size checks need the same split, so
+  // it is derived once here rather than in each of them.
   struct Blocks {
     std::span<const NodeId> values;
     std::span<const NodeId> jacobian;
@@ -145,8 +138,7 @@ public:
     return properties_;
   }
 
-  // Operands in slot order.  Arity is at most two, so this is a fixed pair
-  // rather than a vector.
+  // Operands in slot order; arity is at most two, hence a pair.
   [[nodiscard]] std::array<NodeId, 2> operands(NodeId v) const {
     std::array out{no_node, no_node};
     const auto [first, last] =
@@ -178,8 +170,8 @@ private:
   std::vector<bool> live_;
 };
 
-// Assembling what a Graph is frozen with.  Each step names one block of output
-// columns, and `build` is the only thing that produces a Graph.
+// Each step names one block of output columns; `build` is the only thing that
+// produces a Graph.
 //
 //   GraphBuilder{b}.value(f).gradient().build()
 //   GraphBuilder{b}.values({f0, f1}).jacobian().build()
@@ -206,9 +198,8 @@ public:
     return *this;
   }
 
-  // Reuse nodes a caller already has, rather than sweeping again: Equation
-  // builds its derivative in the constructor and freezes only when a batch call
-  // arrives.
+  // Nodes a caller already has, rather than sweeping again: Equation builds
+  // its derivative in the constructor and freezes only on a batch call.
   constexpr GraphBuilder &values_from(std::span<const NodeId> roots) {
     roots_.assign(roots.begin(), roots.end());
     outputs_.assign(roots.begin(), roots.end());
@@ -233,8 +224,7 @@ public:
   // The scalar spelling of the same thing.
   constexpr GraphBuilder &gradient() { return jacobian(); }
 
-  // Compressed by colour, not n x n: for a banded coupling that is a handful of
-  // columns rather than hundreds.
+  // Compressed by colour, not n x n: a handful of columns when banded.
   GraphBuilder &hessian() {
     const auto h = rt::hessian(*builder_, roots_.front());
     outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "symbolic/sweep.hpp"
 #include "symbolic/named_value.hpp"
+#include "symbolic/sweep.hpp"
 #include "symbolic/traits.hpp"
 #include "util/config.hpp"
 #include "util/error.hpp"
@@ -59,8 +59,8 @@ consteval std::array<std::size_t, N> arg_of_canonical() noexcept {
   const std::array<std::size_t, N> canonical_of_arg{
       find_index_of_symbol<ArgSyms::value, SymList>()...};
   std::array<std::size_t, N> out{};
-  for (std::size_t j = 0; j < N; ++j) {
-    out[canonical_of_arg[j]] = j;
+  for (const auto [j, slot] : std::views::enumerate(canonical_of_arg)) {
+    out[slot] = static_cast<std::size_t>(j);
   }
   return out;
 }

@@ -20,13 +20,10 @@ inline constexpr NodeId no_node = ~NodeId{0};
 
 namespace detail {
 
-// What `roots` reach, over a node set whose ids are topological.  One
-// descending pass settles it, and the pass is the subtle part: the body marks
-// entries it has not visited yet, so this cannot be a filtered view -- a lazy
-// filter would be reading the state the loop is still writing.
-//
-// The operand access is the caller's, because the two callers hold different
-// things: a Builder has `a`/`b` on the node, a frozen Graph has a CSR row.
+// What `roots` reach, over a node set whose ids are topological, so one
+// descending pass settles it.  Not a filtered view: the body marks entries the
+// pass has not reached, which a lazy filter would read mid-write.  Operand
+// access is the caller's -- a Builder has `a`/`b`, a frozen Graph a CSR row.
 [[nodiscard]] inline std::vector<bool>
 reachable(std::size_t n, std::span<const NodeId> roots, auto &&operands_of) {
   std::vector<bool> live(n, false);
@@ -50,10 +47,8 @@ template <impl::Numeric T> struct Node {
 };
 
 // The mutable half of the graph: nodes are interned as they are formed, so an
-// id *is* the identity of a subexpression and a repeat costs a hash lookup.
-// Everything here mirrors what the operator factories in expr/values.hpp do at
-// compile time, one level cheaper -- structural identity is a uint32 compare
-// rather than a type comparison.
+// id *is* the identity of a subexpression.  The compile-time counterpart is the
+// operator factories in expr/values.hpp, where identity is a type comparison.
 template <impl::Numeric T = double> class Builder {
 public:
   using value_type = T;
@@ -112,9 +107,8 @@ private:
     if (n.op != OpCode::Const) {
       return std::uint64_t{n.slot};
     }
-    // Only a scalar the size of a word can be hashed by its bits.  Anything
-    // else lands in one bucket and is separated by `same` below, which costs a
-    // few comparisons among constants and nothing at all elsewhere.
+    // Anything wider than a word lands in one bucket and is separated by
+    // `same` below -- a few comparisons among constants, nothing elsewhere.
     if constexpr (std::is_trivially_copyable_v<T> && sizeof(T) == 8) {
       return std::bit_cast<std::uint64_t>(n.value);
     } else {
@@ -181,12 +175,10 @@ private:
     return id;
   }
 
-  // The rewrites of expr/simplify.hpp.  x*0 -> 0, 0/x -> 0 and (n/d)*d -> n are
-  // not IEEE-faithful; as there, they cancel arithmetic the derivative rules
-  // manufactured rather than anything a caller wrote.
-  // "is this node the constant k", for k of 0, 1 or -1.  T{0} and T{1} are what
-  // CFieldLike promises; a scalar with no equality simply never matches, and
-  // the identity rewrites quietly stop firing for it.
+  // The rewrites of expr/simplify.hpp.  x*0 -> 0, 0/x -> 0 and (n/d)*d -> n
+  // are not IEEE-faithful; as there, they cancel arithmetic the derivative
+  // rules manufactured rather than anything a caller wrote.  A scalar with no
+  // equality never matches, and the identity rewrites stop firing for it.
   constexpr bool holds(NodeId id, int k) const {
     if (id == no_node || nodes_[id].op != OpCode::Const) {
       return false;
@@ -232,10 +224,8 @@ private:
       if (holds(b, 1)) {
         return a;
       }
-      // (n/d) * d -> n holds for any T: `/` is right division, so d^-1 meets d
-      // and cancels whichever side it came from.  d * (n/d) is d n d^-1, which
-      // is n only when the factors commute -- the same split simplify.hpp
-      // makes.
+      // (n/d) * d -> n holds for any T; d * (n/d) is d n d^-1, which is n
+      // only when the factors commute -- the same split simplify.hpp makes.
       if (const auto n = cancel_quotient(a, b).or_else([&] {
             return impl::CCommutativeMultiply<T> ? cancel_quotient(b, a)
                                                  : std::nullopt;

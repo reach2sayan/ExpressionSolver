@@ -1,8 +1,8 @@
 #pragma once
 
 #include "symbolic/expressions.hpp" // ddx::impl::Numeric
-#include "util/export.hpp"
 #include "util/error.hpp"
+#include "util/export.hpp"
 #include "util/pinned.hpp"
 
 #include <cstddef>
@@ -12,13 +12,9 @@
 #include <span>
 #include <string>
 
-// The JIT's public surface.
 namespace ddx::rt {
-// The JIT emits machine types, so it compiles graphs over a machine scalar.
-// A graph over anything else -- Numeric admits matrices and quaternions -- is
-// interpretable but not compilable, which is why everything below names
-// Graph<double> rather than the template.  The constraint has to match the
-// definition, hence the one ddx include; it carries no dependency of its own.
+// The JIT emits machine types, so only a graph over a machine scalar compiles.
+// The constraint has to match the definition, hence the one ddx include.
 template <impl::Numeric T> class Graph;
 } // namespace ddx::rt
 
@@ -27,10 +23,8 @@ namespace ddx::jit {
 // Which vector math library the loop vectoriser may call.
 enum class VecLib : std::uint8_t { None, Auto, Libmvec };
 
-// A JIT failure carries text where the rest of the library's does not: LLVM's
-// own errors are not one of a fixed set, and the reason a target will not come
-// up on this host is the whole of what a caller can act on.  There is no
-// numeric path through here to keep allocation-free.
+// Carries text where the rest of the library's errors do not: LLVM's are not
+// one of a fixed set, and there is no allocation-free path through here.
 struct error {
   errc code;
   std::string detail;
@@ -55,9 +49,8 @@ struct Options {
   bool contract = default_contract; // Follows DDX_FP_FLAGS
 };
 
-// One compiled graph.  Cheap to copy: a copy is one atomic increment, because a
-// Kernel keeps the JIT that owns its code alive rather than pointing into
-// something another object may free.  Dropping the last Kernel frees the code.
+// One compiled graph.  A copy is one atomic increment: a Kernel keeps the JIT
+// that owns its code alive, and dropping the last one frees the code.
 class Kernel {
 public:
   using function_type = void (*)(const double *const *, double *const *,
@@ -70,13 +63,9 @@ public:
       : fn_(fn), code_(std::move(code)), arity_(arity), values_(values),
         jacobian_(jacobian), hessian_(hessian) {}
 
-  // Spans on the C++ surface, raw pointers only in function_type, which is the
-  // JIT's actual ABI: a block that was not requested is `{}` here rather than a
-  // null pointer whose length the callee has to infer.  xs[j] is the column for
-  // symbol j, g[j] the column for the partial in that symbol, all of length n.
-  // noexcept because the emitted function is nounwind: codegen marks both the
-  // kernel and every libm declaration it calls, so there is no unwind edge to
-  // cross here.
+  // xs[j] is the column for symbol j, g[j] the partial in it, each of length n;
+  // a block that was not requested is `{}`.  noexcept because codegen marks the
+  // kernel and every libm declaration it calls nounwind.
   void operator()(std::span<const double *const> xs, std::span<double *const> f,
                   std::span<double *const> g, std::span<double *const> h,
                   std::size_t n) const noexcept {
@@ -100,27 +89,19 @@ public:
 
 private:
   function_type fn_ = nullptr;
-  // Never read: it is here to be held.  operator() calls through fn_ alone.
-  std::shared_ptr<void> code_;
+  std::shared_ptr<void> code_; // Held, never read; operator() calls through fn_
   std::size_t arity_ = 0;
   std::size_t values_ = 0;
   std::size_t jacobian_ = 0;
   std::size_t hessian_ = 0;
 };
 
-// A Compiler *is* the LLJIT, and the code a Kernel calls lives in it. Move-only
-// on the surface, so there is one Compiler to hand on or hold in a static;
-// underneath, every Kernel it hands out shares that LLJIT.  A Compiler going
-// out of scope therefore frees nothing still callable -- and reclaims nothing
-// either: one surviving Kernel holds the target machine, the symbol generators
-// and every module compiled through it.
+// A Compiler *is* the LLJIT, and every Kernel it hands out shares it: one going
+// out of scope frees nothing still callable, and reclaims nothing either.
 class Compiler : private impl::noncopyable {
 public:
-  // Bringing up the LLJIT is the one thing here that can fail for reasons that
-  // are not a caller's mistake -- no native target for this host, no way to
-  // build a target machine -- so it happens in a factory rather than a
-  // constructor.  A caller that cannot get one is not stuck: the runtime graph
-  // interprets instead.
+  // A factory, because bring-up fails for reasons that are not a caller's
+  // mistake -- no native target on this host.  Then the graph interprets.
   [[nodiscard]] static DDX_JIT_API result<Compiler> create();
 
   DDX_JIT_API ~Compiler();
@@ -135,7 +116,7 @@ private:
   DDX_JIT_API explicit Compiler(std::shared_ptr<Impl> impl) noexcept;
 
   // Private, but Ir::str() calls it from a consumer's translation unit, so it
-  // crosses the boundary like the public ones and is exported like them.
+  // is exported like the public ones.
   friend class Ir;
   [[nodiscard]] DDX_JIT_API result<std::string>
   render_ir(const rt::Graph<double> &g, const Options &opt) const;
@@ -143,10 +124,9 @@ private:
   std::shared_ptr<Impl> impl_;
 };
 
-// The optimised IR a graph would compile to.  A borrowing handle rather than a
-// string, so the IR prints through the same formatter as everything else and
-// the pipeline only runs if something reads it.  Both ends have to outlive the
-// handle, which the deleted overloads make the compiler check.
+// The optimised IR a graph would compile to.  Borrowing rather than a string,
+// so the pipeline runs only if something reads it; the deleted overloads make
+// the compiler check that both ends outlive the handle.
 class Ir {
 public:
   Ir(const Compiler &c, const rt::Graph<double> &g, Options opt = {}) noexcept
