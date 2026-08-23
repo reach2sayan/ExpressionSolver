@@ -36,7 +36,7 @@ namespace rt_detail {
 
 template <typename A, typename T>
 concept CPointArg =
-    Numeric<std::remove_cvref_t<A>> || CNamedValue<A> ||
+    Numeric<std::remove_cvref_t<A>> || CEntry<A> ||
     (std::ranges::input_range<A> &&
      Numeric<std::remove_cvref_t<std::ranges::range_value_t<A>>>);
 
@@ -114,7 +114,7 @@ public:
     }
     std::vector<T> at(symbol_count(), T{});
     result<void> ok{};
-    if constexpr ((CNamedValue<Args> && ...) && sizeof...(Args) > 0) {
+    if constexpr ((CEntry<Args> && ...) && sizeof...(Args) > 0) {
       ((ok = ok.and_then([&] { return assign_named(at, args); })), ...);
     } else if constexpr (sizeof...(Args) == 1 &&
                          (std::ranges::input_range<Args> && ...)) {
@@ -279,7 +279,7 @@ private:
     return std::nullopt;
   }
 
-  template <CNamedValue V>
+  template <CEntry V>
   [[nodiscard]] constexpr result<void> assign_named(std::vector<T> &at,
                                                     const V &nv) const {
     const auto name = std::remove_cvref_t<V>::symbol.view();

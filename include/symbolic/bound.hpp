@@ -1,6 +1,6 @@
 #pragma once
 
-#include "symbolic/named_value.hpp"
+#include "symbolic/entry.hpp"
 #include "symbolic/sweep.hpp"
 #include "symbolic/traits.hpp"
 #include "util/config.hpp"
@@ -79,7 +79,7 @@ consteval std::array<std::size_t, N> symbol_permutation() noexcept {
 
 // values(named<"x">(1.0), named<"y">(0.5))
 template <FixedString... Syms, Numeric... Vs>
-[[nodiscard]] constexpr auto values(NamedValue<Syms, Vs>... nv) noexcept {
+[[nodiscard]] constexpr auto values(Entry<Syms, Vs>... nv) noexcept {
   using SymList = unique_tuple_t<mp::mp_list<symbol_type<Syms>...>>;
   constexpr std::size_t N = sizeof...(Syms);
   static_assert(mp::mp_size<SymList>::value == N, "values: duplicate symbol");
@@ -160,8 +160,7 @@ template <CExpression Expr, CValueMap Map>
 
 // bind(expr, named<"x">(1.0), named<"y">(0.5))
 template <CExpression Expr, FixedString... Syms, Numeric... Vs>
-[[nodiscard]] constexpr auto bind(Expr &&e,
-                                  NamedValue<Syms, Vs>... nv) noexcept {
+[[nodiscard]] constexpr auto bind(Expr &&e, Entry<Syms, Vs>... nv) noexcept {
   return bind(static_cast<Expr &&>(e), values(nv...));
 }
 
@@ -194,7 +193,7 @@ make_point(const Args &...args) noexcept {
   }
 
   // point(map) / point(named<"x">(..), ..) -- read by name.
-  else if constexpr ((CValueMap<Args> && ...) || (is_named_value_v<std::remove_cvref_t<Args>> && ...)) {
+  else if constexpr ((CValueMap<Args> && ...) || (is_entry_v<std::remove_cvref_t<Args>> && ...)) {
     const auto map = [&] {
       if constexpr ((CValueMap<Args> && ...)) {
         static_assert(sizeof...(Args) == 1, "eval: pass a single ValueMap");

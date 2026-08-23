@@ -5,10 +5,10 @@
 
 namespace {
 
-using ddx::impl::Map;
-using ddx::impl::NamedValue;
+using ddx::impl::Entry;
+using ddx::impl::Record;
 
-constexpr auto kMapX = var<"x">;
-constexpr auto kMapN = var<"n", int>;
+constexpr auto kRecordX = var<"x">;
+constexpr auto kRecordN = var<"n", int>;
 
 } // namespace

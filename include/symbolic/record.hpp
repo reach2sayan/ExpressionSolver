@@ -2,17 +2,17 @@
 // FixedString keys, values of unrelated types.  The keys live in the type, so a
 // lookup is a base-class cast, not a search.
 //
-//   constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+//   constexpr auto m = record(named<"n">(3), named<"x">(1.5));
 //   static_assert(m.get<"n">() == 3);   // int
 //   static_assert(m["x"_s] == 1.5);     // double
 //
 // ValueMap (bound.hpp) is the homogeneous sibling: one Scalar per slot, in
 // canonical order, which is what a point of an expression is.
 
+#include "symbolic/entry.hpp"
 #include "symbolic/expressions.hpp" // symbol_type, for operator[]
-#include "symbolic/named_value.hpp"
-#include "symbolic/symbol.hpp" // mp
-#include "util/config.hpp"     // DDX_KEYED_ACCESSORS
+#include "symbolic/symbol.hpp"      // mp
+#include "util/config.hpp"          // DDX_KEYED_ACCESSORS
 #include "util/fixed_string.hpp"
 
 #include <array>
@@ -24,7 +24,7 @@
 
 namespace ddx::impl {
 
-template <CNamedValue... Entries> struct Map;
+template <CEntry... Entries> struct Record;
 
 namespace detail {
 
@@ -48,7 +48,7 @@ template <FixedString... Keys>
 inline constexpr bool keys_unique =
     mp::mp_size<mp::mp_unique<key_list<Keys...>>>::value == sizeof...(Keys);
 
-template <FixedString Key, CNamedValue E>
+template <FixedString Key, CEntry E>
 [[nodiscard]] constexpr auto entry_unless(const E &e) {
   if constexpr (E::symbol == Key) {
     return std::tuple<>{};
@@ -57,22 +57,23 @@ template <FixedString Key, CNamedValue E>
   }
 }
 
-template <CNamedValue... Es>
-[[nodiscard]] constexpr Map<Es...>
-map_from_entries(const std::tuple<Es...> &es) {
-  return std::apply([](const Es &...e) { return Map<Es...>{e...}; }, es);
+template <CEntry... Es>
+[[nodiscard]] constexpr Record<Es...>
+record_from_entries(const std::tuple<Es...> &es) {
+  return std::apply([](const Es &...e) { return Record<Es...>{e...}; }, es);
 }
 
 } // namespace detail
 
-// Base classes, not a tuple member: that keeps Map an aggregate, so
-// Map{named<"n">(3), ...} and Map<E...>{{3}, ...} are one initialisation.
-template <CNamedValue... Entries> struct Map : Entries... {
-  static_assert(detail::keys_unique<Entries::symbol...>, "Map: duplicate key");
+// Base classes, not a tuple member: that keeps Record an aggregate, so
+// Record{named<"n">(3), ...} and Record<E...>{{3}, ...} are one initialisation.
+template <CEntry... Entries> struct Record : Entries... {
+  static_assert(detail::keys_unique<Entries::symbol...>,
+                "Record: duplicate key");
 
   using entry_types = std::tuple<Entries...>;
 
-  static constexpr bool kNamedMap = true;
+  static constexpr bool kRecord = true;
   static constexpr std::size_t size = sizeof...(Entries);
 
   template <FixedString Key>
@@ -94,7 +95,7 @@ template <CNamedValue... Entries> struct Map : Entries... {
   template <FixedString Key>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     if constexpr (!contains<Key>()) {
-      static_assert(contains<Key>(), "Map: key not present (see keys())");
+      static_assert(contains<Key>(), "Record: key not present (see keys())");
     } else if constexpr (std::is_lvalue_reference_v<decltype(self)>) {
       using Self = std::remove_reference_t<decltype(self)>;
       using Base = std::conditional_t<std::is_const_v<Self>,
@@ -122,16 +123,16 @@ template <CNamedValue... Entries> struct Map : Entries... {
 
   // The key set is part of the type, so these return new maps.
   template <FixedString... Keys, typename... Vs>
-  [[nodiscard]] constexpr auto insert(NamedValue<Keys, Vs>... es) const {
+  [[nodiscard]] constexpr auto insert(Entry<Keys, Vs>... es) const {
     static_assert((... && !contains<Keys>()),
-                  "Map::insert: key already present (use set<Key>)");
-    return Map<Entries..., NamedValue<Keys, Vs>...>{
+                  "Record::insert: key already present (use set<Key>)");
+    return Record<Entries..., Entry<Keys, Vs>...>{
         static_cast<const Entries &>(*this)..., std::move(es)...};
   }
 
   template <FixedString Key> [[nodiscard]] constexpr auto erase() const {
-    static_assert(contains<Key>(), "Map::erase: key not present");
-    return detail::map_from_entries(std::tuple_cat(
+    static_assert(contains<Key>(), "Record::erase: key not present");
+    return detail::record_from_entries(std::tuple_cat(
         detail::entry_unless<Key>(static_cast<const Entries &>(*this))...));
   }
 
@@ -147,20 +148,20 @@ template <CNamedValue... Entries> struct Map : Entries... {
   }
 
   // Permuted keys are a different type, and do not compare at all.
-  constexpr bool operator==(const Map &) const = default;
+  constexpr bool operator==(const Record &) const = default;
 };
 
-template <CNamedValue... Entries> Map(Entries...) -> Map<Entries...>;
+template <CEntry... Entries> Record(Entries...) -> Record<Entries...>;
 
 template <typename T>
-concept CNamedMap = requires { requires std::remove_cvref_t<T>::kNamedMap; };
+concept CRecord = requires { requires std::remove_cvref_t<T>::kRecord; };
 
-[[nodiscard]] constexpr auto map(CNamedValue auto... es) {
+[[nodiscard]] constexpr auto record(CEntry auto... es) {
   // Reached before a duplicate key becomes a duplicate base class.
   static_assert(
       detail::keys_unique<std::remove_cvref_t<decltype(es)>::symbol...>,
-      "map: duplicate key");
-  return Map{std::move(es)...};
+      "record: duplicate key");
+  return Record{std::move(es)...};
 }
 
 } // namespace ddx::impl

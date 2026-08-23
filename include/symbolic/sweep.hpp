@@ -10,7 +10,7 @@
 #include "ops/mode.hpp"
 #include "ops/scalar.hpp"
 #include "symbolic/expressions.hpp"
-#include "symbolic/named_value.hpp"
+#include "symbolic/entry.hpp"
 #include "symbolic/symbol.hpp"
 #include "symbolic/traits.hpp"
 #include "util/config.hpp"
@@ -107,10 +107,12 @@ DDX_ALWAYS_INLINE constexpr void color_sweeps(const Expr &expr, const Point &x,
     if constexpr (kIdentity) {
       seeds[c].deriv() = v;
     } else {
-      for (auto &&[seed, color] : std::views::zip(seeds, Colors.color)) {
-        if (color == c) {
-          seed.deriv() = v;
-        }
+      auto seed_view = std::views::zip(seeds, Colors.color) |
+                       std::views::filter(
+                           [c](const auto &p) { return std::get<1>(p) == c; }) |
+                       std::views::keys;
+      for (auto&& seed : seed_view) {
+        seed.deriv() = v;
       }
     }
   };
@@ -145,7 +147,7 @@ template <CExpression Expr,
               scalar_base_t<typename std::remove_cvref_t<Expr>::value_type>,
           FixedString... Syms, Numeric... Vs>
 [[nodiscard]] constexpr std::array<Scalar, detail::expr_arity_v<Expr>>
-make_values(NamedValue<Syms, Vs>... nv) noexcept {
+make_values(Entry<Syms, Vs>... nv) noexcept {
   using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   constexpr std::size_t N = mp::mp_size<SymList>::value;
   static_assert(sizeof...(Syms) == N,
@@ -156,7 +158,7 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
       "make_values: duplicate symbol");
   std::array<Scalar, N> out{};
   (
-      [&]<FixedString Sy, Numeric Vv>(const NamedValue<Sy, Vv> &v) {
+      [&]<FixedString Sy, Numeric Vv>(const Entry<Sy, Vv> &v) {
         constexpr std::size_t idx = find_index_of_symbol<Sy, SymList>();
         static_assert(idx < N, "make_values: symbol not present in expression");
         out[idx] = static_cast<Scalar>(v.value);

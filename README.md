@@ -38,7 +38,7 @@ so the same source serves every symbol type on this page.
 [Building](#building) · [Expressions](#expressions) · [Points](#points) ·
 [Equation](#equation) · [Reverse mode](#reverse-mode) ·
 [Forward mode](#forward-mode) · [Runtime expressions](#runtime-expressions) ·
-[Printing](#printing) · [Map](#map) ·
+[Printing](#printing) · [Record](#record) ·
 [Compile-time results](#compile-time-results) ·
 [Values and lifetime](#values-and-lifetime) · [Errors](#errors) ·
 [What `ddx.hpp` declares](#what-ddxhpp-declares)
@@ -186,7 +186,7 @@ a symbol you already hold:
 | `4_vi` | `"c"`, valued `int` |
 
 `"x"_s` and `sym<"x">` are the symbol itself, without a scalar type — the label
-`Map` keys by, `named` binds to, and `variable` turns into a symbol of a type.
+`Record` keys by, `named` binds to, and `variable` turns into a symbol of a type.
 
 ```cpp
 constexpr auto x = var<"x">;
@@ -790,13 +790,13 @@ eq.get<1>();                            // same slot as eq[idx<1>()]
 
 ---
 
-## Map
+## Record
 
-`map` collects the same keyword arguments into a value with the keys in its
+`record` collects the same keyword arguments into a value with the keys in its
 type. The values need not share a type.
 
 ```cpp
-constexpr auto m = map(named<"n">(3), named<"x">(1.5));
+constexpr auto m = record(named<"n">(3), named<"x">(1.5));
 
 static_assert(m.get<"n">() == 3);          // int
 static_assert(m["x"_s] == 1.5);            // double
@@ -808,24 +808,24 @@ static_assert(m.size == 2);
 |---|---|
 | `m.get<"x">()`, `m["x"_s]` | read a slot |
 | `m.set<"x">(v)`, `m["x"_s] = v` | write it in place, keeping its type |
-| `m.insert(named<"y">(v))` | a new map with one more entry |
-| `m.erase<"x">()` | a new map with one fewer, order preserved |
+| `m.insert(named<"y">(v))` | a new record with one more entry |
+| `m.erase<"x">()` | a new record with one fewer, order preserved |
 | `m.contains<"x">()` | `consteval bool` |
 | `m.size` | entry count |
 | `m.keys()` | the keys, in entry order |
 | `m.for_each(f)` | call `f(key, value)` over the entries |
 | `m == m2` | keys in order, then values |
 
-Four equivalent spellings of the same map:
+Four equivalent spellings of the same record:
 
 ```cpp
-map(named<"n">(3), named<"x">(1.5));
-Map{named<"n">(3), named<"x">(1.5)};
-Map{NamedValue{"n"_s, 3}, NamedValue{var<"x">, 1.5}};
-Map<NamedValue<"n", int>, NamedValue<"x", double>>{{3}, {1.5}};
+record(named<"n">(3), named<"x">(1.5));
+Record{named<"n">(3), named<"x">(1.5)};
+Record{Entry{"n"_s, 3}, Entry{var<"x">, 1.5}};
+Record<Entry<"n", int>, Entry<"x", double>>{{3}, {1.5}};
 ```
 
-Adding or removing an entry gives a new map; writing one is in place:
+Adding or removing an entry gives a new record; writing one is in place:
 
 ```cpp
 auto m2 = m;
@@ -837,7 +837,7 @@ constexpr auto m4 = m3.erase<"n">();                            // 2 entries
 constexpr auto m5 = m.erase<"n">().insert(named<"n">(2.5f));    // "n" is now float
 ```
 
-A map is not a point: pass `named<"x">(v)` arguments to `evaluate` directly.
+A record is not a point: pass `named<"x">(v)` arguments to `evaluate` directly.
 
 ---
 
@@ -883,9 +883,9 @@ Most mistakes are compile errors:
 |---|---|
 | `eval: supply exactly one value per symbol, in canonical order` | wrong number of positional values |
 | `eval: no value supplied for this symbol` | a named point misses a symbol |
-| `Map: key not present (see keys())` | no such key |
-| `Map::insert: key already present (use set<Key>)` | duplicate key |
-| `Map::erase: key not present` | no such key |
+| `Record: key not present (see keys())` | no such key |
+| `Record::insert: key already present (use set<Key>)` | duplicate key |
+| `Record::erase: key not present` | no such key |
 
 A range whose length is not in its type is checked at run time instead, and
 answers `result<T>` — `std::expected<T, ddx::error>`:
@@ -927,8 +927,8 @@ brings in these names:
 | `var_of<"x">(v)`, `dual_var_of<"x">(v)` | name a symbol, taking its scalar type from `v` |
 | `constant(3.0)` | a value stored in the expression |
 | `literals` — `"x"_s`, `_cd`, `_ci`, `_vd`, `_vi` | the user-defined literals, as a namespace |
-| `named<"x">(v)`, `NamedValue` | one keyword argument of a point, or one map entry |
-| `map(…)`, `Map` | a compile-time map of those entries |
+| `named<"x">(v)`, `Entry` | one keyword argument of a point, or one record entry |
+| `record(…)`, `Record` | a compile-time record of those entries |
 | `dual`, `dual2nd` | the symbol value types `hessian` needs |
 
 The operators, the math functions, `operator<<` and the `std::formatter`

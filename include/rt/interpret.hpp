@@ -20,7 +20,7 @@ template <impl::Numeric T, std::ranges::random_access_range R>
   const auto at = std::ranges::begin(point);
 
   std::vector<U> v(b.size());
-  for (const auto [i, n] : std::views::enumerate(b.nodes())) {
+  for (const auto [i, n] : b.nodes() | std::views::enumerate) {
     switch (arity_of(n.op)) {
     case 0:
       v[i] = n.op == OpCode::Const ? static_cast<U>(n.value) : at[n.slot];

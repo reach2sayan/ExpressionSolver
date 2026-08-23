@@ -15,19 +15,19 @@ namespace ddx::impl {
 
 template <FixedString S, typename V>
   requires std::is_object_v<V>
-struct NamedValue;
+struct Entry;
 
 // A symbol-list element: the label lifted to a type.
 template <auto S> struct symbol_type {
   static constexpr auto value = S;
   static constexpr std::string_view name = S.view();
 
-  // "x"_s = 1.5 -- one entry of a point or a map.  Assignment rather than a
+  // "x"_s = 1.5 -- one entry of a point or a record.  Assignment rather than a
   // call: a symbol carries no state for a real assignment to overwrite.
-  // Defined in named_value.hpp, where the thing it returns is.
+  // Defined in entry.hpp, where the thing it returns is.
   template <typename V>
     requires std::is_object_v<V>
-  constexpr NamedValue<S, V> operator=(V v) const;
+  constexpr Entry<S, V> operator=(V v) const;
 };
 
 // The same symbol as a value, for operator[].  FixedString, not
