@@ -11,51 +11,6 @@
 
 namespace ddx::rt {
 
-// The nodes named by `order`, into caller-owned scratch indexed by node id.
-// `order` must be topological and closed under operands, so that every entry
-// read has already been written; plain id order and Graph::live_order() are
-// both.  Entries outside `order` are left alone -- the caller reads back only
-// what it asked for.  Indexed rather than a transform because v[i] reads
-// entries the same pass wrote.
-template <impl::Numeric T, std::ranges::random_access_range R,
-          std::ranges::input_range Order, impl::Numeric U>
-  requires impl::Numeric<std::ranges::range_value_t<R>> &&
-           std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
-constexpr void evaluate_into(const Builder<T> &b, const R &point, Order order,
-                             std::span<U> v) {
-  const auto at = std::ranges::begin(point);
-  for (const NodeId i : order) {
-    const Node<T> &n = b[i];
-    switch (arity_of(n.op)) {
-    case 0:
-      v[i] = n.op == OpCode::Const ? static_cast<U>(n.value) : at[n.slot];
-      break;
-    case 1:
-      v[i] = apply(n.op, v[n.a]);
-      break;
-    default:
-      v[i] = apply(n.op, v[n.a], v[n.b]);
-      break;
-    }
-  }
-}
-
-// Every node once, in id order: a child always precedes its parent.  The
-// reference the JIT is checked against.  The point's element type chooses the
-// arithmetic, as eval_seeded does, so Dual<double> carries derivatives through
-// the same walk.
-template <impl::Numeric T, std::ranges::random_access_range R>
-  requires impl::Numeric<std::ranges::range_value_t<R>>
-[[nodiscard]] constexpr auto evaluate_all(const Builder<T> &b, const R &point) {
-  using U = std::ranges::range_value_t<R>;
-  std::vector<U> v(b.size());
-  evaluate_into(b, point,
-                std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())),
-                std::span<U>{v});
-  return v;
-}
-
-
 // --- block sweep -----------------------------------------------------------
 // W points per node instead of one, so the switch is paid once per node per
 // block rather than once per node per point, and each operation becomes a
@@ -126,24 +81,26 @@ constexpr void lanes_binary(OpCode op, const T *DDX_RESTRICT l,
 // evaluate_into; the tail of a batch is padded by repeating a point rather
 // than falling back to a scalar path, and the padded lanes are simply not read
 // back.
-template <std::size_t W, impl::Numeric T, std::ranges::input_range Order>
-  requires std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
-constexpr void evaluate_block(const Builder<T> &b,
-                              std::span<const T> point_lanes, Order order,
-                              std::span<T> tape) {
+template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
+          std::ranges::input_range Order, impl::Numeric U>
+  requires impl::Numeric<std::ranges::range_value_t<R>> &&
+           std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
+constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
+                              Order order, std::span<U> tape) {
+  const auto at = std::ranges::begin(point_lanes);
   for (const NodeId i : order) {
     const Node<T> &n = b[i];
-    T *const out = tape.data() + std::size_t{i} * W;
+    U *const out = tape.data() + std::size_t{i} * W;
     switch (arity_of(n.op)) {
     case 0:
       if (n.op == OpCode::Const) {
         for (std::size_t k = 0; k < W; ++k) {
-          out[k] = n.value;
+          out[k] = static_cast<U>(n.value);
         }
       } else {
-        const T *const src = point_lanes.data() + std::size_t{n.slot} * W;
+        const auto src = at + static_cast<std::ptrdiff_t>(std::size_t{n.slot} * W);
         for (std::size_t k = 0; k < W; ++k) {
-          out[k] = src[k];
+          out[k] = src[static_cast<std::ptrdiff_t>(k)];
         }
       }
       break;
@@ -164,5 +121,39 @@ template <impl::Numeric T, std::ranges::random_access_range R>
                                       const R &point) {
   return evaluate_all(b, point)[root];
 }
+
+
+// The nodes named by `order`, one point at a time, into caller-owned scratch
+// indexed by node id.  `order` must be topological and closed under operands,
+// so that every entry read has already been written; plain id order and
+// Graph::live_order() are both.  Entries outside `order` are left alone.
+//
+// The width-one block sweep, not a second implementation of it: a lane loop
+// over one lane is the scalar walk, and having the two drift apart is the one
+// bug neither would show on its own.
+template <impl::Numeric T, std::ranges::random_access_range R,
+          std::ranges::input_range Order, impl::Numeric U>
+  requires impl::Numeric<std::ranges::range_value_t<R>> &&
+           std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
+constexpr void evaluate_into(const Builder<T> &b, const R &point, Order order,
+                             std::span<U> v) {
+  evaluate_block<1>(b, point, order, v);
+}
+
+// Every node once, in id order: a child always precedes its parent.  The
+// reference the JIT is checked against.  The point's element type chooses the
+// arithmetic, as eval_seeded does, so Dual<double> carries derivatives through
+// the same walk.
+template <impl::Numeric T, std::ranges::random_access_range R>
+  requires impl::Numeric<std::ranges::range_value_t<R>>
+[[nodiscard]] constexpr auto evaluate_all(const Builder<T> &b, const R &point) {
+  using U = std::ranges::range_value_t<R>;
+  std::vector<U> v(b.size());
+  evaluate_into(b, point,
+                std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())),
+                std::span<U>{v});
+  return v;
+}
+
 
 } // namespace ddx::rt

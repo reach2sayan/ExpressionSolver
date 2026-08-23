@@ -49,6 +49,21 @@ concept CColumns = std::ranges::contiguous_range<R> &&
 
 } // namespace rt_detail
 
+// Whether an equation compiles its graph, where a backend was built in at all.
+//
+// Not named Auto, because nothing here decides: Compile compiles whenever it
+// can, and that is the default only because it was the behaviour before there
+// was a choice.  Deciding would need what the equation does not have -- how
+// many times the kernel will be called.  Compiling costs more than linearly in
+// the graph, so a large graph evaluated a million times repays it and the same
+// graph evaluated twice does not, and only the caller knows which.
+//
+// Interpret is a real alternative rather than a fallback: the block sweep needs
+// no compiler and no LLVM, and on the graphs measured in compare/ it runs
+// within about 1.4x of the compiled kernel.  It is also the only way to compare
+// the two paths on a build that has the backend.
+enum class Backend : std::uint8_t { Compile, Interpret };
+
 template <Numeric T, typename... Rest>
   requires(std::same_as<Rest, rt::RTExpression<T>> && ...)
 class Equation<rt::RTExpression<T>, Rest...> {
@@ -172,6 +187,31 @@ public:
 
   // One sweep per colour, not per symbol.  A mixing rule couples everything
   // and colours in n, so it is not always a win.
+  // Choosing the backend discards anything already compiled, so the choice
+  // holds however late it is made.  Returns *this, since a caller most often
+  // wants it on the way to a batch call.
+  constexpr Equation &backend(Backend which) noexcept {
+    if (which != backend_) {
+      backend_ = which;
+      compiled_.reset();
+    }
+    return *this;
+  }
+  [[nodiscard]] constexpr Backend backend() const noexcept { return backend_; }
+
+  // Whether a batch call will go through compiled code.  False on a build with
+  // no backend, on a refused compile, and wherever Interpret was asked for.
+  [[nodiscard]] bool uses_kernel() const {
+    if (poisoned() || backend_ == Backend::Interpret) {
+      return false;
+    }
+#ifdef DDX_HAS_JIT
+    return static_cast<bool>(compiled(false).kernel);
+#else
+    return false;
+#endif
+  }
+
   [[nodiscard]] std::optional<std::size_t> hessian_colors() const
     requires(output_dim == 1)
   {
@@ -357,7 +397,7 @@ private:
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
       // Not an error a caller handles: run() falls back to interpret().
-      if (auto *const c = compiler()) {
+      if (auto *const c = backend_ == Backend::Compile ? compiler() : nullptr) {
         if (auto k = c->compile(out.graph)) {
           out.kernel = std::move(*k);
         }
@@ -488,6 +528,7 @@ private:
   ArenaPtr arena_{nullptr, borrow};
   std::vector<rt::NodeId> roots_;
 
+  Backend backend_ = Backend::Compile;
   // Eager: one reverse sweep is microseconds, and it keeps every per-point
   // accessor const and constexpr.
   rt::Jacobian derivative_;
@@ -501,6 +542,9 @@ private:
 } // namespace ddx::impl
 
 namespace ddx::rt {
+
+// Named here as well as in impl, since choosing it is a caller's business.
+using impl::Backend;
 
 // Over expressions already built in a caller's own arena.  Partial
 // specialisations contribute no deduction guides, so this is the whole of CTAD.

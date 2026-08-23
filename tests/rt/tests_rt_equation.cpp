@@ -417,3 +417,53 @@ TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
 }
 
 } // namespace
+
+// --- choosing the backend -----------------------------------------------------
+// Compiling is not free and its cost grows faster than the graph, so a caller
+// has to be able to decline it on a build that has the backend.
+
+TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  auto eq = ddx::rt::equation(x * log(x) + y * exp(x * y) + sqrt(x + y));
+
+  constexpr std::size_t n = 16;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.02 * static_cast<double>(i);
+    cy[i] = 0.7 - 0.01 * static_cast<double>(i);
+  }
+  const double *const columns[]{cx.data(), cy.data()};
+
+  const auto run = [&](ddx::rt::Backend which) {
+    std::vector<double> f(n), dx(n), dy(n);
+    double *const values[]{f.data()};
+    double *const partials[]{dx.data(), dy.data()};
+    eq.backend(which);
+    const bool kernel = eq.uses_kernel();
+    *eq.jacobian(columns, values, partials, n);
+    return std::tuple{f, dx, dy, kernel};
+  };
+
+  const auto [f_jit, dx_jit, dy_jit, used_kernel] =
+      run(ddx::rt::Backend::Compile);
+  const auto [f_int, dx_int, dy_int, used_none] =
+      run(ddx::rt::Backend::Interpret);
+
+  EXPECT_EQ(eq.backend(), ddx::rt::Backend::Interpret);
+  EXPECT_FALSE(used_none) << "Interpret still reached for a kernel";
+#ifdef DDX_HAS_JIT
+  EXPECT_TRUE(used_kernel) << "Compile did not compile on a JIT build";
+#endif
+
+  // Near, not equal: the kernel contracts a multiply and an add into an FMA
+  // where the interpreter evaluates them separately, so the two paths agree to
+  // rounding rather than to the bit.  Declining the backend changes which
+  // arithmetic runs, which is the whole point of being able to decline it.
+  for (std::size_t i = 0; i < n; ++i) {
+    EXPECT_NEAR(f_jit[i], f_int[i], 1e-12) << "value at " << i;
+    EXPECT_NEAR(dx_jit[i], dx_int[i], 1e-12) << "d/dx at " << i;
+    EXPECT_NEAR(dy_jit[i], dy_int[i], 1e-12) << "d/dy at " << i;
+  }
+}
