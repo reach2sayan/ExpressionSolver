@@ -11,8 +11,8 @@ namespace ddx::impl {
 
 namespace detail {
 
-// The label a tag names: sym<"x"> / "x"_s carry it as ::value, var<"x"> as
-// ::label.  Left undefined for everything else, which is what CSymbolTag tests.
+// sym<"x"> / "x"_s carry it as ::value, var<"x"> as ::label; undefined
+// elsewhere, which is what CSymbolTag tests.
 template <typename T> struct tag_key_of {};
 template <auto S> struct tag_key_of<symbol_type<S>> {
   static constexpr auto value = S;
@@ -30,14 +30,13 @@ template <typename T> using tag_key_t = tag_key_of<std::remove_cvref_t<T>>;
 template <typename T>
 concept CSymbolTag = requires { detail::tag_key_t<T>::value; };
 
-// One keyword argument: a label bound to a value.  The label is a template
-// parameter, so it costs nothing at run time and is matchable at compile time.
+// One keyword argument: a label bound to a value, the label a template
+// parameter.
 //
 //   named<"x">(1.5)      NamedValue{"x"_s, 1.5}      NamedValue{var<"x">, 1.5}
 //
-// V is any object type, not just Numeric: Map (named_map.hpp) keys arbitrary
-// values by this same spelling.  The numeric entry points -- values(), bind(),
-// Equation::eval() -- constrain V to Numeric where they take it.
+// V is any object type: Map keys arbitrary values by this same spelling, and
+// the numeric entry points constrain V to Numeric where they take it.
 template <FixedString Sym, typename V>
   requires std::is_object_v<V>
 struct NamedValue {

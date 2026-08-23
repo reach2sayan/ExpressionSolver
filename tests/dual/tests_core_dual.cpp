@@ -104,8 +104,7 @@ TEST(ForwardModeAD, BasicArithmetic) {
   EXPECT_DOUBLE_EQ(quot_deriv, 0.5); // (1*2 - 3*0)/4 = 0.5
 }
 TEST(ForwardModeAD, DualScalarArithmetic) {
-  // A bare scalar promotes to a zero-derivative Dual, so the derivative part
-  // of `d` is preserved (or scaled, for * and /) and the value part shifts.
+  // A bare scalar promotes to a zero-derivative Dual.
   constexpr Dual<double> d{3.0, 1.0};
 
   auto [add_v, add_d] = d + 2.0;
@@ -136,8 +135,8 @@ TEST(ForwardModeAD, DualScalarArithmetic) {
   EXPECT_DOUBLE_EQ(acc.template get<1>(), 1.0);
 }
 TEST(ForwardModeAD, ScalarPromotionDeepDual) {
-  // `expr + scalar` must embed a zero derivative at every nesting level: a
-  // single static_cast would need two chained explicit conversions here.
+  // A zero derivative at every nesting level: one static_cast would need two
+  // chained explicit conversions.
   using DD = Dual<Dual<double>>;
   Variable<DD, ddx::impl::FixedString{"x"}> x;
   auto expr = x + 2.0;
@@ -917,9 +916,8 @@ TEST(DualScalarContract, PowMaxMinAndComparisons) {
   EXPECT_TRUE(x != 1.0);
 }
 TEST(DualScalarContract, ImplicitConstantFromScalarAtDepth) {
-  // The S{0} / S c = 1.0 idiom must work for nested duals as a zero-derivative
-  // constant (generic numeric code written against a plain scalar relies on
-  // it).
+  // Generic numeric code written against a plain scalar relies on S{0} and
+  // S c = 1.0 meaning a zero-derivative constant.
   const dual2nd a{0};    // brace-init from int
   const dual2nd b = 2.5; // copy-init needs a non-explicit ctor
   const std::vector<dual2nd> v(3, dual2nd{1}); // vector fill from a scalar
@@ -972,8 +970,7 @@ TEST(ForwardDriver, IdealMixingHessianMatchesClosedForm) {
   EXPECT_NEAR(hess_at(H, 0, 1), 0.0, 1e-6); // no cross term
 }
 TEST(ScopedValue, NestedGuardsOverSiblingScalarsOfOneDual) {
-  // The hessian shape: the inner- and outer-derivative seeds of the
-  // SAME dual2nd are held by two independently scoped guards.
+  // Two independently scoped guards over the SAME dual2nd's seeds.
   dual2nd d{Dual<double>{2.0, 0.0}, Dual<double>{0.0, 0.0}};
   {
     const auto inner = scoped_seed<1.0>(d.value().deriv());
@@ -990,8 +987,8 @@ TEST(ScopedValue, NestedGuardsOverSiblingScalarsOfOneDual) {
 }
 
 TEST(ScopedValue, UsableDuringConstantEvaluation) {
-  // sweep.hpp's reverse_mode_hessian and equation.hpp's
-  // hessian_forward_over_reverse are constexpr, so the guard must be too.
+  // reverse_mode_hessian and hessian_forward_over_reverse are constexpr, so
+  // the guard must be too.
   static constexpr auto probe = []() constexpr {
     double slot = 3.0;
     double seen = 0.0;

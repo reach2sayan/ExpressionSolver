@@ -13,26 +13,18 @@
 #include <span>
 #include <vector>
 
-// ===========================================================================
-// One Equation (include/rt/equation.hpp)
-//
-// `Equation` is one name for both kinds of expression: the compile-time tree
-// and the runtime graph.  The specialisation is keyed on the RTExpression<T>
-// *pattern* rather than on a constraint, because a constraint over
+// One name for both kinds of expression.  The specialisation is keyed on the
+// RTExpression<T> *pattern*, not a constraint: a constraint over
 // <TFirst, TRest...> has the same pattern as the compile-time one and neither
-// constraint subsumes the other -- that would be ambiguous, not overloaded.
-//
-// The bridge is what makes these tests possible: to_graph lowers a typed
-// expression, so the same function can be asked the same question both ways.
-// ===========================================================================
+// subsumes the other.  to_graph lowers a typed expression, so the same function
+// can be asked the same question both ways.
 
 namespace {
 constexpr auto sx = ddx::var<"x">;
 constexpr auto sy = ddx::var<"y">;
 
-// constexpr, never consteval (NOTES.md): one implementation serves a
-// static_assert and a value read at run time.  A runtime graph exists for the
-// second, so this proves the first still works rather than the other way round.
+// constexpr, never consteval (NOTES.md): one implementation serves both a
+// static_assert and a value read at run time.
 consteval double slope_at_two() {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -88,7 +80,8 @@ TEST(RtEquation, SystemsGiveAJacobian) {
   const auto J = *eq.jacobian(1.3, 0.7);
   ASSERT_EQ(J.size(), 4u); // 2 functions x 2 symbols, row-major
 
-  // Row k is the Jacobian row of function k, which the compile-time side agrees on.
+  // Row k is the Jacobian row of function k, which the compile-time side agrees
+  // on.
   const auto row0 = ddx::Equation{sx * sy + sin(sx)}.jacobian(1.3, 0.7);
   const auto row1 = ddx::Equation{exp(sx) - sy * sy}.jacobian(1.3, 0.7);
   EXPECT_NEAR(J[0], row0[0], 1e-12);
@@ -169,9 +162,8 @@ TEST(RtEquation, HessianColoursReflectTheCoupling) {
 
 namespace {
 
-// A Builder is an arena, not something a caller should have to name or keep
-// alive.  equation() makes one, hands out symbols from it, and moves it into
-// the result -- so the Equation owns exactly what it needs.
+// equation() makes the arena, hands out symbols from it and moves it into the
+// result, so a caller never names or keeps a Builder alive.
 TEST(RtEquation, TheFactoryHidesTheArena) {
   const auto eq = ddx::rt::equation([] {
     const auto x = ddx::rt::var("x");
@@ -187,8 +179,7 @@ TEST(RtEquation, TheFactoryHidesTheArena) {
   EXPECT_NEAR(g[1], std::exp(1.0) * std::cos(2.0), 1e-12);
 }
 
-// The point of owning it: an Equation built this way can be returned, stored
-// and passed around.  One whose arena the caller holds cannot.
+// Owning the arena is what lets an Equation be returned, stored and passed.
 TEST(RtEquation, AnOwningEquationOutlivesItsScope) {
   const auto make = [](double c) {
     return ddx::rt::equation([c] {
@@ -203,8 +194,7 @@ TEST(RtEquation, AnOwningEquationOutlivesItsScope) {
   EXPECT_NEAR((*eq.hessian(2.0))[0], 6.0, 1e-12);
 }
 
-// Same answers whichever backend ran: with the JIT this goes through a compiled
-// kernel, without it through the interpreter, and the call site is identical.
+// Same answers through the compiled kernel and the interpreter alike.
 TEST(RtEquation, BatchAgreesWithPerPoint) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -293,8 +283,8 @@ TEST(RtEquation, BatchTakesAnyContiguousRange) {
   EXPECT_DOUBLE_EQ(f[0], 6.0);
 }
 
-// A wrong column count is silent memory corruption if it reaches the kernel;
-// the ABI has no way to notice.  This is the layer that can.
+// A wrong column count is silent corruption once it reaches the kernel; the
+// ABI cannot notice, so this layer has to.
 TEST(RtEquation, AMismatchedColumnCountIsRejected) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -337,11 +327,9 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_EQ(eq.arity(), 2u);
   EXPECT_NEAR(*eq.evaluate(2.0, 3.0), 6.0 + std::sin(2.0), 1e-12);
 
-  // Naming one outside a model has no arena to go in.  var() cannot answer with
-  // an error without costing every model lambda a dereference, so it poisons
-  // the expression instead: the mistake survives every operator applied to it
-  // and reaches the Equation, which carries it rather than handing back a
-  // result<Equation> every caller would have to unwrap first.
+  // var() poisons the expression rather than answering with an error, which
+  // would cost every model lambda a dereference.  The poison survives every
+  // operator and reaches the Equation, which carries it.
   const auto stray = ddx::rt::var("stray");
   EXPECT_TRUE(stray.poisoned());
   EXPECT_TRUE((stray * 2.0 + 1.0).poisoned());
@@ -355,9 +343,7 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_EQ(poisoned.evaluate(1.0).error().code, ddx::errc::no_arena);
   EXPECT_EQ(poisoned.jacobian(1.0).error().code, ddx::errc::no_arena);
   EXPECT_EQ(poisoned.point(1.0).error().code, ddx::errc::no_arena);
-  // Nothing answers a degenerate 0 that a valid literal-only equation could
-  // also answer: every count is nullopt, so a caller cannot loop over it by
-  // accident.
+  // Every count is nullopt, never a 0 a caller could loop over by accident.
   EXPECT_FALSE(poisoned.arity().has_value());
   EXPECT_FALSE(poisoned.symbols().has_value());
   EXPECT_FALSE(poisoned.jacobian_columns().has_value());
@@ -366,8 +352,8 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_FALSE(poisoned.hessian_colors().has_value());
 }
 
-// The other refusal: a bare literal reaches no graph, so it names no builder.
-// Distinct from no_arena, and the poisoned Equation is where it surfaces.
+// A bare literal reaches no graph, so it names no builder -- distinct from
+// no_arena, and surfacing on the poisoned Equation.
 TEST(RtEquation, ALiteralNamesNoGraph) {
   const auto eq = ddx::rt::equation(ddx::rt::RTExpression<double>{2.0});
   ASSERT_TRUE(eq.status().has_value());

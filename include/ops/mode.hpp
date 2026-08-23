@@ -1,10 +1,5 @@
 #pragma once
-// Which sweep a derivative is taken with.  It lives down here, with the
-// operation vocabulary, because both graphs answer to it: the compile-time
-// drivers in drivers/symbolic.hpp and the runtime ones in rt/derivative.hpp.
-// Before it was extracted, rt/ included the whole compile-time driver tree --
-// duals, tensors and all -- for this one enumeration.
-//
+// Which sweep a derivative is taken with :
 // Forward mode is reached through the drivers, which take a callable rather
 // than a Mode, so it is not a value here.
 //

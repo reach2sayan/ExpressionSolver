@@ -19,8 +19,8 @@ inline void fmt_put(std::format_context &ctx, std::string_view s) {
   ctx.advance_to(std::ranges::copy(s, ctx.out()).out);
 }
 
-// S stays unconstrained on purpose: std::formattable<S, char> would recurse
-// through the very std::formatter specialisation that derives from this.
+// S unconstrained: std::formattable<S, char> would recurse through the very
+// std::formatter specialisation that derives from this.
 template <typename S> struct dual_formatter_base {
   constexpr auto parse(std::format_parse_context &ctx) {
     return part_.parse(ctx);

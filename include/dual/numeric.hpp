@@ -56,15 +56,11 @@ std::vector<double> jacobian(F &&f, const std::span<const double> x) {
 
 namespace detail {
 
-// Value, first derivatives and symmetric Hessian at x w.r.t. `active`: an
-// O(m^2) forward-over-forward sweep on dual2nd.  Probe (i, j) seeds active[i]
-// in the outer derivative slot and active[j] in the inner one, so f returns
-// ((f, df/dx_j), (df/dx_i, d2f/dx_i dx_j)).  Only those two scalars move per
-// probe, so they are toggled in place.  Writes every cell of both outputs.
-//
-// Each guard holds a bare double, never the enclosing dual2nd: when ai == aj
-// they name two scalars of the same number and a guard over it would clobber
-// the sibling.
+// An O(m^2) forward-over-forward sweep on dual2nd.  Probe (i, j) seeds
+// active[i] in the outer derivative slot and active[j] in the inner one, so f
+// returns ((f, df/dx_j), (df/dx_i, d2f/dx_i dx_j)); only those two scalars move
+// per probe.  Each guard holds a bare double, never the enclosing dual2nd: at
+// ai == aj they name two scalars of the same number.
 template <CEnergyOf<dual2nd> F, CIndexRange R>
 constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
                               double *const grad_out, double *const hess_out) {
@@ -107,8 +103,8 @@ double hessian(F &&f, const std::span<const double> x,
                       hess_out.data());
 }
 
-// Compile-time arity: std::array throughout, so this path allocates nothing --
-// and so it is the one Hessian driver a constant evaluation can run.
+// std::array throughout, so this is the one Hessian driver a constant
+// evaluation can run.
 template <std::size_t N, CEnergyOf<dual2nd> F>
 constexpr HessianStatic<N> hessian_static(F &&f,
                                           const std::span<const double> x) {

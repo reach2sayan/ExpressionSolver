@@ -65,10 +65,8 @@ TEST(UnivariateDerivative, MaxAndMinAreDifferentiable) {
   EXPECT_DOUBLE_EQ(
       Equation{max(x * x, 1.0)}.template univariate_derivative<2>(2.0), 2.0);
 }
-// The guard on "everything is constexpr", differentiation entry points
-// included, and the tripwire for anything (a foreign matrix type, a
-// std::vector, an allocation) leaking into the symbolic core: a leak makes
-// these static_asserts fail to compile rather than merely slow something down.
+// The tripwire for anything -- a foreign matrix type, a std::vector, an
+// allocation -- leaking into the symbolic core: it fails to compile here.
 TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
   constexpr Variable<double, FixedString{"x"}> x;
   constexpr Variable<double, FixedString{"y"}> y;
@@ -135,9 +133,8 @@ TEST(MdLayout, LeadingSimplexKeepsOutputsApart) {
   EXPECT_NE((t[0, 1, 2]), (t[1, 1, 2])); // but outputs never alias
 }
 TEST(DerivativeTensorTest, ForwardAndReverseHessiansAgree) {
-  // derivative_tensor<2> is forward-over-forward; hessian<Reverse> is
-  // forward-over-reverse.  Two algorithms, same tensor and same type --
-  // which is what lets a caller pick on cost alone.
+  // Forward-over-forward and forward-over-reverse: two algorithms, same
+  // tensor and same type, so a caller picks on cost alone.
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
   {
@@ -180,8 +177,8 @@ TEST(DerivativeTensorTest, ForwardAndReverseHessiansAgree) {
   }
 }
 TEST(ForwardDriver, DriverHessianAgreesWithEquationHessian) {
-  // Two routes to the same Hessian with two return shapes: the driver hands
-  // back a tuple of owning row-major buffers, Equation an md_tensor.
+  // Two return shapes: a tuple of owning row-major buffers, and an
+  // md_tensor.
   Variable<ddx::impl::Dual<double>, ddx::impl::FixedString{"x"}> x;
   Variable<ddx::impl::Dual<double>, ddx::impl::FixedString{"y"}> y;
   auto expr = x * y + x * x + sin(y);
@@ -197,8 +194,7 @@ TEST(ForwardDriver, DriverHessianAgreesWithEquationHessian) {
           << "driver vs Equation at (" << i << "," << j << ")";
     }
   }
-  // Row-major is part of the driver's contract: (0,1) is element 1 of the flat
-  // buffer.
+  // Row-major: (0,1) is element 1 of the flat buffer.
   EXPECT_DOUBLE_EQ(hess_ptr(H)[1], hess_at(H, 0, 1));
 }
 TEST(MdTensor, PackedSymmetricTensorMatchesDenseEvaluation) {

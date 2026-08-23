@@ -21,10 +21,9 @@ inline constexpr NodeId no_node = ~NodeId{0};
 
 namespace detail {
 
-// What `roots` reach, over a node set whose ids are topological, so one
-// descending pass settles it.  Not a filtered view: the body marks entries the
-// pass has not reached, which a lazy filter would read mid-write.  Operand
-// access is the caller's -- a Builder has `a`/`b`, a frozen Graph a CSR row.
+// Ids are topological, so one descending pass settles it.  Not a filtered view:
+// the body marks entries the pass has not reached, which a lazy filter would
+// read mid-write.  Operand access is the caller's.
 [[nodiscard]] inline std::vector<bool>
 reachable(std::size_t n, std::span<const NodeId> roots, auto &&operands_of) {
   std::vector<bool> live(n, false);
@@ -47,9 +46,8 @@ template <impl::Numeric T> struct Node {
   std::uint32_t slot = 0; // Var
 };
 
-// The mutable half of the graph: nodes are interned as they are formed, so an
-// id *is* the identity of a subexpression.  The compile-time counterpart is the
-// operator factories in expr/values.hpp, where identity is a type comparison.
+// Nodes are interned as they are formed, so an id *is* the identity of a
+// subexpression -- where the compile-time side compares types.
 template <impl::Numeric T = double> class Builder {
 public:
   using value_type = T;
@@ -61,8 +59,7 @@ public:
 
   [[nodiscard]] constexpr NodeId variable(std::string_view name) {
     const auto it = std::ranges::find(symbols_, name);
-    // Index before growing: emplace_back invalidates `it`, and for a new symbol
-    // the slot is the old size, which is what end() - begin() already is.
+    // Index before growing: emplace_back invalidates `it`.
     const auto slot = static_cast<std::uint32_t>(it - symbols_.begin());
     if (it == symbols_.end()) {
       symbols_.emplace_back(name);
@@ -109,7 +106,7 @@ private:
       return std::uint64_t{n.slot};
     }
     // Anything wider than a word lands in one bucket and is separated by
-    // `same` below -- a few comparisons among constants, nothing elsewhere.
+    // `same` below.
     if constexpr (std::is_trivially_copyable_v<T> && sizeof(T) == 8) {
       return std::bit_cast<std::uint64_t>(n.value);
     } else {
@@ -176,8 +173,8 @@ private:
     return id;
   }
 
-  // Is this node the literal k?  A scalar with no equality never matches, so
-  // the identity rewrites in ops/algebra.hpp simply stop firing for it.
+  // A scalar with no equality never matches, so ops/algebra.hpp's identity
+  // rewrites simply stop firing for it.
   constexpr bool holds(NodeId id, int k) const {
     if (id == no_node || nodes_[id].op != OpCode::Const) {
       return false;
@@ -208,8 +205,8 @@ private:
     }
   }
 
-  // The same predicates simplify.hpp answers with type traits, answered here
-  // by id compare -- interning makes structural identity an id equality.
+  // simplify.hpp's predicates, answered by id compare: interning makes
+  // structural identity an id equality.
   constexpr bool holds_pred(impl::algebra::Pred p, NodeId a,
                             NodeId b) const noexcept {
     using impl::algebra::Pred;
@@ -261,9 +258,8 @@ private:
     const bool cb = b != no_node && nodes_[b].op == OpCode::Const;
     const bool unary = arity_of(op) == 1;
 
-    // Constant arithmetic first: it runs the same *_impl functor the
-    // compile-time evaluator does, so a folded node and an evaluated one
-    // cannot disagree.
+    // Constant arithmetic first, through the same *_impl functor the
+    // compile-time evaluator uses.
     if (unary && ca) {
       return constant(apply<T>(op, nodes_[a].value));
     }

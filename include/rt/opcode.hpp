@@ -7,8 +7,7 @@
 #include <string_view>
 
 // The runtime mirror of the compile-time operation set.  Rows are (factory
-// spelling, enumerator, label), the shape DDX_UNARY_MATH_TABLE already has, so
-// the two sets cannot drift.
+// spelling, enumerator, label), the shape DDX_UNARY_MATH_TABLE already has.
 namespace ddx::rt {
 
 #define DDX_RT_LEAF_TABLE(X)                                                   \
@@ -62,10 +61,9 @@ struct OpInfo {
   std::uint8_t arity;
 };
 
-// Arity is a property of which sub-table a row sits in, not a column any row
-// carries, so the three groups fill one array in three passes.  Each row lands
-// at its own enumerator rather than at a running index, so nothing here depends
-// on the table order matching the enum's.
+// Arity is which sub-table a row sits in, so the three groups fill one array in
+// three passes.  Each row lands at its own enumerator, so nothing depends on
+// the table order matching the enum's.
 inline constexpr std::array<OpInfo, op_count> op_info = [] {
   std::array<OpInfo, op_count> t{};
 #define DDX_RT_ROW(fn, Op, label, ...)                                         \
@@ -86,9 +84,8 @@ inline constexpr std::array<OpInfo, op_count> op_info = [] {
 
 } // namespace detail
 
-// An OpCode reaching these from outside the builder -- a deserialised graph, a
-// cast byte -- need not name a row, so both answer out of range rather than
-// index past the table.
+// An OpCode from outside the builder -- a deserialised graph, a cast byte --
+// need not name a row, so both answer out of range.
 [[nodiscard]] constexpr std::string_view label_of(OpCode op) noexcept {
   const auto i = static_cast<std::size_t>(op);
   return i < op_count ? detail::op_info[i].label : "?";

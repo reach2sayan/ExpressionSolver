@@ -7,25 +7,15 @@
 #include <cmath>
 #include <vector>
 
-// ===========================================================================
-// Newton-Raphson (include/rt/equation.hpp)
-//
-// The case the runtime path exists for: an expression assembled from data,
-// then evaluated many times at changing values.  Build once, differentiate
-// once, iterate.
-//
-// A solver is also the strongest correctness argument available for a
-// Jacobian.  A Jacobian row that is slightly wrong still evaluates; a Jacobian
-// that is wrong does not converge, and quadratic convergence is a sharp test
-// of it being exactly right rather than approximately so.
-// ===========================================================================
+// Build once, differentiate once, iterate -- the case the runtime path exists
+// for.  A slightly wrong Jacobian still evaluates but converges linearly, so
+// quadratic convergence is the sharp test.
 
 namespace {
 using ddx::rt::Builder;
 using models::RE;
 
-// Solve a 2x2 system by hand -- small enough that a linear solver would be
-// more machinery than the thing under test.
+// By hand: a linear solver would be more machinery than the thing under test.
 std::array<double, 2> solve2(const std::vector<double> &J,
                              const std::array<double, 2> &rhs) {
   const double det = J[0] * J[3] - J[1] * J[2];
@@ -59,14 +49,12 @@ TEST(RtNewton, SolvesASystemBuiltAtRuntime) {
   const double expected_x = std::sqrt(2.0 + std::sqrt(3.0));
   EXPECT_NEAR(at[0], expected_x, 1e-12);
   EXPECT_NEAR(at[1], 1.0 / expected_x, 1e-12);
-  // Quadratic convergence from a decent start: a wrong Jacobian would still
-  // converge, but linearly and in far more than this.
+  // Quadratic convergence: a wrong Jacobian needs far more iterations.
   EXPECT_LE(taken, 8);
 }
 
-// The real one: Peng-Robinson's cubic, solved for the compressibility Z at a
-// composition read from "data".  This is what a flash calculation does, and
-// the derivative it needs is exactly what the graph was built to provide.
+// Peng-Robinson's cubic solved for Z at a composition read from "data" -- what
+// a flash calculation does.
 TEST(RtNewton, SolvesPengRobinsonForCompressibility) {
   constexpr std::size_t species = 6;
   Builder<> b;
@@ -99,8 +87,7 @@ TEST(RtNewton, SolvesPengRobinsonForCompressibility) {
   EXPECT_GT(at[z_slot], 0.0) << "a compressibility factor is positive";
 }
 
-// Build once, solve many: a parameter sweep re-uses one Equation across every
-// point, which is the shape the whole runtime path is arranged around.
+// Build once, solve many: one Equation re-used across a parameter sweep.
 TEST(RtNewton, OneEquationServesAWholeSweep) {
   Builder<> b;
   const auto x = var(b, "x");

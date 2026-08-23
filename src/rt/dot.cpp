@@ -1,7 +1,5 @@
-// Here rather than in rt/dot.hpp so that boost/graph/graphviz.hpp -- which
-// carries the DOT *reader* as well as the writer -- reaches this translation
-// unit and no other.  rt::Dot resolves the scalar-dependent parts into
-// DotNode, so nothing below names a `T`.
+// Here rather than in rt/dot.hpp so boost/graph/graphviz.hpp -- which carries
+// the DOT *reader* too -- reaches this translation unit and no other.
 
 #include "rt/dot.hpp"
 

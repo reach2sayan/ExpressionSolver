@@ -17,16 +17,15 @@
 //
 //   std::cout << ddx::rt::Dot{g};          // or `... | dot -Tsvg`
 //
-// Its own header, not part of graph.hpp: boost/graph/graphviz.hpp carries the
-// reader as well as the writer, and the writer lives in src/rt/dot.cpp, so
-// graphviz reaches that translation unit and no other.
+// Its own header: boost/graph/graphviz.hpp carries the reader as well, and the
+// writer lives in src/rt/dot.cpp, so graphviz reaches one TU only.
 namespace ddx::rt {
 
 // Live is what codegen emits; All draws what the freeze pruned, dashed.
 enum class Scope : std::uint8_t { Live, All };
 
-// What the CSR does not say.  Every field is decided by the graph's scalar, so
-// resolving them here is what leaves the writer carrying no `T`.
+// What the CSR does not say.  Resolved here, which leaves the writer carrying
+// no `T`.
 struct DotNode {
   std::string label;
   std::string shape;
@@ -37,11 +36,9 @@ struct DotNode {
 [[nodiscard]] DDX_API std::string
 to_dot(const Adjacency &adj, std::span<const DotNode> nodes, Scope scope);
 
-// Borrows and renders on demand, the same shape as jit::Ir; the deleted
-// overload makes the compiler check that the graph outlives the handle.
-//
-// Edges point from a node to its operands, the direction codegen walks, and
-// carry the operand slot where the two are not interchangeable.
+// Borrows and renders on demand, as jit::Ir does; the deleted overload checks
+// that the graph outlives the handle.  Edges point from a node to its operands
+// and carry the operand slot where the two are not interchangeable.
 template <impl::Numeric T = double> class Dot {
 public:
   explicit Dot(const Graph<T> &g, Scope scope = Scope::Live) noexcept

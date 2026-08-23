@@ -7,9 +7,8 @@ TEST(Ownership, EquationSubtreeAccessorsWorkOnTemporaries) {
   EXPECT_DOUBLE_EQ(Equation(x * y).get<1>().eval(2.0), 2.0);
   EXPECT_DOUBLE_EQ(Equation(x * y)[idx<2>()].eval(4.0), 4.0);
 }
-// A plain arithmetic energy lambda carries no tag and is not a CExpression, so
-// it must keep routing to the raw-callable branch — the expr-graph path is
-// auto-detected, never forced onto a lambda that merely looks numeric.
+// A plain arithmetic lambda is not a CExpression, so it must keep routing to
+// the raw-callable branch.
 TEST(SeededExprEnergy, RawLambdaIsNotMistakenForAGraph) {
   auto f = [](const auto *y) {
     using std::log;

@@ -4,29 +4,12 @@
 #include <cstdint>
 
 // The algebraic identities, written once.
-//
-// Two simplifiers consume these: symbolic/simplify.hpp rewrites *types* while
-// an expression is built, and rt/builder.hpp rewrites *node ids* while a graph
-// is interned.  The rules are the same either way, so they live here as data
-// rather than being spelled twice -- the drift that costs is a rule one side
-// learns and the other does not.
-//
-// Data, not an X-macro: the operation tables in ops/unary_math.hpp have to be
-// macros because they emit declarations (enumerators, friend functions, case
-// labels).  A rewrite rule emits nothing.  It is a value each side matches
-// against in its own representation, which an array does better -- greppable,
-// debuggable, and assertable over.
-//
-// Not IEEE-faithful, deliberately: x*0 -> 0, 0/x -> 0, x/x -> 1 and (n/x)*x
-// -> n all disagree with IEEE at 0, Inf and NaN.  They cancel arithmetic the
-// derivative rules manufactured rather than anything a user wrote, which is
-// the trade every AD library makes.
 namespace ddx::impl::algebra {
 
 enum class RuleOp : std::uint8_t { Add, Mul, Div, Pow, Neg };
 
-// What has to hold of the operands.  Each simplifier answers these in its own
-// terms: a type trait on one side, a node-id compare on the other.
+// Each simplifier answers these in its own terms: a type trait on one side, a
+// node-id compare on the other.
 enum class Pred : std::uint8_t {
   ZeroA,   // a is the literal 0
   ZeroB,   // b is the literal 0
@@ -59,8 +42,7 @@ struct Rule {
   bool needs_commutative_multiply = false;
 };
 
-// Order is significant: both simplifiers take the first match, so this reads
-// top to bottom exactly as the if-chains it replaced did.
+// Order is significant: both simplifiers take the first match.
 inline constexpr std::array kRules{
     // clang-format off
     Rule{RuleOp::Mul, Pred::ZeroA,    Take::LitZero},

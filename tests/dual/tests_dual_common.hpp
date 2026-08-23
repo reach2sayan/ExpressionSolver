@@ -1,7 +1,5 @@
 #pragma once
-// What the forward-mode suite adds to tests_common.hpp: the dual scalars
-// themselves, the drivers only they can answer, and the two shapes a
-// second-order result comes back in.
+// What the forward-mode suite adds to tests_common.hpp.
 
 #include "tests_common.hpp"
 
@@ -10,9 +8,8 @@
 #include "dual/numeric.hpp"
 #include "dual/taylor_dual.hpp"
 
-// Test-side conveniences over the drivers' two second-order result shapes.
-// Both name the same members, so the only thing that differs is whether the
-// buffers are owned (unique_ptr, runtime arity) or inline (array, static N).
+// The drivers' two second-order result shapes name the same members; they
+// differ only in owned (unique_ptr) vs inline (array) buffers.
 template <typename T>
 concept CHessianResult = requires(const T &H) {
   { H.value } -> std::convertible_to<double>;

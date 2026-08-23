@@ -1,12 +1,8 @@
 // A tour of every way to ask this library for a derivative, with timings.
 //
-//   LAMBDA — an ordinary templated function; a black box the drivers can only
-//            evaluate at seeded dual numbers.
-//   GRAPH  — the same formula built from Variable<>, so it is a compile-time
-//            tree whose sparsity, symbolic partials and constexpr evaluation
-//            all fall out of its type.
-//
-// Both give the same numbers; see the last two sections for the difference.
+//   LAMBDA — a black box the drivers can only evaluate at seeded duals.
+//   GRAPH  — the same formula from Variable<>, so sparsity, symbolic partials
+//            and constexpr evaluation all fall out of its type.
 
 #include "ddx.hpp"               // the public surface: Equation, var, named
 #include "dual/hessian.hpp"      // hessian(), jacobian()
@@ -38,8 +34,8 @@ namespace {
 // loop.
 volatile double g_sink = 0.0;
 
-// Nanoseconds per call, best-of-rounds.  The minimum, not the mean: one
-// descheduled run inflates a mean beyond recovery.  One warm-up is discarded.
+// Nanoseconds per call, best-of-rounds: one descheduled run inflates a mean
+// beyond recovery.  One warm-up is discarded.
 template <std::invocable F>
 double bench_ns(F &&f, int reps = 4000, int rounds = 7) {
   using clock = std::chrono::steady_clock;
@@ -123,8 +119,7 @@ auto make_chain8() {
 } // namespace
 
 int main() {
-  // Positional values are in CANONICAL (alphabetical, not source) order; the
-  // named<> forms below sidestep the question.
+  // Positional values are in CANONICAL (alphabetical) order.
   const std::array<double, 3> p{0.4, 0.7, 1.1}; // x, y, z
   const std::span<const double> xs{p.data(), p.size()};
 
@@ -202,7 +197,7 @@ int main() {
     println("          packed: stores {} cells, not {}", Hs.size(), 3 * 3);
   }
 
-  // ---- HIGHER ORDER, graph only: there is no lambda entry point above 2nd.
+  // ---- HIGHER ORDER, graph only: no lambda entry point above 2nd.
   println("\nHIGHER ORDER  (graph only)");
   {
     const auto T = Equation{gplain}.template derivative_tensor<3>(p);
@@ -247,9 +242,8 @@ int main() {
             1000));
   }
 
-  // ---- The same 8-variable chain both ways.  The graph's sparsity is known
-  // from its type, so the sweep count follows the bandwidth rather than n --
-  // a gap that widens with n (~10x at n = 16).
+  // ---- The same 8-variable chain both ways.  The graph's sparsity is in its
+  // type, so the sweep count follows the bandwidth rather than n (~10x at 16).
   println("\nSTRUCTURED PROBLEM — 8-variable chain, Hessian");
   {
     std::array<double, 8> q{};

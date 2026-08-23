@@ -7,17 +7,15 @@
 #include <cstddef>
 #include <ranges>
 
-// The one layout beyond the standard ones: a derivative tensor's symmetry as
-// storage rather than convention.  (The sparse-pattern layout is in
-// coupling.hpp, next to the pass that derives it.)  The mapping is a literal
-// type, so nothing here allocates or holds anything but extents.
+// A derivative tensor's symmetry as storage rather than convention.  (The
+// sparse-pattern layout is in coupling.hpp, next to the pass deriving it.)  The
+// mapping is a literal type, so nothing here allocates.
 namespace ddx::impl {
 
 namespace detail {
 
-// C(n, k), integer arithmetic only: the value is a storage offset, so a rounded
-// double would file a derivative in the wrong cell.  consteval, because this
-// only ever sizes storage; the subscript path uses binomial_fixed.
+// C(n, k), integer arithmetic only: a rounded double would file a derivative in
+// the wrong cell.  consteval; the subscript path uses binomial_fixed.
 [[nodiscard]] consteval std::size_t binomial(std::size_t n,
                                              std::size_t k) noexcept {
   if (k > n) {
@@ -33,10 +31,9 @@ static_assert(binomial(4, 2) == 6);
 static_assert(binomial(8, 3) == 56);
 static_assert(binomial(10, 0) == 1);
 
-// C(n, K) with K fixed: the falling product over K!.  binomial() above is wrong
-// for the subscript path -- its `k = min(k, n - k)` makes the fold's bound
-// depend on the runtime n, so the loop cannot unroll.  Here it collapses to a
-// few multiplies and one divide.
+// C(n, K) with K fixed: the falling product over K!.  binomial()'s
+// `k = min(k, n - k)` makes the fold's bound depend on the runtime n, so the
+// loop cannot unroll; this collapses to a few multiplies and one divide.
 template <std::size_t K>
 [[nodiscard]] constexpr std::size_t binomial_fixed(std::size_t n) noexcept {
   if (n < K) {
@@ -58,13 +55,11 @@ static_assert(binomial_fixed<2>(1) == 0);
 
 } // namespace detail
 
-// layout_leading_simplex<Lead>: Lead dense leading axes over a simplex-packed
-// remainder.  By Schwarz only non-decreasing multi-indices over the derivative
-// axes carry distinct values -- C(N + Order - 1, Order) against N^Order dense
-// cells.  Lead covers a vector-valued Equation, whose output axis is neither
-// interchangeable with the derivative axes nor the same length; Lead == 0 is
-// the scalar case.  The symmetric part ranks the sorted multiset in colex
-// order, through the bijection b_t = a_t + t.
+// Lead dense leading axes over a simplex-packed remainder.  By Schwarz only
+// non-decreasing multi-indices over the derivative axes carry distinct values:
+// C(N + Order - 1, Order) against N^Order dense cells.  Lead covers a
+// vector-valued Equation's output axis; Lead == 0 is the scalar case.  The
+// symmetric part ranks the sorted multiset in colex order, via b_t = a_t + t.
 template <std::size_t Lead> struct layout_leading_simplex {
   template <md::CExtents Ext> class mapping {
     static_assert(Ext::rank() > Lead,

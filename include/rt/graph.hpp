@@ -34,8 +34,8 @@ public:
 
   using value_type = T;
 
-  // What the output columns are, in the order stored.  Codegen and the caller
-  // agree on a column's meaning from this, not by positional convention.
+  // Codegen and the caller agree on a column's meaning from this, not by
+  // positional convention.
   struct Layout {
     std::size_t values = 0;   // m
     std::size_t jacobian = 0; // m * n, row-major by function
@@ -106,8 +106,8 @@ public:
     return std::ranges::subrange(first, last);
   }
 
-  // In id order, which is topological, so a consumer emits them in one pass.
-  // The view refers to this graph and must not outlive it.
+  // Id order is topological, so a consumer emits them in one pass.  The view
+  // must not outlive this graph.
   [[nodiscard]] auto live_nodes() const {
     return std::views::iota(NodeId{0}, static_cast<NodeId>(size())) |
            std::views::filter([this](NodeId v) { return live_[v]; });
@@ -117,8 +117,7 @@ public:
     return static_cast<std::size_t>(std::ranges::distance(live_nodes()));
   }
 
-  // Codegen, the interpreter and the ABI size checks need the same split, so
-  // it is derived once here rather than in each of them.
+  // Derived once, for codegen, the interpreter and the ABI size checks.
   struct Blocks {
     std::span<const NodeId> values;
     std::span<const NodeId> jacobian;
@@ -194,8 +193,8 @@ public:
     return *this;
   }
 
-  // Nodes a caller already has, rather than sweeping again: Equation builds
-  // its derivative in the constructor and freezes only on a batch call.
+  // Nodes a caller already has: Equation builds its derivative in the
+  // constructor and freezes only on a batch call.
   constexpr GraphBuilder &values_from(std::span<const NodeId> roots) {
     roots_.assign(roots.begin(), roots.end());
     outputs_.assign(roots.begin(), roots.end());

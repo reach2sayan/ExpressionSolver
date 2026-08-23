@@ -21,10 +21,10 @@ namespace {
 
 // Global LLVM state, and a process may hold more than one Compiler.
 void init_native_target_once() {
-  [[maybe_unused]] static const bool ready = [] {
+  [[maybe_unused]] static const auto ready = [] {
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
-    return true;
+    return 42;
   }();
 }
 
@@ -32,14 +32,14 @@ void init_native_target_once() {
 // what a caller can act on, so it is kept.
 [[nodiscard]] error as_error(const errc code, const llvm::Twine &what,
                              llvm::Error e) {
-  return error{code, (what + ": " + llvm::toString(std::move(e))).str()};
+  return error{.code = code,
+               .detail = (what + ": " + llvm::toString(std::move(e))).str()};
 }
 
-// Every libm entry point an emitted kernel can call, defined outright rather
-// than left to the process: GetForCurrentProcess resolves only what a loaded
-// module exports -- none of these under a static CRT -- and where the process
-// does export them, nothing says it is the libm this TU was compiled against.
-// Defining them pins a kernel and the interpreter to the same one.
+// Every libm entry point an emitted kernel can call, defined outright:
+// GetForCurrentProcess resolves only what a loaded module exports, and nothing
+// says that is the libm this TU was compiled against.  Defining them pins the
+// kernel and the interpreter to the same one.
 [[nodiscard]] llvm::Error define_libm(llvm::orc::ExecutionSession &es,
                                       llvm::orc::JITDylib &jd,
                                       const llvm::DataLayout &dl) {
@@ -62,9 +62,8 @@ void init_native_target_once() {
   return jd.define(llvm::orc::absoluteSymbols(std::move(syms)));
 }
 
-// `have` is whether libmvec resolves in this process, not whether the target
-// could have one: promising the vectoriser a vector sin it cannot then call
-// fails at link, and scalar transcendentals beat a kernel that will not load.
+// Whether libmvec resolves in *this process*, not whether the target could have
+// one: promising the vectoriser a vector sin it cannot call fails at link.
 llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
                                                 const Options &opt,
                                                 const bool have) {
@@ -136,32 +135,32 @@ struct Compiler::Impl {
     init_native_target_once();
     auto impl = std::make_shared<Impl>();
 
-    auto jtmb = llvm::orc::JITTargetMachineBuilder::detectHost();
-    if (!jtmb) {
+    if (auto jtmb = llvm::orc::JITTargetMachineBuilder::detectHost(); !jtmb) {
       return std::unexpected{
           as_error(errc::jit_target, "detecting the host", jtmb.takeError())};
-    }
-    // Parity with the project's -march=native.
-    jtmb->setCPU(llvm::sys::getHostCPUName().str());
-    for (const auto &[feature, enabled] : llvm::sys::getHostCPUFeatures()) {
-      jtmb->getFeatures().AddFeature(feature, enabled);
-    }
+    } else {
+      // Parity with the project's -march=native.
+      jtmb->setCPU(llvm::sys::getHostCPUName().str());
+      for (const auto &[feature, enabled] : llvm::sys::getHostCPUFeatures()) {
+        jtmb->getFeatures().AddFeature(feature, enabled);
+      }
 
-    auto tm = jtmb->createTargetMachine();
-    if (!tm) {
-      return std::unexpected{as_error(
-          errc::jit_target, "creating a target machine", tm.takeError())};
-    }
-    impl->tm = std::move(*tm);
+      if (auto tm = jtmb->createTargetMachine(); !tm) {
+        return std::unexpected{as_error(
+            errc::jit_target, "creating a target machine", tm.takeError())};
+      } else {
+        impl->tm = std::move(*tm);
+      }
 
-    auto jit = llvm::orc::LLJITBuilder()
-                   .setJITTargetMachineBuilder(std::move(*jtmb))
-                   .create();
-    if (!jit) {
-      return std::unexpected{
-          as_error(errc::jit_target, "creating the JIT", jit.takeError())};
+      auto jit = llvm::orc::LLJITBuilder()
+                     .setJITTargetMachineBuilder(std::move(*jtmb))
+                     .create();
+      if (!jit) {
+        return std::unexpected{
+            as_error(errc::jit_target, "creating the JIT", jit.takeError())};
+      }
+      impl->jit = std::move(*jit);
     }
-    impl->jit = std::move(*jit);
 
     llvm::orc::JITDylib &jd = impl->jit->getMainJITDylib();
     const llvm::DataLayout &dl = impl->jit->getDataLayout();

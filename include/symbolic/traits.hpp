@@ -15,9 +15,8 @@ inline constexpr bool is_variable_v<Variable<T, C, F>> = true;
 template <typename T>
 concept CVariable = is_variable_v<std::remove_cvref_t<T>>;
 
-// Freezing a symbol: same leaf, same value lookup, zero derivative.  A pure
-// type transform, which is what keeps the symbolic Jacobian made of empty
-// types.
+// Same leaf, same value lookup, zero derivative.  A pure type transform, which
+// keeps the symbolic Jacobian made of empty types.
 template <CVariable T> struct frozen_variable;
 template <Numeric T, CFixedString auto C, bool F>
 struct frozen_variable<Variable<T, C, F>> {
@@ -155,13 +154,12 @@ make_all_constant_except(const Expression<Op, C...> &expr) noexcept
       expr.expressions());
 }
 
-// Canonical symbol order: alphabetical by name.  A metafunction rather than a
-// comparison object because that is what mp_sort takes.
+// Alphabetical by name; a metafunction because that is what mp_sort takes.
 template <CSymbol A, CSymbol B>
 struct symbol_less : std::bool_constant<(A::name < B::name)> {};
 
-// mp_sort is stable, which is what keeps a tie -- two symbols of the same name,
-// which mp_unique below then collapses -- from reordering the rest.
+// mp_sort is stable, so a tie -- two symbols of the same name, collapsed by
+// mp_unique below -- does not reorder the rest.
 template <CSymbolList List> using sort_tuple_t = mp::mp_sort<List, symbol_less>;
 
 template <CSymbolList List>

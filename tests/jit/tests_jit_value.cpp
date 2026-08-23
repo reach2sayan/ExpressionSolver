@@ -10,38 +10,29 @@
 #include <type_traits>
 #include <vector>
 
-// ===========================================================================
-// JIT'd values (src/jit/codegen.cpp)
-//
-// The interpreter in rt/interpret.hpp is the reference: it and the compiled
-// kernel walk the same graph, so any disagreement is a codegen bug rather than
-// a question about what the expression means.  Batch shape throughout, because
-// that is the shape the kernel exists for.
-// ===========================================================================
+// The interpreter in rt/interpret.hpp is the reference: it and the kernel walk
+// the same graph, so a disagreement is a codegen bug.  Batch shape throughout.
 
 namespace {
 using ddx::rt::Builder;
 using ddx::rt::Graph;
 
-// A host with no native target has no JIT to test; every test here needs one,
-// so bring it up once and let the assertion name the reason if it will not.
+// No native target means no JIT to test; bring it up once and name the reason.
 ddx::jit::Compiler &compiler() {
   static ddx::jit::result<ddx::jit::Compiler> c = ddx::jit::Compiler::create();
   EXPECT_TRUE(c.has_value()) << (c ? "" : c.error().detail);
   return *c;
 }
 
-// A compile that has to succeed for the test to mean anything.  compile()
-// answers with result<Kernel>; the assertion names LLVM's own reason when it
-// does not, instead of an empty Kernel three lines later.
+// compile() answers with result<Kernel>; name LLVM's reason here rather than
+// meeting an empty Kernel three lines later.
 ddx::jit::Kernel must_compile(auto &&...args) {
   auto k = compiler().compile(static_cast<decltype(args) &&>(args)...);
   EXPECT_TRUE(k.has_value()) << (k ? std::string{} : k.error().detail);
   return k ? std::move(*k) : ddx::jit::Kernel{};
 }
 
-// Compile the value of `build` and compare a whole batch against the
-// interpreter, point by point.
+// Compile `build` and compare a batch against the interpreter.
 void expect_matches_interpreter(auto build, std::size_t nvars,
                                 std::size_t n = 64) {
   Builder<> b;
@@ -83,9 +74,8 @@ void expect_matches_interpreter(auto build, std::size_t nvars,
   }
 }
 
-// A Compiler is the LLJIT, and a Kernel is a pointer into code it owns: there
-// is one owner, but it has to be able to move -- Equation keeps one in a static
-// and hands compilers around.
+// A Compiler is the LLJIT and a Kernel points into code it owns: one owner,
+// but it must move -- Equation keeps one in a static.
 TEST(JitValue, CompilerIsMovableButNotCopyable) {
   static_assert(!std::is_copy_constructible_v<ddx::jit::Compiler>);
   static_assert(!std::is_copy_assignable_v<ddx::jit::Compiler>);
@@ -133,8 +123,7 @@ TEST(JitValue, IntrinsicBackedFunctions) {
       [](Builder<> &, auto &v) { return min(v[0], v[1]); }, 2);
 }
 
-// These six have no LLVM intrinsic and go out as libm calls, so they exercise
-// a different path through the emitter.
+// No LLVM intrinsic: these go out as libm calls, a different emitter path.
 TEST(JitValue, LibmBackedFunctions) {
   expect_matches_interpreter([](Builder<> &, auto &v) { return cbrt(v[0]); },
                              1);
@@ -150,9 +139,8 @@ TEST(JitValue, LibmBackedFunctions) {
 }
 
 TEST(JitValue, MaxMinPropagateNaNSymmetrically) {
-  // max/min are llvm.maximum/minimum, the IEEE-754 pair that propagates a NaN
-  // operand from either side; maxnum/minnum would return the other operand
-  // instead, and the interpreter's max_impl does not.
+  // llvm.maximum/minimum propagate a NaN operand from either side, as
+  // max_impl does; maxnum/minnum would return the other operand.
   Builder<> b;
   const auto root =
       max(var(b, "x"), var(b, "y")) + min(var(b, "x"), var(b, "y"));
@@ -217,10 +205,8 @@ TEST(JitValue, AgreesWithDdxThroughTheBridge) {
   }
 }
 
-// A host the JIT will not come up on is not a failure a caller has to handle:
-// rt::Equation::run() asks the kernel whether it exists and interprets if it
-// does not.  That branch is gated on exactly this, so an empty Kernel has to be
-// falsy, and bring-up has to report its refusal rather than throw it.
+// rt::Equation::run() interprets when there is no kernel, so an empty Kernel
+// must be falsy and bring-up must report its refusal rather than throw.
 TEST(JitValue, AnUnbuiltKernelIsFalsyAndCreateAnswersWithAResult) {
   const ddx::jit::Kernel none;
   EXPECT_FALSE(static_cast<bool>(none));
@@ -287,10 +273,8 @@ TEST(JitValue, SeparateCompilesCoexist) {
   EXPECT_NEAR(bb, std::cos(0.5), 1e-15);
 }
 
-// A Kernel shares ownership of the JIT its code lives in, so a Compiler going
-// out of scope does not take the code with it.  Without that share this call
-// lands in an unmapped page, which is why it is asserted rather than left to
-// the lifetime comment in kernel.hpp.
+// A Kernel shares ownership of the JIT its code lives in; without that share
+// this call lands in an unmapped page.
 TEST(JitValue, KernelOutlivesItsCompiler) {
   ddx::jit::Kernel kernel;
   {

@@ -56,11 +56,11 @@ struct BinaryOp {
   static constexpr int precedence = prec;
 
   static constexpr bool reads_primals = true;
-  [[nodiscard]] static constexpr auto
-  eval(const CExpression auto &lhs, const CExpression auto &rhs) noexcept {
-    using LT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
-    using RT = typename std::remove_cvref_t<decltype(rhs)>::value_type;
-    return std::invoke(func{}, static_cast<LT>(lhs), static_cast<RT>(rhs));
+  template <CExpression LT, CExpression RT>
+  [[nodiscard]] static constexpr auto eval(const LT &lhs,
+                                           const RT &rhs) noexcept {
+    return std::invoke(func{}, static_cast<typename LT::value_type>(lhs),
+                       static_cast<typename RT::value_type>(rhs));
   }
 };
 
@@ -181,8 +181,7 @@ struct abs_impl {
 // a - a reaches only ±0 and NaN, so a NaN operand poisons the derivative
 // rather than picking a side.
 struct sign_impl {
-  constexpr auto operator()(const Numeric auto &a) const noexcept {
-    using T = std::remove_cvref_t<decltype(a)>;
+  template <Numeric T> constexpr auto operator()(const T &a) const noexcept {
     return a > T{} ? T{1} : a < T{} ? T{-1} : T{a - a};
   }
 };
@@ -215,11 +214,9 @@ struct max_impl {
     using R = std::remove_cvref_t<decltype(a < b ? b : a)>;
     if (a == b) {
       return R{midpoint_impl{}(R{a}, R{b})};
-    }
-    if (a < b) {
+    } else if (a < b) {
       return R{b};
-    }
-    if (b < a) {
+    } else if (b < a) {
       return R{a};
     }
     return R{(a - b) * R{}};
@@ -231,11 +228,9 @@ struct min_impl {
     using R = std::remove_cvref_t<decltype(b < a ? b : a)>;
     if (a == b) {
       return R{midpoint_impl{}(R{a}, R{b})};
-    }
-    if (b < a) {
+    } else if (b < a) {
       return R{b};
-    }
-    if (a < b) {
+    } else if (a < b) {
       return R{a};
     }
     return R{(a - b) * R{}};
@@ -422,11 +417,9 @@ struct MinOp
     if (a == b) {
       const T half = adj / T{2};
       return ret_t{half, half};
-    }
-    if (b < a) {
+    } else if (b < a) {
       return ret_t{T{}, adj};
-    }
-    if (a < b) {
+    } else if (a < b) {
       return ret_t{adj, T{}};
     }
     const T poison = (a - b) * T{}; // unordered: NaN to both operands

@@ -8,19 +8,10 @@
 #include <numeric>
 #include <string>
 
-// ===========================================================================
-// Energy functions at scale (tests/rt/energy_models.hpp)
-//
-// UNIQUAC, Peng-Robinson and MSE over many species: the workload the runtime
-// graph exists for.  There is no compile-time twin to check against -- that is
-// the point of these models -- so the reference is central differences on the
-// interpreter, which shares no code with the reverse sweep.
-//
-// Two structural facts these tests pin down, both of which affect what the JIT
-// is worth on this workload: the Jacobian stays cheap as species are added,
-// and the Hessian does not, because a mixing rule couples every species to
-// every other and there is nothing for the colouring to exploit.
-// ===========================================================================
+// There is no compile-time twin for these models, so the reference is central
+// differences on the interpreter, which shares no code with the reverse sweep.
+// Two structural facts: the Jacobian stays cheap as species are added, and the
+// Hessian does not -- a mixing rule couples every species to every other.
 
 namespace {
 using ddx::rt::Builder;
@@ -48,8 +39,7 @@ std::vector<double> composition(std::size_t n) {
   return pt;
 }
 
-// Central differences on the interpreter: an independent path to the same
-// number, sharing nothing with the sweep that built the derivative nodes.
+// Central differences on the interpreter: independent of the sweep.
 void expect_jacobian_matches_differences(Builder<> &b, ddx::rt::NodeId root,
                                          const ddx::rt::JacobianRow &g,
                                          std::vector<double> pt,
@@ -95,9 +85,7 @@ TEST(RtEnergy, MseJacobian) {
   expect_jacobian_matches_differences(b, f.id(b), g, composition(6));
 }
 
-// A trace species is the normal case, not the edge case: an electrolyte model
-// is routinely handed 1e-12 mole fractions.  UNIQUAC has x*log(x) and
-// log(phi/x) in it, so this is where it would fall over if anywhere.
+// 1e-12 mole fractions are routine, and UNIQUAC has x*log(x) and log(phi/x).
 TEST(RtEnergy, StableDownToTraceMoleFractions) {
   constexpr std::size_t n = 6;
   Builder<> b;
@@ -117,10 +105,8 @@ TEST(RtEnergy, StableDownToTraceMoleFractions) {
       EXPECT_TRUE(std::isfinite(values[g.partial[i]]))
           << "dG/dx" << i << " at trace " << trace;
     }
-    // The trace species' contribution has to vanish *with* its amount: the
-    // change per decade is proportional to the trace, not below some fixed
-    // tolerance.  Measured, it is about 1.6x the trace -- a cancellation bug
-    // shows up as a change that stays put or grows while the trace shrinks.
+    // The change per decade must be proportional to the trace (~1.6x it),
+    // not merely below a fixed tolerance.
     if (previous_trace != 0) {
       EXPECT_LT(std::abs(values[g.value] - previous_value),
                 100.0 * previous_trace)
@@ -156,10 +142,8 @@ TEST(RtEnergy, HessianMatchesDifferencesOfTheJacobian) {
   }
 }
 
-// A mixing rule is a double sum over species, so every pair couples and the
-// colouring has nothing to exploit.  Asserting it rather than hoping: a
-// colouring that came back with fewer colours than this would be wrong, not
-// clever, and would silently sum two second derivatives into one cell.
+// Every pair couples, so fewer colours than this would silently sum two second
+// derivatives into one cell.
 TEST(RtEnergy, MixingRulesGiveADenseHessian) {
   for (const std::size_t n : {4u, 8u}) {
     Builder<> b;
@@ -169,8 +153,7 @@ TEST(RtEnergy, MixingRulesGiveADenseHessian) {
     const auto coloring = ddx::rt::color_columns(rows);
     EXPECT_EQ(coloring.count, n) << "n=" << n;
 
-    // Dense means dense: every pair of species couples, so no two columns may
-    // share a colour.  Fewer colours than this would be a wrong answer.
+    // No two columns may share a colour.
     for (std::size_t i = 0; i < n; ++i) {
       for (std::size_t j = 0; j < n; ++j) {
         EXPECT_TRUE(rows[i].test(j))
@@ -181,7 +164,6 @@ TEST(RtEnergy, MixingRulesGiveADenseHessian) {
 }
 
 // The Jacobian stays proportional to the expression; the Hessian does not.
-// This is the number that decides whether a full Hessian is worth compiling.
 TEST(RtEnergy, JacobianStaysCheapAsSpeciesAreAdded) {
   std::size_t previous_ratio = 0;
   for (const std::size_t n : {5u, 10u, 20u}) {
@@ -192,8 +174,7 @@ TEST(RtEnergy, JacobianStaysCheapAsSpeciesAreAdded) {
     (void)ddx::rt::jacobian(b, f.id(b));
     const std::size_t added = b.size() - built;
 
-    // One reverse sweep, so the Jacobian costs a small multiple of the
-    // function however many species there are -- not a multiple of n.
+    // One reverse sweep: a small multiple of the function, not of n.
     EXPECT_LT(added, 3 * built) << "n=" << n;
     const std::size_t ratio = added / built;
     if (previous_ratio != 0) {
@@ -207,9 +188,8 @@ TEST(RtEnergy, JacobianStaysCheapAsSpeciesAreAdded) {
 
 namespace {
 
-// The other half of the picture.  A finite interaction range makes the Hessian
-// banded, and then the colouring is the difference between a handful of sweeps
-// and one per species -- which is the whole reason it is there.
+// A finite interaction range makes the Hessian banded, and the colouring is
+// then a handful of sweeps rather than one per species.
 TEST(RtEnergySparse, FiniteRangeGivesFewColours) {
   for (const std::size_t n : {20u, 60u, 200u}) {
     Builder<> b;
@@ -218,10 +198,8 @@ TEST(RtEnergySparse, FiniteRangeGivesFewColours) {
     const auto coloring =
         ddx::rt::color_columns(ddx::rt::coupling_pattern(b, e.id(b)));
 
-    // Range 2 on a ring couples each site to four neighbours, so the column
-    // graph has bounded degree and the colour count must not grow with n.
-    // Measured at 5 with smallest-last ordering; the bound is there to catch a
-    // regression in the ordering, which is worth ~2.4x on this pattern.
+    // Bounded degree, so the colour count must not grow with n.  Measured at
+    // 5 with smallest-last ordering, which is worth ~2.4x here.
     EXPECT_LE(coloring.count, 6u) << "n=" << n;
     EXPECT_LT(coloring.count, n);
   }
@@ -246,11 +224,9 @@ TEST(RtEnergySparse, BondedChainIsBanded) {
   EXPECT_LE(ddx::rt::color_columns(rows).count, 5u);
 }
 
-// Correctness is the thing colouring can silently break, so a sparse Hessian
-// gets the same elementwise check the dense one does.
+// Colouring can silently break correctness, so check elementwise.
 TEST(RtEnergySparse, ColouredHessianIsStillCorrect) {
-  // Comfortably larger than the interaction range: a ring of 8 with range 2
-  // couples every site to half the others, and there is nothing to save.
+  // Larger than the interaction range: a ring of 8 at range 2 saves nothing.
   constexpr std::size_t n = 16;
   Builder<> b;
   const auto s = species(b, n);

@@ -12,9 +12,8 @@
 
 namespace ddx::impl {
 
-// Bridges an expression graph into the runtime numeric Hessian driver: seeded
-// dofs arrive in sorted symbol order and the graph is traversed once via
-// eval_seeded.
+// Bridges an expression graph into the numeric Hessian driver: seeded dofs
+// arrive in sorted symbol order, and the graph is walked once by eval_seeded.
 template <CExpression Expr> class SeededExprEnergy {
   static_assert(
       !std::is_reference_v<Expr>,
@@ -42,10 +41,9 @@ public:
   }
 };
 
-// The tag seeded_energy() puts on a bridged expression graph.  It sits with
-// the class it detects rather than with the Hessian driver that reads it: the
-// question "is this already seeded?" is about this header's type and has
-// nothing to do with forward mode.
+// The tag seeded_energy() puts on a bridged graph.  With the class it detects
+// rather than the driver that reads it: "is this already seeded?" is a question
+// about this header's type.
 template <typename F>
 concept CSeededExprEnergy =
     requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };

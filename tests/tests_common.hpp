@@ -1,7 +1,6 @@
 #pragma once
-// Dual-free by construction: this is what the suite that builds without
-// forward mode includes.  The second-order helpers live in
-// dual/tests_dual_common.hpp beside the tests that need them.
+// Dual-free by construction: what the suite that builds without forward mode
+// includes.
 #include "ddx.hpp"
 
 #include "md/layouts.hpp"
@@ -34,8 +33,7 @@ using namespace ddx::impl;
 using namespace ddx::literals; // "x"_s
 
 // The drivers answer with result<T> wherever the point is a span or a range,
-// so every accessor below takes either.  A test that is not about the error
-// path reads exactly as it did; one that is checks .error().code directly.
+// so every accessor below takes either.
 template <typename T>
 [[nodiscard]] constexpr const T &deref(const T &x) noexcept {
   return x;

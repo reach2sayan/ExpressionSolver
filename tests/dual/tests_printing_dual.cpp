@@ -10,9 +10,8 @@ TEST(ExpressionPrinting, DualValuedLeavesPrint) {
   EXPECT_EQ(std::format("{::.2f}", c), "1.50+2.00ε");
 }
 
-// The dual family shares one formatter base (util/fmt.hpp): parse() and the
-// number/punctuation primitives are written once, so a spec means the same
-// thing in both and the iostream spelling cannot drift from std::format.
+// One formatter base (util/fmt.hpp), so a spec means the same thing in both
+// and the iostream spelling cannot drift from std::format.
 TEST(DualPrinting, EachDualRendersItsOwnShape) {
   const ddx::impl::Dual<double> d{1.5, 2.0};
   ddx::impl::TaylorDual<double, 3> t;
@@ -44,8 +43,7 @@ TEST(DualPrinting, StreamInserterMatchesFormat) {
   oss << d << '|' << t;
   EXPECT_EQ(oss.str(), std::format("{}|{}", d, t));
 }
-// Every dual is reachable as an expression leaf, which is the reason both have
-// to be formattable and not just Dual.
+// Every dual is reachable as an expression leaf, so both must be formattable.
 TEST(DualPrinting, AllThreeWorkAsExpressionLeaves) {
   EXPECT_EQ(std::format("{}",
                         ddx::impl::Constant<ddx::impl::Dual<double>>{

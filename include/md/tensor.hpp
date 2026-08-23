@@ -14,11 +14,10 @@
 
 namespace ddx::impl {
 
-// md_tensor: an owning, constant-evaluable tensor with compile-time extents.
-// Both t[i, j, k] and t[i][j][k] work.  The latter is not a slice -- a
-// rank-reducing view needs submdspan, which the packed and sparse layouts do
-// not support -- so the proxy accumulates the prefix and calls the mapping once
-// at the last subscript.  Works over any layout, and none of it survives -O2.
+// An owning, constant-evaluable tensor with compile-time extents.  t[i][j][k]
+// is not a slice -- a rank-reducing view needs submdspan, which the packed and
+// sparse layouts do not support -- so the proxy accumulates the prefix and
+// calls the mapping once at the last subscript.  None of it survives -O2.
 
 namespace detail {
 
@@ -54,9 +53,8 @@ class md_tensor;
 
 namespace detail {
 
-// The index-prefix proxy behind t[i][j][k]; resolves to a reference once
-// Depth + 1 == rank.  It points at the tensor, not the data, so the mapping and
-// the const-ness travel with it.
+// Resolves to a reference once Depth + 1 == rank.  It points at the tensor, not
+// the data, so the mapping and the const-ness travel with it.
 template <typename Tensor, std::size_t Depth> class md_index_proxy {
   using index_type = typename Tensor::index_type;
   static constexpr std::size_t kRank = Tensor::rank();
@@ -159,9 +157,8 @@ public:
         *this, std::array<index_type, 1>{i});
   }
 
-  // The proxy's terminal step.  The two value categories differ only in the
-  // constness of data_, so P0847 writes it once; DDX_DEDUCING_THIS=off is a
-  // supported configuration, hence the pair below it.
+  // P0847 writes it once; DDX_DEDUCING_THIS=off is supported, hence the pair
+  // below.
 #if DDX_DEDUCING_THIS
   [[nodiscard]] constexpr decltype(auto)
   at_index(DDX_SELF, const std::array<index_type, Ext::rank()> &idx) noexcept {
@@ -201,9 +198,9 @@ template <Numeric S, std::size_t Lead, std::size_t N, std::size_t Order,
           typename Layout = layout_leading_simplex<1>>
 using nd_stack_t = md_tensor<S, stacked_extents_t<Lead, N, Order>, Layout>;
 
-// Index-based rather than a pointer walk into data(): under a packed mapping a
-// row is not contiguous.  The sweeps still fill a plain array first, since a
-// rank-1 mdspan is not a range.
+// Index-based, not a pointer walk into data(): under a packed mapping a row is
+// not contiguous.  The sweeps fill a plain array first, since a rank-1 mdspan
+// is not a range.
 template <Numeric S, md::CStaticExtents Ext, md::CLayoutFor<Ext> Layout,
           std::ranges::input_range R>
   requires(Ext::rank() == 2)

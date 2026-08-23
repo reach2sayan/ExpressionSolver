@@ -23,8 +23,8 @@ namespace ddx::jit {
 // Which vector math library the loop vectoriser may call.
 enum class VecLib : std::uint8_t { None, Auto, Libmvec };
 
-// Carries text where the rest of the library's errors do not: LLVM's are not
-// one of a fixed set, and there is no allocation-free path through here.
+// Carries text where the library's other errors do not: LLVM's are not one of
+// a fixed set.
 struct error {
   errc code;
   std::string detail;
@@ -96,12 +96,12 @@ private:
   std::size_t hessian_ = 0;
 };
 
-// A Compiler *is* the LLJIT, and every Kernel it hands out shares it: one going
-// out of scope frees nothing still callable, and reclaims nothing either.
+// A Compiler *is* the LLJIT, and every Kernel shares it: one going out of scope
+// frees nothing still callable, and reclaims nothing either.
 class Compiler : private impl::noncopyable {
 public:
-  // A factory, because bring-up fails for reasons that are not a caller's
-  // mistake -- no native target on this host.  Then the graph interprets.
+  // A factory: bring-up fails for reasons that are not a caller's mistake,
+  // and then the graph interprets.
   [[nodiscard]] static DDX_JIT_API result<Compiler> create();
 
   DDX_JIT_API ~Compiler();
@@ -124,9 +124,9 @@ private:
   std::shared_ptr<Impl> impl_;
 };
 
-// The optimised IR a graph would compile to.  Borrowing rather than a string,
-// so the pipeline runs only if something reads it; the deleted overloads make
-// the compiler check that both ends outlive the handle.
+// The optimised IR a graph would compile to.  Borrowing, so the pipeline runs
+// only if something reads it; the deleted overloads check both ends outlive
+// the handle.
 class Ir {
 public:
   Ir(const Compiler &c, const rt::Graph<double> &g, Options opt = {}) noexcept

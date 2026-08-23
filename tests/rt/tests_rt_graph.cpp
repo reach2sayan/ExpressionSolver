@@ -5,14 +5,8 @@
 
 #include <gtest/gtest.h>
 
-// ===========================================================================
-// The frozen graph (rt/graph.hpp)
-//
-// Freezing is what makes the graph static: the builder can still be added to,
-// a Graph<> cannot.  A CSR row is a set, so the assertions that matter are that
-// operand *position* survives the compression and that nothing reachable is
-// dropped.
-// ===========================================================================
+// A CSR row is a set, so what matters is that operand *position* survives the
+// compression and that nothing reachable is dropped.
 
 namespace {
 using ddx::rt::Graph;

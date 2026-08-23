@@ -30,9 +30,8 @@ TEST(ExpressionPrinting, FunctionStyleOps) {
   EXPECT_EQ(std::format("{}", hypot(px, py)), "hypot(x, y)");
   EXPECT_EQ(std::format("{}", max(px, py + pz)), "max(x, y + z)");
 }
-// Names are variables and numbers are constants, so the only leaf that needs
-// marking is the frozen variable: it prints as a name but differentiates to
-// zero, which is what "_c" says.
+// The only leaf needing a mark is the frozen variable: it prints as a name but
+// differentiates to zero, which is what "_c" says.
 TEST(ExpressionPrinting, FrozenVariablesPrintAsConstants) {
   EXPECT_EQ(std::format("{}", px * py), "x * y");
   EXPECT_EQ(

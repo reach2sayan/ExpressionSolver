@@ -6,19 +6,13 @@
 
 #include <cmath>
 
-// ===========================================================================
-// The graph over a non-arithmetic scalar (rt/builder.hpp, rt/apply.hpp)
-//
-// Numeric admits matrices and quaternions -- expressions.hpp says so, and the
-// compile-time side honours it.  The rewrites that assume a commuting product
-// must therefore ask rather than assume, and this is the type that catches
-// them: M2 is associative under + and *, commutative under + only.
-// ===========================================================================
+// Numeric admits matrices and quaternions, so the rewrites that would assume a
+// commuting product have to ask.  M2 is associative under + and *, commutative
+// under + only.
 
 namespace {
 
-// A 2x2 matrix: associative on + and *, commutative on + only.  It satisfies
-// CFieldLike, so Numeric admits it -- exactly the case ddx's comment names.
+// A 2x2 matrix satisfying CFieldLike.
 struct M2 {
   std::array<double, 4> a{};
   constexpr M2() = default;
@@ -82,13 +76,12 @@ TEST(RtScalar, EvaluatesInTheScalarsOwnArithmetic) {
   EXPECT_EQ(v, (M2{19, 22, 43, 50}));
 }
 
-// The four operators are all CFieldLike promises; a transcendental over a
-// matrix is meaningless, and must not stop the type being usable at all.
+// A transcendental over a matrix is meaningless, and must not stop the type
+// being usable at all.
 TEST(RtScalar, UnsupportedOpsDoNotBreakTheInstantiation) {
   ddx::rt::Builder<M2> b;
   const auto x = var(b, "x");
-  // Nothing here can fail at run time: the assertion is that it instantiates
-  // and builds a node at all, which is what naming the id proves.
+  // The assertion is that it instantiates and builds a node at all.
   EXPECT_NE((x + x * x - x / x).id(b), ddx::rt::no_node);
 }
 
@@ -96,10 +89,8 @@ TEST(RtScalar, UnsupportedOpsDoNotBreakTheInstantiation) {
 
 namespace {
 
-// Forward mode falls out of the interpreter rather than being a second engine,
-// exactly as it does on the compile-time side: eval_seeded instantiated at
-// Dual<T> is what makes ddx's forward mode, and evaluate_all takes its
-// arithmetic from the point's element type for the same reason.
+// Forward mode falls out of the interpreter rather than being a second engine:
+// evaluate_all takes its arithmetic from the point's element type.
 TEST(RtScalar, ADualPointCarriesDerivativesThroughTheSameWalk) {
   ddx::rt::Builder<> b; // the graph itself is over double
   const auto x = var(b, "x");

@@ -8,11 +8,8 @@
 
 #include <vector>
 
-// What the JIT is and is not for.  Per point it cannot beat AOT-compiled ddx:
-// the expression is already straight-line code there, and README measures the
-// libm call at around three quarters of a Jacobian.  The batch kernel wins by
-// vectorising exactly that call, so these run the same Jacobian both ways over
-// the same points and report items/s.
+// Per point the JIT cannot beat AOT-compiled ddx; the batch kernel wins by
+// vectorising the libm call, which is ~3/4 of a Jacobian.
 
 namespace {
 using ddx::rt::Builder;
@@ -46,12 +43,8 @@ template <ddx::impl::CExpression E>
 void aot_jacobian(benchmark::State &state, E expr) {
   const auto n = static_cast<std::size_t>(state.range(0));
   Batch data(n);
-  // Store the results rather than discarding them: the kernel has to write its
-  // columns, and at a million points that traffic outweighs the arithmetic, so
-  // a loop that keeps its answer in a register is not the same measurement.
-  // One jacobian() call, which is ddx's natural shape -- the kernel also hands
-  // back f from the same pass, which ddx would need a second sweep for, so this
-  // comparison is if anything generous to the AOT side.
+  // Stored, not discarded: at a million points the write traffic outweighs
+  // the arithmetic, so a register-only loop measures something else.
   for (auto _ : state) {
     for (std::size_t i = 0; i < n; ++i) {
       const auto g = ddx::Equation{expr}.jacobian(data.x[i], data.y[i]);

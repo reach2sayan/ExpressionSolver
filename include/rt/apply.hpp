@@ -10,11 +10,10 @@ namespace ddx::rt {
 
 namespace detail {
 
-// A switch instantiates every case, so support has to be probed per operation
-// rather than per category.  It probes the free function, not the functor: a
-// matrix satisfies pow_impl's `Numeric auto` and fails in the body, which is a
-// hard error, where `pow(a, b)` simply does not resolve.  Arithmetic
-// short-circuits -- a fundamental type gives ADL no namespace to search.
+// A switch instantiates every case, so support is probed per operation.  It
+// probes the free function, not the functor: a matrix satisfies pow_impl's
+// `Numeric auto` and hard-errors in the body, where `pow(a, b)` simply does not
+// resolve.  Arithmetic short-circuits: ADL has no namespace to search.
 template <typename Fn> inline constexpr bool is_field_op_v = false;
 template <> inline constexpr bool is_field_op_v<std::plus<>> = true;
 template <> inline constexpr bool is_field_op_v<std::minus<>> = true;
@@ -56,9 +55,8 @@ template <typename Fn, impl::Numeric T, bool Ok, impl::Numeric... Args>
 
 } // namespace detail
 
-// Dispatch an OpCode onto ddx's own functors.  Templated on the scalar, so the
-// interpreter, constant folding and the graph builder share one definition: at
-// T = double it computes, at T = RTExpression it builds nodes.
+// Templated on the scalar, so the interpreter, constant folding and the builder
+// share one definition: at double it computes, at RTExpression it builds.
 template <impl::Numeric T>
 [[nodiscard]] constexpr T apply(OpCode op, const T &u) noexcept {
   switch (op) {

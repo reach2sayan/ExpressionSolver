@@ -8,13 +8,8 @@
 #include <sstream>
 #include <string>
 
-// ===========================================================================
-// The graph as DOT (rt/dot.hpp)
-//
-// A debugging view, so what is tested is that it says the true things: the
-// symbols by name, the operand order of a division, and which nodes the live
-// sweep pruned.
-// ===========================================================================
+// A debugging view: the symbols by name, the operand order of a division, and
+// which nodes the live sweep pruned.
 
 namespace {
 using ddx::rt::Graph;
@@ -64,7 +59,7 @@ TEST(RtDot, LiveViewDrawsOnlyWhatCodegenEmits) {
   EXPECT_EQ(dot.find("sin"), std::string::npos);
   EXPECT_NE(dot.find("*"), std::string::npos);
 
-  // The filter drops vertices, it does not renumber them: a node keeps the id
+  // The filter drops vertices without renumbering: a node keeps the id
   // codegen and every error message call it by.
   EXPECT_NE(dot.find(std::format("{}: *", (x * x).id(b))), std::string::npos);
 }

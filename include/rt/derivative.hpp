@@ -27,9 +27,8 @@ template <typename Fn, impl::Numeric T>
   }
 }
 
-// d/du of a one-argument op.  The rule bodies are written against Numeric, so
-// at T = RTExpression the same descriptors build nodes instead of computing --
-// there is no second copy of the chain rule anywhere.
+// The rule bodies are written against Numeric, so at T = RTExpression the same
+// descriptors build nodes instead of computing.
 template <impl::Numeric S>
 [[nodiscard]] constexpr RTExpression<S>
 partial(OpCode op, const RTExpression<S> &u, const RTExpression<S> &f) {
@@ -69,18 +68,15 @@ partials(OpCode op, const RTExpression<S> &l, const RTExpression<S> &r,
 
 } // namespace detail
 
-// One root's row of the Jacobian.  A scalar function has only this row, which
-// is why jacobian() below is an overload set rather than two names: the number
-// of roots picks the shape, exactly as output_dim does on Equation.
+// One root's row of the Jacobian.  jacobian() below is an overload set rather
+// than two names: the number of roots picks the shape, as output_dim does.
 struct JacobianRow {
   NodeId value = no_node;      // the node for f itself
   std::vector<NodeId> partial; // one per symbol, in Builder::symbols() order
 };
 
-// One reverse sweep pushing adjoints from each node to its children -- the
-// structural analogue of reverse_sweep in drivers/symbolic.hpp, accumulating
-// *nodes*.  It appends to the builder it reads: new nodes land above the
-// snapshot, so reverse id order stays topological over what came before.
+// reverse_sweep, accumulating *nodes*.  It appends to the builder it reads: new
+// nodes land above the snapshot, so reverse id order stays topological.
 template <impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow reverse_jacobian(Builder<T> &b,
                                                      NodeId root) {
@@ -96,7 +92,7 @@ template <impl::Numeric T>
   };
 
   // Not a filtered view: the body writes adjoints into entries this traversal
-  // has not reached, which a lazy filter would read mid-write.
+  // has not reached.
   for (NodeId v = n; v-- > 0;) {
     if (adj[v] == no_node) {
       continue;
@@ -133,9 +129,8 @@ template <impl::Numeric T>
   return g;
 }
 
-// Forward accumulation: one pass per symbol, carrying d[v]/dx_s up the graph.
-// Here to check Reverse against, not to compute with -- Reverse produces fewer
-// nodes on everything but a single-variable expression, where it loses by one.
+// One pass per symbol, carrying d[v]/dx_s up the graph.  Here to check Reverse
+// against: Reverse produces fewer nodes on everything but a single variable.
 template <impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow symbolic_jacobian(Builder<T> &b,
                                                       NodeId root) {
@@ -206,10 +201,8 @@ template <impl::Numeric T>
 }
 
 // One root rather than a span: a span is not constructible from a NodeId, so
-// this and the m-root overload above never compete.  Explicit template
-// arguments are required here, which keeps it clear of the plain spelling
-// below as well -- DiffMode does not satisfy Numeric, so the other two
-// candidates drop out on the first argument.
+// this and the m-root overload never compete, and DiffMode does not satisfy
+// Numeric, which keeps it clear of the plain spelling below.
 template <impl::DiffMode Mode, impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow jacobian(Builder<T> &b, NodeId root) {
   if constexpr (Mode == impl::DiffMode::Symbolic) {
@@ -224,10 +217,9 @@ template <impl::Numeric T>
   return reverse_jacobian(b, root);
 }
 
-// One sweep per colour rather than per variable.  Sweeping from the sum of a
-// colour's partials gives, for row i, the sum over j in the colour of
-// d2f/dxi dxj, of which the colouring guarantees at most one is not
-// structurally zero; the rest fold away as the nodes are formed.
+// One sweep per colour.  Sweeping from the sum of a colour's partials gives,
+// for row i, the sum over j in the colour of d2f/dxi dxj -- of which the
+// colouring guarantees at most one is not structurally zero.
 struct Hessian {
   NodeId value = no_node;
   std::vector<NodeId> partial;    // n

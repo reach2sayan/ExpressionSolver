@@ -3,14 +3,8 @@
 
 #include <gtest/gtest.h>
 
-// ===========================================================================
-// The runtime builder (rt/builder.hpp, rt/expressions.hpp)
-//
-// The compile-time side folds in the operator factories so a tree is born
-// folded and the garbage is never instantiated.  The builder does the same
-// thing with ids: a rewrite returns an existing node, so the assertions here
-// are on node identity rather than on node count.
-// ===========================================================================
+// The builder folds with ids: a rewrite returns an existing node, so the
+// assertions here are on node identity rather than node count.
 
 namespace {
 using ddx::rt::Builder;

@@ -13,30 +13,22 @@
 #include <ranges>
 #include <vector>
 
-// ===========================================================================
-// JIT'd partials
-//
 // A kernel computes exactly the outputs its graph was frozen with, so freezing
-// {value, partials...} is all it takes to get the Jacobian columns; the checks
-// here are that those columns land in the right buffers and hold what the
-// interpreter says they should.
-// ===========================================================================
+// {value, partials...} yields the Jacobian columns.
 
 namespace {
 using ddx::rt::Builder;
 using ddx::rt::Graph;
 
-// A host with no native target has no JIT to test; every test here needs one,
-// so bring it up once and let the assertion name the reason if it will not.
+// No native target means no JIT to test; bring it up once and name the reason.
 ddx::jit::Compiler &compiler() {
   static ddx::jit::result<ddx::jit::Compiler> c = ddx::jit::Compiler::create();
   EXPECT_TRUE(c.has_value()) << (c ? "" : c.error().detail);
   return *c;
 }
 
-// A compile that has to succeed for the test to mean anything.  compile()
-// answers with result<Kernel>; the assertion names LLVM's own reason when it
-// does not, instead of an empty Kernel three lines later.
+// compile() answers with result<Kernel>; name LLVM's reason here rather than
+// meeting an empty Kernel three lines later.
 ddx::jit::Kernel must_compile(auto &&...args) {
   auto k = compiler().compile(static_cast<decltype(args) &&>(args)...);
   EXPECT_TRUE(k.has_value()) << (k ? std::string{} : k.error().detail);
@@ -148,9 +140,8 @@ TEST(JitJacobian, MatchesDdxThroughTheBridge) {
 
 namespace {
 
-// The block the four-pointer signature exists for.  The Hessian arrives
-// compressed by colour, which is why the kernel reports its column count
-// rather than leaving the caller to work it out from n.
+// The Hessian arrives compressed by colour, so the kernel reports its column
+// count rather than leaving the caller to derive it from n.
 TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
   Builder<> b;
   const auto x = var(b, "x");

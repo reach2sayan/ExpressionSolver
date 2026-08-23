@@ -13,10 +13,9 @@
 
 namespace ddx::rt {
 
-// A handle onto one node, plus the arithmetic surface that builds more.  A
-// null builder means a literal not yet given to a graph, which is what lets
-// RTExpression{1} exist: CFieldLike requires constructible_from<int>, and the
-// derivative rules manufacture exactly 0 and 1.
+// A handle onto one node, plus the arithmetic surface that builds more.  A null
+// builder is a literal not yet given to a graph, which is what lets
+// RTExpression{1} exist for CFieldLike's constructible_from<int>.
 template <impl::Numeric T = double> class RTExpression {
 public:
   using value_type = T;
@@ -24,16 +23,11 @@ public:
 
   constexpr RTExpression() = default;
 
-  // By value, not a forwarding reference: RTExpression is itself Numeric, and
-  // a Numeric&& would out-match the copy constructor for a non-const lvalue.
-  //
-  // The same-type exclusion is first, and load-bearing rather than an
-  // optimisation: conjunction short-circuits, so writing it here stops
-  // Numeric<V> from ever being asked about RTExpression itself.  Without it
-  // the check is circular -- RTExpression is Numeric, so Numeric<RTExpression>
-  // asks whether `a + b` converts to RTExpression, conversion considers this
-  // constructor, and the constructor asks Numeric again.  Clang diagnoses the
-  // cycle outright; GCC happens to accept it, which is why it survived.
+  // By value: RTExpression is itself Numeric, and a Numeric&& would out-match
+  // the copy constructor for a non-const lvalue.  The same-type exclusion is
+  // first and load-bearing -- conjunction short-circuits, which stops
+  // Numeric<V> from ever being asked about RTExpression itself.  Without it the
+  // check is circular, and clang diagnoses the cycle where GCC accepts it.
   template <typename V>
     requires(!std::same_as<std::remove_cvref_t<V>, RTExpression> &&
              impl::Numeric<V>)
@@ -46,10 +40,9 @@ public:
     return builder_ == nullptr;
   }
 
-  // A symbol named while no arena was current.  Deliberately not a pending
-  // literal, which would materialise into the first graph it meets and put a
-  // zero where a symbol should be; this propagates through every operator
-  // instead and surfaces as errc::no_arena out of equation().
+  // A symbol named while no arena was current.  Not a pending literal, which
+  // would materialise into the first graph it meets and put a zero where a
+  // symbol should be; this surfaces as errc::no_arena out of equation().
   [[nodiscard]] static constexpr RTExpression poison() noexcept {
     RTExpression e;
     e.poisoned_ = true;
@@ -88,8 +81,8 @@ public:
              : RTExpression{apply<T>(op, l.literal(), r.literal())};
   }
 
-  // Hidden friends, not free templates: these are ordinary functions for a
-  // given RTExpression<T>, so `x * 2` and `2 * x` both convert.
+  // Hidden friends: ordinary functions for a given RTExpression<T>, so `x * 2`
+  // and `2 * x` both convert.
   friend constexpr RTExpression operator+(const RTExpression &l,
                                           const RTExpression &r) {
     return form(OpCode::Add, l, r);
@@ -154,10 +147,9 @@ template <impl::Numeric T>
   return RTExpression<T>{b, b.constant(v)};
 }
 
-// The arena var() registers into while an equation() callback runs.
-//
-// Thread-local, and held by the same guard the drivers seed derivatives with,
-// so nesting works and an escaping exception still restores the previous arena.
+// The arena var() registers into while an equation() callback runs.  Thread-
+// local, and held by the same guard the drivers seed derivatives with, so
+// nesting works and an escaping exception restores the previous arena.
 namespace detail {
 
 // Spell one type N times in a pack expansion.

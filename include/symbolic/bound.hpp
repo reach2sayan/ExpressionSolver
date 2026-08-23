@@ -172,17 +172,15 @@ template <CExpression Expr>
 
 namespace detail {
 
-// The one spelling of a point whose length is not known until it arrives: a
-// single range that is not tuple-like.  Every other spelling is counted by a
-// static_assert, so this is the only one that can answer with an error.
+// The one spelling whose length is not known until it arrives.  Every other is
+// counted by a static_assert, so this is the only one answering with an error.
 template <typename... Args>
 concept CDynamicPoint =
     sizeof...(Args) == 1 && (std::ranges::input_range<Args> && ...) &&
     !(CTupleLike<Args> && ...);
 
 // Every spelling of "a point" reduced to an array of N values in canonical
-// symbol order.  Written against a symbol list, not an expression, because
-// Equation supplies its own.
+// symbol order.  Against a symbol list, since Equation supplies its own.
 template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
   requires(!CDynamicPoint<Args...>)
 [[nodiscard]] constexpr std::array<U, N>
@@ -239,7 +237,7 @@ make_point(const Args &...args) noexcept {
 }
 
 // point(range) -- the length arrives with the range, so a short one is the one
-// wrong point this library cannot catch at compile time.
+// wrong point that cannot be caught at compile time.
 template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
   requires(CDynamicPoint<Args...>)
 [[nodiscard]] constexpr result<std::array<U, N>>
@@ -257,10 +255,9 @@ make_point(const Args &...args) noexcept {
   }(args...);
 }
 
-// Run `body` on the point.  Whether the point is an array or an error is
-// settled here and nowhere else, so every numeric member below reads as though
-// it were always an array -- and returns result<T> exactly when its caller
-// spelled the point as a range.
+// Array or error is settled here and nowhere else, so every numeric member
+// below reads as though it were always an array -- and returns result<T>
+// exactly when its caller spelled the point as a range.
 template <CSymbolList Syms, Numeric U, std::size_t N, typename Body,
           CEvalArg... Args>
 [[nodiscard]] constexpr auto with_point(Body &&body,
@@ -283,9 +280,8 @@ template <CExpression Expr, CEvalArg... Args>
       args...);
 }
 
-// Forward-mode sweep seeded on `Seed`: the ordinary seeded sweep with Dual<VT>,
-// so there is no separate forward engine.  Slot k gets a unit tangent exactly
-// when symbol k is the one being differentiated.
+// The ordinary seeded sweep with Dual<VT>, so there is no separate forward
+// engine.  Slot k gets a unit tangent when symbol k is the one differentiated.
 template <auto Seed, CExpression Expr, CEvalArg... Args>
 [[nodiscard]] constexpr auto tangent_dispatch(const Expr &e,
                                               const Args &...args) {

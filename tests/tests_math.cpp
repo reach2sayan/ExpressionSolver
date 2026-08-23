@@ -107,32 +107,15 @@ TEST(NewMathFunctions, ReverseMaxMinSelectsBranch) {
   EXPECT_DOUBLE_EQ(gmin[1], 0.0);
 }
 
-// ===========================================================================
-// Forward tangent sweep (eval_with_tangent)
-//
-// eval_with_tangent<"s"> walks the *existing* expression tree once, seeded with
-// Dual<T>, and returns a Dual whose .value()/.deriv() are the value and the
-// tangent.  It is the ordinary eval_seeded sweep -- there is no separate
-// forward engine -- so what these tests pin is the seeding and the Dual
-// arithmetic, cross-checked against the two implementations that remain
-// genuinely independent of it: the reverse sweep (backward()/adjoints()) and
-// the symbolic derivative tree (derivative()).
-// ===========================================================================
+// eval_with_tangent<"s"> is the ordinary eval_seeded sweep seeded with Dual<T>,
+// cross-checked against the reverse sweep and the symbolic derivative tree.
 
-// Single-variable expression: value must match eval(), tangent must match the
-// reverse-mode Jacobian computed by the separate backward()/adjoints() sweep.
-// The two agree algebraically but not bit-for-bit — e.g. the quotient rule
-// evaluates (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse — so the
-// tangent is compared to a tolerance a few ULP wide rather than exactly.
+// Forward and reverse agree algebraically but not bit-for-bit -- the quotient
+// rule is (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse -- so the
+// tangent is compared to a few ULP.
 
-// ===========================================================================
-// ValueMap / Bound — root-held values.
-//
-// The point lives in one slot per *variable* rather than one per leaf
-// occurrence.  These tests pin the behaviour that the stateless-leaf change
-// depends on: canonical ordering, symbol lookup, and bit-identity with the
-// existing leaf-storage eval() path.
-// ===========================================================================
+// Root-held values: one slot per *variable*, not per leaf occurrence.  Pins
+// canonical ordering, symbol lookup, and bit-identity with leaf storage.
 
 TEST(ValueMapTest, SlotsAreInCanonicalOrderNotArgumentOrder) {
   // Canonical order is alphabetical, so {w,x,y} regardless of how they arrive.
@@ -182,8 +165,8 @@ TEST(ValueMapTest, SubscriptOwnershipMatchesGet) {
       "subscript on a temporary map must return by value");
   EXPECT_DOUBLE_EQ(values(named<"x">(2.0))["x"_s], 2.0);
 
-  // get<S>() reaches the same body, so it owns its result exactly as the
-  // subscript does - on either side of the __cpp_explicit_this_parameter split.
+  // get<S>() reaches the same body on either side of the
+  // __cpp_explicit_this_parameter split.
   static_assert(std::is_same_v<decltype(m.get<"x">()), const double &>);
   static_assert(std::is_same_v<decltype(mut.get<"x">()), double &>);
   static_assert(
@@ -201,8 +184,7 @@ TEST(ValueMapTest, SubscriptIsConstexpr) {
   EXPECT_DOUBLE_EQ(folded, 10.0);
 }
 TEST(BoundTest, EvalMatchesLeafStorageBitForBit) {
-  // The seeded path and the leaf-storage path must agree exactly - this is a
-  // storage change, not a numerics change.
+  // A storage change, not a numerics change: the two paths agree exactly.
   auto x = var<"x">;
   auto y = var<"y">;
   const auto e = sin(x * y) * exp(x + y) + log(y * y + 1.0) / (x + 2.0) -
@@ -219,8 +201,7 @@ TEST(BoundTest, ArgumentOrderIsIrrelevantAndSupersetsAreAllowed) {
   EXPECT_DOUBLE_EQ(bind(e, named<"x">(2.0), named<"y">(3.0)).eval(), 10.0);
   EXPECT_DOUBLE_EQ(bind(e, named<"y">(3.0), named<"x">(2.0)).eval(), 10.0);
 
-  // A map carrying extra symbols still binds; the permutation picks the ones
-  // the expression actually uses.
+  // Extra symbols still bind: the permutation picks the ones in use.
   const auto wide = values(named<"z">(9.0), named<"x">(2.0), named<"y">(3.0),
                            named<"a">(9.0));
   EXPECT_DOUBLE_EQ(bind(e, wide).eval(), 10.0);
@@ -265,8 +246,7 @@ TEST(BoundTest, SubscriptForwardsToTheMap) {
                    6.0);
 }
 TEST(BoundTest, IsConstexpr) {
-  // constexpr constrains the function, not the caller: the same eval() serves
-  // compile-time and runtime values.
+  // constexpr constrains the function, not the caller.
   constexpr auto x = var<"x">;
   constexpr auto y = var<"y">;
   constexpr auto b = bind(x * x + y, named<"x">(3.0), named<"y">(4.0));
@@ -303,9 +283,8 @@ TEST(PositionalEvalTest, AcceptsALazyNonSizedInputRange) {
               std::views::transform([](int i) { return double(i); });
   EXPECT_DOUBLE_EQ(*eval(e, lazy), 10.0);
 }
-// A range is the one spelling whose length is not in its type, so it is the one
-// that answers with an error rather than a diagnostic.  The array spelling two
-// tests up is checked by static_assert, and stays a bare double.
+// A range's length is not in its type, so it answers with an error rather than
+// a diagnostic; the array spelling stays a static_assert and a bare double.
 TEST(PositionalEvalTest, AShortRangeIsAnError) {
   auto x = var<"x">;
   auto y = var<"y">;

@@ -1,15 +1,4 @@
 #pragma once
-// What the rest of the library needs to know *about* a scalar, without needing
-// the scalar itself.
-//
-// `Dual` is forward-declared here and defined in dual/dual.hpp.  Every trait
-// below is expressible against that incomplete type -- `nth_dual_t` only names
-// `Dual<Inner>`, `embed_constant` only constructs one inside a template that
-// nothing instantiates unless duals are in play -- so the symbolic layer can
-// ask "is this a dual? what scalar is underneath it? how deep does it nest?"
-// and get correct answers without including the forward-mode headers.  That is
-// what keeps every `requires(DualLike<value_type>)` member a plain constraint
-// rather than something an `#if` has to wrap.
 
 #include "ops/numeric.hpp"
 
@@ -46,10 +35,9 @@ template <typename A, typename B>
 concept DualCompatible = DualLike<A> && DualLike<B> &&
                          std::same_as<dual_value_t<A>, dual_value_t<B>>;
 
-// N of them nested: the Nth-order forward dual.  It has 2^N components, one
-// per subset of the ε's, and the all-ones component is the Nth derivative --
-// which is what extract_nth reads and make_mixed_seed seeds for.
-// Ref: Fike & Alonso, AIAA 2011-886 (N = 2, and the generalisation);
+// N of them nested: 2^N components, one per subset of the ε's, and the all-ones
+// component is the Nth derivative -- what extract_nth reads and
+// make_mixed_seed seeds for.  Ref: Fike & Alonso, AIAA 2011-886;
 // docs/hyperdual_nth_order_by_example.md draws the lattice.
 template <Numeric T, std::size_t N> consteval auto nth_dual_impl() noexcept {
   if constexpr (N == 0) {

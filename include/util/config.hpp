@@ -30,8 +30,8 @@
 #endif
 
 // get<Key>() and operator[](tag) for a class with a private static
-// slot(auto &&self), in whichever form this toolchain takes.  SUB_PARAM is the
-// empty tag operator[] deduces its key from; ... is a trailing requires-clause.
+// slot(auto &&self).  SUB_PARAM is the empty tag operator[] deduces its key
+// from; ... is a trailing requires-clause.
 #if DDX_DEDUCING_THIS
 #define DDX_KEYED_ACCESSORS(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, ...)     \
   template <GET_TPARAMS>                                                       \

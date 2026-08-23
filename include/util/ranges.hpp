@@ -5,13 +5,11 @@
 
 namespace ddx::impl {
 
-// `r | to<C>()`, spelled as std::ranges::to is and forwarding to it, but piped
-// by us.  libstdc++ 14.2 pipes through an adaptor whose call operator names
-// std::forward_like's deduced return type while constraints are still being
-// checked; clang rejects that outright, and the diagnostic is a fatal error in
-// <bits/move.h> rather than anything to fix here.  14.3 rewrote the offending
-// alias as a trait, so this is what keeps the spelling available on the
-// toolchains in between.  The call form was never affected.
+// `r | to<C>()`, forwarding to std::ranges::to but piped by us: libstdc++ 14.2
+// pipes through an adaptor whose call operator names std::forward_like's
+// deduced return type while constraints are still being checked, which clang
+// rejects outright.  14.3 rewrote it as a trait; the call form was never
+// affected.
 template <typename C> struct to_closure {
   template <std::ranges::input_range R>
     requires requires(R &&r) { std::ranges::to<C>(std::forward<R>(r)); }

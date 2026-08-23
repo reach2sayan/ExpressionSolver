@@ -1,7 +1,7 @@
 #pragma once
 
-// The public hessian() entry point: it chooses between the O(N^2) probe driver
-// (numeric.hpp) and the O(N) reverse graph sweep (symbolic.hpp).
+// Chooses between the O(N^2) probe driver (numeric.hpp) and the O(N) reverse
+// graph sweep (symbolic.hpp).
 
 #include "dual/dual.hpp"
 #include "dual/numeric.hpp"
@@ -36,9 +36,8 @@ check_graph_point(std::size_t arity, std::span<const double> x,
                   CIndexRange auto &&active) noexcept {
   if (x.size() < arity) {
     return fail(errc::short_point);
-  }
-  if (std::ranges::any_of(active,
-                          [arity](std::size_t i) { return i >= arity; })) {
+  } else if (std::ranges::any_of(
+                 active, [arity](std::size_t i) { return i >= arity; })) {
     return fail(errc::index_out_of_range);
   }
   return {};
@@ -52,7 +51,7 @@ check_graph_point(std::size_t arity, std::span<const double> x) noexcept {
 }
 
 // The graph driver differentiates every symbol; a strict subset keeps the probe
-// driver, which can honour `active`.
+// driver, which honours `active`.
 [[nodiscard]] constexpr bool
 reverse_hessian_applies(std::size_t n, std::span<const double> x,
                         CIndexRange auto &&active) noexcept {
@@ -74,10 +73,9 @@ template <CHessianTarget F> constexpr std::size_t declared_arity() noexcept {
 } // namespace detail
 
 namespace detail {
-// The point checks both entry points share, hoisted out of the driver choice.
-// Hoisting is free: reverse_hessian_applies is strictly stronger than
-// check_graph_point, so the path that used to skip the check already satisfied
-// it, and a callable advertising no arity has nothing to check against.
+// The point checks both entry points share.  Free to hoist:
+// reverse_hessian_applies is strictly stronger than check_graph_point, and a
+// callable advertising no arity has nothing to check against.
 template <CHessianTarget F>
 [[nodiscard]] constexpr result<void> check_target(std::span<const double> x,
                                                   CIndexRange auto &&active) {
@@ -122,10 +120,9 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
   });
 }
 
-// Every symbol, in canonical order: the extent is compile-time for a graph, so
-// this allocates nothing but the result -- which is what lets a constant
-// evaluation run it.  The subset-taking form above cannot: it widens to the
-// owning shape, and that allocates.
+// Every symbol, in canonical order.  The extent is compile-time for a graph, so
+// this allocates nothing but the result and a constant evaluation can run it;
+// the subset-taking form widens to the owning shape and cannot.
 template <CHessianTarget F>
 constexpr auto hessian(F &&f, const std::span<const double> x) {
   return detail::check_target<F>(x).transform([&] {

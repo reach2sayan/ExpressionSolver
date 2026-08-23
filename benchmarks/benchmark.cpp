@@ -310,18 +310,14 @@ static void BM_Footprint_F4(benchmark::State &state) {
 }
 BENCHMARK(BM_Footprint_F4);
 
-// Batched point coordinates ramp for this many steps and then repeat, so every
-// batch size samples the same range of values. An unbounded ramp would grow the
-// arguments to sin/exp with the batch size and push libm into progressively
-// more expensive argument reduction, which shows up as a per-point cost that
-// climbs with the batch and makes the sizes incomparable.
+// The ramp repeats so every batch size samples the same range: an unbounded one
+// would push libm into costlier argument reduction as the batch grows.
 static constexpr std::size_t kRampPeriod = 256;
 
 static void BM_Symbolic_Batched_F4(benchmark::State &state) {
   const auto count = static_cast<std::size_t>(state.range(0));
 
-  // The expression carries no values, so a batch is one expression and N
-  // points rather than N copies of the tree.
+  // One expression and N points, not N copies of the tree.
   constexpr auto x = var<"x">;
   constexpr auto y = var<"y">;
   constexpr auto z = var<"z">;
@@ -429,9 +425,7 @@ static void BM_Forward_Batched_F4(benchmark::State &state) {
 }
 BENCHMARK(BM_Forward_Batched_F4)->Arg(256)->Arg(1024)->Arg(4096);
 
-// ===========================================================================
-// Dual-variable reverse mode (PDV path)
-// ===========================================================================
+// Dual-variable reverse mode (PDV path).
 
 static void BM_Reverse_Dual_F1_Univariate(benchmark::State &state) {
   double xv = 1.25;

@@ -6,9 +6,8 @@
 
 namespace ddx {
 
-// Everything the library can refuse at run time.  The set is small because
-// almost every misuse is a static_assert instead: these are the ones whose
-// shape is not known until a point, a span or an LLVM target actually arrives.
+// Everything the library can refuse at run time -- small, because almost every
+// misuse is a static_assert instead.
 enum class errc : std::uint8_t {
   // A point that does not match the expression's symbols.
   short_point,
@@ -27,9 +26,9 @@ enum class errc : std::uint8_t {
   jit_lookup,
 };
 
-// No message string and no source location: an error travels through the
-// numeric path, where an allocation would be as unwelcome as the throw it
-// replaces.  message() recovers the text from a static table.
+// No message string and no source location: an error travels the numeric path,
+// where an allocation is as unwelcome as the throw it replaces.  message()
+// recovers the text from a static table.
 struct error {
   errc code;
   [[nodiscard]] friend constexpr bool operator==(error,

@@ -110,9 +110,8 @@ TEST(MathFunctionTest, ExpLogIdentity) {
 TEST(MathFunctionTest, QuotientSelfIsConstant) {
   auto x = var_of<"x">(2.0);
   auto expr = x / x;
-  // Folded structurally rather than numerically: x/x is the literal 1, so it
-  // names no symbol and takes no point.  The runtime builder has always done
-  // this; ops/algebra.hpp is what made both simplifiers agree.
+  // Folded structurally: x/x is the literal 1, so it names no symbol and
+  // takes no point.
   static_assert(std::same_as<decltype(expr), ddx::impl::Lit<double, 1>>,
                 "x / x folds to the literal 1 while the tree is built");
   ASSERT_NEAR(expr.eval(), 1.0, 1e-12);
@@ -252,11 +251,9 @@ TEST(SymbolTest, ThreeVariables) {
   using Syms = extract_symbols_from_expr_t<decltype(expr)>;
   static_assert(ddx::impl::mp::mp_size<Syms>::value == 3);
 }
-// The canonical order is what turns a label into a slot index, so an expression
-// whose symbols appear out of order, more than once, and across several
-// subtrees has to come back alphabetical and deduplicated -- every Jacobian is
-// returned in this order, and a sort that reordered them would silently return
-// the right numbers against the wrong names.
+// Canonical order turns a label into a slot index: out of order, repeated and
+// spread across subtrees, the symbols must still come back alphabetical and
+// deduplicated, or a Jacobian carries the right numbers against wrong names.
 TEST(SymbolTest, CanonicalOrderIsAlphabetical) {
   auto expr = (var<"z"> * var<"a">)+(var<"m"> * var<"z">)+var<"b">;
   using Syms = extract_symbols_from_expr_t<decltype(expr)>;
@@ -861,9 +858,8 @@ TEST(ScopedValue, SeedsOnEntryAndRestoresOnExit) {
   EXPECT_DOUBLE_EQ(slot, 7.5); // the previous value, not zero
 }
 TEST(ScopedValue, RestoreIsBitExactFromAnyBase) {
-  // Why the guard saves the old bits instead of undoing arithmetically: a
-  // `slot += 1` / `slot -= 1` round trip is not the identity in floating
-  // point, and this library cares about the last ULP.
+  // The guard saves the old bits: a `slot += 1` / `slot -= 1` round trip is
+  // not the identity in floating point.
   double slot = 0.1;
   {
     const auto seed = scoped_seed<1.0>(slot);
@@ -874,10 +870,8 @@ TEST(ScopedValue, RestoreIsBitExactFromAnyBase) {
 }
 
 TEST(ScopedValue, IsPinnedByItsBase) {
-  // A guard restores in its destructor, so exactly one of them may exist per
-  // slot: moving one would leave a second destructor writing back a value that
-  // has been carried off.  The four deletes are `private pinned`, not four
-  // lines here -- this is what they are for.
+  // Exactly one guard per slot: moving one would leave a second destructor
+  // writing back a value that has been carried off.  Hence `private pinned`.
   using Guard = decltype(scoped_seed<1.0>(std::declval<double &>()));
   static_assert(!std::is_copy_constructible_v<Guard>);
   static_assert(!std::is_move_constructible_v<Guard>);
@@ -886,15 +880,13 @@ TEST(ScopedValue, IsPinnedByItsBase) {
   SUCCEED();
 }
 TEST(ScopedValue, CarriesNothingForTheNewValue) {
-  // The guard is the reference plus the saved scalar: the new value is moved
-  // into the slot by the constructor and never stored beside it.
+  // The reference plus the saved scalar, and nothing else.
   static_assert(sizeof(decltype(scoped_seed<1.0>(std::declval<double &>()))) ==
                 sizeof(double *) + sizeof(double));
   SUCCEED();
 }
 TEST(ScopedValue, HoldsARuntimeValueToo) {
-  // The same guard rt::equation() makes an arena current with -- a pointer
-  // slot and a value that is not a constant.
+  // As rt::equation() uses it: a pointer slot, and a non-constant value.
   int a = 1;
   int b = 2;
   int *slot = &a;

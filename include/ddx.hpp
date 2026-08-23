@@ -1,11 +1,8 @@
 #pragma once
-// The public surface of the library, and the whole of it.  Everything else
-// lives in ddx::impl.  Operators and math functions are found by ADL, so they
-// are deliberately not re-exported here.
-//
-// The algorithms are standard.  REFERENCES.md is where they come from and
-// docs/ works examples by hand; citations for one specific derivation sit at
-// the code that implements it -- grep "Ref:".
+// The public surface, and the whole of it; everything else lives in ddx::impl.
+// Operators and math functions are found by ADL, so they are not re-exported.
+// REFERENCES.md carries the algorithms; per-derivation citations sit at the
+// code that implements them -- grep "Ref:".
 #include "symbolic/equation.hpp"
 #include "symbolic/named_map.hpp"
 
@@ -14,13 +11,11 @@ namespace ddx {
 // The only derivative entry point.
 using impl::Equation;
 
-// Symbol value types.  A `double` graph answers evaluate(), jacobian(),
-// derivative_tensor() and univariate_derivative(); hessian() needs `dual`.
+// A `double` graph answers everything but hessian(), which needs `dual`.
 using impl::dual;
 using impl::dual2nd;
 
-// var<"x">, or "x"_s.  var_of<"x">(v) / dual_var_of<"x">(v) take the scalar
-// type from an exemplar value instead of naming it.
+// var_of<"x">(v) / dual_var_of<"x">(v) take the scalar from an exemplar.
 using impl::sym;
 using impl::var;
 using impl::var_of;
@@ -35,17 +30,14 @@ using impl::constant;
 using impl::idx;
 
 // named<"x">(3.0) -- one keyword argument of a point, or one map entry.
-// NamedValue is the type behind it: NamedValue{"x"_s, 3.0}, NamedValue{x, 3.0}.
 using impl::named;
 using impl::NamedValue;
 
-// map(named<"n">(3), named<"x">(1.5)) -- a compile-time map of those entries,
-// and Map{...}, the brace spelling of the same thing.
+// map(named<"n">(3), named<"x">(1.5)), and Map{...}, its brace spelling.
 using impl::map;
 using impl::Map;
 
-// Symbolic (evaluate the stored partial trees) vs Reverse (one sweep, no
-// trees).
+// Symbolic evaluates the stored partial trees; Reverse builds none.
 using impl::DiffMode;
 
 } // namespace ddx

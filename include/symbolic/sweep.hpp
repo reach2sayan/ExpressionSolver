@@ -30,8 +30,8 @@ template <CExpression Expr>
 using node_cache_t = std::array<typename std::remove_cvref_t<Expr>::value_type,
                                 node_count_v<std::remove_cvref_t<Expr>>>;
 
-// A leaf holds no value and reads its slot out of `vals` (canonical symbol
-// order).  `Store` is the parent's `reads_primals`: no rule reads its own slot.
+// A leaf reads its slot out of `vals`, in canonical symbol order.  `Store` is
+// the parent's `reads_primals`: no rule reads its own slot.
 template <std::size_t Base = 0, CSymbolList Syms, bool Store = true,
           CExpression E, CNumericBuffer Vals, CNumericBuffer Cache>
 constexpr auto fill_cache(const E &node, const Vals &vals,
@@ -77,9 +77,9 @@ reverse_sweep(const Expr &expr, const Seeds &seeds, Grads &grads) noexcept {
 
 namespace detail {
 
-// One backward sweep per colour, not per column.  Colours are an NTTP: as an
-// argument the loop bound is a runtime load, the colour loop stops unrolling,
-// and a dense Hessian measured slower than a plain column sweep.
+// One backward sweep per colour.  Colours are an NTTP: as an argument the loop
+// bound is a runtime load, the colour loop stops unrolling, and a dense Hessian
+// measured slower than a plain column sweep.
 template <auto Colors, CExpression Expr, CNumericBuffer Point, typename Harvest>
   requires std::invocable<
       Harvest &, std::size_t,
@@ -126,9 +126,9 @@ DDX_ALWAYS_INLINE constexpr void color_sweeps(const Expr &expr, const Point &x,
 
 } // namespace detail
 
-// The value-array APIs take a positional array in CANONICAL (alphabetical, not
-// source) order.  make_values() binds by name, so a missing, extra, duplicated
-// or misspelled symbol is a compile error.
+// The value-array APIs take CANONICAL (alphabetical) order; make_values() binds
+// by name, so a missing, extra, duplicated or misspelled symbol will not
+// compile.
 template <CExpression Expr>
 [[nodiscard]] consteval auto symbol_order() noexcept {
   using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
@@ -251,9 +251,9 @@ template <std::size_t N, std::size_t Order>
   });
 }
 
-// One representative per permutation class: mixed partials commute (Schwarz),
-// so only C(N+Order-1, Order) of the N^Order entries are distinct.  A consteval
-// table, not a filtered view or lazy iterator: both measured 4x slower.
+// One representative per permutation class: by Schwarz only C(N+Order-1, Order)
+// of the N^Order entries are distinct.  A consteval table, not a filtered view
+// or lazy iterator: both measured 4x slower.
 // Ref: Neidinger, ACM TOMS 18(2) (1992) 159.
 template <std::size_t N, std::size_t Order>
   requires(N > 0 && Order > 0)
@@ -318,8 +318,8 @@ derivative_tensor_impl(const Expr &expr,
 
   nd_tensor_t<S, N, Order> result{};
 
-  // First order: J is a template parameter, so `k == J` folds away and the
-  // passes are straight-line, where the generic loop below walks indices.
+  // J is a template parameter, so `k == J` folds away and the passes are
+  // straight-line.
   if constexpr (Order == 1) {
     static_for<N>([&]<std::size_t Seeded>() {
       std::array<U, N> seeds{};
@@ -371,9 +371,9 @@ univariate_derivative_impl(const Expr &expr, S x0) noexcept {
 
 namespace detail {
 
-// Forward-over-reverse: seeding column j and running one backward sweep yields
-// that whole Hessian column -- N sweeps against the scalar driver's N(N+1)/2
-// probes, with value and first derivatives free from the j == 0 sweep.
+// Seeding column j and running one backward sweep yields that whole Hessian
+// column: N sweeps against the scalar driver's N(N+1)/2 probes, with value and
+// first derivatives free from the j == 0 sweep.
 template <CExpression Expr>
 constexpr HessianStatic<
     mp::mp_size<detail::expr_symbols_t<std::remove_cvref_t<Expr>>>::value>
@@ -420,8 +420,8 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
 }
 
 // The same sweeps, scattered straight into compressed storage.  The layout
-// names each entry once, so nothing is symmetrised; NNZ is a consteval count,
-// so the buffer is an array and this path does not allocate.
+// names each entry once, so nothing is symmetrised, and NNZ is a consteval
+// count, so this path does not allocate.
 template <CExpression Expr,
           std::size_t NNZ = hessian_nnz<std::remove_cvref_t<Expr>>()>
 constexpr std::array<double, NNZ + 1>
@@ -451,8 +451,8 @@ hessian_values_sparse(const Expr &expr, std::span<const double> x) {
 
 } // namespace detail
 
-// The structure is a property of the expression type, so `outer` and `inner`
-// are static constexpr and only the nnz values are computed -- a CSC triple.
+// The structure is in the expression type, so `outer` and `inner` are static
+// constexpr and only the nnz values are computed: a CSC triple.
 template <CExpression Expr> class SparseHessian {
   using E = std::remove_cvref_t<Expr>;
   static constexpr std::size_t kN = detail::expr_arity_v<E>;

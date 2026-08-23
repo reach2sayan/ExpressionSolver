@@ -17,19 +17,11 @@
 namespace ddx::jit::detail {
 namespace {
 
-// Which LLVM intrinsic, if any, covers an op.  Whatever is missing here goes
-// out as a libm call under label_of(op), already the libm spelling.
-//
-// Three are named rather than looked up, because for these the label is not
-// the intrinsic's name and the difference is a decision, not a spelling:
-// llvm.abs is the *integer* intrinsic and would silently be wrong, and
-// maximum/minimum are the NaN-propagating pair the interpreter matches, where
-// maxnum/minnum are not.  A select chain does not survive InstCombine.
-//
-// Everything else is derived from the op's own label, so DDX_UNARY_MATH_TABLE
-// stays the single place the operation set is written down -- a row added
-// there picks up its intrinsic here with no edit, and one LLVM has no
-// intrinsic for falls through to libm on its own.
+// Which LLVM intrinsic, if any, covers an op; whatever is missing goes out as a
+// libm call under label_of(op).  Everything is derived from the op's own label
+// except three, where the label is not the intrinsic's name: llvm.abs is the
+// *integer* intrinsic, and maximum/minimum are the NaN-propagating pair the
+// interpreter matches where maxnum/minnum are not.
 llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
   switch (op) {
   case rt::OpCode::Abs:
@@ -46,7 +38,7 @@ llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
 }
 
 // memory(none) is the IR spelling of -fno-math-errno: without it a call is
-// assumed to write errno, which blocks hoisting and vectorisation outright.
+// assumed to write errno, which blocks hoisting and vectorisation.
 llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
                           unsigned args) {
   llvm::Type *f64 = llvm::Type::getDoubleTy(m.getContext());
@@ -135,8 +127,8 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   }
   fn->addParamAttr(0, llvm::Attribute::ReadOnly);
 
-  // nounwind is the IR spelling of noexcept, and without it the optimiser
-  // cannot move code across the libm calls.  Kernel::operator() matches.
+  // nounwind: without it the optimiser cannot move code across the libm
+  // calls.  Kernel::operator() matches.
   fn->setDoesNotThrow();
   fn->setWillReturn();
   fn->setMemoryEffects(llvm::MemoryEffects::argMemOnly());
@@ -144,8 +136,8 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
 }
 
 llvm::FastMathFlags flags_for(const Options &opt) {
-  // Contraction only, matching -ffp-contract=fast.  Reassociation would change
-  // derivative values and has no reduction here to win on anyway.
+  // Contraction only, matching -ffp-contract=fast: reassociation would change
+  // derivative values.
   llvm::FastMathFlags fmf;
   if (opt.contract) {
     fmf.setAllowContract();

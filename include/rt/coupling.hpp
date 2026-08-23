@@ -13,8 +13,8 @@
 #include <ranges>
 #include <vector>
 
-// The runtime analogue of drivers/coupling.hpp, which answers the same
-// question `consteval`.  `n` is run-time here, so its bitset rows become words.
+// The runtime analogue of drivers/coupling.hpp; `n` is run-time here, so its
+// bitset rows become words.
 namespace ddx::rt {
 
 inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
@@ -24,8 +24,7 @@ inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
 using SymbolSet = boost::dynamic_bitset<>;
 using CouplingRows = std::vector<SymbolSet>;
 
-// Compressed-by-colour storage is always colours-major and n wide.  Saying the
-// shape once keeps `c * n + i` out of every place that reads or fills one.
+// Always colours-major and n wide, said once so `c * n + i` is not respelled.
 [[nodiscard]] constexpr auto by_color(auto &&flat, std::size_t colors,
                                       std::size_t n) {
   return impl::md::mdspan{std::ranges::data(flat),
@@ -123,13 +122,11 @@ template <impl::Numeric T>
   return rows;
 }
 
-// Columns j and k conflict iff their coupling rows overlap -- the CPR
-// colouring color_columns runs at compile time (symbolic/coupling.hpp), which
-// carries the citations.  An invalid colouring corrupts the Hessian rather than
-// degrading it: two columns sharing a colour sum into one cell.
-//
-// In src/rt/coupling.cpp because it carries no `T`, so a header definition
-// would emit one copy of the Boost.Graph machinery per scalar.
+// Columns j and k conflict iff their coupling rows overlap -- the CPR colouring
+// symbolic/coupling.hpp runs at compile time, and carries the citations.  An
+// invalid colouring corrupts the Hessian rather than degrading it: two columns
+// sharing a colour sum into one cell.  In src/rt/coupling.cpp because it
+// carries no `T`.
 [[nodiscard]] DDX_API Coloring color_columns(const CouplingRows &rows);
 
 } // namespace ddx::rt

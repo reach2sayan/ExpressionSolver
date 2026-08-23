@@ -9,12 +9,9 @@
 #include <string_view>
 #include <tuple>
 
-// The type-level half of the simplifier: it answers ops/algebra.hpp's
-// predicates with type traits and picks a return type per rule, run at build
-// time by the operator factories in values.hpp so a tree is born folded.
-// rt/builder.hpp answers the same predicates by node id.  The identities
-// themselves, and the note on where they part company with IEEE, live in
-// ops/algebra.hpp.
+// The type-level half of the simplifier: ops/algebra.hpp's predicates answered
+// with type traits, run by the operator factories in values.hpp so a tree is
+// born folded.  rt/builder.hpp answers the same predicates by node id.
 namespace ddx::impl::detail {
 
 template <typename Op> inline constexpr bool is_sum_op_v = false;
@@ -30,16 +27,13 @@ template <typename E> inline constexpr bool is_negation_expr_v = false;
 template <Numeric T, CExpression C>
 inline constexpr bool is_negation_expr_v<Expression<NegateOp<T>, C>> = true;
 
-// Q is a quotient whose denominator is exactly the tree X.  Trees are empty
-// types carrying their whole structure, so type identity *is* structural
-// identity -- no walk needed.
+// Q is a quotient whose denominator is exactly the tree X.
 template <typename Q, typename X> inline constexpr bool is_over_v = false;
 template <Numeric T, CExpression N, CExpression D, typename X>
 inline constexpr bool is_over_v<Expression<DivideOp<T>, N, D>, X> =
     std::same_as<D, X>;
 
-// Only a Lit carries its value in the type, so a runtime Constant<T> never
-// folds.
+// Only a Lit carries its value in the type; a Constant<T> never folds.
 template <CExpression E> consteval bool lit_equals(int n) {
   if constexpr (CLit<E>) {
     return E::value == typename E::value_type(n);
@@ -152,16 +146,15 @@ template <COperation Op, CExpression A>
   }
 }
 
-// Canonical ordering: fixing the operand order of a commutative node makes x+y
-// and y+x the same type.  Sums always reorder, products only when the scalar
-// declares CCommutativeMultiply.  Swaps operands of one node, never
-// reassociates, and runs where Equation is built rather than in the operators.
+// Fixing the operand order of a commutative node makes x+y and y+x the same
+// type.  Sums always reorder, products only under CCommutativeMultiply.  Swaps
+// operands of one node, never reassociates.
 
 template <typename E> inline constexpr bool is_variable_expr_v = false;
 template <Numeric T, CFixedString auto S, bool F>
 inline constexpr bool is_variable_expr_v<Variable<T, S, F>> = true;
 
-// Leaves before branches, symbols by name, branches by size then op.  Ties
+// Leaves before branches, symbols by name, branches by size then op; ties
 // compare equal, so the order is stable.
 struct order_key {
   int kind{};

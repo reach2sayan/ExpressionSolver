@@ -8,9 +8,8 @@ TEST(NewMathFunctions, MaxMinTiesAverageAndNaNPropagatesSymmetrically) {
   auto tie = Equation{max(x, y)}.jacobian(2.0, 2.0);
   EXPECT_DOUBLE_EQ(tie[0], 0.5);
   EXPECT_DOUBLE_EQ(tie[1], 0.5);
-  // A NaN operand propagates from either side -- fmax-style dropping would
-  // depend on the operand order the graph builder happens to store -- and it
-  // poisons the derivative along with the value.
+  // A NaN operand propagates from either side, value and derivative both;
+  // fmax-style dropping would depend on the builder's operand order.
   const double qnan = std::nan("");
   EXPECT_TRUE(std::isnan(max(x, y).eval(qnan, 2.0)));
   EXPECT_TRUE(std::isnan(max(x, y).eval(2.0, qnan)));
@@ -132,8 +131,8 @@ TEST(NewMathFunctions, TaylorBinaryUnivariate) {
         2.0 / (4.0 + x0 * x0), 1e-10);
   }
 }
-// Composite arguments: the asin/atan/asinh/acosh/atanh recurrences must use the
-// argument's actual derivative series (u'), not assume the bare seed (u'=1).
+// The asin/atan/asinh/acosh/atanh recurrences must use the argument's actual
+// derivative series u', not assume the bare seed u'=1.
 TEST(NewMathFunctions, TaylorCompositeArguments) {
   {
     double x0 = 0.6, x4 = x0 * x0 * x0 * x0, d = 1.0 + x4;
@@ -183,23 +182,13 @@ TEST(NewMathFunctions, TaylorCompositeArguments) {
   }
 }
 
-// ===========================================================================
-// Forward tangent sweep (eval_with_tangent)
-//
-// eval_with_tangent<"s"> walks the *existing* expression tree once, seeded with
-// Dual<T>, and returns a Dual whose .value()/.deriv() are the value and the
-// tangent.  It is the ordinary eval_seeded sweep -- there is no separate
-// forward engine -- so what these tests pin is the seeding and the Dual
-// arithmetic, cross-checked against the two implementations that remain
-// genuinely independent of it: the reverse sweep (backward()/adjoints()) and
-// the symbolic derivative tree (derivative()).
-// ===========================================================================
+// eval_with_tangent<"s"> is the ordinary eval_seeded sweep seeded with Dual<T>,
+// so what is pinned is the seeding and the Dual arithmetic -- cross-checked
+// against the reverse sweep and the symbolic derivative tree.
 
-// Single-variable expression: value must match eval(), tangent must match the
-// reverse-mode Jacobian computed by the separate backward()/adjoints() sweep.
-// The two agree algebraically but not bit-for-bit — e.g. the quotient rule
-// evaluates (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse — so the
-// tangent is compared to a tolerance a few ULP wide rather than exactly.
+// Forward and reverse agree algebraically but not bit-for-bit -- the quotient
+// rule is (a'b - ab')/b² forward and {adj/b, -adj·a/b²} in reverse -- so the
+// tangent is compared to a few ULP.
 #define EXPECT_TANGENT_MATCHES_REVERSE(expr_, xv_)                             \
   do {                                                                         \
     const auto e_ = (expr_);                                                   \
@@ -238,9 +227,8 @@ TEST(ForwardTangentSweep, ArithmeticRules) {
   EXPECT_TANGENT_MATCHES_REVERSE((x + 1.0) / x, 0.7); // quotient
   EXPECT_TANGENT_MATCHES_REVERSE(-(x / (x * x + 2.0)), 0.7);
 
-  // Cross-check the same sweep against the symbolic derivative tree, which is a
-  // third independent path (derivative() is a total derivative, so this is only
-  // meaningful for a single-variable expression).
+  // Third independent path.  derivative() is a total derivative, so this is
+  // only meaningful for a single-variable expression.
   const auto e = (x * x + 1.0) / (x + 2.0);
   EXPECT_DOUBLE_EQ(e.eval_with_tangent<"x">(x0).deriv(),
                    e.derivative().eval(x0));
@@ -327,9 +315,8 @@ TEST(ForwardTangentSweep, IsConstexpr) {
   static_assert(t.deriv() == 7.0, "2x + 3 at x = 2");
   EXPECT_DOUBLE_EQ(t.deriv(), 7.0);
 }
-// A frozen symbol is a constant: same value lookup, zero derivative.  All three
-// engines have to say so — the seeded sweep that the drivers use, the forward
-// tangent sweep, and the symbolic derivative tree.
+// A frozen symbol is a constant: same value lookup, zero derivative, in all
+// three engines.
 TEST(FrozenVariable, EveryEngineSeesZeroDerivative) {
   auto e =
       make_const_variable<ddx::impl::FixedString{"x"}>(var<"x"> * var<"y">);
@@ -347,17 +334,11 @@ TEST(FrozenVariable, EveryEngineSeesZeroDerivative) {
 
 #undef EXPECT_TANGENT_MATCHES_REVERSE
 
-// ===========================================================================
-// ValueMap / Bound — root-held values.
-//
-// The point lives in one slot per *variable* rather than one per leaf
-// occurrence.  These tests pin the behaviour that the stateless-leaf change
-// depends on: canonical ordering, symbol lookup, and bit-identity with the
-// existing leaf-storage eval() path.
-// ===========================================================================
+// Root-held values: one slot per *variable*, not per leaf occurrence.  Pins
+// canonical ordering, symbol lookup, and bit-identity with leaf storage.
 
-// derivative_tensor<1> has to support every unary math function at any arity:
-// each one below must *instantiate* at 3 variables and agree with reverse mode.
+// Every unary math function must instantiate at 3 variables and agree with
+// reverse mode.
 TEST(ForwardJacobian, CoversEveryUnaryMathFunction) {
   [[maybe_unused]] const std::array<double, 3> pt{0.6, 0.4, 1.3};
   [[maybe_unused]] auto y = var<"y">;

@@ -1,10 +1,8 @@
 #pragma once
-// The scalar vocabulary the whole library is written against, and the only
-// thing `ops/` needs from below it.  Nothing here knows what an expression tree
-// is: `Numeric` admits a double, a dual, a matrix or a quaternion alike, and
-// every operation descriptor in operations.hpp and unary_math.hpp is written
-// against that concept rather than against a scalar type.  That is what lets
-// the compile-time graph, the runtime graph and the JIT share one set of rules.
+// The scalar vocabulary the whole library is written against.  Nothing here
+// knows what an expression tree is: `Numeric` admits a double, a dual, a matrix
+// or a quaternion alike, which is what lets the compile-time graph, the runtime
+// graph and the JIT share one set of operation descriptors.
 
 #include <algorithm>
 #include <concepts>
@@ -35,8 +33,7 @@ template <typename T>
 concept Numeric = CArithmetic<T> || CFieldLike<T>;
 
 // Declared, not deduced: Numeric admits matrices and quaternions, and the
-// default is the safe answer.  Only simplify.hpp reads it.  Specialise directly
-// for a class template; DDX_COMMUTATIVE_MULTIPLY below covers concrete types.
+// default is the safe answer.
 template <typename T>
 inline constexpr bool is_commutative_multiply_v = CArithmetic<T>;
 
@@ -69,11 +66,8 @@ inline constexpr bool pack_invocable_v<F, std::index_sequence<Is...>> =
     requires(F &&f) { static_cast<F &&>(f).template operator()<Is...>(); };
 } // namespace detail
 
-// The two shapes every 0..N expansion in this library takes.  static_for hands
-// over one index at a time, for a fold of statements; index_apply hands over
-// the whole pack at once, for the far commoner case of building one expression
-// out of it.  Both exist so that `std::make_index_sequence<N>{}` is not spelled
-// at each of them.
+// static_for  : hands over one index at a time, for a fold of statements;
+// index_apply : hands over the whole pack at once,
 template <std::size_t N, typename F>
   requires detail::index_invocable_v<F, std::make_index_sequence<N>>
 constexpr void static_for(F &&f) noexcept {
@@ -98,14 +92,6 @@ template <typename T> inline constexpr bool is_expression_type_v = false;
 template <typename T>
 concept CExpression = is_expression_type_v<std::remove_cvref_t<T>>;
 
-// The expression tree's vocabulary, declared here rather than with its
-// definitions in expr/expressions.hpp.  The operation descriptors below are
-// written against these names -- the sign and power rules return Lit<T, 0>,
-// Lit<T, 1>, Lit<T, 2>, and the abs/max/min rules build a MonoExpression over
-// SignOp -- so a declaration is all they need to be *written*.  Only a
-// translation unit that instantiates them needs the tree itself, and that is
-// the compile-time layer, which has it.  The runtime graph reuses the same
-// descriptors through their functors and instantiates none of these.
 template <COperation Op, CExpression... Children> class Expression;
 
 // Expression's storage base, and the CRTP `Derived`.

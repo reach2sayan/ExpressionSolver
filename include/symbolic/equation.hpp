@@ -26,9 +26,8 @@ constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
 
 namespace detail {
 
-// The expressions are final by the time an Equation is built, so this is where
-// commutative operands get ordered; folding already happened as they were
-// built.
+// The expressions are final by now, so this is where commutative operands get
+// ordered; folding already happened as they were built.
 template <CExpression E>
 using canonical_t = decltype(canonicalise(std::declval<const E &>()));
 
@@ -66,18 +65,17 @@ public:
   static constexpr std::size_t number_of_derivatives = input_dim;
 
 private:
-  // symbols and input_dim stay derived from what the user wrote, so a partial
-  // that folds away a symbol cannot shrink the point.
+  // Derived from what the user wrote, so a partial that folds away a symbol
+  // cannot shrink the point.
   using Exprs =
       std::tuple<detail::canonical_t<TFirst>, detail::canonical_t<TRest>...>;
   Exprs expressions;
 
   using point_t = std::array<value_type, input_dim>;
 
-  // Every row goes through detail::strip_seed, so a dual-valued expression
-  // answers with the derivative proper rather than one still carrying its seed
-  // -- the same thing the one-output path has always done.  dual_scalar_t is
-  // the identity on a plain scalar, so this is only a rename there.
+  // strip_seed, so a dual-valued expression answers with the derivative proper
+  // rather than one still carrying its seed.  dual_scalar_t is the identity on
+  // a plain scalar.
   using jacobian_tensor_t =
       md_tensor<dual_scalar_t<value_type>,
                 md::extents<std::size_t, output_dim, input_dim>>;
@@ -113,14 +111,13 @@ private:
     return J;
   }
 
-  // The one-output symbolic path: row 0, without the leading axis.  Reverse
-  // has no counterpart here because detail::reverse_mode_jacobian already is
-  // one -- see the dispatch in jacobian() below.
+  // Row 0, without the leading axis.  Reverse has no counterpart:
+  // detail::reverse_mode_jacobian already is one.
   [[nodiscard]] constexpr auto symbolic_row(const point_t &vals) const noexcept
     requires(output_dim == 1 && input_dim > 0)
   {
-    // Held by value: jacobian_rows() builds on demand, so a reference into
-    // std::get<0>(jacobian_rows()) would outlive the tuple it names.
+    // By value: jacobian_rows() builds on demand, so a reference into
+    // std::get<0>(...) would outlive the tuple it names.
     const auto rows = jacobian_rows();
     const auto &row = std::get<0>(rows);
     std::array<value_type, input_dim> grads{};
@@ -130,9 +127,9 @@ private:
     return detail::strip_seed(grads);
   }
 
-  // Forward over reverse: the dual level carries the tangent seed while the
-  // sweep carries the adjoints, so one sweep is an exact Hessian-vector
-  // product.  Ref: Pearlmutter, Neural Computation 6(1) (1994) 147.
+  // The dual level carries the tangent seed while the sweep carries the
+  // adjoints, so one sweep is an exact Hessian-vector product.
+  // Ref: Pearlmutter, Neural Computation 6(1) (1994) 147.
   [[nodiscard]] constexpr auto hessian_forward_over_reverse(
       const std::array<dual_scalar_t<value_type>, input_dim> &values)
       const noexcept
@@ -215,17 +212,15 @@ public:
   [[nodiscard]] constexpr const Exprs &functions() const noexcept {
     return expressions;
   }
-  // Built on demand: storing it would instantiate the whole symbolic Jacobian
-  // every time Equation<E> is named, which the reverse-mode members never
-  // touch.
+  // On demand: storing it would instantiate the whole symbolic Jacobian every
+  // time Equation<E> is named.
   [[nodiscard]] constexpr auto jacobian_rows() const noexcept {
     return detail::make_jac_rows(expressions, symbols{});
   }
 
-  // Every numeric member takes a point in any spelling eval() accepts.  A
-  // spelling whose length is only known at run time -- a range -- answers with
-  // result<T>; every other spelling is counted by a static_assert and answers
-  // with T.  detail::with_point is the one place that fork lives.
+  // A point spelled as a range answers with result<T>, its length being unknown
+  // until it arrives; every other spelling is counted by a static_assert.
+  // detail::with_point is the one place that fork lives.
   template <Numeric U = value_type>
   [[nodiscard]] static constexpr auto
   point(const CEvalArg auto &...args) noexcept {
@@ -255,17 +250,11 @@ public:
                       requires(output_dim == 1 && N <= input_dim))
 
   // Symbolic evaluates the stored partial trees; Reverse never builds them.
-  //
-  // The leading output axis only appears with more than one output, here as in
-  // hessian() and derivative_tensor() below: one function answers with its n
-  // partials as a flat array, m functions with an m x n tensor.  One name, and
-  // output_dim picks which -- see jacobian_t.
-  //
-  // The two reverse branches sweep over different symbol lists: the m == 1 one
-  // over the canonicalised expression's own symbols, the m > 1 one over the
-  // Equation's.  They part company only when canonicalisation folds a symbol
-  // away, which is what input_dim staying derived from what the user wrote is
-  // there to prevent from shrinking the point.
+  // The leading output axis appears only with more than one output, here as in
+  // hessian() and derivative_tensor(): output_dim picks the shape, see
+  // jacobian_t.  The two reverse branches sweep different symbol lists -- the
+  // m == 1 one over the canonicalised expression's own -- and part company only
+  // when canonicalisation folds a symbol away.
   template <DiffMode Mode = DiffMode::Reverse>
   [[nodiscard]] constexpr auto
   jacobian(const CEvalArg auto &...args) const noexcept
@@ -289,11 +278,9 @@ public:
         args...);
   }
 
-  // The leading output axis only appears with more than one output, here and in
-  // derivative_tensor below.
-  // No DiffMode: there is only the reverse path.  A symbolic second derivative
-  // would be derivative_tensor<2> with extra steps, and it is the colouring
-  // that makes this worth having over that.
+  // No DiffMode: only the reverse path.  A symbolic second derivative would be
+  // derivative_tensor<2> with extra steps, and the colouring is what makes this
+  // worth having over that.
   [[nodiscard]] constexpr auto
   hessian(const CEvalArg auto &...args) const noexcept
     requires(DualLike<value_type> && input_dim > 0)
@@ -326,10 +313,9 @@ public:
         args...);
   }
 
-  // One variable, one Taylor sweep: a plain number, not a one-entry tensor.
-  // Unlike hessian() and derivative_tensor(), which constrain on DualLike and
-  // so disappear on their own without forward mode, this one is spelled over a
-  // plain scalar and has to be guarded.
+  // A plain number, not a one-entry tensor.  Spelled over a plain scalar, so
+  // unlike hessian() and derivative_tensor() it has to be guarded rather than
+  // disappearing with forward mode.
   template <std::size_t Order>
   [[nodiscard]] DDX_ALWAYS_INLINE constexpr auto
   univariate_derivative(scalar_base_t<value_type> x0) const noexcept
@@ -343,13 +329,9 @@ public:
 template <CExpression T, CExpression... Ts>
 Equation(T, Ts...) -> Equation<T, Ts...>;
 
-// What the derivative members answer with, spelled once.  Same shape as
-// std::ranges::borrowed_iterator_t: a conditional_t the caller can name,
-// rather than a return type only decltype can recover.
-//
-// These name the *unwrapped* result.  The members stay `auto` because
-// detail::with_point wraps them in result<> for a point whose length is only
-// known at run time; every other spelling answers with exactly these.
+// What the derivative members answer with, spelled once: a conditional_t the
+// caller can name, as std::ranges::borrowed_iterator_t is.  These name the
+// *unwrapped* result -- with_point wraps them in result<> for a range point.
 template <typename Eq>
 using jacobian_t = std::conditional_t<
     Eq::output_dim == 1,
@@ -386,8 +368,8 @@ std::ostream &operator<<(std::ostream &out, const Equation<Ts...> &eq) {
 
 } // namespace ddx::impl
 
-// One block per output: the function, then its Jacobian row in canonical
-// symbol order.  The spec is forwarded to every expression printed.
+// One block per output: the function, then its Jacobian row in canonical symbol
+// order.  The spec is forwarded to every expression printed.
 template <ddx::impl::CExpression... Ts>
 struct std::formatter<ddx::impl::Equation<Ts...>, char> {
   constexpr auto parse(std::format_parse_context &ctx) {

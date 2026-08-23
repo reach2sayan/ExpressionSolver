@@ -17,8 +17,7 @@
 namespace ddx::impl {
 
 // An energy called with a pointer into the driver's seed buffer.  D is `dual`
-// for the first-derivative sweep and `dual2nd` for the Hessian when forward
-// mode is built; the concept itself asks only that the scalar be Numeric.
+// for the first-derivative sweep and `dual2nd` for the Hessian.
 template <typename F, typename D>
 concept CEnergyOf =
     std::invocable<F &, const D *> &&
@@ -37,13 +36,10 @@ namespace detail {
 }
 } // namespace detail
 
-// What a second-order sweep hands back: f(x), n Jacobian entries, and n*n
-// row-major Hessian entries -- (i, j) is hessian[i * n + j].
-//
-// Named members rather than a tuple: `arity` is the only thing telling a caller
-// how to index `hessian`, and std::get<3> is not a spelling that says so.  The
-// two shapes carry the same names so that code generic over both -- the tests
-// are -- reads one way.
+// f(x), n Jacobian entries, and n*n row-major Hessian entries: (i, j) is
+// hessian[i * n + j].  Named members rather than a tuple, since `arity` is what
+// tells a caller how to index `hessian`; the two shapes share the names so code
+// generic over both reads one way.
 struct HessianOwned {
   double value = 0.0;
   std::unique_ptr<double[]> jacobian;
@@ -60,10 +56,8 @@ template <std::size_t N> struct HessianStatic {
 };
 
 namespace detail {
-// Average each mirrored pair: independent sweeps differ in the last ULP.
-//
-// An mdspan rather than a pointer and a stride: the caller's buffer is square
-// and row-major, and saying so once is what keeps `h[i, j]` from being an index
+// Average each mirrored pair: independent sweeps differ in the last ULP.  An
+// mdspan rather than a pointer and a stride, so `h[i, j]` is not an index
 // expression the reader has to check.
 constexpr void symmetrize(std::span<double> h, const std::size_t n) noexcept {
   const md::mdspan m{h.data(), md::dextents<std::size_t, 2>{n, n}};
@@ -95,12 +89,12 @@ template <std::size_t N>
 }
 } // namespace detail
 
-// Caller-owned scratch for a sweep's seeded variables: reused across a loop
-// over many points, so it allocates once.
+// Caller-owned scratch for a sweep's seeded variables, reused across a loop
+// over many points.
 
 namespace detail {
 // An array member costs a stack-protector canary in every function holding the
-// workspace, so a D too wide to ever fit a point gets no block at all.
+// workspace, so a D too wide to fit a point gets no block at all.
 template <Numeric D, std::size_t Bytes> struct inline_block {
   alignas(D) std::byte storage[Bytes];
 };
@@ -128,8 +122,7 @@ template <Numeric D> struct SweepWorkspace {
   [[nodiscard]] D *seed_with(const std::span<const double> x, Make make) {
     if constexpr (inline_capacity > 0) {
       if (x.size() <= inline_capacity) {
-        // Raw storage: each seed constructs rather than assigns, which is
-        // what uninitialized_ means here -- there is no D to assign over.
+        // Raw storage: each seed constructs rather than assigns.
         D *const dof = reinterpret_cast<D *>(block.storage);
         std::ranges::uninitialized_copy(x | std::views::transform(make),
                                         std::span{dof, x.size()});

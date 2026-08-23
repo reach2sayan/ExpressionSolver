@@ -27,9 +27,9 @@
 #include <string>
 #include <vector>
 
-// Keyed on the RTExpression<T> *pattern* rather than a constraint: a
-// `requires` over <TFirst, TRest...> would be ambiguous with the compile-time
-// specialisation, since the two concepts do not subsume one another.
+// Keyed on the RTExpression<T> *pattern*: a `requires` over <TFirst, TRest...>
+// would be ambiguous with the compile-time specialisation, since the two
+// concepts do not subsume one another.
 namespace ddx::impl {
 
 namespace rt_detail {
@@ -56,12 +56,10 @@ public:
   static constexpr std::size_t output_dim = 1 + sizeof...(Rest);
 
   // A constructor cannot answer with an error, and an expression can name no
-  // graph two ways -- a bare literal, or a symbol named with no arena current.
-  // Neither is worth a result<Equation> at every call site, so the refusal
-  // rides on the Equation itself: the poison RTExpression already carries
-  // through every operator ends here rather than one layer short of it.  The
-  // constructors below still take the graph as a precondition; create() is
-  // what establishes it.
+  // graph two ways: a bare literal, or a symbol named with no arena current.
+  // Rather than a result<Equation> at every call site, the refusal rides on the
+  // Equation, where the poison RTExpression's journey ends.  The constructors
+  // take the graph as a precondition; create() establishes it.
   [[nodiscard]] static constexpr Equation create(rt::RTExpression<T> first,
                                                  Rest... rest) {
     if (const auto bad = why_not(first, rest...)) {
@@ -90,11 +88,9 @@ public:
     return bad_;
   }
 
-  // Optional rather than a degenerate 0: an equation over a literal-only graph
-  // legitimately has no symbols and no output columns, so a plain count could
-  // not distinguish "none" from "there is no equation".  nullopt is the only
-  // spelling that cannot be mistaken for an answer -- a loop written over
-  // arity() stops compiling rather than silently running zero times.
+  // Optional rather than a degenerate 0: a literal-only graph legitimately has
+  // no symbols, so a count could not tell "none" from "no equation".  A loop
+  // written over arity() stops compiling rather than running zero times.
   [[nodiscard]] constexpr std::optional<std::size_t> arity() const {
     return poisoned() ? std::nullopt : std::optional{symbol_count()};
   }
@@ -103,14 +99,13 @@ public:
     if (poisoned()) {
       return std::nullopt;
     }
-    // Spelled out, not std::optional{...}: Builder::symbols() answers with a
-    // const vector&, so CTAD would deduce optional<vector>, copy it, and hand
-    // back a span into the copy as it died.
+    // Not std::optional{...}: Builder::symbols() answers with a const vector&,
+    // so CTAD would deduce optional<vector> and span the copy as it died.
     return std::span<const std::string>{arena_->symbols()};
   }
 
-  // Every spelling make_point accepts.  The symbol list exists only at run
-  // time, so every one of them, positional included, answers with result<T>.
+  // The symbol list exists only at run time, so every spelling, positional
+  // included, answers with result<T>.
   template <rt_detail::CPointArg<T>... Args>
   [[nodiscard]] constexpr result<std::vector<T>>
   point(const Args &...args) const {
@@ -153,8 +148,7 @@ public:
         [this](const auto &at) { return harvest(derivative_.partial, at); });
   }
 
-  // Dense row-major m x n x n, as Equation::hessian returns; the graph holds
-  // it compressed by colour and the scatter hides that from callers.
+  // Dense row-major m x n x n; the graph holds it compressed by colour.
   [[nodiscard]] result<std::vector<T>>
   hessian(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform([this](const auto &at) {
@@ -184,8 +178,7 @@ public:
                       : std::optional{this->cached_hessians().front().colors()};
   }
 
-  // One Taylor sweep rather than K nested duals: seed c[0] = x0, c[1] = 1,
-  // then un-normalise c[Order], since TaylorDual stores f^(k)/k!.
+  // One Taylor sweep: seed c[0] = x0, c[1] = 1, then un-normalise c[Order].
   template <std::size_t Order>
   [[nodiscard]] result<T> univariate_derivative(T x0) const
     requires(output_dim == 1 && Order > 0)
@@ -208,10 +201,9 @@ public:
   }
 
   // --- batch ---------------------------------------------------------------
-  //
   // `xs[j]` is the column for symbol j; each output span holds one pointer per
-  // output column, every column n long.  A column-count mismatch that went
-  // unchecked would be silent memory corruption.
+  // output column, every column n long.  An unchecked column-count mismatch is
+  // silent memory corruption.
 
   [[nodiscard]] result<void>
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
@@ -249,15 +241,15 @@ public:
   }
 
 private:
-  // Past the poison guard every caller of this has already passed, so the
-  // arena is known good.  arity() is the checked spelling, for callers.
+  // Past the poison guard, so the arena is known good; arity() is the checked
+  // spelling.
   [[nodiscard]] constexpr std::size_t symbol_count() const {
     return arena_->symbols().size();
   }
 
-  // Both take a graph as a precondition; create() above is what establishes it.
-  // The third construction: none at all.  arena_ stays null, roots_ empty and
-  // derivative_ default -- every accessor short-circuits before reading them.
+  // Both take a graph as a precondition, which create() establishes.  The third
+  // construction is none at all: arena_ null, roots_ empty, derivative_
+  // default, and every accessor short-circuits before reading them.
   constexpr explicit Equation(error why) noexcept : bad_(why) {}
 
   constexpr explicit Equation(rt::RTExpression<T> first, Rest... rest)
@@ -274,9 +266,8 @@ private:
     arena_ = ArenaPtr{owned.release(), reclaim};
   }
 
-  // The graph an expression names, or why it names none.  Poison first: a
-  // symbol named with no arena current is a different mistake from a literal
-  // that never reached a graph.
+  // The graph an expression names, or why it names none.  Poison first: no
+  // arena current is a different mistake from a literal that reached no graph.
   [[nodiscard]] static constexpr std::optional<error>
   why_not(const rt::RTExpression<T> &first, const Rest &...rest) noexcept {
     if (first.poisoned() || (rest.poisoned() || ...)) {
@@ -350,9 +341,8 @@ private:
   }
 
   Compiled freeze(bool want_hessian) const {
-    // Poisoned: no arena to build from.  An empty Graph reports zero columns
-    // of every kind, which is what the *_columns() accessors should answer;
-    // has_hessian spares compiled() from re-freezing it on every call.
+    // No arena to build from.  An empty Graph reports zero columns of every
+    // kind; has_hessian spares compiled() from re-freezing on every call.
     if (bad_) {
       return Compiled{.graph = {}, .has_hessian = true};
     }
@@ -365,8 +355,7 @@ private:
     Compiled out{.graph = gb.build(), .has_hessian = want_hessian};
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
-      // Not an error a caller has to handle: run() falls back to interpret(),
-      // which is the reference the JIT is tested against anyway.
+      // Not an error a caller handles: run() falls back to interpret().
       if (auto *const c = compiler()) {
         if (auto k = c->compile(out.graph)) {
           out.kernel = std::move(*k);
@@ -378,8 +367,8 @@ private:
   }
 
 #ifdef DDX_HAS_JIT
-  // A Kernel does not own its code, so the compiler outlives every kernel it
-  // produced.  Null on a host with no JIT, asked once.
+  // A Kernel does not own its code, so the compiler outlives every kernel.
+  // Null on a host with no JIT, asked once.
   static jit::Compiler *compiler() {
     static jit::result<jit::Compiler> instance = jit::Compiler::create();
     return instance ? &*instance : nullptr;
@@ -456,8 +445,8 @@ private:
   ArenaPtr arena_{nullptr, borrow};
   std::vector<rt::NodeId> roots_;
 
-  // Eager: one reverse sweep costs microseconds, and building it here keeps
-  // every per-point accessor const and constexpr.
+  // Eager: one reverse sweep is microseconds, and it keeps every per-point
+  // accessor const and constexpr.
   rt::Jacobian derivative_;
   // Lazy, being ~1.2M nodes and 350 ms for a 50-species mixture.
   mutable std::vector<rt::Hessian> hessians_;
@@ -471,8 +460,7 @@ private:
 namespace ddx::rt {
 
 // Over expressions already built in a caller's own arena.  Partial
-// specialisations contribute no deduction guides and create() is a static
-// member, so this is the whole of the CTAD surface.
+// specialisations contribute no deduction guides, so this is the whole of CTAD.
 template <impl::Numeric T, typename... Ts>
   requires(std::same_as<Ts, RTExpression<T>> && ...)
 [[nodiscard]] constexpr auto equation(RTExpression<T> first, Ts... rest) {
@@ -488,8 +476,8 @@ template <impl::Numeric T, typename... Ts>
 //   });
 //
 // The arena is moved into the Equation, so it can be returned and stored where
-// one over a caller's Builder cannot.  The callback takes nothing: equation()
-// makes an arena current for its duration.  A range of expressions is a system.
+// one over a caller's Builder cannot.  equation() makes an arena current for
+// the callback's duration.  A range of expressions is a system.
 template <impl::Numeric T = double, std::invocable Assemble>
 [[nodiscard]] auto equation(Assemble &&assemble) {
   auto arena = std::make_unique<Builder<T>>();

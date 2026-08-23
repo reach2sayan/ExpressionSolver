@@ -85,15 +85,29 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL)
         list(APPEND DDX_PACKAGE_COMMON_OPTIONS -DLLVM_DIR=${LLVM_DIR})
     endif ()
 
+    # A multi-config generator carries the configuration on the command line and
+    # not in the cache, and none of it reaches a nested cmake: left alone, the
+    # consumer is built Debug against a Release ddx, its ctest finds a test it
+    # has no configuration for, and the install has no configuration to install.
+    # --build-project is the other half of the same gap -- Visual Studio is
+    # driven through a solution file ctest names after the project, and without
+    # a name it tries to build ".slnx".
+    get_property(DDX_PACKAGE_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if (DDX_PACKAGE_MULTI_CONFIG)
+        set(DDX_PACKAGE_CONFIG -C $<CONFIG>)
+        set(DDX_PACKAGE_INSTALL_CONFIG --config $<CONFIG>)
+    endif ()
+    set(DDX_PACKAGE_PROJECT --build-project ddx_package_consumer)
+
     # 1. The build tree, with nothing installed anywhere.  ddx_DIR is the build
     #    directory itself, which is what export(EXPORT) makes possible.
     add_test(NAME package.build_tree
-            COMMAND ${CMAKE_CTEST_COMMAND}
+            COMMAND ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG}
             --build-and-test "${CMAKE_CURRENT_SOURCE_DIR}/package"
                              "${CMAKE_CURRENT_BINARY_DIR}/package/build_tree"
-            --build-generator ${CMAKE_GENERATOR}
+            --build-generator ${CMAKE_GENERATOR} ${DDX_PACKAGE_PROJECT}
             --build-options -Dddx_DIR=${PROJECT_BINARY_DIR} ${DDX_PACKAGE_COMMON_OPTIONS}
-            --test-command ${CMAKE_CTEST_COMMAND} --output-on-failure)
+            --test-command ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG} --output-on-failure)
 
     # 2. An install prefix, which is the other half: the build tree's exported
     #    targets point into the source and build directories, an installed one's
@@ -101,26 +115,26 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL)
     set(DDX_PACKAGE_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/package/prefix")
     add_test(NAME package.install
             COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR}
-                    --prefix ${DDX_PACKAGE_PREFIX})
+                    ${DDX_PACKAGE_INSTALL_CONFIG} --prefix ${DDX_PACKAGE_PREFIX})
     set_tests_properties(package.install PROPERTIES FIXTURES_SETUP ddx_installed)
 
     add_test(NAME package.install_tree
-            COMMAND ${CMAKE_CTEST_COMMAND}
+            COMMAND ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG}
             --build-and-test "${CMAKE_CURRENT_SOURCE_DIR}/package"
                              "${CMAKE_CURRENT_BINARY_DIR}/package/install_tree"
-            --build-generator ${CMAKE_GENERATOR}
+            --build-generator ${CMAKE_GENERATOR} ${DDX_PACKAGE_PROJECT}
             --build-options -DCMAKE_PREFIX_PATH=${DDX_PACKAGE_PREFIX} ${DDX_PACKAGE_COMMON_OPTIONS}
-            --test-command ${CMAKE_CTEST_COMMAND} --output-on-failure)
+            --test-command ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG} --output-on-failure)
     set_tests_properties(package.install_tree PROPERTIES FIXTURES_REQUIRED ddx_installed)
 
     # 3. Asking for a component this build does not have must fail at configure
     #    time.  Only checkable where something is genuinely absent.
     if (NOT DDX_BUILD_JIT)
         add_test(NAME package.missing_component
-                COMMAND ${CMAKE_CTEST_COMMAND}
+                COMMAND ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG}
                 --build-and-test "${CMAKE_CURRENT_SOURCE_DIR}/package"
                                  "${CMAKE_CURRENT_BINARY_DIR}/package/missing_component"
-                --build-generator ${CMAKE_GENERATOR}
+                --build-generator ${CMAKE_GENERATOR} ${DDX_PACKAGE_PROJECT}
                 --build-options -Dddx_DIR=${PROJECT_BINARY_DIR}
                                 -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
                                 -DBoost_DIR=${Boost_DIR}

@@ -8,15 +8,11 @@
 
 namespace ddx::rt {
 
-// Every node once, in id order: a child always precedes its parent, so one
-// forward pass suffices.  This is the reference the JIT is checked against.
-//
-// The point's element type chooses the arithmetic, as eval_seeded does on the
-// compile-time side: doubles compute values, Dual<double> carries derivatives
-// through the same walk.  The graph's own scalar only has to convert into it.
-//
-// Indexed rather than a transform because v[i] reads entries the same pass
-// wrote -- a fold over a dependence order, not a map.
+// Every node once, in id order: a child always precedes its parent.  The
+// reference the JIT is checked against.  The point's element type chooses the
+// arithmetic, as eval_seeded does, so Dual<double> carries derivatives through
+// the same walk.  Indexed rather than a transform because v[i] reads entries
+// the same pass wrote.
 template <impl::Numeric T, std::ranges::random_access_range R>
   requires impl::Numeric<std::ranges::range_value_t<R>>
 [[nodiscard]] constexpr auto evaluate_all(const Builder<T> &b, const R &point) {

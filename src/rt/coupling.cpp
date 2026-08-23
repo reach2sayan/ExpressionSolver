@@ -1,6 +1,6 @@
-// The Hessian column colouring.  Here rather than in rt/coupling.hpp because
-// it names no `T`: a header definition would emit one copy of the Boost.Graph
-// machinery per scalar, and put it on every consumer's include path.
+// The Hessian column colouring.  Here rather than in rt/coupling.hpp because it
+// names no `T`: a header would emit one copy of the Boost.Graph machinery per
+// scalar, on every consumer's include path.
 
 #include "rt/coupling.hpp"
 

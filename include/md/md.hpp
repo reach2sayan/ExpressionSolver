@@ -2,11 +2,9 @@
 
 // The one place the library says "mdspan": it picks between the vendored
 // reference implementation (third_party/mdspan.hpp, Apache-2.0 WITH
-// LLVM-exception) and the standard one, and everything else spells the names
-// ddx::impl::md::... without learning which it got.
-//
-// Explicit `using` declarations, not a namespace alias: `namespace md = std`
-// would make ddx::impl::md::vector compile.
+// LLVM-exception) and the standard one.  Explicit `using` declarations, not a
+// namespace alias: `namespace md = std` would make ddx::impl::md::vector
+// compile.
 
 #include <version> // __cpp_lib_mdspan / __cpp_lib_submdspan
 
@@ -89,9 +87,9 @@ template <typename E>
 concept CStaticExtents =
     CExtents<E> && (std::remove_cvref_t<E>::rank_dynamic() == 0);
 
-// A layout mapping, checked against the extents it will carry.  There is no
-// unparameterised CLayoutPolicy: the interesting layouts here are
-// rank-constrained, so probing them with arbitrary extents would hard-error.
+// Checked against the extents it will carry.  There is no unparameterised
+// CLayoutPolicy: the layouts here are rank-constrained, so probing them with
+// arbitrary extents would hard-error.
 template <typename M, typename E>
 concept CLayoutMappingOf = CExtents<E> && std::copyable<M> &&
                            std::equality_comparable<M> && requires(const M m) {

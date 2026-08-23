@@ -31,13 +31,11 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
       ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
 }
 
-// Each arithmetic operator in its three shapes: expression OP expression (with
-// the folding ladder) and the two scalar-promoted forms.  Only the node branch
-// differs, so that is the macro argument.
-//
-// Folding keeps a literal-only subtree from becoming a node.  A T-valued
-// template argument exists only for structural T, so a dual scalar can put back
-// only 0 and 1 -- the only values differentiation manufactures.
+// Each arithmetic operator in its three shapes: expression OP expression, with
+// the folding ladder, and the two scalar-promoted forms.  Only the node branch
+// differs, so that is the macro argument.  Folding keeps a literal-only subtree
+// from becoming a node; a T-valued template argument exists only for structural
+// T, so a dual scalar can put back only the 0 and 1 differentiation makes.
 #define DDX_EXPR_BINOP(OP, ...)                                                \
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
@@ -73,8 +71,8 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
 DDX_EXPR_BINOP(+, return detail::simplify_node<SumOp<value_type>>(a, b);)
 DDX_EXPR_BINOP(*, return detail::simplify_node<MultiplyOp<value_type>>(a, b);)
 DDX_EXPR_BINOP(/, return detail::simplify_node<DivideOp<value_type>>(a, b);)
-// a - b is a + (-b), so the reverse sweep needs one adjoint rule instead of
-// two, and both operators get to apply their folding rules.
+// a - b is a + (-b): one adjoint rule instead of two, and both operators get to
+// apply their folding rules.
 DDX_EXPR_BINOP(-, return detail::simplify_node<SumOp<value_type>>(a, -b);)
 #undef DDX_EXPR_BINOP
 
@@ -123,9 +121,9 @@ DDX_EXPR_BINFN(min, MinOp)
 
 namespace detail {
 
-// Both forms answer every sweep identically, so read() is the only member a
-// specialisation supplies.  CRTP rather than a data member: the compile-time
-// form has to stay std::is_empty_v to select the stateless node storage.
+// read() is the only member a specialisation supplies.  CRTP rather than a data
+// member: the compile-time form has to stay std::is_empty_v to select the
+// stateless node storage.
 template <typename Derived, Numeric T>
 class ConstantOps : public EquationConvertible<Derived> {
   [[nodiscard]] constexpr const Derived &self() const noexcept {
@@ -148,8 +146,8 @@ public:
   constexpr void backward(const auto &, T, auto &,
                           const auto &) const noexcept {}
 
-  // At the constant's own type the value passes through verbatim; at a deeper
-  // type ConstantEmbedder<U> embeds it with zero dual parts.
+  // At its own type the value passes through; deeper, ConstantEmbedder<U>
+  // embeds it with zero dual parts.
   template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded(const std::array<U, N> &) const noexcept {
@@ -187,8 +185,8 @@ public:
 
 } // namespace detail
 
-// A literal carried in the type, so the object is empty -- which is what makes
-// the 0s and 1s derivative() manufactures free.
+// Carried in the type, so the object is empty and derivative()'s 0s and 1s are
+// free.
 template <Numeric T, auto V>
   requires std::same_as<std::remove_cv_t<decltype(V)>, T>
 class Lit<T, V> : public detail::ConstantOps<Lit<T, V>, T> {
@@ -299,16 +297,14 @@ public:
 template <FixedString S, Numeric T = double>
 inline constexpr Variable<T, S> var{};
 
-// var_of<"x">(v) — the same, with the exemplar supplying the type and nothing
-// else.  It is never read, so a run-time value names a symbol as well as a
-// literal does.
+// var_of<"x">(v) — the exemplar supplies the type and is never read, so a
+// run-time value names a symbol as well as a literal does.
 template <FixedString S, Numeric T>
 [[nodiscard]] constexpr auto var_of(const T &) noexcept {
   return Variable<T, S>{};
 }
 
-// The same two, keyed by a symbol in hand rather than by a template argument,
-// so nothing here needs the caller to write an angle bracket:
+// The same two, keyed by a symbol in hand rather than a template argument:
 //
 //   variable("x"_s)              // Variable<double, "x">
 //   variable<dual>("x"_s)        // and over another scalar
@@ -323,16 +319,15 @@ template <FixedString S, Numeric T>
   return Variable<T, S>{};
 }
 
-// constant(3.0) — a value stored in the tree.  A bare scalar mixed with an
-// expression promotes on its own; this is for spelling one out.
+// constant(3.0) — a value stored in the tree; a bare scalar promotes on its
+// own.
 template <Numeric T> [[nodiscard]] constexpr auto constant(T v) noexcept {
   return Lit<T>{v};
 }
 
 } // namespace ddx::impl
 
-// In namespace literals, next to "x"_s, and reached the same way:
-// `using namespace ddx::literals;`.  Nothing of ours belongs at global scope.
+// In namespace literals, next to "x"_s: `using namespace ddx::literals;`.
 namespace ddx::impl::literals {
 
 DEFINE_CONST_UDL(int, ci)

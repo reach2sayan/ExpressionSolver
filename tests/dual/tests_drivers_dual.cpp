@@ -28,9 +28,7 @@ TEST(HessianRouter, RawCallableTakesTheScalarDriver) {
     }
   }
 }
-// A compile-time expression *graph* can be handed straight to the public
-// hessian(): the router detects CExpression and auto-bridges it via
-// seeded_energy, with no client wrapping.
+// The router detects CExpression and auto-bridges it via seeded_energy.
 TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
@@ -63,10 +61,8 @@ TEST(SeededExprEnergy, GraphRoutesThroughPublicHessian) {
     }
   }
 }
-// Forward-over-reverse is the third driver for the same Hessian, and the only
-// one that is O(N) sweeps rather than O(N^2) probes.  It has to agree with the
-// forward-over-forward driver on a real graph energy, not just the two-variable
-// cases in HessianTest.
+// Forward-over-reverse: O(N) sweeps rather than O(N^2) probes, and it must
+// agree with forward-over-forward on a real graph energy.
 TEST(SeededExprEnergy, ForwardOverReverseAgreesWithNumericDrivers) {
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
@@ -100,8 +96,8 @@ TEST(Ownership, GraphHessianRejectsAPointShorterThanTheSymbolSet) {
   Variable<D, FixedString{"x02"}> c;
   auto expr = a * b + exp(c);
 
-  // Two values for a three-symbol graph.  seeded_energy() reads slots [0,3),
-  // so without the guard this reads off the end of the driver's dof vector.
+  // seeded_energy() reads slots [0,3), so without the guard this reads off
+  // the end of the driver's dof vector.
   const std::array<double, 2> shortx{0.2, 0.4};
   EXPECT_EQ(
       ddx::impl::hessian(expr, std::span<const double>{shortx}).error().code,
@@ -138,24 +134,21 @@ TEST(Ownership, GraphHessianRejectsAnActiveIndexThatNamesNoSymbol) {
                   .has_value());
 }
 TEST(Ownership, ResultOwnsItsBuffersAndTransfersThem) {
-  // The drivers hand back plain owning std types, so the buffers move with the
-  // result and die with it.
+  // Owning std types: the buffers move with the result and die with it.
   auto f = [](const auto *d) { return d[0] * d[0] * d[1]; };
   const std::array<double, 2> x{2.0, 3.0};
 
   auto H = *ddx::impl::hessian(f, std::span<const double>{x});
   EXPECT_DOUBLE_EQ(hess_at(H, 0, 1), 4.0); // d2/dx0dx1 of x0^2 x1 = 2 x0
 
-  // Moving the result moves the buffers: the destination is intact and the
-  // source has released them, which is what "the caller owns this" means.
+  // Moving the result moves the buffers.
   const double *const before = hess_ptr(H);
   auto moved = std::move(H);
   EXPECT_EQ(hess_ptr(moved), before) << "move must not copy the buffer";
   EXPECT_DOUBLE_EQ(hess_at(moved, 0, 1), 4.0);
   EXPECT_EQ(H.hessian.get(), nullptr) << "moved-from must have released";
 
-  // The extent travels with the buffers rather than being recoverable from
-  // them -- a unique_ptr<double[]> does not know its own length.
+  // The extent travels with the buffers: unique_ptr<double[]> has no length.
   EXPECT_EQ(hess_n(moved), 2u);
 
   // Same for the value maps: lvalue borrows, rvalue copies.
@@ -240,8 +233,8 @@ TEST(HessianCoupling, DenseExpressionDegradesToOneSweepPerColumn) {
   constexpr auto C = ddx::impl::color_columns<3>(P);
   static_assert(C.count == 3, "dense pattern gives one colour per column");
 }
-// A division-heavy energy exercises the quotient rule branch of the coupling
-// pass, where curvature appears within the denominator but not the numerator.
+// Quotient-rule branch of the coupling pass: curvature in the denominator
+// only.
 TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnQuotients) {
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
@@ -266,8 +259,7 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnQuotients) {
     }
   }
 }
-// Trig and mixed products: a shape the chain energy does not cover, checked
-// against the driver that makes no structural assumption at all.
+// Trig and mixed products, against the structure-blind driver.
 TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnTrigProducts) {
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
@@ -290,16 +282,15 @@ TEST(HessianCoupling, CompressedDriverMatchesProbeDriverOnTrigProducts) {
     }
   }
 }
-// The dense Hessian buffer is row-major with the extent alongside it, and that
-// layout is the contract a caller maps its own matrix type onto.  Pinning it
-// here is what makes `H[i * n + j]` safe to write in client code.
+// The dense Hessian buffer is row-major with the extent alongside it: the
+// layout `H[i * n + j]` a caller maps its own matrix type onto.
 TEST(SparseHessian, DenseBufferIsRowMajorWithItsExtent) {
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
   Variable<D, FixedString{"x00"}> a;
   Variable<D, FixedString{"x01"}> b;
-  // Deliberately asymmetric in the SOURCE so a transposed read would be caught
-  // if the driver did not symmetrise: d2/da db of a*a*b is 2a, of b*b*a is 2b.
+  // Asymmetric in the SOURCE, so a transposed read would show: d2/da db of
+  // a*a*b is 2a, of b*b*a is 2b.
   auto expr = a * log(a) + b * log(b) + 0.5 * (a - b) * (a - b);
 
   const std::array<double, 2> x{0.3, 0.7};
@@ -407,15 +398,14 @@ TEST(SparseHessian, IsSymmetricAndSortedWithinEachColumn) {
       EXPECT_NEAR(M[i * 3 + j], hess_at(dense, i, j), 1e-9);
     }
   }
-  // No symmetrization pass runs on the sparse path, so symmetry has to come out
-  // of the sweeps themselves.
+  // No symmetrization pass on the sparse path: symmetry comes out of the
+  // sweeps themselves.
   for (std::size_t i = 0; i < 3; ++i) {
     for (std::size_t j = 0; j < 3; ++j) {
       EXPECT_NEAR(M[i * 3 + j], M[j * 3 + i], 1e-9);
     }
   }
-  // Compressed and sorted: every column's row indices strictly ascend, which is
-  // what a CSC consumer is entitled to assume without a re-sort.
+  // Every column's row indices strictly ascend, as a CSC consumer assumes.
   const auto outer = decltype(sparse)::outer();
   const auto inner = decltype(sparse)::inner();
   for (std::size_t j = 0; j < 3; ++j) {
@@ -425,21 +415,14 @@ TEST(SparseHessian, IsSymmetricAndSortedWithinEachColumn) {
     }
   }
 }
-// Both Hessian drivers have to reach a constant expression, and nothing else
-// notices if they stop: the runtime paths are unaffected, so a constexpr
-// dropped anywhere between sparse_hessian and the sweeps beneath it would leave
-// every test here green.  These fail to compile instead.
-//
-// Dual<double>, NOT dual2nd.  hessian_values_sparse harvests grad.get<1>() and
-// casts it to double, so a second-order dual fails inside sweep.hpp rather than
-// at the call -- which is a long way to travel from a scalar someone "fixed"
-// here because a Hessian is a second derivative.
+// A constexpr dropped between sparse_hessian and the sweeps would leave every
+// runtime test green; these fail to compile instead.  Dual<double>, NOT
+// dual2nd: hessian_values_sparse harvests grad.get<1>() as double.
 TEST(ConstexprContract, BothHessianDriversAreConstantEvaluated) {
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
 
-  // f(x, y) = x*y + 0.5*x*x  ->  H = [[1, 1], [1, 0]], exact in binary floating
-  // point and independent of the point, so no tolerance is involved.
+  // f(x, y) = x*y + 0.5*x*x  ->  H = [[1, 1], [1, 0]], exact and point-free.
   constexpr Variable<D, FixedString{"x00"}> a;
   constexpr Variable<D, FixedString{"x01"}> b;
   constexpr auto expr = a * b + 0.5 * a * a;
@@ -454,8 +437,7 @@ TEST(ConstexprContract, BothHessianDriversAreConstantEvaluated) {
   static_assert(sparse[0, 0] == 1.0, "d2f/dx2");
   static_assert(sparse.values().size() == sparse.nnz);
 
-  // The dense driver, row-major, hence i * n + j where the sparse one indexes
-  // with [i, j].
+  // The dense driver is row-major, hence i * n + j.
   constexpr auto dense = ddx::impl::hessian(expr, std::span<const double>{at});
   static_assert(dense.has_value());
   static_assert(dense->hessian[0 * 2 + 1] == 1.0);
@@ -463,10 +445,8 @@ TEST(ConstexprContract, BothHessianDriversAreConstantEvaluated) {
   static_assert(dense->hessian[1 * 2 + 1] == 0.0, "y appears only linearly");
 }
 
-// The degenerate end of the storage range.  A linear expression has a
-// structurally empty Hessian, so nnz is 0 and the buffer collapses to nothing
-// but the sink cell — the one place an off-by-one in the sizing would show up
-// as a zero-length array rather than a wrong answer.
+// A linear expression has nnz 0, so the buffer collapses to the sink cell --
+// where an off-by-one in the sizing shows up as a zero-length array.
 TEST(SparseHessian, OfALinearExpressionIsEmpty) {
   using D = ddx::impl::Dual<double>;
   using ddx::impl::FixedString;
@@ -483,8 +463,7 @@ TEST(SparseHessian, OfALinearExpressionIsEmpty) {
   EXPECT_EQ(sparse.values().size(), 0u);
   EXPECT_EQ(decltype(sparse)::outer().back(), 0);
 
-  // Every entry is a structural zero, and each one still reads back as exactly
-  // 0.0 through the shared sink cell rather than as garbage.
+  // Every entry reads back as exactly 0.0 through the shared sink cell.
   for (std::size_t i = 0; i < 2; ++i) {
     for (std::size_t j = 0; j < 2; ++j) {
       EXPECT_FALSE(decltype(sparse)::structural(i, j));
@@ -532,9 +511,8 @@ TEST(ForwardDriverReuse, WritingOverloadMatchesOwningOverload) {
   }
 }
 TEST(ForwardDriverReuse, WorkspaceSurvivesAShrinkingExtent) {
-  // The scratch workspace is grow-only, so a second call with a SMALLER point
-  // must seed and read only that point's slots: running over the stale tail is
-  // silently wrong rather than a crash.
+  // The scratch workspace is grow-only: a second, SMALLER point must touch
+  // only its own slots, or the stale tail is read as live.
   ddx::impl::HessianWorkspace ws;
 
   const std::array<double, 3> big{0.4, 0.9, 1.3};
@@ -594,9 +572,8 @@ TEST(ForwardDriverReuse, JacobianReusingOverloadMatchesOwning) {
   }
 }
 TEST(ForwardDriverReuse, PointAcceptsAnyContiguousSizedRange) {
-  // vector, array, C array and span must all bind and agree to the last bit --
-  // they are the same numbers by construction, so anything other than exact
-  // equality means a conversion is doing work.
+  // vector, array, C array and span agree bit-for-bit, or a conversion is
+  // doing work.
   auto f = [](const auto *q) { return q[0] * q[0] * q[1] + q[2]; };
 
   const std::vector<double> v{0.4, 0.9, 1.3};

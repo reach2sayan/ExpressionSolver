@@ -9,9 +9,8 @@
 #include <tuple>
 #include <utility>
 
-// Lowering a compile-time ddx tree into the runtime graph: the structure lives
-// in the type, so the walk is a compile-time recursion that emits nodes.  What
-// it buys is a differential test of the two paths against each other.
+// Lowering a compile-time tree into the runtime graph: the structure is in the
+// type, so the walk is a compile-time recursion that emits nodes.
 namespace ddx::rt {
 
 namespace detail {

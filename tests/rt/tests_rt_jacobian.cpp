@@ -8,21 +8,14 @@
 #include <algorithm>
 #include <string>
 
-// ===========================================================================
-// Runtime differentiation (rt/derivative.hpp)
-//
-// The sweep is checked against ddx itself: to_graph lowers a compile-time
-// expression into the graph, so the same function can be differentiated by
-// Equation and by the sweep and the two must agree.  That makes these tests
-// comparisons against code already covered elsewhere, rather than against
-// hand-computed constants.
-// ===========================================================================
+// to_graph lowers a compile-time expression into the graph, so the same
+// function can be differentiated by Equation and by the sweep, and the two
+// must agree.
 
 namespace {
 
-// Value and every partial, graph against Equation.  Symbols are matched by
-// name: Equation reports partials in canonical alphabetical order, the builder
-// numbers them in the order they were first seen.
+// Symbols are matched by name: Equation reports partials alphabetically, the
+// builder numbers them in first-seen order.
 template <ddx::impl::CExpression E, std::size_t N>
 void expect_agrees_with_ddx(const E &e, std::array<double, N> pt) {
   ddx::rt::Builder<> b;

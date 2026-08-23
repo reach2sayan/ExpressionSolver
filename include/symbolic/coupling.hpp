@@ -64,8 +64,7 @@ consteval void couple(coupling_rows<N> &rows, const symbol_set<N> &a,
   }
 }
 
-// Propagate (symbols, coupled pairs) upward.  Recursion is on the type: a
-// storing node is not default-constructible.
+// Propagate (symbols, coupled pairs) upward, recursing on the type.
 template <CExpression E, CSymbolList Syms, std::size_t N>
 consteval coupling_info<N> coupling_of() noexcept {
   using U = std::remove_cvref_t<E>;
@@ -125,8 +124,8 @@ template <std::size_t N> struct column_coloring {
   std::size_t count = 0;
 };
 
-// Two columns may share a seed only if no row has a nonzero in both -- the
-// greedy distance-1 colouring of the column intersection graph that CPR uses.
+// Two columns may share a seed only if no row has a nonzero in both: CPR's
+// greedy distance-1 colouring of the column intersection graph.
 // Ref: Curtis, Powell & Reid, J. Inst. Math. Appl. 13(1) (1974) 117; Coleman &
 // More, SIAM J. Numer. Anal. 20(1) (1983) 187.
 template <std::size_t N>
@@ -227,7 +226,7 @@ consteval sparse_layout_t<N, NNZ> sparse_layout() noexcept {
 namespace detail {
 
 // For each column j, every stored entry k and the row i it sits at.  Both
-// tables below are that walk, differing only in where they write (i, j) -> k.
+// tables below are that walk, differing in where they write (i, j) -> k.
 struct compressed_entry {
   std::size_t column, row, slot;
 };
@@ -250,8 +249,8 @@ consteval auto compressed_entries(const sparse_layout_t<N, NNZ> &layout) {
 
 } // namespace detail
 
-// The sparse counterpart of scatter_targets: the sweep writes straight into
-// compressed storage, so the dense N x N matrix is never materialised.
+// The sweep writes straight into compressed storage, so the dense N x N matrix
+// is never materialised.
 template <CExpression Expr, std::size_t N = detail::expr_arity_v<Expr>>
 consteval scatter_map<N> sparse_slots() noexcept {
   constexpr auto coloring = color_columns<N>(hessian_pattern_v<Expr>);
@@ -264,11 +263,9 @@ consteval scatter_map<N> sparse_slots() noexcept {
   return slots;
 }
 
-// layout_sparse_pattern<Expr>: the compressed Hessian, indexed as if dense.
-//
-// An mdspan mapping must be total and a structural zero has no slot, so the
-// span is nnz + 1 cells and every structural zero maps onto the last -- read
-// as 0.0, written and discarded.  Hence is_always_unique() == false.
+// The compressed Hessian, indexed as if dense.  An mdspan mapping must be total
+// and a structural zero has no slot, so the span is nnz + 1 cells and every
+// structural zero maps onto the last.  Hence is_always_unique() == false.
 template <CExpression Expr, std::size_t N = detail::expr_arity_v<Expr>,
           std::size_t NNZ = hessian_nnz<Expr>()>
 consteval std::array<std::size_t, N * N> sparse_slot_table() noexcept {

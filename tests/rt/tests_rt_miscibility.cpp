@@ -6,19 +6,11 @@
 
 #include <cmath>
 
-// ===========================================================================
-// A binary miscibility gap (models::regular_solution)
-//
-// This one is worth having because both derivatives have closed forms:
+// Both derivatives have closed forms, so neither needs finite differences:
 //
 //   f(x)  = c x(1-x) + k( x ln x + (1-x) ln(1-x) )
 //   f'(½) = 0                       by symmetry, for every c and k
 //   f''   = -2c + k/(x(1-x))        exactly
-//
-// So both derivatives are checked against closed forms rather than against
-// finite differences. And the *shape* the derivatives imply -- one minimum or
-// two -- is a physical claim a solver can be made to confirm.
-// ===========================================================================
 
 namespace {
 using ddx::rt::Builder;
@@ -31,10 +23,9 @@ constexpr double second_derivative(double x, double c, double k) {
   return -2.0 * c + k / (x * (1.0 - x));
 }
 
-// The zero is exact in the reals but not in the graph: the reverse sweep sums
-// the two halves in node order, and node order follows the order the operands
-// of an overloaded operator happen to be evaluated in, which is unspecified.
-// So the halves cancel to rounding, not to the bit.
+// Exact in the reals but not in the graph: the reverse sweep sums the halves in
+// node order, which follows unspecified operand evaluation order, so they
+// cancel to rounding rather than to the bit.
 TEST(RtMiscibility, HalfIsAlwaysStationary) {
   for (const double c : {2.0, 0.4, 0.0, -1.5}) {
     for (const double k : {0.25, -0.25}) {
@@ -74,8 +65,7 @@ TEST(RtMiscibility, TheGapOpensWhenEnthalpyBeatsEntropy) {
   EXPECT_LT((*inverted.hessian(0.02))[0], 0.0) << "concave at the edge";
 }
 
-// Newton on f', using f'' as the derivative -- so a wrong Hessian shows up as
-// failure to converge, not merely as a wrong number.
+// Newton on f' with f'' as the derivative: a wrong Hessian fails to converge.
 TEST(RtMiscibility, NewtonFindsTwoSymmetricMinima) {
   constexpr double c = 1.0;
   constexpr double k = 0.25; // c > 2k, so the gap is open
@@ -106,8 +96,7 @@ TEST(RtMiscibility, NewtonFindsTwoSymmetricMinima) {
   EXPECT_LT(lower, 0.5);
   EXPECT_GT(upper, 0.5);
 
-  // The two coexisting compositions are mirror images: the model is symmetric,
-  // so this must hold to rounding rather than approximately.
+  // Mirror images, so this holds to rounding rather than approximately.
   EXPECT_NEAR(lower + upper, 1.0, 1e-12);
 }
 

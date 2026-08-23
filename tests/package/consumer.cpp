@@ -1,6 +1,5 @@
-// What a consumer of an exported ddx gets, compiled the way a consumer compiles
-// it: headers reached through the imported targets' include paths, and ddx::jit
-// resolved as a real shared object rather than a symbol the linker inlined.
+// Headers reached through the imported targets' include paths, and ddx::jit
+// resolved as a real shared object.
 #include "ddx.hpp"
 
 #include <array>
@@ -44,8 +43,7 @@ int main() {
   }
 
 #ifdef DDX_CONSUMER_RT
-  // The same expression lowered into the runtime graph: this is the header set
-  // that needs Boost, so it is what proves the consumer resolved Boost at all.
+  // The runtime graph is the header set that needs Boost.
   rt::Builder<> b;
   const auto root = rt::to_graph(b, x * y + sin(x));
   const auto rg = rt::jacobian(b, root.id(b));
@@ -57,8 +55,7 @@ int main() {
 #endif
 
 #ifdef DDX_HAS_JIT
-  // Nothing else here would fail if libddx_jit.so had not been found: the rest
-  // is headers.  This call is the one that has to resolve out of the library.
+  // The one call that has to resolve out of libddx_jit.so.
   auto compiler = jit::Compiler::create();
   if (!compiler) {
     return fail(compiler.error().detail.c_str());

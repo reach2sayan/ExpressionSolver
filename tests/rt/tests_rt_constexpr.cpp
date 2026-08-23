@@ -5,18 +5,11 @@
 
 #include <gtest/gtest.h>
 
-// ===========================================================================
-// The runtime graph in constant evaluation (rt/builder.hpp and below)
-//
 // "Runtime" names when the *structure* is decided, not when the arithmetic
-// runs.  A graph assembled from values a constant expression can see is itself
-// a constant expression, which keeps rt/ to the same promise as the rest of the
-// library.  Everything here is a static_assert; the TEST bodies exist only so
-// the file reports.
-//
-// The frozen graph is the boundary: Boost.Graph's containers are not constexpr,
-// and neither is the JIT.
-// ===========================================================================
+// runs, so a graph over constant-visible values is a constant expression.
+// Everything here is a static_assert; the TEST bodies exist so the file
+// reports.  The frozen graph is the boundary -- Boost.Graph's containers are
+// not constexpr, and neither is the JIT.
 
 namespace {
 using ddx::rt::Builder;
@@ -64,11 +57,8 @@ consteval double partial_of_product() {
 }
 static_assert(partial_of_product() == 4.0);
 
-// Evaluating a transcendental during constant evaluation needs the compiler to
-// fold a libm call, which is a GCC extension rather than something the standard
-// requires -- <cmath> is not constexpr.  Clang rejects `std::sin(0.0)` in a
-// constant expression outright, so this one sweep is GCC-only.  Everything else
-// in this file is arithmetic and holds on both.
+// <cmath> is not constexpr; folding a libm call is a GCC extension and clang
+// rejects it outright, so this one sweep is GCC-only.
 #if defined(__GNUC__) && !defined(__clang__)
 consteval double transcendental_jacobian() {
   Builder<> b;

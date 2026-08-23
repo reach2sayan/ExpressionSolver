@@ -3,14 +3,10 @@
 #include <cmath>
 #include <vector>
 
-// Thermodynamic models as runtime graphs: UNIQUAC, Peng-Robinson and an
-// MSE-shaped electrolyte model.  These are the shapes the runtime path exists
-// for -- the species list and its parameters come from a database, so the
-// expression cannot be written in source.
-//
-// The parameters here are deterministic nonsense of the right magnitude.  What
-// is being tested is the differentiation machinery at this scale and shape, not
-// the thermodynamics, and a fixed pseudo-parameter keeps the test reproducible.
+// UNIQUAC, Peng-Robinson and an MSE-shaped electrolyte model as runtime graphs:
+// the species list comes from a database, so the expression cannot be written
+// in source.  The parameters are deterministic nonsense of the right magnitude
+// -- the machinery is what is under test, not the thermodynamics.
 namespace models {
 
 using RE = ddx::rt::RTExpression<>;
@@ -61,8 +57,7 @@ inline RE uniquac(const std::vector<RE> &x) {
   return comb + res;
 }
 
-// Peng-Robinson: the cubic in Z, with van der Waals mixing.  Z is a variable,
-// because that is what Newton-Raphson solves for.
+// Peng-Robinson: the cubic in Z, with van der Waals mixing.  Z is a variable.
 //   A = a_mix P/(RT)^2,  B = b_mix P/(RT)
 //   f(Z) = Z^3 - (1-B)Z^2 + (A - 3B^2 - 2B)Z - (AB - B^2 - B^3)
 inline RE peng_robinson(const std::vector<RE> &x, const RE &Z) {
@@ -91,9 +86,8 @@ inline RE peng_robinson(const std::vector<RE> &x, const RE &Z) {
          (A * B - B * B - B * B * B);
 }
 
-// MSE-flavoured: a long-range Debye-Huckel term plus a middle-range ionic
-// double sum plus a short-range UNIQUAC.  The shape that matters here is the
-// double sum over species, which is what makes the Hessian dense.
+// MSE-flavoured: long-range Debye-Huckel, a middle-range ionic double sum and
+// a short-range UNIQUAC.  The double sum is what makes the Hessian dense.
 inline RE mse(const std::vector<RE> &x) {
   const std::size_t n = x.size();
   std::vector<double> zc(n);
@@ -118,10 +112,8 @@ inline RE mse(const std::vector<RE> &x) {
 }
 
 // --- sparse models ---------------------------------------------------------
-// Not everything is a mixing rule.  A lattice energy with a finite interaction
-// range, or a chain with bonded terms, couples each site to its neighbours and
-// nothing else -- so the Hessian is banded and the colouring has something to
-// exploit.
+// A finite interaction range couples each site to its neighbours only, so the
+// Hessian is banded and the colouring has something to exploit.
 
 // Cluster expansion truncated at nearest and next-nearest neighbours on a ring.
 inline RE cluster_expansion(const std::vector<RE> &s, std::size_t range = 2) {
@@ -152,20 +144,14 @@ inline RE bonded_chain(const std::vector<RE> &r) {
   return e;
 }
 
-// Regular-solution free energy of a binary mixture: an enthalpy of mixing that
-// favours demixing against an entropy that favours mixing.
+// Regular-solution free energy of a binary mixture:
 //
 //   f(x) = c x(1-x) + k( x ln x + (1-x) ln(1-x) )
 //
-// f is symmetric about x = 1/2, so f'(1/2) is exactly zero whatever c and k
-// are, and f''(x) = -2c + k/(x(1-x)) in closed form -- which makes it a sharp
-// check on a Hessian rather than a plausible one.
-//
-// With k > 0 (k = RT) the entropy term is convex and diverges at the ends, so
-// the curve is convex at the edges and, once c > 2k, concave in the middle:
-// x = 1/2 becomes a maximum flanked by two symmetric minima, which is a
-// miscibility gap.  With k < 0 that is inverted -- concave at the edges -- and
-// no interior double well exists for any c.
+// Symmetric about x = 1/2, so f'(1/2) is exactly zero for every c and k, and
+// f''(x) = -2c + k/(x(1-x)) in closed form.  With k > 0 and c > 2k, x = 1/2 is
+// a maximum flanked by two minima -- a miscibility gap.  k < 0 inverts that and
+// admits no interior double well for any c.
 inline RE regular_solution(const RE &x, double c, double k) {
   return c * x * (RE{1} - x) + k * (x * log(x) + (RE{1} - x) * log(RE{1} - x));
 }

@@ -59,16 +59,14 @@ template <Numeric V> struct printer {
   void put(char c) const { put(std::string_view{&c, 1}); }
 
   // Through the nested formatter, so a caller's "{::.3f}" reaches every leaf.
-  // Generic in the value: a leaf may hand over something that converts to V.
   template <Numeric U> void put_value(const U &v) const {
     ctx.advance_to(value_fmt.format(v, ctx));
   }
 };
 
-// `min_prec` is the binding strength the parent demands; anything looser is
-// parenthesised.  A left operand may be as loose as its own operator, a right
-// operand must be one step tighter -- which is what parenthesises x / (y / z)
-// and x - (y + z) but leaves x - y * z clean.
+// `min_prec` is what the parent demands; anything looser is parenthesised.  A
+// left operand may be as loose as its own operator, a right operand must be one
+// step tighter -- so x / (y / z) and x - (y + z) but not x - y * z.
 template <CExpression E, Numeric V>
 void print_infix(const printer<V> &p, const E &e, int min_prec) {
   using U = std::remove_cvref_t<E>;
@@ -142,8 +140,8 @@ std::ostream &operator<<(std::ostream &out, const CExpression auto &e) {
 
 } // namespace ddx::impl
 
-// The whole spec is the value-spec, handed verbatim to the formatter for
-// value_type.  The leading ':' is optional, as in std::formatter for ranges.
+// The whole spec is the value-spec; the leading ':' is optional, as in
+// std::formatter for ranges.
 template <ddx::impl::CExpression E> struct std::formatter<E, char> {
   constexpr auto parse(std::format_parse_context &ctx) {
     auto it = ctx.begin();

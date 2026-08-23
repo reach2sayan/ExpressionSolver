@@ -22,19 +22,17 @@ template <auto S> struct symbol_type {
   static constexpr auto value = S;
   static constexpr std::string_view name = S.view();
 
-  // "x"_s = 1.5 -- one entry of a point or a map, with the symbol in hand
-  // rather than in a template argument.  Assignment rather than a call because
-  // the pair reads as one at the call site; a symbol carries no state for a
-  // real assignment to overwrite.  Defined in named_value.hpp, where the thing
-  // it returns is.
+  // "x"_s = 1.5 -- one entry of a point or a map.  Assignment rather than a
+  // call: a symbol carries no state for a real assignment to overwrite.
+  // Defined in named_value.hpp, where the thing it returns is.
   template <typename V>
     requires std::is_object_v<V>
   constexpr NamedValue<S, V> operator=(V v) const;
 };
 
-// The same symbol as a value, for operator[], which takes no template argument.
-// FixedString, not `CFixedString auto`: CTAD has to turn the literal into a
-// FixedString rather than decay it to const char*.
+// The same symbol as a value, for operator[].  FixedString, not
+// `CFixedString auto`: CTAD has to turn the literal into a FixedString rather
+// than decay it to const char*.
 template <FixedString S> inline constexpr symbol_type<S> sym{};
 
 namespace literals {
@@ -47,16 +45,13 @@ template <FixedString S> [[nodiscard]] consteval auto operator""_s() noexcept {
 
 template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 
-// Unconstrained, so include/rt can specialise it for a runtime graph.  The
-// compile-time definition in expr/equation.hpp carries the CExpression
-// constraint itself, and every use of Equation<...> in this header and that one
-// is constrained too, so nothing here widens.
+// Unconstrained, so include/rt can specialise it for a runtime graph; the
+// compile-time definition carries the CExpression constraint itself.
 template <typename... Ts> class Equation;
 
-// Reaches Equation from a bare expression.  Declared here and defined out of
-// line, since Equation is still incomplete.  Keep it a constrained *template*:
-// a plain operator Equation<Derived>() is a candidate for every is_convertible
-// query, and answering one completes the return type, which asks again.
+// Declared here and defined out of line, Equation being incomplete.  Keep it a
+// constrained *template*: a plain operator Equation<Derived>() is a candidate
+// for every is_convertible query, and answering one asks again.
 template <typename Derived> struct EquationConvertible {
   template <typename Eq>
     requires std::same_as<Eq, Equation<Derived>>
@@ -132,8 +127,7 @@ consteval std::size_t child_base_at() {
   return off;
 }
 
-// One element of a point: a bare number, a range of them, a ValueMap, or a
-// named value.
+// One element of a point: a number, a range, a ValueMap, or a named value.
 template <typename T>
 concept CEvalArg = Numeric<T> || std::ranges::input_range<T> || requires {
   typename std::remove_cvref_t<T>::symbols;
@@ -236,8 +230,8 @@ public:
   }
 };
 
-// Derives from the storage form rather than aliasing it, so Expression stays a
-// class template that partial specialisations can match.
+// Derives rather than aliases, so Expression stays a class template partial
+// specialisations can match.
 template <COperation Op, CExpression... Children>
 class Expression : public ExpressionImpl<(std::is_empty_v<Children> && ...), Op,
                                          Children...> {
@@ -265,7 +259,7 @@ struct expression_element<V, I,
 } // namespace ddx::impl
 
 // At GLOBAL scope: the body opens namespace ddx::impl.  Variadic, so a
-// template-id containing commas survives the preprocessor.
+// template-id with commas survives the preprocessor.
 #define DDX_COMMUTATIVE_MULTIPLY(...)                                          \
   namespace ddx::impl {                                                        \
   template <>                                                                  \

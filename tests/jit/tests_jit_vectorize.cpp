@@ -11,42 +11,30 @@
 #include <sstream>
 #include <string>
 
-// ===========================================================================
-// Vectorisation (src/jit/compiler.cpp)
-//
-// Batch is the only shape in which the JIT beats AOT-compiled ddx, and it only
-// does so if the loop actually vectorises.  A scalar fallback is silent -- the
-// kernel still returns right answers, just slowly -- so it has to be asserted
-// on the IR rather than inferred from a benchmark.
-//
-// The transcendentals are the whole point: README measures the libm call at
-// around three quarters of a Jacobian, so a loop that vectorises the
-// arithmetic and leaves sin() scalar has won nothing.
-// ===========================================================================
+// A scalar fallback is silent -- right answers, slowly -- so vectorisation is
+// asserted on the IR, not inferred from a benchmark.  The transcendentals are
+// the point: the libm call is ~3/4 of a Jacobian.
 
 namespace {
 using ddx::rt::Builder;
 using ddx::rt::Graph;
 
-// A host with no native target has no JIT to test; every test here needs one,
-// so bring it up once and let the assertion name the reason if it will not.
+// No native target means no JIT to test; bring it up once and name the reason.
 ddx::jit::Compiler &compiler() {
   static ddx::jit::result<ddx::jit::Compiler> c = ddx::jit::Compiler::create();
   EXPECT_TRUE(c.has_value()) << (c ? "" : c.error().detail);
   return *c;
 }
 
-// A compile that has to succeed for the test to mean anything.  compile()
-// answers with result<Kernel>; the assertion names LLVM's own reason when it
-// does not, instead of an empty Kernel three lines later.
+// compile() answers with result<Kernel>; name LLVM's reason here rather than
+// meeting an empty Kernel three lines later.
 ddx::jit::Kernel must_compile(auto &&...args) {
   auto k = compiler().compile(static_cast<decltype(args) &&>(args)...);
   EXPECT_TRUE(k.has_value()) << (k ? std::string{} : k.error().detail);
   return k ? std::move(*k) : ddx::jit::Kernel{};
 }
 
-// Any width: libmvec offers 2 (SSE), 4 (AVX2) and 8 (AVX512), and which one
-// the vectoriser picks is the host's business, not this test's.
+// Any width: libmvec offers 2, 4 and 8, and the choice is the host's.
 bool has_vector_doubles(const std::string &ir) {
   return std::regex_search(ir, std::regex{R"(<[0-9]+ x double>)"});
 }
@@ -75,11 +63,9 @@ constexpr bool host_has_libmvec =
     false;
 #endif
 
-// nounwind is the IR spelling of noexcept, and Kernel::operator() is noexcept
-// on the strength of it.  willreturn and memory(argmem: readwrite) go with it:
-// the body is arithmetic over the argument pointers and calls that are
-// themselves nounwind and memory(none), so the optimiser may move code across
-// them.  Asserted on the *optimised* IR, which is what actually runs.
+// nounwind is what Kernel::operator()'s noexcept rests on; willreturn and
+// memory(argmem: readwrite) let the optimiser move code across the call.
+// Asserted on the *optimised* IR, which is what runs.
 TEST(JitVectorize, TheKernelIsNounwind) {
   const auto ir = ir_for([](auto &v) { return exp(v[0]) * sin(v[1]); }, 2);
 
@@ -121,8 +107,7 @@ TEST(JitVectorize, JacobianLoopVectorises) {
   if constexpr (!host_has_libmvec) {
     GTEST_SKIP() << "libmvec is glibc on x86-64";
   }
-  // The Jacobian graph is wider and shares subexpressions; it must still
-  // vectorise, since that is the call anyone actually cares about.
+  // Wider and sharing subexpressions, and still has to vectorise.
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
@@ -133,8 +118,8 @@ TEST(JitVectorize, JacobianLoopVectorises) {
   EXPECT_TRUE(calls_vector_libm(ir, "sin"));
 }
 
-// The escape hatch has to actually disable the thing, or it is no use when a
-// mapping names a symbol the host's glibc lacks.
+// The escape hatch must actually disable it: a mapping can name a symbol the
+// host's glibc lacks.
 TEST(JitVectorize, VecLibNoneLeavesTranscendentalsScalar) {
   ddx::jit::Options off;
   off.veclib = ddx::jit::VecLib::None;
@@ -143,9 +128,8 @@ TEST(JitVectorize, VecLibNoneLeavesTranscendentalsScalar) {
   EXPECT_FALSE(calls_vector_libm(ir, "exp"));
 }
 
-// Every vector symbol the vectoriser chose must be resolvable, or the lookup in
-// compile() fails: LLVM's table is written against a newer glibc than some
-// hosts ship.
+// LLVM's table is written against a newer glibc than some hosts ship, so every
+// symbol the vectoriser chose has to resolve.
 TEST(JitVectorize, EveryVectorSymbolResolves) {
   if constexpr (!host_has_libmvec) {
     GTEST_SKIP() << "libmvec is glibc on x86-64";

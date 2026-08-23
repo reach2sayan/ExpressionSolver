@@ -1,11 +1,7 @@
 #pragma once
-// The forward-mode workspaces: the generic SweepWorkspace of
-// symbolic/workspace.hpp pinned to the dual orders the drivers sweep at.
-//
-// Only these two aliases need Dual to be a complete type, which is why the
-// workspace itself lives a layer down -- symbolic/sweep.hpp wants HessianStatic
-// and symmetrize from it and has no business acquiring forward mode to get
-// them.
+// symbolic/workspace.hpp's SweepWorkspace pinned to the dual orders the drivers
+// sweep at.  Only these aliases need Dual complete, which is why the workspace
+// itself lives a layer down.
 
 #include "dual/dual.hpp"
 #include "symbolic/workspace.hpp"

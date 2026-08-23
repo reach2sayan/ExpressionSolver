@@ -70,13 +70,11 @@ DDX_UNARY_MATH_DESC(ErfOpFn,     erf(u),   static_cast<T>(2.0 * std::numbers::in
 // clang-format on
 
 // A descriptor's `deriv` needs strictly more of T than its value does (sin
-// needs cos, asin needs sqrt, ...), and that is not expressible as a
-// constraint: `deriv` returns auto, so a failure is outside the immediate
-// context and hard-errors rather than SFINAE-ing.
-//
-// log10 and erf are the exception: they carry irrational constants and so need
-// static_cast<T>(double), which constructible_from<T, int> does not give.  That
-// one IS a constraint, applied by the generator below.
+// needs cos, asin needs sqrt), and that is not expressible as a constraint:
+// `deriv` returns auto, so a failure hard-errors rather than SFINAE-ing.  log10
+// and erf are the exception -- their irrational constants need
+// static_cast<T>(double), which constructible_from<T, int> does not give, and
+// that IS a constraint.
 template <typename Fn> inline constexpr bool needs_real_constants_v = false;
 template <Numeric T>
 inline constexpr bool needs_real_constants_v<Log10OpFn<T>> = true;

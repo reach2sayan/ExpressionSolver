@@ -16,8 +16,8 @@ TEST(Simplify, IdentitiesCollapseDerivativeTrees) {
                 26); // f itself is untouched
 }
 TEST(Simplify, OnlyCompileTimeLiteralsFold) {
-  // Lit carries its value in the type, so it folds; a stored Constant holds a
-  // number that only exists at run time, so it must not.
+  // Lit carries its value in the type, so it folds; a stored Constant does
+  // not.
   static_assert(ddx::impl::detail::is_zero_v<ddx::impl::Lit<double, 0>>);
   static_assert(ddx::impl::detail::is_zero_v<ddx::impl::Lit<double, 0.0>>);
   static_assert(ddx::impl::detail::is_one_v<ddx::impl::Lit<double, 1>>);
@@ -33,9 +33,8 @@ TEST(Simplify, OnlyCompileTimeLiteralsFold) {
   EXPECT_DOUBLE_EQ(unfolded.eval(3.0), 3.0);
 }
 TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
-  // The branch-free expansion (a'+b'±sign(a-b)*(a'-b'))/2 keeps a whole a-b
-  // subtree inside the sign node, and that duplication against the primal is
-  // structural so it stays in the type.
+  // (a'+b'±sign(a-b)*(a'-b'))/2 keeps a whole a-b subtree inside the sign
+  // node, and that duplication is structural, so it stays in the type.
   constexpr auto dmax =
       d_nodes<ddx::impl::FixedString{"x"}, decltype(max(sx, sy))>();
   constexpr auto dmin =
@@ -45,8 +44,8 @@ TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
 }
 TEST(Simplify, CommutativeOperandsCanonicalise) {
   // x+y and y+x become the same type, which is what makes type identity a
-  // usable value numbering for a later CSE/DAG pass.  double declares its
-  // multiplication commutative, so x*y and y*x unify for it too.
+  // usable value numbering.  double declares * commutative, so x*y unifies
+  // with y*x too.
   static_assert(std::is_same_v<decltype(canonicalise(sx + sy)),
                                decltype(canonicalise(sy + sx))>);
   static_assert(std::is_same_v<decltype(canonicalise(sx * sy)),
@@ -61,10 +60,8 @@ TEST(Simplify, CommutativeOperandsCanonicalise) {
   EXPECT_EQ(std::format("{}", canonicalise(2.0 * sx)), "2 * x");
 }
 TEST(ReverseMode, MultiplyAdjointRespectsOperandSide) {
-  // MultiplyOp::adjoints must return {adj*b, a*adj}, not {adj*b, adj*a}: for
-  // c = a*b the differential is da*b + a*db, so the adjoint reaching `b`
-  // multiplies on the RIGHT of a.  Every scalar the library ships commutes, so
-  // only a non-commutative one can tell the two spellings apart.
+  // For c = a*b the differential is da*b + a*db, so the adjoint reaching `b`
+  // multiplies on the RIGHT of a: {adj*b, a*adj}, not {adj*b, adj*a}.
   static_assert(ddx::impl::Numeric<Mat2> &&
                 !ddx::impl::CCommutativeMultiply<Mat2>);
 
