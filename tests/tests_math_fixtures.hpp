@@ -16,25 +16,6 @@ constexpr double kLn10 = std::numbers::ln10;
 constexpr double k2OverSqrtPi = 2.0 * std::numbers::inv_sqrtpi;
 } // namespace
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ---------------------------------------------------------------------------
 // operator[] — the subscript spelling of get/set.  It is an alias, so what
 // these pin is that it stays one: same slot, same errors, same ownership

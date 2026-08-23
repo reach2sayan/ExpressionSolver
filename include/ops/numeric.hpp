@@ -15,7 +15,6 @@
 
 namespace ddx::impl {
 
-
 template <typename T>
 concept CArithmetic = std::integral<std::remove_cvref_t<T>> ||
                       std::floating_point<std::remove_cvref_t<T>>;
@@ -118,7 +117,6 @@ using MonoExpression = Expression<Op, Exp>;
 
 template <Numeric T, auto... V> class Lit;
 template <Numeric T> using Constant = Lit<T>;
-
 
 namespace detail {
 // Same fold as binomial() in md/layouts.hpp.

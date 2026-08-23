@@ -36,4 +36,3 @@ concept CHessianResult = requires(const T &H) {
                                        std::size_t j) noexcept {
   return hess_ptr(h)[i * hess_n(h) + j]; // row-major, as the drivers document
 }
-

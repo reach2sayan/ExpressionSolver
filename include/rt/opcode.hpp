@@ -101,11 +101,9 @@ inline constexpr std::array<OpInfo, op_count> op_info = [] {
 
 template <impl::Numeric T>
 [[nodiscard]] constexpr bool is_commutative(OpCode op) noexcept {
-  if (op == OpCode::Mul) {
-    return impl::CCommutativeMultiply<T>;
-  }
-  return op == OpCode::Add || op == OpCode::Max || op == OpCode::Min ||
-         op == OpCode::Hypot;
+  return (op == OpCode::Mul) ? impl::CCommutativeMultiply<T>
+                             : (op == OpCode::Add || op == OpCode::Max ||
+                                op == OpCode::Min || op == OpCode::Hypot);
 }
 
 [[nodiscard]] constexpr bool is_leaf(OpCode op) noexcept {

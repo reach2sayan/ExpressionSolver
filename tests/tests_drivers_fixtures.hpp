@@ -1,6 +1,6 @@
 #pragma once
-// Everything tests_drivers.cpp and dual/tests_drivers_dual.cpp both build on: the
-// includes, the model expressions and the local helpers.  Split out so the
+// Everything tests_drivers.cpp and dual/tests_drivers_dual.cpp both build on:
+// the includes, the model expressions and the local helpers.  Split out so the
 // two suites share one definition of each rather than a copy apiece.
 
 #include "tests_common.hpp"
@@ -29,9 +29,6 @@ template <Numeric T> T vf_sample(const T *y, std::size_t n) {
 }
 } // namespace
 
-
-
-
 // ===========================================================================
 // Memory-ownership contract.
 //
@@ -44,21 +41,11 @@ template <Numeric T> T vf_sample(const T *y, std::size_t n) {
 // alias member storage stay usable on temporaries by copying out.
 // ===========================================================================
 
-
-
-
-
-
 // ===========================================================================
 // Compile-time Hessian sparsity (coupling.hpp).  The pattern drives which
 // entries the compressed driver writes, so a pattern that WRONGLY drops a pair
 // silently zeroes a real Hessian entry — these pin the derivation down.
 // ===========================================================================
-
-
-
-
-
 
 // ===========================================================================
 // Sparse Hessian.  The sparsity is a property of the expression TYPE, so the
@@ -93,13 +80,6 @@ std::vector<double> densify(const Sparse &h) {
   return dense;
 }
 } // namespace
-
-
-
-
-
-
-
 
 // ===========================================================================
 // Reusing driver overloads.  The point of these is that a caller sweeping many

@@ -1,7 +1,7 @@
 #include "jit/format.hpp"
 #include "jit/kernel.hpp"
 #include "rt/derivative.hpp"
-#include "rt/expr.hpp"
+#include "rt/expressions.hpp"
 #include "rt/graph.hpp"
 
 #include <gtest/gtest.h>

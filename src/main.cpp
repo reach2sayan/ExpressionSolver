@@ -8,11 +8,11 @@
 //
 // Both give the same numbers; see the last two sections for the difference.
 
-#include "ddx.hpp"              // the public surface: Equation, var, named
+#include "ddx.hpp"               // the public surface: Equation, var, named
+#include "dual/hessian.hpp"      // hessian(), gradient()
+#include "symbolic/bound.hpp"    // eval(), bind(), named<>()
 #include "symbolic/coupling.hpp" // hessian_pattern(), color_columns()
-#include "dual/hessian.hpp"  // hessian(), gradient()
-#include "symbolic/bound.hpp"       // eval(), bind(), named<>()
-#include "symbolic/equation.hpp"    // Equation: vector-valued f, Jacobians
+#include "symbolic/equation.hpp" // Equation: vector-valued f, Jacobians
 #include <tuple>
 
 #include <array>

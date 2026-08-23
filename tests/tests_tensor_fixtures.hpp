@@ -46,10 +46,6 @@ struct BitHash {
 };
 } // namespace
 
-
-
-
-
 // ===========================================================================
 // mdspan layer — layouts, accessors, and the owning tensor.
 //
@@ -57,12 +53,6 @@ struct BitHash {
 // wrong derivative rather than failing, so each one is pinned both as a
 // runtime test and, below, inside constant evaluation.
 // ===========================================================================
-
-
-
-
-
-
 
 // The packed tensor with the permutations skipped must equal the dense tensor
 // with every multi-index evaluated: a wrong symmetry assumption or simplex

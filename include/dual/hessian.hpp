@@ -3,11 +3,11 @@
 // The public hessian() entry point: it chooses between the O(N^2) probe driver
 // (numeric.hpp) and the O(N) reverse graph sweep (symbolic.hpp).
 
+#include "dual/dual.hpp"
 #include "dual/numeric.hpp"
+#include "symbolic/expressions.hpp" // CExpression
 #include "symbolic/seeded_energy.hpp"
 #include "symbolic/sweep.hpp"
-#include "dual/dual.hpp"
-#include "symbolic/expressions.hpp" // CExpression
 #include "util/error.hpp"
 
 #include <cstddef>

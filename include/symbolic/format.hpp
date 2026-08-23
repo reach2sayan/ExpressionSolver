@@ -1,9 +1,9 @@
 #pragma once
 
-#include "symbolic/expressions.hpp"
 #include "ops/operations.hpp"
+#include "symbolic/expressions.hpp"
 #include "symbolic/traits.hpp" // CVariable
-#include "util/fmt.hpp"    // detail::fmt_put
+#include "util/fmt.hpp"        // detail::fmt_put
 
 #include <format>
 #include <ostream>

@@ -2,7 +2,7 @@
 
 #include "ops/mode.hpp" // DiffMode
 #include "rt/coupling.hpp"
-#include "rt/expr.hpp"
+#include "rt/expressions.hpp"
 
 #include <algorithm>
 #include <cstddef>

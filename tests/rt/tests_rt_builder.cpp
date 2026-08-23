@@ -1,10 +1,10 @@
-#include "rt/expr.hpp"
+#include "rt/expressions.hpp"
 #include "rt/interpret.hpp"
 
 #include <gtest/gtest.h>
 
 // ===========================================================================
-// The runtime builder (rt/builder.hpp, rt/expr.hpp)
+// The runtime builder (rt/builder.hpp, rt/expressions.hpp)
 //
 // The compile-time side folds in the operator factories so a tree is born
 // folded and the garbage is never instantiated.  The builder does the same

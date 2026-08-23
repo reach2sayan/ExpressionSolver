@@ -4,16 +4,16 @@
 // dual/tests_dual_common.hpp beside the tests that need them.
 #include "ddx.hpp"
 
-#include "symbolic/seeded_energy.hpp"
-#include "symbolic/sweep.hpp"
+#include "md/layouts.hpp"
+#include "md/tensor.hpp"
+#include "ops/operations.hpp"
 #include "symbolic/bound.hpp"
 #include "symbolic/equation.hpp"
 #include "symbolic/format.hpp"
-#include "ops/operations.hpp"
+#include "symbolic/seeded_energy.hpp"
+#include "symbolic/sweep.hpp"
 #include "symbolic/traits.hpp"
 #include "symbolic/values.hpp"
-#include "md/layouts.hpp"
-#include "md/tensor.hpp"
 #include "util/scope_guard.hpp"
 #include <array>
 #include <cmath>

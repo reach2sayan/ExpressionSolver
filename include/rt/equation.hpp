@@ -9,7 +9,7 @@
 #include "md/md.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
-#include "rt/expr.hpp"
+#include "rt/expressions.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
 #include "symbolic/equation.hpp"

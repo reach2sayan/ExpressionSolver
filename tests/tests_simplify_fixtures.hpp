@@ -1,6 +1,6 @@
 #pragma once
-// Everything tests_simplify.cpp and dual/tests_simplify_dual.cpp both build on: the
-// includes, the model expressions and the local helpers.  Split out so the
+// Everything tests_simplify.cpp and dual/tests_simplify_dual.cpp both build on:
+// the includes, the model expressions and the local helpers.  Split out so the
 // two suites share one definition of each rather than a copy apiece.
 
 #include "tests_common.hpp"
@@ -29,12 +29,6 @@ template <ddx::impl::FixedString S, class E> consteval std::size_t d_nodes() {
 constexpr auto F4 =
     (sx + sy) * (sz - sw) + exp(sx * sz) + sin(sy * sw) + sx * sy * sz * sw;
 } // namespace
-
-
-
-
-
-
 
 // Two scalars for the commutativity opt-in below: the same type but for the
 // tag, so the only thing that differs is whether they declare that their
@@ -89,8 +83,6 @@ struct Mat2 {
   // secretly demand one either (values.hpp accumulates with + and assignment).
   friend constexpr bool operator==(Mat2, Mat2) noexcept = default;
 };
-
-
 
 // Whether an op template accepts a scalar, WITHOUT instantiating it -- naming a
 // constrained specialisation directly is a hard error rather than a

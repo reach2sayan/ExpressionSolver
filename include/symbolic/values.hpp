@@ -234,7 +234,7 @@ public:
   using value_type = T;
 
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    return Lit < T, Frozen ? 0 : 1 > {};
+    return Lit<T, Frozen ? 0 : 1>{};
   }
 
   template <std::size_t Base = 0>
