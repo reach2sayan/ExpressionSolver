@@ -49,11 +49,13 @@ function(ddx_target_flags target)
     target_compile_options(${target} PRIVATE ${DDX_CODEGEN_FLAGS} ${DDX_WARNINGS})
 endfunction()
 
-# A shared ddx::jit has to be findable at run time.  CMake's build RPATH covers
+# A shared libddx has to be findable at run time.  CMake's build RPATH covers
 # the ELF build tree already; $ORIGIN is what survives the tree being moved, and
 # Windows has no RPATH at all, so there the DLL is copied next to the .exe.
-function(ddx_jit_runtime target)
-    if (NOT DDX_BUILD_JIT OR DDX_JIT_STATIC)
+# Every executable linking ddx::rt needs this now that the runtime graph is
+# always built, where it used to be the JIT's problem alone.
+function(ddx_runtime_deps target)
+    if (NOT DDX_SHARED_LIBS)
         return ()
     endif ()
     set_property(TARGET ${target} APPEND PROPERTY BUILD_RPATH "$ORIGIN")

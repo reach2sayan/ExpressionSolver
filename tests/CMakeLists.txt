@@ -5,6 +5,12 @@ ddx_use_googletest()
 include(GoogleTest)
 
 # One TU per anonymous-namespace helper block, so `-j` can build them at once.
+#
+# `tests` is the compile-time suite with forward mode taken out of it, so it is
+# what proves DDX_BUILD_DUAL=OFF is a configuration and not just an option:
+# every case in it compiles and runs without a dual in the build.  The cases
+# that do want one moved to tests/dual/, which is the same split the tiering
+# above already makes for Boost.Graph and LLVM.
 file(GLOB DDX_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 add_executable(tests ${DDX_TEST_SOURCES})
 target_include_directories(tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -12,28 +18,33 @@ target_link_libraries(tests PRIVATE gtest_main ddx)
 ddx_target_flags(tests)
 gtest_discover_tests(tests)
 
-if (DDX_BUILD_RT)
-    file(GLOB DDX_RT_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rt/*.cpp")
-    add_executable(tests_rt ${DDX_RT_TEST_SOURCES})
-    # Against the JIT where it is built, the interpreter where it is not: the
-    # batch tests are written once and have to give the same answers either way,
-    # which is only checked if they actually run both.
-    if (DDX_BUILD_JIT)
-        target_link_libraries(tests_rt PRIVATE gtest_main ddx_jit)
-    else ()
-        target_link_libraries(tests_rt PRIVATE gtest_main ddx_rt)
-    endif ()
-    ddx_target_flags(tests_rt)
-    ddx_jit_runtime(tests_rt)
-    gtest_discover_tests(tests_rt)
+if (DDX_BUILD_DUAL)
+    file(GLOB DDX_DUAL_TEST_SOURCES CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/dual/*.cpp")
+    add_executable(tests_dual ${DDX_DUAL_TEST_SOURCES})
+    target_include_directories(tests_dual PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(tests_dual PRIVATE gtest_main ddx)
+    ddx_target_flags(tests_dual)
+    gtest_discover_tests(tests_dual)
 endif ()
+
+# The batch tests are written once and have to give the same answers whether
+# they run interpreted or JIT-compiled, which is only checked if they actually
+# run both.  One link line does that now: ddx::rt is libddx either way, and the
+# JIT is inside it when it was built.
+file(GLOB DDX_RT_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rt/*.cpp")
+add_executable(tests_rt ${DDX_RT_TEST_SOURCES})
+target_link_libraries(tests_rt PRIVATE gtest_main ddx::rt)
+ddx_target_flags(tests_rt)
+ddx_runtime_deps(tests_rt)
+gtest_discover_tests(tests_rt)
 
 if (DDX_BUILD_JIT)
     file(GLOB DDX_JIT_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/jit/*.cpp")
     add_executable(tests_jit ${DDX_JIT_TEST_SOURCES})
-    target_link_libraries(tests_jit PRIVATE gtest_main ddx_jit)
+    target_link_libraries(tests_jit PRIVATE gtest_main ddx::jit)
     ddx_target_flags(tests_jit)
-    ddx_jit_runtime(tests_jit)
+    ddx_runtime_deps(tests_jit)
     gtest_discover_tests(tests_jit)
 endif ()
 

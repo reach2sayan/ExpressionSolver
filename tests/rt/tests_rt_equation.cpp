@@ -120,6 +120,7 @@ TEST(RtEquation, AWrongSizedPointIsRejected) {
 
 namespace {
 
+#if DDX_HAS_DUAL
 // dual2nd on the compile-time side, because that is what its hessian needs;
 // the runtime graph is over plain double either way.
 TEST(RtEquation, HessianMatchesTheCompileTimeEquation) {
@@ -144,6 +145,7 @@ TEST(RtEquation, HessianMatchesTheCompileTimeEquation) {
   EXPECT_TRUE(std::isfinite(got[1]));
   EXPECT_DOUBLE_EQ(got[1], got[2]) << "a Hessian is symmetric";
 }
+#endif // DDX_HAS_DUAL
 
 // The colour count is a property of the expression, and the facade exposes it
 // because whether colouring saves anything is not something a caller can guess.
@@ -376,6 +378,7 @@ TEST(RtEquation, HessianOfASystemIsOneBlockPerOutput) {
   }
 }
 
+#if DDX_HAS_DUAL
 // One Taylor sweep rather than K nested duals, matching
 // univariate_derivative_impl.
 TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
@@ -401,5 +404,6 @@ TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
   EXPECT_EQ(two.univariate_derivative<1>(1.0).error().code,
             ddx::errc::not_univariate);
 }
+#endif // DDX_HAS_DUAL
 
 } // namespace

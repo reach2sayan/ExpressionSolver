@@ -1,9 +1,9 @@
 #pragma once
-#include "dual/dual.hpp"
-#include "expr/expressions.hpp"
-#include "expr/operations.hpp"
-#include "expr/simplify.hpp"
-#include "expr/symbol.hpp"
+#include "ops/scalar.hpp"
+#include "symbolic/expressions.hpp"
+#include "ops/operations.hpp"
+#include "symbolic/simplify.hpp"
+#include "symbolic/symbol.hpp"
 #include <utility>
 
 namespace ddx::impl {
@@ -309,10 +309,24 @@ template <FixedString S, Numeric T>
   return Variable<T, S>{};
 }
 
-// dual_var_of<"x">(v) — dual-valued, which is what hessian() needs.
+// The same two, keyed by a symbol in hand rather than by a template argument:
+//
+//   variable("x"_s)              // Variable<double, "x">
+//   variable<dual>("x"_s)        // and over another scalar
+//   var_of("x"_s, v)             // exemplar supplies the scalar
+//
+// "x"_s is already the standard spelling of a symbol -- a C++20 string-literal
+// operator template over a class-type NTTP -- so this is only the other half of
+// it: nothing here needs the caller to write an angle bracket.  named() has had
+// its tag-taking overload all along.
+template <Numeric T = double, FixedString S>
+[[nodiscard]] constexpr auto variable(symbol_type<S>) noexcept {
+  return Variable<T, S>{};
+}
+
 template <FixedString S, Numeric T>
-[[nodiscard]] constexpr auto dual_var_of(const T &) noexcept {
-  return Variable<Dual<T>, S>{};
+[[nodiscard]] constexpr auto var_of(symbol_type<S>, const T &) noexcept {
+  return Variable<T, S>{};
 }
 
 // constant(3.0) — a value stored in the tree.  A bare scalar mixed with an

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "expr/expressions.hpp" // Numeric
+#include "ops/numeric.hpp" // Numeric
 
 #include <cmath>
 #include <numbers>

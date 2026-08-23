@@ -29,11 +29,12 @@ target_link_libraries(consumer PRIVATE ddx::ddx)
 # half of what ddx_CODEGEN_FLAGS exists for.
 target_compile_options(consumer PRIVATE ${ddx_CODEGEN_FLAGS})
 
-if (DDX_BUILD_RT)
-    target_link_libraries(consumer PRIVATE ddx::rt)
-    target_compile_definitions(consumer PRIVATE DDX_CONSUMER_RT)
-endif ()
-if (DDX_BUILD_JIT)
+# Driven off what find_package actually reported, not off cache variables the
+# parent never passes down -- which is what these two blocks used to read, so
+# the consumer had never once linked the runtime graph or the backend.
+target_link_libraries(consumer PRIVATE ddx::rt)
+target_compile_definitions(consumer PRIVATE DDX_CONSUMER_RT)
+if (ddx_jit_FOUND)
     # DDX_HAS_JIT arrives with the target, so consumer.cpp needs no flag of ours.
     target_link_libraries(consumer PRIVATE ddx::jit)
 endif ()

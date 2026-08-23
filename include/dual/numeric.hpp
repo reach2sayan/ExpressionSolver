@@ -4,7 +4,7 @@
 // the callable a pointer to it, read the derivative back out.  gradient sweeps
 // once per active variable, hessian once per probe pair.
 
-#include "drivers/common.hpp"
+#include "dual/workspace.hpp"
 #include "util/scope_guard.hpp"
 
 #include <algorithm>

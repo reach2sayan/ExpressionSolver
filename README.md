@@ -3,821 +3,97 @@
 
 # ddx
 
-A header-only C++23 library for symbolic expression trees and automatic
-differentiation: symbolic derivatives, forward mode (dual numbers), reverse mode
-(adjoint sweeps), Hessians, higher-order derivative tensors, and Taylor-mode
-univariate derivatives — all usable at run time or inside `constexpr`.
+A C++23 library for differentiating expressions. Write a function over named
+symbols and ask it for values, gradients, Jacobians, Hessians, higher-order
+derivative tensors, or the derivative expressions themselves — at run time, in a
+`static_assert`, or over a batch of thousands of points.
 
 ```cpp
 #include "ddx.hpp"
 using namespace ddx;
 
-constexpr auto x = var<"x">;
-constexpr auto y = var<"y">;
+constexpr std::array ts{0.0, 1.0, 2.0, 3.0};
+constexpr std::array ys{2.00, 1.21, 0.74, 0.45};
 
-auto f  = exp(x) * sin(y);
-auto v  = Equation{f}.evaluate(1.0, 2.0);   // f(1, 2)
-auto g  = Equation{f}.gradient(1.0, 2.0);   // {∂f/∂x, ∂f/∂y}
+// residual sum of squares for the fit m(t) = a·exp(−b·t)
+template <std::size_t I>
+constexpr auto residual(auto a, auto b) { return ys[I] - a * exp(-b * ts[I]); }
+
+template <std::size_t... I>
+constexpr auto rss(auto a, auto b, std::index_sequence<I...>) {
+  return ((residual<I>(a, b) * residual<I>(a, b)) + ...);
+}
+
+const auto eq = Equation{rss(var<"a">, var<"b">, std::make_index_sequence<4>{})};
+
+eq.evaluate(2.0, 0.5);      // 4.1343959887091816e-05
+eq.gradient(2.0, 0.5);      // {-0.0010757424682184863, 0.015067847559529016}
 ```
 
-**Contents**
+## The manuals
 
-1. [Requirements and setup](#requirements-and-setup)
-2. [Building expressions](#building-expressions)
-3. [Supplying a point](#supplying-a-point)
-4. [Derivatives: the `Equation` API](#derivatives-the-equation-api)
-5. [Return types](#return-types)
-6. [Getting the most speed out of it](#getting-the-most-speed-out-of-it)
-7. [Compile-time use](#compile-time-use)
-8. [Runtime expressions](#runtime-expressions)
-9. [Thread safety](#thread-safety)
-10. [Building the project](#building-the-project)
-11. [Cheat sheet](#cheat-sheet)
-12. [Diagnostics](#diagnostics)
-13. [Further reading](#further-reading)
+| Manual | Covers |
+|---|---|
+| [Compile-time expressions](include/symbolic/README.md) | symbols, points, `Equation`, values, gradients, Jacobians, the partial expressions, `Map`, printing |
+| [Forward mode](include/dual/README.md) | `hessian`, `derivative_tensor<K>`, `univariate_derivative<K>`, `eval_with_tangent`, tensors |
+| [Runtime expressions](include/rt/README.md) | expressions assembled while the program runs, the batch column API, the JIT |
 
 ---
 
-## Requirements and setup
+## Requirements
 
-- A C++23 compiler with a C++23 standard library: **GCC 14+**, **Clang 19+**
-  over libstdc++ 14+, or **Clang 17+** over libc++ 17+. MSVC (VS 2022,
-  `/std:c++latest`) is supported. Clang before 19 defines `__cpp_concepts` as
-  `201907L`, below what libstdc++ asks of it before it will offer `<expected>`.
-- **CMake 3.26+** if you build through CMake.
+- A C++23 compiler and standard library: **GCC 14+**, **Clang 19+** over
+  libstdc++ 14+, **Clang 17+** over libc++ 17+, or MSVC (VS 2022,
+  `/std:c++latest`).
+- **CMake 3.26+** to build through CMake.
+- Header-only dependencies are fetched at configure time, so the first configure
+  wants a network. `-DDDX_BUILD_JIT=ON` additionally needs an LLVM 18–20
+  installation, pointed at with `LLVM_DIR`.
 
-C++23 is a hard requirement — the library uses `constexpr std::bitset` inside
-`consteval` functions and the multidimensional subscript `t[i, j, k]`.
+## Using it
 
-The library is header-only, and so is what it depends on: Boost.Mp11, which the
-build fetches at a pinned version, and nothing else. Mp11 is the type-list
-vocabulary the symbol lists are built out of — header-only and standalone, so
-this is a fetch and not a link, and no other part of Boost comes with it.
-Configuring therefore wants a network the first time, or a warm `.deps`. A
-reference implementation of `std::mdspan` is vendored under
-`include/md/third_party/` and is used automatically when your toolchain has no
-complete `<mdspan>`.
-
-### Using it
-
-With CMake, link the interface target — it puts `include/` on your include path:
+In a project that vendors ddx:
 
 ```cmake
 add_subdirectory(ddx)
-target_link_libraries(my_app PRIVATE ddx::ddx)   # or: ddx
+target_link_libraries(my_app PRIVATE ddx::ddx)
 ```
 
-Three targets exist, and which one you link decides how much of the library you get:
-`ddx::ddx` is the header-only core, `ddx::rt` adds
-[runtime expressions](#runtime-expressions), and `ddx::jit` is `ddx::rt` with the
-batch calls compiled rather than interpreted. `ddx::jit` is the only one that is a
-library rather than a set of headers.
+Or against an installed or built copy:
 
-An installed copy works the same way, and is what a built `ddx::jit` wants — a shared
-library is worth installing where a header is only worth including:
+```cmake
+find_package(ddx CONFIG REQUIRED COMPONENTS dual jit)
+target_link_libraries(my_app PRIVATE ddx::jit)
+```
 
 ```sh
-cmake --install build/release_with_jit --prefix /opt/ddx
+cmake --install build/release_jit --prefix /opt/ddx
 ```
+
+A build tree is consumable without installing:
 
 ```cmake
-find_package(ddx CONFIG REQUIRED)
-target_link_libraries(my_app PRIVATE ddx::jit)   # or ddx::rt, or ddx::ddx
+find_package(ddx CONFIG REQUIRED PATHS /path/to/ddx/build/release NO_DEFAULT_PATH)
 ```
 
-A build directory is consumable in the same way, without installing anything — useful
-when you are developing against ddx and want header edits picked up as you make them:
+Asking for a component the build does not have fails at configure time and says
+which option turns it on. The package also reports the flags ddx itself was
+compiled with, as `ddx_CODEGEN_FLAGS` and `ddx_FP_CONTRACT`; matching
+`ddx_FP_CONTRACT` is worth doing if your results have to agree with ddx's to the
+last bit.
 
-```cmake
-find_package(ddx CONFIG REQUIRED PATHS /path/to/ddx/build/release_with_jit NO_DEFAULT_PATH)
-```
+### Targets
 
-The package exports whichever of the three the build produced, and `ddx-config.cmake`
-finds Boost and LLVM again where they are needed. Ask for what you need by component and
-a build that lacks it says so at configure time:
-
-```cmake
-find_package(ddx CONFIG REQUIRED COMPONENTS jit)
-```
-
-A built `ddx::jit` was compiled against one LLVM major version and says so: configuring
-against a different one fails there rather than at link time, and the LLVM the build used
-is recorded as the default so a machine with several needs no `LLVM_DIR` from you. Boost
-is reported rather than pinned — ddx builds against a fetched Boost and a consumer uses
-whichever it has, so the configure output names both.
-
-`ddx_CODEGEN_FLAGS` and `ddx_FP_CONTRACT` carry the flags ddx itself was built with.
-Nothing is forced on you — an interface library has no business dictating your codegen —
-but FP contraction is worth matching if you use `ddx::jit`, whose kernels contract to
-agree with the compile-time path:
-
-```cmake
-target_compile_options(my_app PRIVATE ${ddx_CODEGEN_FLAGS})
-```
-
-Then include the public header:
-
-```cpp
-#include "ddx.hpp"    // the whole public surface
-
-using namespace ddx;  // assumed by every example below
-```
-
-### What `namespace ddx` contains
-
-`ddx.hpp` puts fifteen names in `namespace ddx`, and that is the whole surface:
-
-| Name | Purpose |
+| Target | Is |
 |---|---|
-| `Equation` | the derivative API — every derivative entry point is a member |
-| `var<"x">`, `sym<"x">`, `idx<N>()` | name a symbol; index into an `Equation` |
-| `var_of<"x">(v)`, `dual_var_of<"x">(v)` | name a symbol, taking its scalar type from `v` |
-| `constant(3.0)` | a value stored in the tree |
-| `literals` — `"x"_s`, `_cd`, `_ci`, `_vd`, `_vi` | the user-defined literals, as a namespace |
-| `named<"x">(v)`, `NamedValue` | one keyword argument of a point, or one map entry |
-| `map(…)`, `Map` | a compile-time map of those entries |
-| `DiffMode` | `Symbolic` vs `Reverse` |
-| `dual`, `dual2nd` | the symbol value type `Equation::hessian` needs |
+| `ddx::ddx` | the header-only library — expressions, `Equation`, forward mode |
+| `ddx::rt` | that plus runtime expressions |
+| `ddx::jit` | `ddx::rt` with the LLVM backend compiled in |
 
-The operators (`+`, `*`, …), the math functions (`sin`, `exp`, …), `operator<<`
-and the `std::formatter` specialisations are deliberately *not* on that list.
-They are found by argument-dependent lookup, so they work on an expression
-without their names being visible. `using namespace ddx;` therefore brings in
-fifteen names, not a hundred and a half.
+Components for `find_package`: `ddx`, `util`, `ops`, `md`, `symbolic`, `dual`,
+`rt`, `jit`.
 
-Every user-defined literal — `"x"_s` and the `_cd`, `_ci`, `_vd`, `_vi` suffixes
-— lives in `ddx::literals`, so they arrive only where you ask for them:
-
-```cpp
-using namespace ddx::literals;    // "x"_s, 2.0_cd, 4_vi, …
-```
-
-The public API is macro-free, so nothing of the library sits at global scope.
-Everything that deduces a type from a value — `constant(v)`, `var_of<"x">(v)`,
-`dual_var_of<"x">(v)` — is an ordinary function template, and obeys namespaces
-like the rest.
-
-`ddx::rt` is deliberately not among them. Its one public name is `equation`, it is
-opt-in, it carries dependencies, and `ddx.hpp` does not reach for it. See
-[Runtime expressions](#runtime-expressions).
-
----
-
-## Building expressions
-
-### Symbols
-
-A variable is a **name**, spelled `var<"x">`:
-
-```cpp
-constexpr auto x = var<"x">;              // a double-valued symbol named "x"
-constexpr auto n = var<"n", int>;         // another scalar type
-auto xd = var<"x", dual>;                 // dual-valued symbol (needed for hessian())
-```
-
-Equivalent spellings, including the ones that deduce the scalar type from an
-exemplar value rather than naming it:
-
-| Syntax | Means |
-|---|---|
-| `var<"x">` | a symbol named `"x"`, valued `double` |
-| `var<"x", T>` | a symbol named `"x"`, valued `T` |
-| `var_of<"x">(v)` | a symbol named `"x"`, valued `decltype(v)` — `v` supplies only the *type* |
-| `dual_var_of<"x">(v)` | the same, dual-valued: `var<"x", dual>` when `v` is a `double` |
-| `2.0_vd` | a `double` symbol named `"v"` (needs `ddx::literals`) |
-| `4_vi` | an `int` symbol named `"c"` (needs `ddx::literals`) |
-
-### Constants
-
-| Syntax | Means |
-|---|---|
-| `constant(3.0)` | a `double` constant stored in the tree |
-| `1.5_cd` | the same, as a literal (needs `ddx::literals`) |
-| `3_ci` | an `int` constant (needs `ddx::literals`) |
-
-A bare scalar mixed with an expression is promoted automatically, so `x * 2.0`
-and `2.0 * x + 1.0` need no wrapping. Use `constant` only when you want the
-constant spelled explicitly.
-
-### Operators and functions
-
-| Kind | Available |
-|---|---|
-| Arithmetic | `+`  `-`  `*`  `/`  unary `-` |
-| Unary functions | `sin` `cos` `tan` `exp` `log` `log10` `sqrt` `cbrt` `abs` `asin` `acos` `atan` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` `erf` |
-| Binary functions | `pow` `atan2` `hypot` `max` `min` |
-
-```cpp
-auto f = (x + y) * (x - y) + exp(x * y) + sin(y) * x * y;
-auto g = pow(x, 2.0) + hypot(x, y) - log(max(x, y));
-```
-
-Trees are simplified as they are built: `x + 0`, `x * 1`, `x * 0`, `x / 1`,
-`(a / x) * x`, `-(-x)`, `pow(x, 0)`, `pow(x, 1)` and literal folding are applied
-by the operators themselves, so a derivative comes out as `y` rather than
-`1 * y + x * 0`, and `d(x log x)/dx` as `1 + log(x)` rather than
-`log(x) + x * (1 / x)`.
-
-### Symbols carry no value
-
-A symbol holds nothing, and neither does any node built from it. An expression
-over symbols is an *empty type*, whatever its depth and however often a symbol
-repeats:
-
-```cpp
-auto f = (x + y) * (x - y) + exp(x * y) + sin(y) * x * y;
-static_assert(std::is_empty_v<decltype(f)>);   // sizeof(f) == 1
-```
-
-The point is supplied where you ask for a value or a derivative, never where the
-tree is built. One value slot exists per *symbol*, not per leaf occurrence, and
-an expression is free to copy, store, and pass by value.
-
-### Printing
-
-Expressions and `Equation`s are formattable and streamable:
-
-```cpp
-std::format("{}", x * y + sin(x));      // "x * y + sin(x)"
-std::format("{}", x / (y / x));         // "x / (y / x)"  — parentheses as needed
-std::format("{::.3f}", 2.0 * x);        // "2.000 * x"    — spec applies to every number
-std::cout << (x - y * x) << '\n';       // "x - y * x"
-```
-
-For an `Equation` the format prints each function followed by its gradient row.
-A symbol held constant for the purpose of one partial derivative prints with a
-`_c` suffix:
-
-```
-f0: x * y
-  grad: y_c, x_c
-```
-
----
-
-## Supplying a point
-
-Every entry point that needs numbers accepts the point in three interchangeable
-spellings:
-
-```cpp
-auto f = x * y + constant(3.0) * x;                 // f(x, y) = xy + 3x
-
-f.eval(4.0, 2.0);                                   // positional, canonical order
-f.eval(named<"y">(2.0), named<"x">(4.0));           // by name, order-independent
-f.eval(std::array{4.0, 2.0});                       // any input range
-```
-
-All of these give `20`. The same spellings work for `Equation::evaluate`,
-`gradient`, `jacobian`, `hessian`, `derivative_tensor` — one normaliser serves
-them all.
-
-### Canonical order
-
-**Canonical order is alphabetical by symbol name, not the order you wrote them
-in.** For `f(w, x, y, z)` the positional form expects `w` first — and for
-`f(x, y)` above, `x` then `y`.
-
-The positional and range forms check the count at compile time, so a missing or
-extra value is a compile error. The named form binds by name and is immune to
-ordering entirely — prefer them when the symbol set is large. A non-sized range
-brings its length with it rather than in its type, so a short one is the single
-wrong point that cannot be caught at compile time: it comes back as
-`ddx::errc::short_point` instead (and is a compile error during constant
-evaluation).
-
-### A compile-time map
-
-The same keyword arguments also stand on their own, as `map`:
-
-```cpp
-constexpr auto m = map(named<"n">(3), named<"x">(1.5));
-
-static_assert(m.get<"n">() == 3);          // int
-static_assert(m["x"_s] == 1.5);            // double
-static_assert(m.contains<"n">());
-static_assert(m.size == 2);
-```
-
-The keys live in the type, so a lookup is a member access the compiler has
-already resolved — there is no search, no hashing, and nothing to keep in step
-at run time. The values do *not* have to share a type: each slot keeps exactly
-what it was given, which is what separates this from the point of an
-expression.
-
-**The entries, in every spelling.** A map is an aggregate over its entries, so
-braces work as well as the `map(…)` call, and an entry can be written as a
-keyword argument, as a label/value pair, or as a variable/value pair:
-
-```cpp
-constexpr auto x = var<"x">;
-constexpr auto n = var<"n", int>;
-
-Map{named<"n">(3), named<"x">(1.5)};                  // keyword argument
-Map{NamedValue{"n"_s, 3}, NamedValue{x, 1.5}};        // label pair, variable pair
-map(named(n, 3), named(x, 1.5));                      // named(), keyed by a tag
-Map<NamedValue<"n", int>, NamedValue<"x", double>>{{3}, {1.5}};   // type spelled out
-```
-
-All four are the same type. What no spelling can do is `{"n", 3}` with a bare
-string: a braced list has no type for the compiler to read `"n"` out of, and the
-key has to reach the *type* — so the label comes in as `"n"_s`, as `var<"n">`,
-or as the `named<"n">` template argument.
-
-**Everything else it answers.** Writing a slot is in place; adding or removing
-one gives a new map, since the keys are part of the type:
-
-```cpp
-auto m2 = m;
-m2.set<"x">(2.5);                          // in place — same type
-m2["x"_s] = 2.5;                           // the same write
-
-constexpr auto m3 = m.insert(named<"y">('c'));   // 3 entries, m untouched
-constexpr auto m4 = m3.erase<"n">();             // 2 entries, order preserved
-constexpr auto m5 = m.erase<"n">().insert(named<"n">(2.5f));   // "n" is now float
-
-m.for_each([](auto key, const auto &v) { /* key.name is "n", then "x" */ });
-m.keys();                                  // {"n", "x"} — entry order, not sorted
-```
-
-`m == m2` compares keys in order and then values; a map whose keys are permuted
-is a different type and does not compare at all. Asking for a key that is not
-there is a compile error (`Map: key not present`), as is a duplicate key.
-
-A map is a container, not a point: `f.eval(…)` takes the `named<"x">(v)`
-arguments themselves, not a map of them.
-
-## Derivatives: the `Equation` API
-
-`Equation` is the derivative API. Wrap one expression for a scalar function
-f: ℝⁿ → ℝ, or several for a vector function f: ℝⁿ → ℝᵐ:
-
-```cpp
-auto eq  = Equation{x * y};                    // scalar
-auto sys = Equation(x + y, x * y, sin(x));     // three outputs
-```
-
-`n` is the number of distinct symbols across all outputs, in canonical order;
-`m` is the number of outputs. Both are available as
-`decltype(eq)::input_dim` / `::output_dim`.
-
-### Scalar functions
-
-```cpp
-constexpr auto x = var<"x">;
-constexpr auto y = var<"y">;
-auto eq = Equation{exp(x) * sin(y)};
-const std::array pt{1.0, 2.0};
-
-eq.evaluate(pt);                          // f(x, y)
-eq.gradient(pt);                          // reverse mode — one backward sweep
-eq.gradient<DiffMode::Symbolic>(pt);      // evaluate the stored partial trees
-eq.derivative_tensor<1>(pt);              // forward mode gradient
-eq.derivative_tensor<2>(pt);              // forward-over-forward Hessian
-```
-
-Every one of them also takes positional or named arguments:
-
-```cpp
-eq.gradient(1.0, 2.0);
-eq.gradient(named<"y">(2.0), named<"x">(1.0));
-```
-
-#### Hessians
-
-There are two Hessians, and they differ in what the symbols must be:
-
-```cpp
-// forward-over-forward: plain scalar symbols
-auto H1 = Equation{x * y}.derivative_tensor<2>(std::array{2.0, 3.0});
-
-// forward-over-reverse: dual-valued symbols
-auto a = var<"x", dual>;
-auto b = var<"y", dual>;
-auto H2 = Equation{a * b}.hessian(std::array{2.0, 3.0});
-```
-
-`hessian()` needs `dual`-valued symbols because it seeds tangents into the
-tree; `derivative_tensor<K>` builds its nested duals internally and works on
-plain scalar symbols. Either way the *point* is given in the base scalar type
-(`double` above), never in the dual type.
-
-#### Higher-order and univariate derivatives
-
-`derivative_tensor<K>` generalises to any order: it returns a rank-K symmetric
-tensor of all K-th order partials.
-
-```cpp
-auto T3 = Equation{x * y + sin(x)}.derivative_tensor<3>(std::array{1.0, 2.0});
-T3[0, 0, 1];   // ∂³f/∂x²∂y
-```
-
-For a **single-variable** function, `univariate_derivative<K>` is far cheaper —
-it runs one Taylor-mode sweep in O(K²) instead of building a rank-K tensor:
-
-```cpp
-double d4 = Equation{sin(x)}.univariate_derivative<4>(1.0);   // f⁗(1.0)
-```
-
-#### The symbolic partials
-
-An `Equation` can hand back the derivative *expressions* themselves. Slot 0 is
-the function; slot k > 0 is the partial with respect to the k-th symbol in
-canonical order:
-
-```cpp
-auto eq = Equation(x * y);
-
-eq[idx<0>()];              // x * y
-eq[idx<1>()].eval(2.0);    // ∂f/∂x = y  → 2
-eq[idx<2>()].eval(4.0);    // ∂f/∂y = x  → 4
-eq.get<1>();               // same as eq[idx<1>()]
-```
-
-Because the partials are simplified, each names only the symbols it actually
-depends on and takes just those values — `∂(xy)/∂x` is `y`, a one-symbol
-expression. The symbols that were held constant to form a partial print with a
-`_c` suffix (`y_c`); they still read their value from the point as usual, their
-derivative is simply zero. Like any expression the partials are empty types, so
-holding them is free.
-
-### Vector functions
-
-```cpp
-auto sys = Equation(x * y, sin(x) + y * y);
-const std::array pt{1.0, 2.0};
-
-sys.evaluate(pt);                          // std::array<double, 2>
-sys.jacobian(pt);                          // reverse mode, J[i][j] = ∂fᵢ/∂xⱼ
-sys.jacobian<DiffMode::Symbolic>(pt);      // symbolic
-sys.derivative_tensor<1>(pt);              // forward-mode Jacobian
-sys.derivative_tensor<2>(pt);              // per-output Hessians, H[k][i][j]
-```
-
-The reverse-mode per-output Hessian is available too, again on `dual`-valued
-symbols:
-
-```cpp
-auto a = var<"x", dual>;
-auto b = var<"y", dual>;
-auto H = Equation(a * b, a * a).hessian(std::array{2.0, 3.0});
-// H[0][i][j] = ∂²(xy)/∂xᵢ∂xⱼ,  H[1][i][j] = ∂²(x²)/∂xᵢ∂xⱼ
-```
-
-### Choosing a mode
-
-| Call | Mode | Symbols | Cost |
-|---|---|---|---|
-| `gradient(pt)` | reverse | plain or dual | one backward sweep |
-| `gradient<DiffMode::Symbolic>(pt)` | symbolic | plain or dual | evaluates n partial trees |
-| `derivative_tensor<1>(pt)` | forward | plain | n forward sweeps |
-| `hessian(pt)` | forward-over-reverse | **`dual` required** | one sweep per *colour* — see below |
-| `derivative_tensor<2>(pt)` | forward-over-forward | plain | one sweep per index pair |
-| `derivative_tensor<K>(pt)` | forward | plain | one sweep per distinct K-index |
-| `univariate_derivative<K>(x0)` | Taylor | plain, n = 1 | one sweep, O(K²) |
-
-Which to reach for is in [Getting the most speed out of
-it](#getting-the-most-speed-out-of-it); the short version is reverse for a
-gradient of many variables, and symbolic when you want to *see* the derivative
-rather than just evaluate it.
-
-There is no `DiffMode::Forward` — forward mode is reached through
-`derivative_tensor<K>` and `univariate_derivative<K>`.
-
-### One-shot forward tangent
-
-To get a value and one directional derivative in a single pass, without an
-`Equation`:
-
-```cpp
-auto t = (x * y).eval_with_tangent<"x">(4.0, 2.0);
-t.value();   // 8
-t.deriv();   // ∂(xy)/∂x = 2
-```
-
-It returns a `dual`, seeded on the named symbol. Arguments are positional, in
-canonical order.
-
----
-
-## Return types
-
-Everything below is an owning value; the library keeps no reference to it.
-
-| Call | Returns |
-|---|---|
-| `eval` / `evaluate` (m = 1) | the scalar type `T` |
-| `evaluate` (m > 1) | `std::array<T, m>` |
-| `gradient` | `std::array<S, n>` |
-| `jacobian` | rank-2 tensor, `m × n` |
-| `hessian` / `derivative_tensor<2>` (m = 1) | rank-2 tensor, `n × n` |
-| `hessian` / `derivative_tensor<2>` (m > 1) | rank-3 tensor, `m × n × n` |
-| `derivative_tensor<K>` (m = 1) | rank-K tensor, `n^K` |
-| `derivative_tensor<K>` (m > 1) | rank-(K+1) tensor, `m × n^K` |
-| `univariate_derivative<K>` | the scalar type `S` |
-
-`S` is the base scalar type: for a `dual`-valued expression it is
-`double`. A single-output system carries no leading output axis — a scalar
-function's Hessian is an `n × n` matrix, not a `1 × n × n` stack.
-
-### Tensors
-
-The tensor type accepts two equivalent index spellings:
-
-```cpp
-auto H = Equation{x * y}.derivative_tensor<2>(std::array{2.0, 3.0});
-
-H[0, 1];        // the mdspan spelling
-H[0][1];        // the nested spelling — same element
-H.extent(0);    // n
-decltype(H)::rank();
-H.data();       // contiguous storage (packed: symmetric entries are stored once)
-```
-
-Symmetric derivative tensors use a packed layout, so `data()` holds fewer
-elements than `n^K`; index it through `[i, j]` / `[i][j]` rather than assuming a
-dense stride.
-
----
-
-## Getting the most speed out of it
-
-**Pick the call that matches the shape of the problem.** This is worth more than
-everything else on this page put together.
-
-| You want | Call | What it costs |
-|---|---|---|
-| a gradient, many variables | `gradient(pt)` | one backward sweep, independent of n |
-| a gradient, two or three variables | `gradient<DiffMode::Symbolic>(pt)` | n folded partial trees — often quicker at that size |
-| a Hessian | `hessian(pt)`, symbols declared `dual` | one sweep per colour of the sparsity pattern |
-| a Hessian without dual-valued symbols | `derivative_tensor<2>(pt)` | one sweep per index pair — O(n²) |
-| the K-th derivative of one variable | `univariate_derivative<K>(x0)` | one Taylor sweep, O(K²) |
-| all K-th partials of n variables | `derivative_tensor<K>(pt)` | one sweep per distinct K-index |
-
-Reverse is the default for a reason, but it is not a clean win at every size: on a
-system of two or three symbols the folded partial trees are cheaper than a sweep, and
-symbolic wins. Reverse pulls away as n grows. If n is small and the call is hot,
-measure both — it is a one-word change.
-
-**`hessian()` reads your problem's sparsity off the type, for free.** Two
-variables that never appear in the same second-derivative term can be seeded in
-the *same* backward sweep, so the cost is one sweep per *colour* of the coupling
-pattern rather than one per variable — and the pattern is computed from the
-expression type at compile time, so there is nothing to switch on and nothing to
-pay at run time. A chain in which each variable couples only to its neighbours
-colours in far fewer sweeps than it has variables; a dense problem colours in n, which
-is one sweep per variable and no saving at all. The wider and more structured the
-problem, the more this wins — so prefer `hessian()` over `derivative_tensor<2>()`
-whenever you can declare the symbols `dual`.
-
-**Prefer `univariate_derivative<K>` whenever the function really has one
-variable.** `derivative_tensor<K>` builds a rank-K tensor to hold a single
-number; the Taylor sweep is O(K²) and allocates nothing.
-
-**Do not worry about rebuilding the tree.** Expressions and `Equation`s are
-empty types — `sizeof(Equation{f})` is 1 — and the whole structure lives in the
-type, so `Equation{f}.gradient(pt)` inside a loop constructs nothing at run
-time. Hoisting it into a variable is a readability choice, not a speed one.
-
-**Let the tree be simplified for you.** Algebraic folding happens as the
-expression is built, so `∂(xy)/∂x` really is the single node `y`, and the
-partials each name only the symbols they still depend on. Nothing you can write
-by hand beats it, and hand-expanding an expression usually makes it worse.
-
-**Give the point in the base scalar type.** A `dual`-valued expression still
-takes a point of `double`; the seeding happens inside. Positional and named
-arguments cost exactly the same — the reordering is resolved at compile time.
-
-**Compile with the flags the project already sets.** `-ffp-contract=fast` and
-`-fno-math-errno` (`DDX_FP_FLAGS=ON`, the default) are both worth having.
-`-ffast-math` is **not**: it changes derivative values, and it does not buy speed
-here either. `-march=native` (`ENABLE_NATIVE_ARCH=ON`) is on by default.
-
-**Know where the time actually goes.** For a gradient of anything with `exp`,
-`log`, `sin` or `pow` in it, the libm call dominates — around three quarters of
-the total. Reducing the number of transcendental calls in the expression is the
-optimisation with the most left in it; shaving arithmetic nodes around them is
-not.
-
-**Many points at once is a different question.** Everything above is one point per
-call. If what you have is thousands of them, the libm call that dominates can be
-vectorised, which the compile-time path cannot do for you — see
-[Runtime expressions](#runtime-expressions) for the batch calls.
-
-The measurements behind all of this, and the workloads they were taken on, are in
-[BENCHMARKS.md](benchmarks/BENCHMARKS.md).
-
-**Move it to compile time if the point is known.** Every entry point is
-`constexpr`; see the next section.
-
----
-
-## Compile-time use
-
-Evaluation *and* differentiation are `constexpr`. A gradient, a Hessian or a
-Taylor-mode derivative can be computed during constant evaluation and baked into
-the binary:
-
-```cpp
-constexpr auto x = var<"x">;
-constexpr auto y = var<"y">;
-
-constexpr auto g  = Equation{x * y}.gradient(std::array{3.0, 4.0});
-constexpr auto gf = Equation{x * y}.derivative_tensor<1>(std::array{3.0, 4.0});
-constexpr auto H  = Equation{x * y}.derivative_tensor<2>(std::array{3.0, 4.0});
-constexpr auto d2 = Equation{x * x * x}.univariate_derivative<2>(2.0);
-
-static_assert(g[0] == 4.0 && gf[0] == 4.0 && H[0][1] == 1.0 && d2 == 12.0);
-```
-
-These are `constexpr`, not `consteval`: the same call serves a `static_assert`
-and a value read from a file at run time.
-
----
-
-## Runtime expressions
-
-Everything above needs the expression written in source, because the tree lives in
-the type. An expression assembled while the program runs — terms looped over from a
-data file, a coupling read from a configuration — has no type to live in, so it is
-built into a graph instead.
-
-This half is opt-in: build with `DDX_BUILD_RT` (or `DDX_BUILD_JIT`, which implies it)
-and link `ddx::rt` or `ddx::jit`. `ddx::rt::equation` is then the entry point, and what
-it hands back is an `Equation` — the same class, the same member names, the same
-canonical symbol order.
-
-```cpp
-#include "rt/equation.hpp"
-
-const auto eq = *ddx::rt::equation([] {
-  const auto x = ddx::rt::var("x");
-  const auto y = ddx::rt::var("y");
-  return exp(x) * sin(y);
-});
-
-eq.arity();                   // 2
-eq.symbols();                 // {"x", "y"}
-*eq.evaluate(1.0, 2.0);       // f(1, 2)
-*eq.gradient(1.0, 2.0);       // {∂f/∂x, ∂f/∂y}, as a std::vector
-```
-
-Symbols are named inside the callback, with `ddx::rt::var(name)` taking a string
-rather than a template argument — that is the whole point of the runtime path, since
-a name read from a file is not a template argument. The callback returns the
-expression; return several and you get a system, exactly as passing several
-expressions to `Equation` does:
-
-```cpp
-const auto sys = *ddx::rt::equation([] {
-  const auto x = ddx::rt::var("x");
-  const auto y = ddx::rt::var("y");
-  return std::array{x * y + sin(x), exp(x) - y * y};
-});
-
-*sys.jacobian(1.3, 0.7);      // row-major, m × n
-```
-
-The arena those symbols live in is owned by the `Equation`, so one built this way can
-be returned from a function and stored:
-
-```cpp
-auto make = [](double c) {
-  return *ddx::rt::equation([c] {
-    const auto x = ddx::rt::var("x");
-    return c * x * x;
-  });
-};
-const auto eq = make(3.0);    // still valid; it owns everything it needs
-```
-
-### Every call answers with `result`
-
-The symbol list of a runtime equation exists only while the program runs, so the
-count of a point cannot be checked while it compiles. Every call therefore answers
-with `result<T>` — `std::expected<T, ddx::error>` — including the positional
-spelling, and including `equation()` itself:
-
-```cpp
-const auto eq = ddx::rt::equation([] { return ddx::rt::var("x") * 2.0; });
-if (!eq) {
-  std::println("{}", ddx::message(eq.error().code));
-}
-
-const auto g = eq->gradient(1.0, 2.0);   // two values for one symbol
-if (!g) {
-  // ddx::errc::wrong_arity
-}
-```
-
-The `*` in the examples above is that check skipped, which is fine in a program that
-built the expression itself and wrong in one that read it from a file.
-
-Points come in the same three spellings as everywhere else, and the named form is
-worth more here than anywhere: a runtime symbol list is exactly the case where
-positional order is easy to get wrong.
-
-```cpp
-*eq.gradient(1.3, 0.7);                                  // positional, canonical order
-*eq.gradient(std::array{1.3, 0.7});                      // any input range
-*eq.gradient(named<"y">(0.7), named<"x">(1.3));          // by name
-```
-
-### Batches
-
-The reason to build a graph rather than a tree is that a graph can be compiled, and
-the shape that pays for compiling is a batch. The batch calls take columns — one
-pointer per symbol, one per output, each `n` long — and fill them in one pass:
-
-```cpp
-const std::size_t n = points.size();
-const std::vector<const double *> xs{x_column, y_column};
-const std::vector<double *> values{f_column};
-const std::vector<double *> partials{dx_column, dy_column};
-
-const auto ok = eq.gradient(xs, values, partials, n);
-```
-
-`value_columns()`, `jacobian_columns()` and `hessian_columns()` say how many columns
-each block wants, which is what a caller sizes its buffers by. A count that does not
-match comes back as `ddx::errc::wrong_column_count` rather than reaching the loop —
-an unchecked mismatch there is silent memory corruption.
-
-`hessian` takes a fourth block:
-
-```cpp
-const auto ok = eq.hessian(xs, values, partials, hessians, n);
-```
-
-**Where the JIT comes in.** Built with `DDX_BUILD_JIT`, the batch calls compile the
-graph to native code on first use and vectorise the libm calls that dominate a
-gradient. Built without it, the same calls run the graph through an interpreter,
-under the same signatures and to the same answers. It is a build option, not an API:
-nothing above changes spelling either way, and there is no compiler, kernel or module
-for a caller to hold.
-
-Compiling happens once per equation, on the first batch call that needs it, and the
-result is kept for the rest of that equation's life.
-
----
-
-## Thread safety
-
-Nothing in the library starts a thread, and nothing in it takes a lock. That is a
-deliberate reading of where the parallelism in this problem actually is: one point per
-call is nanoseconds of work, which no thread pool can pay for, and a batch of thousands
-is the caller's loop and the caller's pool. What the library owes that caller is a
-statement of what may be shared. Here it is.
-
-**The compile-time path is pure.** An `Equation` over `var<"x">` is an empty type and
-every entry point on it reads only its argument, so `evaluate`, `gradient`, `jacobian`,
-`hessian`, `derivative_tensor<K>` and `univariate_derivative<K>` may be called from any
-number of threads on the same expression. There is nothing to synchronise because
-there is nothing shared to begin with.
-
-**Two threads may build runtime equations at once.** `ddx::rt::equation` makes its
-arena current through a thread-local for the duration of the callback, so two threads
-assembling models at the same time never see each other's symbols.
-
-**A runtime `Equation` fills a cache on first use.** The graph it compiles and the
-Hessian workspace it keeps are filled by the first call that needs them, from inside a
-`const` member. So one runtime `Equation` is one thread's unless it has been warmed:
-make the first call of each kind before handing it to several threads, or give each
-thread its own. Warming it is one call, and it is what the first call of a batch does
-anyway.
-
-**A warmed batch is reentrant, and the batch is where parallelism belongs.** The
-compiled code reads no global and writes no static: every intermediate is a register,
-and the only memory it touches is the columns handed to it. So a batch splits by
-slicing the columns, with no synchronisation of any kind:
-
-```cpp
-*eq.gradient(xs, values, partials, 1);   // warm it once, on one thread
-
-const std::size_t chunk = (n + threads - 1) / threads;
-std::vector<std::jthread> pool;
-for (std::size_t t = 0; t < n; t += chunk) {
-  const std::size_t m = std::min(chunk, n - t);
-  pool.emplace_back([&, t, m] {
-    const std::vector<const double *> xs{x.data() + t, y.data() + t};
-    const std::vector<double *> values{f.data() + t};
-    const std::vector<double *> partials{dx.data() + t, dy.data() + t};
-    (void)eq.gradient(xs, values, partials, m);
-  });
-}
-```
-
-Slice on the vector width if the difference matters; the tail of a chunk is a scalar
-remainder, and one per thread rather than one per batch is the only cost of splitting.
-
-**Lifetime needs no rule.** A runtime `Equation` owns the arena its symbols live in and
-the code its batch calls run, so there is nothing to keep alive alongside it and no
-order to destroy things in. It owns that arena rather than sharing it, so it is
-move-only: move it, return it from a function, store it — what it owns goes with it.
-
----
-
-## Building the project
+## Building
 
 ```sh
 cmake -S . -B build
@@ -827,178 +103,69 @@ ctest --test-dir build --output-on-failure
 
 Or through the presets:
 
-| Preset | Build type | Runtime graph | JIT |
-|---|---|---|---|
-| `debug` | Debug | — | — |
-| `release` | Release | — | — |
-| `relwithdebinfo` | RelWithDebInfo | — | — |
-| `debug_with_rt` | Debug | yes, interpreted | — |
-| `release_with_rt` | Release | yes, interpreted | — |
-| `debug_with_jit` | Debug | yes | kernels at `-O1` |
-| `release_with_jit` | Release | yes | kernels at `-O3` |
-| `debug_with_jit_static` | Debug | yes | kernels at `-O1`, `ddx::jit` a static archive |
-| `debug_no_exceptions` | Debug | yes | kernels at `-O1`, whole tree `-fno-exceptions` |
-
-The `_with_rt` pair is the runtime graph on the interpreter. It needs only the
-header-only Boost the build fetches, so it configures where the JIT presets do
-not — they are gated on Linux and on an LLVM install. It is also the path a
-graph over anything but `double` takes anyway: the JIT emits machine types, so
-`Equation` over a dual, a Taylor dual or a matrix interprets even in a JIT
-build.
+| Preset | Build type | JIT |
+|---|---|---|
+| `debug` | Debug | — |
+| `release` | Release | — |
+| `debug_jit` | Debug | yes |
+| `release_jit` | Release | yes |
 
 ```sh
-cmake --preset release_with_jit
-cmake --build --preset release_with_jit
-ctest --preset release_with_jit
+cmake --preset release_jit
+cmake --build --preset release_jit
+ctest --preset release_jit
 ```
 
-The two JIT presets pin `LLVM_DIR` to the Debian/Ubuntu `llvm-20` layout, because an
-unhinted `find_package(LLVM)` takes whichever it finds first — often too old. Override
-it on the command line, which wins over the preset:
+The JIT presets point `LLVM_DIR` at the Debian/Ubuntu `llvm-20` layout;
+override it on the command line, which wins over the preset:
 
 ```sh
-cmake --preset release_with_jit -DLLVM_DIR=/opt/llvm-19/lib/cmake/llvm
+cmake --preset release_jit -DLLVM_DIR=/opt/llvm-19/lib/cmake/llvm
 ```
 
-or keep your own layout in an untracked `CMakeUserPresets.json`.
-
-Benchmarks:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target benchmarks
-./build/benchmarks
-```
-
-See [BENCHMARKS.md](benchmarks/BENCHMARKS.md) for the suite description and
-results, and `src/main.cpp` for a runnable tour of every entry point.
-
-[Runtime expressions](#runtime-expressions) are off by default, because they are the
-one part of the library whose dependencies are compiled rather than fetched headers:
-
-```sh
-cmake -S . -B build -DDDX_BUILD_JIT=ON -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm
-cmake --build build --target tests_rt tests_jit
-```
-
-`ddx::rt` needs Boost.Graph and Boost.DynamicBitset, fetched at the same pinned
-release as the Mp11 the core already uses. All three are header-only, so no compiled
-Boost library is linked and a system Boost is not consulted. `ddx::jit` adds LLVM
-18–20 — the ORC API is not stable across releases, so the range is checked rather
-than assumed — and is the only part of ddx that produces a library to link.
-
-### CMake options
+### Options
 
 | Option | Default | Meaning |
 |---|---|---|
-| `DDX_BUILD_BENCHMARKS` | `ON` | build the Google Benchmark targets |
-| `ENABLE_NATIVE_ARCH` | `ON` | `-march=native` (falls back to `x86-64-v3`) |
+| `DDX_BUILD_DUAL` | `ON` | forward mode — `hessian`, `derivative_tensor`, `univariate_derivative` |
+| `DDX_BUILD_JIT` | `OFF` | compile the LLVM backend into the library |
+| `DDX_SHARED_LIBS` | `ON` | build the library shared rather than static |
+| `DDX_BUILD_BENCHMARKS` | `ON` | build the benchmark targets |
+| `DDX_INSTALL` | on if top-level | generate the install and `find_package` rules |
+| `ENABLE_NATIVE_ARCH` | `ON` | `-march=native`, falling back to `x86-64-v3` |
 | `DDX_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
+| `DDX_NO_EXCEPTIONS` | `OFF` | build our own targets `-fno-exceptions` |
 | `DDX_MDSPAN_MODE` | `auto` | `auto` / `std` / `vendored` — which `mdspan` to bind to |
 | `DDX_DEDUCING_THIS` | `auto` | `auto` / `on` / `off` — accessor spelling (P0847) |
-| `DDX_BUILD_RT` | `OFF` | the runtime expression graph — fetches header-only Boost.Graph and Boost.DynamicBitset |
-| `DDX_BUILD_JIT` | `OFF` | the LLVM JIT backend — implies `DDX_BUILD_RT` |
-| `DDX_JIT_STATIC` | `OFF` | build `ddx::jit` as a static archive rather than a shared library |
-| `DDX_NO_EXCEPTIONS` | `OFF` | build our own targets `-fno-exceptions` |
-| `DDX_INSTALL` | on if top-level | generate the install and `find_package` rules |
 
-`-ffast-math` is not used and is not recommended: it changes derivative values.
+`-ffast-math` is not used and not recommended: it changes derivative values.
 
 ---
 
-## Cheat sheet
+## What `ddx.hpp` declares
 
-```cpp
-// symbols and expressions
-constexpr auto x = var<"x">;  constexpr auto y = var<"y">;
-auto f = exp(x) * sin(y) + pow(x, 2.0);
+`#include "ddx.hpp"` is the whole public surface, and `using namespace ddx;`
+brings in these names:
 
-// values
-f.eval(1.0, 2.0);                              // positional (alphabetical order!)
-f.eval(named<"y">(2.0), named<"x">(1.0));      // by name
-
-// a compile-time map of the same keyword arguments
-constexpr auto m = map(named<"n">(3), named<"x">(1.5));
-static_assert(m.get<"n">() == 3 && m["x"_s] == 1.5);
-m.insert(named<"y">('c'));                     // new key, new type
-
-// scalar derivatives
-auto eq = Equation{f};
-eq.evaluate(1.0, 2.0);
-eq.gradient(1.0, 2.0);                         // reverse mode
-eq.gradient<DiffMode::Symbolic>(1.0, 2.0);
-eq.derivative_tensor<1>(1.0, 2.0);             // forward gradient
-eq.derivative_tensor<2>(1.0, 2.0);             // forward Hessian
-eq[idx<1>()];                                  // ∂f/∂x as an expression
-
-// dual-valued symbols → reverse-mode Hessian
-auto a = var<"x", dual>;  auto b = var<"y", dual>;
-Equation{exp(a) * sin(b)}.hessian(1.0, 2.0);
-
-// univariate higher order
-Equation{sin(x)}.univariate_derivative<4>(1.0);
-
-// vector systems
-auto sys = Equation(x * y, sin(x) + y * y);
-sys.jacobian(1.0, 2.0);
-sys.derivative_tensor<2>(1.0, 2.0);            // per-output Hessians
-
-// single expression → Equation, implicitly
-Equation eq2 = x * y;                          // no braces needed
-
-// an expression whose shape is not known until the program runs.
-// Same Equation, same members; every call answers with result<T>.
-const auto rt = *ddx::rt::equation([] {
-  const auto a = ddx::rt::var("x");
-  return exp(a) * a;
-});
-*rt.gradient(1.0);                             // std::vector<double>
-(void)rt.gradient(xs, values, partials, n);    // a whole batch in one pass
-```
-
----
-
-## Diagnostics
-
-Common compile-time messages and what they mean:
-
-| Message | Cause |
+| Name | Is |
 |---|---|
-| `eval: supply exactly one value per symbol, in canonical order` | wrong number of positional values — canonical order is alphabetical |
-| `eval: no value supplied for this symbol` | the point does not cover every symbol |
-| no matching call to `hessian` | the symbols are not `dual`-valued — use `var<"x", dual>`, or use `derivative_tensor<2>` |
-| `Map: key not present (see keys())` | the map has no such key — `keys()` lists the ones it has |
-| `map: duplicate key` / `Map: duplicate key` | two entries name the same key |
+| `Equation` | the derivative API — every derivative entry point is a member |
+| `var<"x">`, `sym<"x">`, `variable("x"_s)`, `idx<N>()` | name a symbol; index into an `Equation` |
+| `var_of<"x">(v)`, `dual_var_of<"x">(v)` | name a symbol, taking its scalar type from `v` |
+| `constant(3.0)` | a value stored in the expression |
+| `literals` — `"x"_s`, `_cd`, `_ci`, `_vd`, `_vi` | the user-defined literals, as a namespace |
+| `named<"x">(v)`, `NamedValue` | one keyword argument of a point, or one map entry |
+| `map(…)`, `Map` | a compile-time map of those entries |
+| `DiffMode` | `Symbolic` or `Reverse` |
+| `dual`, `dual2nd` | the symbol value types `hessian` needs |
 
-At run time the library throws nothing at all. The cases a wrong point would
-otherwise pass silently through — an input range shorter than the expression has
-symbols, an index that names no symbol — come back as `std::expected` carrying a
-`ddx::errc`, and `ddx::message(code)` turns one into text. Silently
-differentiating at the wrong point is the thing being avoided; an error a caller
-must look at is how, and it costs no allocation and no unwinding, which is what
-lets the whole tree build `-fno-exceptions`.
+The operators, the math functions, `operator<<` and the `std::formatter`
+specialisations are found by argument-dependent lookup, so they work on an
+expression without being named here. `dual`, `dual2nd` and `dual_var_of` are
+absent from a `-DDDX_BUILD_DUAL=OFF` build.
 
----
-
-## Further reading
-
-Worked walkthroughs of the algorithms, each doing one derivative by hand and
-then pointing at the code that does it:
-
-| Document | Covers |
-|---|---|
-| [docs/reverse_mode_by_example.md](docs/reverse_mode_by_example.md) | one gradient in both modes over the same graph, then the Jacobian and the Hessian |
-| [docs/ad_jacobian.md](docs/ad_jacobian.md) | the node protocol and Jacobian computation in full ([PDF](docs/ad_jacobian.pdf)) |
-| [docs/taylor_dual_by_example.md](docs/taylor_dual_by_example.md) | `TaylorDual<S, N>` — jet arithmetic and the recurrences, at `N = 3` |
-| [docs/hyperdual_nth_order_by_example.md](docs/hyperdual_nth_order_by_example.md) | the nested dual's `2ⁿ` component lattice, and why the top slot is the `n`th derivative |
-| [docs/forward_higher_order_by_example.md](docs/forward_higher_order_by_example.md) | the same higher-order derivative down both routes, compared |
-
-[NOTES.md](NOTES.md) has the design decisions that are not obvious from the
-headers. [REFERENCES.md](REFERENCES.md) is the literature: Part I is the
-mathematics — dual numbers, Taylor arithmetic, the complexity results behind the
-mode choices — and Part II is expression-tree optimisation.
-
----
+Runtime expressions are opt-in and live in `ddx::rt`, reached through
+`#include "rt/equation.hpp"`.
 
 ## License
 

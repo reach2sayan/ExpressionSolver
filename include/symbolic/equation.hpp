@@ -1,10 +1,10 @@
 #pragma once
-#include "drivers/symbolic.hpp"
-#include "dual/dual.hpp"
-#include "expr/bound.hpp"
-#include "expr/format.hpp"
-#include "expr/simplify.hpp"
-#include "expr/symbol.hpp"
+#include "symbolic/sweep.hpp"
+#include "ops/scalar.hpp"
+#include "symbolic/bound.hpp"
+#include "symbolic/format.hpp"
+#include "symbolic/simplify.hpp"
+#include "symbolic/symbol.hpp"
 #include "util/config.hpp"
 #include "util/scope_guard.hpp"
 #include <algorithm>
@@ -306,6 +306,10 @@ public:
   }
 
   // One variable, one Taylor sweep: a plain number, not a one-entry tensor.
+  // Unlike hessian() and derivative_tensor(), which constrain on DualLike and
+  // so disappear on their own without forward mode, this one is spelled over a
+  // plain scalar and has to be guarded.
+#if DDX_HAS_DUAL
   template <std::size_t Order>
   [[nodiscard]] DDX_ALWAYS_INLINE constexpr auto
   univariate_derivative(scalar_base_t<value_type> x0) const noexcept
@@ -314,6 +318,7 @@ public:
     return detail::univariate_derivative_impl<Order>(std::get<0>(expressions),
                                                      x0);
   }
+#endif
 };
 
 template <CExpression T, CExpression... Ts>

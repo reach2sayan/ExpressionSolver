@@ -1,6 +1,6 @@
 #pragma once
-#include "expr/expressions.hpp"
-#include "expr/operations.hpp"
+#include "symbolic/expressions.hpp"
+#include "ops/operations.hpp"
 #include <compare>
 #include <concepts>
 #include <cstddef>

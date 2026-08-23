@@ -28,49 +28,105 @@ include(DdxCompileOptions)
 include(DdxDependencies)
 
 # --- the library ------------------------------------------------------------
-# Header-only, and header-only in what it depends on: Boost.Mp11 below is the
-# whole of it.  CMAKE_CURRENT_SOURCE_DIR, so this works standalone and via
-# add_subdirectory().
-add_library(ddx INTERFACE)
-add_library(ddx::ddx ALIAS ddx)
-target_include_directories(ddx INTERFACE
+# One interface target per header directory, so that what a consumer links and
+# what they can include are the same statement.  ddx_util owns the include path
+# and everything else inherits it by linking, which keeps the install interface
+# in exactly one place.
+#
+#   ddx::util      language configuration, errors, fixed strings   (leaf)
+#   ddx::ops       the operation vocabulary and its derivative rules
+#   ddx::md        the multidimensional storage the drivers hand back
+#   ddx::symbolic  the compile-time graph: tree, point, sweeps
+#   ddx::dual      forward mode -- the one optional piece
+#   ddx::ddx       all of the above, which is what most consumers want
+#
+# ops/ and symbolic/ are fully constexpr and stay that way; nothing below may
+# put a run-time dependency in their path.
+ddx_use_boost()
+
+add_library(ddx_util INTERFACE)
+add_library(ddx::util ALIAS ddx_util)
+set_target_properties(ddx_util PROPERTIES EXPORT_NAME util)
+target_include_directories(ddx_util INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
-# Each header directory lists its own files onto the target, for IDE visibility;
-# nothing is compiled from there.
-add_subdirectory(include)
-
 if (DDX_MDSPAN_VENDORED)
-    target_compile_definitions(ddx INTERFACE DDX_MDSPAN_FORCE_VENDORED)
+    target_compile_definitions(ddx_util INTERFACE DDX_MDSPAN_FORCE_VENDORED)
 endif ()
 if (DEFINED DDX_DEDUCING_THIS_VALUE)
-    target_compile_definitions(ddx INTERFACE DDX_DEDUCING_THIS=${DDX_DEDUCING_THIS_VALUE})
+    target_compile_definitions(ddx_util INTERFACE DDX_DEDUCING_THIS=${DDX_DEDUCING_THIS_VALUE})
 endif ()
 
-# --- optional runtime graph -------------------------------------------------
-# Everything above is headers, and stays that way.  The runtime graph is what an
-# expression built at run time lives in
-option(DDX_BUILD_RT "Build the runtime expression graph (Boost.Graph)" OFF)
-option(DDX_BUILD_JIT "Build the LLVM JIT backend (implies DDX_BUILD_RT)" OFF)
-if (DDX_BUILD_JIT AND NOT DDX_BUILD_RT)
-    set(DDX_BUILD_RT ON)
+# No Boost here, deliberately: the operation descriptors are written against
+# the concepts in ops/numeric.hpp and nothing else, which is what lets the
+# runtime graph link ops without acquiring the compile-time tree.
+add_library(ddx_ops INTERFACE)
+add_library(ddx::ops ALIAS ddx_ops)
+set_target_properties(ddx_ops PROPERTIES EXPORT_NAME ops)
+target_link_libraries(ddx_ops INTERFACE ddx_util)
+
+add_library(ddx_md INTERFACE)
+add_library(ddx::md ALIAS ddx_md)
+set_target_properties(ddx_md PROPERTIES EXPORT_NAME md)
+target_link_libraries(ddx_md INTERFACE ddx_util ddx_ops)
+
+# Boost.Mp11 reaches exactly one header, symbolic/symbol.hpp, so it is declared
+# exactly here.  BUILD_LOCAL_INTERFACE because the fetched target is not ours to
+# export; ddx-config.cmake supplies Mp11 again for an installed consumer.
+add_library(ddx_symbolic INTERFACE)
+add_library(ddx::symbolic ALIAS ddx_symbolic)
+set_target_properties(ddx_symbolic PROPERTIES EXPORT_NAME symbolic)
+target_link_libraries(ddx_symbolic INTERFACE ddx_ops ddx_md
+        $<BUILD_LOCAL_INTERFACE:Boost::mp11>)
+
+# Forward mode.  ops/scalar.hpp forward-declares Dual and gives every trait a
+# non-dual answer, so with this off the second-derivative entry points simply
+# constrain themselves out of existence -- no header is #if'd around a template.
+option(DDX_BUILD_DUAL "Build the dual-number forward-mode component" ON)
+if (DDX_BUILD_DUAL)
+    add_library(ddx_dual INTERFACE)
+    add_library(ddx::dual ALIAS ddx_dual)
+    set_target_properties(ddx_dual PROPERTIES EXPORT_NAME dual)
+    target_link_libraries(ddx_dual INTERFACE ddx_symbolic)
+    target_compile_definitions(ddx_dual INTERFACE DDX_HAS_DUAL=1)
 endif ()
 
-option(DDX_JIT_STATIC
-        "Build ddx::jit as a static archive rather than a shared library" OFF)
-if (DDX_BUILD_RT)
-    ddx_use_boost()
-    add_subdirectory(src/rt)
-    add_subdirectory(include/rt)
+add_library(ddx INTERFACE)
+add_library(ddx::ddx ALIAS ddx)
+target_link_libraries(ddx INTERFACE ddx_util ddx_ops ddx_md ddx_symbolic)
+if (DDX_BUILD_DUAL)
+    target_link_libraries(ddx INTERFACE ddx_dual)
 endif ()
 
-# After the runtime graph rather than before it: Boost.Graph depends on Mp11, so
-# where both are wanted the superproject has already defined Boost::mp11.
-# BUILD_LOCAL_INTERFACE for the same reason as Boost::graph on ddx_rt: the
-# fetched target is not ours to export, so ddx-config.cmake finds Mp11 again.
-ddx_use_mp11()
-target_link_libraries(ddx INTERFACE $<BUILD_LOCAL_INTERFACE:Boost::mp11>)
+# Each header directory lists its own files onto its own target, for IDE
+# visibility; nothing is compiled from there.
+add_subdirectory(include)
+
+# --- libddx -----------------------------------------------------------------
+# Everything above is headers.  This is the one binary the project produces: the
+# runtime expression graph always, and the LLVM backend compiled into the same
+# library when it is asked for.  There is no second artifact -- ddx::jit names
+# the same file ddx::rt does.
+if (DEFINED DDX_BUILD_RT AND NOT DDX_BUILD_RT)
+    message(WARNING "DDX_BUILD_RT is gone: the runtime graph is always built.")
+endif ()
+if (DEFINED DDX_JIT_STATIC)
+    message(WARNING "DDX_JIT_STATIC is gone: use -DDDX_SHARED_LIBS=OFF.")
+endif ()
+
+option(DDX_BUILD_JIT "Build the LLVM JIT backend into libddx" OFF)
+
+# One knob for the one library ddx produces.
+option(DDX_SHARED_LIBS "Build libddx as a shared library" ON)
+if (DDX_SHARED_LIBS)
+    set(DDX_LIBRARY_TYPE SHARED)
+else ()
+    set(DDX_LIBRARY_TYPE STATIC)
+endif ()
+
+add_subdirectory(src/rt)
+add_subdirectory(include/rt)
 
 if (DDX_BUILD_JIT)
     # The JIT's defaults follow how the project itself was built.
@@ -109,9 +165,13 @@ if (NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     return ()
 endif ()
 
-add_executable(main src/main.cpp)
-target_link_libraries(main PRIVATE ddx)
-ddx_target_flags(main)
+# The tour walks every entry point, second derivatives included, so it is built
+# with forward mode or not at all.
+if (DDX_BUILD_DUAL)
+    add_executable(main src/main.cpp)
+    target_link_libraries(main PRIVATE ddx)
+    ddx_target_flags(main)
+endif ()
 
 enable_testing()
 add_subdirectory(tests)

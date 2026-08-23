@@ -1,8 +1,8 @@
 #pragma once
-#include "expr/values.hpp"
+#include "symbolic/values.hpp"
 // CFixedString appears only as a constrained-auto NTTP placeholder, which
 // include-cleaner does not count as a reference -- hence the pragma.
-#include "expr/symbol.hpp"
+#include "symbolic/symbol.hpp"
 #include "util/fixed_string.hpp" // IWYU pragma: keep
 #include <type_traits>
 

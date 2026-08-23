@@ -9,12 +9,12 @@
 // ValueMap (bound.hpp) is the homogeneous sibling -- one Scalar per slot,
 // symbols in canonical order -- which is what a point of an expression is.
 
-#include "expr/expressions.hpp" // symbol_type, for operator[]
-#include "expr/named_value.hpp"
+#include "symbolic/expressions.hpp" // symbol_type, for operator[]
+#include "symbolic/symbol.hpp"      // mp
+#include "symbolic/named_value.hpp"
 #include "util/config.hpp" // DDX_KEYED_ACCESSORS
 #include "util/fixed_string.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string_view>
@@ -28,34 +28,28 @@ template <CNamedValue... Entries> struct Map;
 
 namespace detail {
 
-// The comparison is on the character views, not on the FixedStrings: gcc 14
-// miscounts a fold over == between class-type NTTPs, and answers 2 for
-// key_count<"n", "n", "x">().  A length difference is a content difference, so
-// views agree with FixedString's own operator== and "x" and "xy" still never
-// collide.
+// The keys are lifted to symbol_type before anything asks about them, which is
+// what lets Mp11 answer: it compares types, and two symbol_type<S> are the same
+// type exactly when their FixedStrings are template-argument-equivalent.  A
+// fold over `==` between class-type NTTPs would be the direct spelling, but gcc
+// 14 miscounts one -- it answers 2 for key_count<"n", "n", "x">() -- and type
+// identity never goes near that.  A length difference is a different
+// FixedString<N> and so a different type, so "x" and "xy" still never collide.
+template <FixedString... Keys> using key_list = mp::mp_list<symbol_type<Keys>...>;
+
 template <FixedString Key, FixedString... Keys>
-consteval std::size_t key_count() noexcept {
-  return (std::size_t{0} + ... +
-          static_cast<std::size_t>(Keys.view() == Key.view()));
-}
+inline constexpr std::size_t key_count =
+    mp::mp_count<key_list<Keys...>, symbol_type<Key>>::value;
 
-// Position of Key in Keys..., or sizeof...(Keys) when it is absent.
+// Position of Key in Keys..., or sizeof...(Keys) when it is absent -- which is
+// what mp_find answers with.
 template <FixedString Key, FixedString... Keys>
-consteval std::size_t key_index() noexcept {
-  constexpr std::size_t n = sizeof...(Keys);
-  const std::array<bool, n> hit{(Keys.view() == Key.view())...};
-  return static_cast<std::size_t>(std::ranges::find(hit, true) - hit.begin());
-}
+inline constexpr std::size_t key_index =
+    mp::mp_find<key_list<Keys...>, symbol_type<Key>>::value;
 
-// The inner Keys... is expanded where it stands, so the outer fold walks the
-// pack one key at a time and asks how often that key occurs in the whole.
-template <FixedString... Keys> consteval bool keys_unique() noexcept {
-  return (... && (key_count<Keys, Keys...>() == 1));
-}
-
-static_assert(keys_unique<"n", "x">() && keys_unique<"x", "xy">() &&
-                  !keys_unique<"a", "b", "a">(),
-              "keys_unique: miscounting -- see the comparison note above");
+template <FixedString... Keys>
+inline constexpr bool keys_unique =
+    mp::mp_size<mp::mp_unique<key_list<Keys...>>>::value == sizeof...(Keys);
 
 template <FixedString Key, CNamedValue E>
 [[nodiscard]] constexpr auto entry_unless(const E &e) {
@@ -78,7 +72,7 @@ map_from_entries(const std::tuple<Es...> &es) {
 // aggregate over them, so Map{named<"n">(3), ...} and Map<E...>{{3}, ...} are
 // one initialisation.
 template <CNamedValue... Entries> struct Map : Entries... {
-  static_assert(detail::keys_unique<Entries::symbol...>(),
+  static_assert(detail::keys_unique<Entries::symbol...>,
                 "Map: duplicate key");
 
   using entry_types = std::tuple<Entries...>;
@@ -88,7 +82,7 @@ template <CNamedValue... Entries> struct Map : Entries... {
 
   template <FixedString Key>
   static constexpr std::size_t index_of =
-      detail::key_index<Key, Entries::symbol...>();
+      detail::key_index<Key, Entries::symbol...>;
 
   template <FixedString Key>
   [[nodiscard]] static consteval bool contains() noexcept {
@@ -177,7 +171,7 @@ template <CNamedValue... Entries>
 [[nodiscard]] constexpr auto map(Entries... es) {
   // Reached before a duplicate key becomes a duplicate base class, which is
   // the less legible complaint.
-  static_assert(detail::keys_unique<Entries::symbol...>(),
+  static_assert(detail::keys_unique<Entries::symbol...>,
                 "map: duplicate key");
   return Map<Entries...>{std::move(es)...};
 }

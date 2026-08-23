@@ -1,8 +1,8 @@
 #pragma once
 
-#include "drivers/symbolic.hpp"
-#include "expr/named_value.hpp"
-#include "expr/traits.hpp"
+#include "symbolic/sweep.hpp"
+#include "symbolic/named_value.hpp"
+#include "symbolic/traits.hpp"
 #include "util/config.hpp"
 #include "util/error.hpp"
 #include "util/fixed_string.hpp"

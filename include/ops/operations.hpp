@@ -1,7 +1,8 @@
 #pragma once
 
-#include "expr/expressions.hpp"
-#include "expr/unary_math.hpp"
+#include "ops/numeric.hpp"
+#include "util/fixed_string.hpp"
+#include "ops/unary_math.hpp"
 #include <array>
 #include <cmath>
 #include <concepts>

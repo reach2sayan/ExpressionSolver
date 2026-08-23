@@ -1,6 +1,6 @@
 #pragma once
 
-#include "dual/dual.hpp"
+#include "ops/scalar.hpp"
 #include "md/md.hpp"
 
 #include <algorithm>
@@ -16,7 +16,8 @@
 namespace ddx::impl {
 
 // An energy called with a pointer into the driver's seed buffer.  D is `dual`
-// for the gradient sweep, `dual2nd` for the Hessian.
+// for the gradient sweep and `dual2nd` for the Hessian when forward mode is
+// built; the concept itself asks only that the scalar be Numeric.
 template <typename F, typename D>
 concept CEnergyOf =
     std::invocable<F &, const D *> &&
@@ -145,8 +146,5 @@ template <Numeric D> struct SweepWorkspace {
     return seed_with(x, [](const double v) { return D{v}; });
   }
 };
-
-using GradientWorkspace = SweepWorkspace<dual>;
-using HessianWorkspace = SweepWorkspace<dual2nd>;
 
 } // namespace ddx::impl

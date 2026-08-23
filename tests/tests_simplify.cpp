@@ -1,29 +1,4 @@
-#include "tests_common.hpp"
-
-// ===========================================================================
-// Algebraic simplification (expr/simplify.hpp)
-//
-// Identity folding runs in the operator factories, so trees are born folded
-// and the garbage is never instantiated; canonical ordering of commutative
-// operands runs where Equation is built.  The point of all of it is node
-// count -- node_cache_t is one slot per node and every sweep visits every one
-// -- so these assertions are on node_count_v, at compile time.
-// ===========================================================================
-
-namespace {
-using ddx::impl::detail::canonicalise;
-constexpr auto sx = ddx::var<"x">;
-constexpr auto sy = ddx::var<"y">;
-constexpr auto sz = ddx::var<"z">;
-constexpr auto sw = ddx::var<"w">;
-
-template <ddx::impl::FixedString S, class E> consteval std::size_t d_nodes() {
-  return ddx::impl::node_count_v<
-      decltype(ddx::impl::make_all_constant_except<S>(E{}).derivative())>;
-}
-constexpr auto F4 =
-    (sx + sy) * (sz - sw) + exp(sx * sz) + sin(sy * sw) + sx * sy * sz * sw;
-} // namespace
+#include "tests_simplify_fixtures.hpp"
 
 TEST(Simplify, IdentitiesCollapseDerivativeTrees) {
   // Unfolded, d(x*y)/dx is `1*y_c + x*0`: seven nodes and seven cache slots
@@ -40,7 +15,6 @@ TEST(Simplify, IdentitiesCollapseDerivativeTrees) {
   static_assert(ddx::impl::node_count_v<decltype(F4)> ==
                 26); // f itself is untouched
 }
-
 TEST(Simplify, OnlyCompileTimeLiteralsFold) {
   // Lit carries its value in the type, so it folds; a stored Constant holds a
   // number that only exists at run time, so it must not.
@@ -58,26 +32,6 @@ TEST(Simplify, OnlyCompileTimeLiteralsFold) {
   static_assert(!std::is_same_v<std::remove_cvref_t<decltype(unfolded)>, X>);
   EXPECT_DOUBLE_EQ(unfolded.eval(3.0), 3.0);
 }
-
-TEST(Simplify, DualLiteralPairsStayEmpty) {
-  // For a dual scalar the folded value cannot go back into the type in general,
-  // but 0 and 1 can via the int spelling -- and those are the only values
-  // differentiation makes.  Without that the pair falls to the stored-Constant
-  // branch and the spine above it stops being empty.
-  using D = ddx::impl::Dual<double>;
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 0>{} +
-                                         ddx::impl::Lit<D, 1>{})>);
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 0>{} *
-                                         ddx::impl::Lit<D, 1>{})>);
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<D, 1>{} +
-                                         ddx::impl::Lit<D, 0>{})>);
-  static_assert(std::is_empty_v<decltype(ddx::impl::Lit<double, 0>{} +
-                                         ddx::impl::Lit<double, 1>{})>);
-  // A value that is neither 0 nor 1 has nowhere to live but a stored Constant.
-  EXPECT_DOUBLE_EQ(
-      (ddx::impl::Lit<D, 1>{} + ddx::impl::Lit<D, 1>{}).get().value(), 2.0);
-}
-
 TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
   // The branch-free expansion (a'+b'±sign(a-b)*(a'-b'))/2 keeps a whole a-b
   // subtree inside the sign node, and that duplication against the primal is
@@ -89,19 +43,6 @@ TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
   static_assert(dmax == 9);
   static_assert(dmin == 10);
 }
-
-TEST(Simplify, DualValuedTreesAreStatelessToo) {
-  // The int spelling of Lit works for a T that can never be an NTTP itself, so
-  // the dual-valued path never falls back to a stored Constant -- which would
-  // drag the whole spine above it into the storing node form.
-  using D = ddx::impl::Dual<double>;
-  ddx::impl::Variable<D, ddx::impl::FixedString{"x"}> dx;
-  ddx::impl::Variable<D, ddx::impl::FixedString{"y"}> dy;
-  static_assert(std::is_empty_v<decltype(dx * dy)>);
-  static_assert(std::is_empty_v<decltype((dx * dy).derivative())>);
-  static_assert(sizeof(dx * dy) == 1);
-}
-
 TEST(Simplify, CommutativeOperandsCanonicalise) {
   // x+y and y+x become the same type, which is what makes type identity a
   // usable value numbering for a later CSE/DAG pass.  double declares its
@@ -119,61 +60,6 @@ TEST(Simplify, CommutativeOperandsCanonicalise) {
   EXPECT_EQ(std::format("{}", canonicalise(sx * 2.0)), "2 * x");
   EXPECT_EQ(std::format("{}", canonicalise(2.0 * sx)), "2 * x");
 }
-
-// Two scalars for the commutativity opt-in below: the same type but for the
-// tag, so the only thing that differs is whether they declare that their
-// multiplication commutes.
-template <int Tag> struct Ring {
-  double v{};
-  friend constexpr Ring operator+(Ring a, Ring b) noexcept {
-    return {a.v + b.v};
-  }
-  friend constexpr Ring operator-(Ring a, Ring b) noexcept {
-    return {a.v - b.v};
-  }
-  friend constexpr Ring operator*(Ring a, Ring b) noexcept {
-    return {a.v * b.v};
-  }
-  friend constexpr Ring operator/(Ring a, Ring b) noexcept {
-    return {a.v / b.v};
-  }
-  constexpr Ring operator-() const noexcept { return {-v}; }
-};
-using Undeclared = Ring<0>;
-using Declared = Ring<1>;
-DDX_COMMUTATIVE_MULTIPLY(Ring<1>)
-
-// A genuine non-commutative ring: the only kind of scalar that can observe
-// which side an adjoint multiplies on.  Scalars embed as s*I, which is what
-// makes Lit<Mat2, 0>, Lit<Mat2, 1> and the sweep's root adjoint T{1} come out
-// as the zero and identity matrices.
-struct Mat2 {
-  double a{}, b{}, c{}, d{};
-  constexpr Mat2() = default;
-  constexpr Mat2(double s) noexcept : a{s}, d{s} {}
-  constexpr Mat2(double a_, double b_, double c_, double d_) noexcept
-      : a{a_}, b{b_}, c{c_}, d{d_} {}
-  friend constexpr Mat2 operator+(Mat2 x, Mat2 y) noexcept {
-    return {x.a + y.a, x.b + y.b, x.c + y.c, x.d + y.d};
-  }
-  friend constexpr Mat2 operator-(Mat2 x, Mat2 y) noexcept {
-    return {x.a - y.a, x.b - y.b, x.c - y.c, x.d - y.d};
-  }
-  friend constexpr Mat2 operator*(Mat2 x, Mat2 y) noexcept {
-    return {x.a * y.a + x.b * y.c, x.a * y.b + x.b * y.d, x.c * y.a + x.d * y.c,
-            x.c * y.b + x.d * y.d};
-  }
-  friend constexpr Mat2 operator/(Mat2 x, Mat2 y) noexcept { // x * y^-1
-    const double det = y.a * y.d - y.b * y.c;
-    return x * Mat2{y.d / det, -y.b / det, -y.c / det, y.a / det};
-  }
-  constexpr Mat2 operator-() const noexcept { return {-a, -b, -c, -d}; }
-  // Deliberately NO operator+= -- CFieldLike does not require one, and this
-  // type existing without it is what pins that the reverse sweep does not
-  // secretly demand one either (values.hpp accumulates with + and assignment).
-  friend constexpr bool operator==(Mat2, Mat2) noexcept = default;
-};
-
 TEST(ReverseMode, MultiplyAdjointRespectsOperandSide) {
   // MultiplyOp::adjoints must return {adj*b, a*adj}, not {adj*b, adj*a}: for
   // c = a*b the differential is da*b + a*db, so the adjoint reaching `b`
@@ -202,7 +88,6 @@ TEST(ReverseMode, MultiplyAdjointRespectsOperandSide) {
   EXPECT_EQ(g[1], (Mat2{2, 1, 1, 1}));
   EXPECT_NE(g[1], (Mat2{1, 1, 1, 2})); // what {adj*b, adj*a} would produce
 }
-
 TEST(ReverseMode, DivideAdjointRespectsOperandSide) {
   // DivideOp reads a/b as a*b^-1, so c = a*b^-1 differentiates as
   // da*b^-1 - a*b^-1*db*b^-1: the b-adjoint threads BETWEEN a/b and b^-1 and
@@ -227,94 +112,6 @@ TEST(ReverseMode, DivideAdjointRespectsOperandSide) {
   EXPECT_NE(g[1], quotient);
   EXPECT_EQ(g[2], X / Y); // dz = adj*(x/y) with adj = I
 }
-
-// Whether an op template accepts a scalar, WITHOUT instantiating it -- naming a
-// constrained specialisation directly is a hard error rather than a
-// substitution failure, so the template template parameter is what puts the
-// check in a deduced context where the constraint can fail softly.
-template <template <class> class Op, class T>
-concept OpAccepts = requires { typename Op<T>; };
-
-// Closed under the five operators CFieldLike names, but with no way to spell 1.
-class NoIdentity {
-  double v{};
-
-public:
-  constexpr NoIdentity() = default;
-  friend constexpr NoIdentity operator+(NoIdentity, NoIdentity) noexcept {
-    return {};
-  }
-  friend constexpr NoIdentity operator-(NoIdentity, NoIdentity) noexcept {
-    return {};
-  }
-  friend constexpr NoIdentity operator*(NoIdentity, NoIdentity) noexcept {
-    return {};
-  }
-  friend constexpr NoIdentity operator/(NoIdentity, NoIdentity) noexcept {
-    return {};
-  }
-  constexpr NoIdentity operator-() const noexcept { return {}; }
-};
-
-TEST(Concepts, NumericDemandsWhatTheSweepsActuallyUse) {
-  // Differentiation manufactures exactly 0 and 1: reverse_sweep seeds its root
-  // adjoint with T{1} and Lit<T, V>'s int spelling is T(V).  A type that cannot
-  // spell 1 must be rejected by the concept rather than deep inside a sweep.
-  static_assert(std::default_initializable<NoIdentity>);
-  static_assert(!std::constructible_from<NoIdentity, int>);
-  static_assert(!ddx::impl::Numeric<NoIdentity>);
-
-  // Ordering is required only of the three ops that compare their operands:
-  // abs branches on the sign, min and max on which side is larger.
-  static_assert(ddx::impl::Numeric<Undeclared>);
-  static_assert(!std::totally_ordered<Undeclared>);
-  static_assert(!OpAccepts<ddx::impl::AbsOp, Undeclared>);
-  static_assert(!OpAccepts<ddx::impl::MaxOp, Undeclared>);
-  static_assert(!OpAccepts<ddx::impl::MinOp, Undeclared>);
-  static_assert(OpAccepts<ddx::impl::MultiplyOp, Undeclared>);
-  static_assert(OpAccepts<ddx::impl::SumOp, Undeclared>);
-  // Ordered scalars are accepted by all five, so the guard is narrow.
-  static_assert(OpAccepts<ddx::impl::AbsOp, double> &&
-                OpAccepts<ddx::impl::MinOp, double>);
-
-  // The scalars that ship satisfy both, so neither constraint narrows the
-  // library's actual surface.
-  static_assert(ddx::impl::Numeric<double> && std::totally_ordered<double>);
-  static_assert(std::totally_ordered<ddx::impl::Dual<double>>);
-  static_assert(std::totally_ordered<ddx::impl::TaylorDual<double, 3>>);
-  static_assert(std::totally_ordered<ddx::impl::TaylorDual<double, 3>>);
-}
-
-TEST(Simplify, MultiplicationCommutesOnlyWhenTheScalarSaysSo) {
-  // Numeric admits anything whose product depends on operand order, so a type
-  // that says nothing does not commute: that costs a CSE share, never a wrong
-  // result.
-  static_assert(ddx::impl::Numeric<Undeclared> &&
-                !ddx::impl::CCommutativeMultiply<Undeclared>);
-  static_assert(ddx::impl::Numeric<Declared>);
-  static_assert(ddx::impl::CCommutativeMultiply<double>);
-  static_assert(ddx::impl::CCommutativeMultiply<ddx::impl::Dual<double>>);
-  static_assert(
-      ddx::impl::CCommutativeMultiply<ddx::impl::TaylorDual<double, 3>>);
-  static_assert(
-      ddx::impl::CCommutativeMultiply<ddx::impl::TaylorDual<double, 3>>);
-  // The dual wrappers defer to the scalar underneath rather than asserting for
-  // themselves, so an undeclared scalar stays undeclared through a Dual.
-  static_assert(!ddx::impl::CCommutativeMultiply<ddx::impl::Dual<Undeclared>>);
-  // DDX_COMMUTATIVE_MULTIPLY is the spelling for a concrete user type.
-  static_assert(ddx::impl::CCommutativeMultiply<Declared>);
-
-  // And the trait is what canonicalisation actually consults: same expression,
-  // same shape, reordered for one scalar and left alone for the other.
-  ddx::impl::Variable<Undeclared, ddx::impl::FixedString{"x"}> ux;
-  ddx::impl::Variable<Undeclared, ddx::impl::FixedString{"y"}> uy;
-  static_assert(!std::is_same_v<decltype(canonicalise(ux * uy)),
-                                decltype(canonicalise(uy * ux))>);
-  // Addition needs no opt-in -- a ring's addition commutes by definition.
-  static_assert(std::is_same_v<decltype(canonicalise(ux + uy)),
-                               decltype(canonicalise(uy + ux))>);
-}
-
 TEST(Simplify, MaxAndMinHaveASymbolicDerivative) {
   // Selecting between lhs.derivative() and rhs.derivative() with a runtime
   // conditional cannot type-check: the two are different types.
@@ -335,7 +132,6 @@ TEST(Simplify, MaxAndMinHaveASymbolicDerivative) {
                      rmin[0]);
   }
 }
-
 TEST(Simplify, ReciprocalsCancelOnTheSideDivisionPutsThem) {
   // d(x*log x)/dx is born as log(x) + x*(1/x): the chain rule multiplies log's
   // own 1/u straight back by u.  Cancelling costs no accuracy.

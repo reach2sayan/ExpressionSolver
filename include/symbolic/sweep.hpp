@@ -1,14 +1,21 @@
 #pragma once
 
-#include "drivers/common.hpp"   // HessianStatic, symmetrize
-#include "drivers/coupling.hpp" // compile-time Hessian sparsity + colouring
+#include "symbolic/workspace.hpp" // HessianStatic, symmetrize
+#include "symbolic/coupling.hpp" // compile-time Hessian sparsity + colouring
 
-#include "dual/dual.hpp"
+// Forward mode supplies the truncated-polynomial scalar the univariate sweep
+// runs on; with DDX_BUILD_DUAL=OFF there is none, and the entry point below
+// goes with it.  Everything else in this header is symbolic and reverse mode,
+// which do not need it.
+#if DDX_HAS_DUAL
 #include "dual/taylor_dual.hpp"
-#include "expr/expressions.hpp"
-#include "expr/named_value.hpp"
-#include "expr/symbol.hpp"
-#include "expr/traits.hpp"
+#endif
+#include "ops/mode.hpp"
+#include "ops/scalar.hpp"
+#include "symbolic/expressions.hpp"
+#include "symbolic/named_value.hpp"
+#include "symbolic/symbol.hpp"
+#include "symbolic/traits.hpp"
 #include "md/tensor.hpp"
 #include "util/config.hpp"
 #include "util/scope_guard.hpp"
@@ -164,15 +171,6 @@ make_values(NamedValue<Syms, Vs>... nv) noexcept {
       ...);
   return out;
 }
-
-// Forward mode is reached through the drivers, which take a callable rather
-// than a Mode, so it is not a value here.
-//
-// Reverse is the gradient default: one sweep yields every partial, at a cost
-// bounded by a constant times the function itself however many inputs there
-// are, where forward mode needs one sweep per input.
-// Ref: Baur & Strassen, Theoret. Comput. Sci. 22(3) (1983) 317.
-enum class DiffMode { Symbolic, Reverse };
 
 namespace detail {
 
@@ -357,15 +355,7 @@ derivative_tensor_impl(const Expr &expr,
 
 namespace detail {
 
-// Same fold as binomial() in md/layouts.hpp.
-template <CArithmetic T> consteval T compile_time_factorial(T Order) {
-  return std::ranges::fold_left(std::views::iota(T{1}, T(Order + 1)), T{1},
-                                std::multiplies{});
-}
-static_assert(compile_time_factorial(3) == 6);
-static_assert(compile_time_factorial(5) == 120);
-static_assert(compile_time_factorial(7) == 5040);
-
+#if DDX_HAS_DUAL
 // One Taylor sweep, then undo the 1/Order! normalisation.  Ref: Griewank,
 // Utke & Walther, "Evaluating Higher Derivative Tensors by Forward Propagation
 // of Univariate Taylor Series", Math. Comp. 69(231) (2000) 1117.
@@ -388,6 +378,7 @@ univariate_derivative_impl(const Expr &expr, S x0) noexcept {
   constexpr S factorial = static_cast<S>(compile_time_factorial(Order));
   return result.c[Order] * factorial;
 }
+#endif // DDX_HAS_DUAL
 
 } // namespace detail
 

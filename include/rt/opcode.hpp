@@ -1,6 +1,6 @@
 #pragma once
 
-#include "expr/unary_math.hpp" // DDX_UNARY_MATH_TABLE
+#include "ops/unary_math.hpp" // DDX_UNARY_MATH_TABLE
 
 #include <cstdint>
 #include <string_view>

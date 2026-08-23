@@ -1,6 +1,6 @@
 #pragma once
 
-#include "expr/expressions.hpp" // Numeric
+#include "symbolic/expressions.hpp" // Numeric
 #include "md/layouts.hpp" // layout_leading_simplex — the symmetric packings
 #include "md/md.hpp"
 #include "util/config.hpp" // DDX_SELF

@@ -19,15 +19,22 @@
 
 namespace ddx::rt {
 
+// The frozen edge set.  Named at namespace scope rather than inside Graph
+// because it carries no `T`: every scalar a graph is built over freezes to the
+// same CSR type, which is what lets the graphviz writer be compiled once
+// against it instead of once per scalar.
+using Adjacency =
+    boost::compressed_sparse_row_graph<boost::directedS, boost::no_property,
+                                       std::uint32_t>;
+using Vertex = boost::graph_traits<Adjacency>::vertex_descriptor;
+
 // The static graph: a builder frozen into CSR, which is the form codegen walks.
 // Operand position rides along as an edge attribute, because a CSR row is a set
 // and `a / b` is not `b / a`.
 template <impl::Numeric T = double> class Graph {
 public:
-  using adjacency_type =
-      boost::compressed_sparse_row_graph<boost::directedS, boost::no_property,
-                                         std::uint32_t>;
-  using vertex_type = boost::graph_traits<adjacency_type>::vertex_descriptor;
+  using adjacency_type = Adjacency;
+  using vertex_type = Vertex;
 
   using value_type = T;
 

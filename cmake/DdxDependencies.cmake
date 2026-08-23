@@ -3,8 +3,7 @@
 # until the matching ddx_use_*() macro asks for it -- so the whole manifest can
 # live here while a build still fetches only what its options turned on.
 #
-#   ddx_use_boost()            Boost.Graph + Boost.DynamicBitset   DDX_BUILD_RT
-#   ddx_use_mp11()             Boost.Mp11                          always
+#   ddx_use_boost()            Boost.Mp11 + Graph + DynamicBitset  always
 #   ddx_use_llvm()             LLVM 18-20, found not fetched       DDX_BUILD_JIT
 #   ddx_use_googletest()       GoogleTest                          top-level only
 #   ddx_use_googlebenchmark()  Google Benchmark                    DDX_BUILD_BENCHMARKS
@@ -40,11 +39,6 @@ FetchContent_Declare(Boost
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SYSTEM
 )
-FetchContent_Declare(mp11
-        URL https://github.com/boostorg/mp11/archive/refs/tags/boost-${DDX_BOOST_VERSION}.tar.gz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        SYSTEM
-)
 FetchContent_Declare(googletest
         URL https://github.com/google/googletest/archive/${DDX_GOOGLETEST_REF}.zip
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
@@ -56,28 +50,22 @@ FetchContent_Declare(googlebenchmark
         SYSTEM
 )
 
-# --- Boost.Graph, Boost.DynamicBitset ---------------------------------------
-# Boost.Graph for the frozen graph's CSR and the Hessian colouring, and
-# Boost.DynamicBitset for the coupling rows.  Header-only, so the compiled Boost
-# libraries are not needed.
+# --- Boost -------------------------------------------------------------------
+# Mp11 is the type-list vocabulary the symbol lists are built out of, Boost.Graph
+# supplies the colouring the runtime graph needs, and Boost.DynamicBitset the
+# coupling rows.  All header-only, so no compiled Boost library is linked and a
+# system Boost is never consulted.
+#
+# One fetch rather than two.  Mp11 used to be declared separately and pulled in
+# after Boost.Graph, because Graph depends on Mp11 and defining `Boost::mp11`
+# twice is an error rather than a merge -- an ordering constraint that had to be
+# honoured at every call site.  Naming all three in BOOST_INCLUDE_LIBRARIES
+# retires it.
 macro(ddx_use_boost)
-    if (NOT TARGET Boost::graph)
-        set(BOOST_INCLUDE_LIBRARIES graph dynamic_bitset CACHE STRING "" FORCE)
+    if (NOT TARGET Boost::mp11)
+        set(BOOST_INCLUDE_LIBRARIES mp11 graph dynamic_bitset CACHE STRING "" FORCE)
         set(BOOST_ENABLE_CMAKE ON CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(Boost)
-    endif ()
-endmacro()
-
-# --- Boost.Mp11 -------------------------------------------------------------
-
-# Call this *after* ddx_use_boost() where both are wanted: Boost.Graph depends
-# on Mp11, so the superproject has already defined Boost::mp11, and defining a
-# target twice is an error rather than a merge.  The guard is on the target so
-# that it holds however Mp11 arrived -- a parent project that brought its own
-# Boost included.
-macro(ddx_use_mp11)
-    if (NOT TARGET Boost::mp11)
-        FetchContent_MakeAvailable(mp11)
     endif ()
 endmacro()
 

@@ -8,8 +8,8 @@
 include(CMakeFindDependencyMacro)
 
 # What the exported targets need found again on the consumer's machine.
-set(DDX_BUILD_RT @DDX_BUILD_RT@)
 set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
+set(DDX_BUILD_DUAL @DDX_BUILD_DUAL@)
 
 # Boost::headers rather than any component: every Boost library ddx uses --
 # Mp11 for the symbol lists, Graph and DynamicBitset for the runtime graph --
@@ -48,6 +48,15 @@ endif ()
 
 include("${CMAKE_CURRENT_LIST_DIR}/ddxTargets.cmake")
 
+# ddx::jit is the same library as ddx::rt -- the backend is compiled into libddx
+# rather than shipped beside it -- and an ALIAS is a build-tree thing that no
+# export set carries.  An INTERFACE target that forwards to it is what survives
+# into an installed package.
+if (DDX_BUILD_JIT AND NOT TARGET ddx::jit)
+    add_library(ddx::jit INTERFACE IMPORTED)
+    set_target_properties(ddx::jit PROPERTIES INTERFACE_LINK_LIBRARIES ddx::rt)
+endif ()
+
 # Boost is attached here rather than carried in the export: the build's Boost is
 # a fetched target that belongs to no export set, so the exported targets name
 # it nowhere and are given the one found above instead.  On ddx::ddx, which
@@ -66,12 +75,18 @@ set(ddx_FP_CONTRACT @DDX_FP_FLAGS@)
 # Without these the check below is a no-op and a component request for a part
 # that was never built succeeds, leaving the consumer to find out at link time.
 set(ddx_ddx_FOUND TRUE)
-set(ddx_rt_FOUND ${DDX_BUILD_RT})
+set(ddx_util_FOUND TRUE)
+set(ddx_ops_FOUND TRUE)
+set(ddx_md_FOUND TRUE)
+set(ddx_symbolic_FOUND TRUE)
+# The runtime graph is always built; only forward mode and the backend are not.
+set(ddx_rt_FOUND TRUE)
+set(ddx_dual_FOUND ${DDX_BUILD_DUAL})
 set(ddx_jit_FOUND ${DDX_BUILD_JIT})
 
 # check_required_components() reports only that ddx_FOUND went false, which
 # leaves the consumer to guess which component and how to get it.
-set(DDX_rt_OPTION DDX_BUILD_RT)
+set(DDX_dual_OPTION DDX_BUILD_DUAL)
 set(DDX_jit_OPTION DDX_BUILD_JIT)
 foreach (comp IN LISTS ddx_FIND_COMPONENTS)
     if (NOT ddx_${comp}_FOUND AND DEFINED DDX_${comp}_OPTION)

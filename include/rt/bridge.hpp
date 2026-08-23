@@ -1,8 +1,8 @@
 #pragma once
 
-#include "expr/expressions.hpp"
-#include "expr/operations.hpp"
-#include "expr/traits.hpp"
+#include "symbolic/expressions.hpp"
+#include "ops/operations.hpp"
+#include "symbolic/traits.hpp"
 #include "rt/expr.hpp"
 
 #include <array>

@@ -1,7 +1,7 @@
 # md/ — the multidimensional views derivatives are handed back in: the mdspan
 # binding (std:: or vendored, see DDX_MDSPAN_MODE), the packed symmetric
 # layouts, and the tensor types built on them.
-target_sources(ddx INTERFACE
+target_sources(ddx_md INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/md.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/layouts.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/tensor.hpp>

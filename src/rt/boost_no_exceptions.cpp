@@ -6,8 +6,14 @@
 // the alternative to terminating is a container in a state Boost will not
 // describe.
 //
-// Compiled into ddx_rt only when DDX_NO_EXCEPTIONS is on; with exceptions
+// Compiled into libddx only when DDX_NO_EXCEPTIONS is on; with exceptions
 // enabled Boost defines these itself and this file is not built.
+//
+// Both carry default visibility explicitly.  libddx is built with
+// -fvisibility=hidden, and these are the one pair of definitions in it that has
+// to be found by Boost's own inline code compiled into other objects -- the JIT
+// half of the library included.  They are in namespace boost, so DDX_API is not
+// theirs to wear.
 #include <boost/assert/source_location.hpp>
 #include <boost/throw_exception.hpp>
 
@@ -17,13 +23,20 @@
 
 namespace boost {
 
-void throw_exception(const std::exception &e) {
+#if defined(__GNUC__) || defined(__clang__)
+#define DDX_BOOST_THROW_VISIBILITY __attribute__((visibility("default")))
+#else
+#define DDX_BOOST_THROW_VISIBILITY
+#endif
+
+DDX_BOOST_THROW_VISIBILITY void throw_exception(const std::exception &e) {
   std::fprintf(stderr, "ddx: boost threw with exceptions disabled: %s\n",
                e.what());
   std::abort();
 }
 
-void throw_exception(const std::exception &e, const source_location &loc) {
+DDX_BOOST_THROW_VISIBILITY void
+throw_exception(const std::exception &e, const source_location &loc) {
   std::fprintf(stderr,
                "ddx: boost threw with exceptions disabled: %s (%s:%u)\n",
                e.what(), loc.file_name(), loc.line());

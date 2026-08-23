@@ -1,8 +1,13 @@
 #pragma once
 
-#include "drivers/symbolic.hpp" // compile_time_factorial
+#include "ops/numeric.hpp" // compile_time_factorial
+// The univariate sweep runs on the truncated-polynomial scalar forward mode
+// supplies; with DDX_BUILD_DUAL=OFF that member goes with it.  Every other
+// entry point here is interpreted or JIT-compiled and needs none of it.
+#if DDX_HAS_DUAL
 #include "dual/taylor_dual.hpp"
-#include "expr/equation.hpp"
+#endif
+#include "symbolic/equation.hpp"
 #include "md/md.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
@@ -168,6 +173,7 @@ public:
     return this->cached_hessians().front().colors();
   }
 
+#if DDX_HAS_DUAL
   // One Taylor sweep rather than K nested duals: seed c[0] = x0, c[1] = 1, then
   // un-normalise c[Order] -- TaylorDual stores f^(k)/k!.  The arity is checked
   // rather than constrained because input_dim is not in the type here.
@@ -188,6 +194,8 @@ public:
     return values[roots_[0]].c[Order] *
            static_cast<T>(impl::detail::compile_time_factorial(Order));
   }
+#endif // DDX_HAS_DUAL
+
 
   // --- batch ---------------------------------------------------------------
   //

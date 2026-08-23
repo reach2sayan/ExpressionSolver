@@ -96,6 +96,7 @@ TEST(RtScalar, UnsupportedOpsDoNotBreakTheInstantiation) {
 
 namespace {
 
+#if DDX_HAS_DUAL
 // Forward mode falls out of the interpreter rather than being a second engine,
 // exactly as it does on the compile-time side: eval_seeded instantiated at
 // Dual<T> is what makes ddx's forward mode, and evaluate_all takes its
@@ -118,5 +119,6 @@ TEST(RtScalar, ADualPointCarriesDerivativesThroughTheSameWalk) {
   const auto plain = ddx::rt::evaluate_all(b, std::array{1.0, 2.0});
   EXPECT_NEAR(plain[g.partial[0]], v.deriv(), 1e-14);
 }
+#endif // DDX_HAS_DUAL
 
 } // namespace

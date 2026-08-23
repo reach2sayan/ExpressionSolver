@@ -1,14 +1,14 @@
 #pragma once
 
-#include "expr/expressions.hpp" // CExpression, Numeric
-#include "expr/traits.hpp"      // extract_symbols_from_expr_t
+#include "symbolic/expressions.hpp" // CExpression, Numeric
+#include "symbolic/traits.hpp"      // extract_symbols_from_expr_t
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <type_traits>
 
-#include "expr/symbol.hpp" // mp_size
+#include "symbolic/symbol.hpp" // mp_size
 
 namespace ddx::impl {
 
@@ -41,6 +41,14 @@ public:
     return expr_.template eval_seeded<symbols>(s);
   }
 };
+
+// The tag seeded_energy() puts on a bridged expression graph.  It sits with
+// the class it detects rather than with the Hessian driver that reads it: the
+// question "is this already seeded?" is about this header's type and has
+// nothing to do with forward mode.
+template <typename F>
+concept CSeededExprEnergy =
+    requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };
 
 template <CExpression Expr>
 [[nodiscard]] constexpr auto seeded_energy(Expr &&expr) noexcept {

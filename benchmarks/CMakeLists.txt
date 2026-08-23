@@ -6,9 +6,9 @@ ddx_target_flags(benchmarks)
 
 if (DDX_BUILD_JIT)
     add_executable(benchmarks_jit jit/benchmark_jit.cpp)
-    target_link_libraries(benchmarks_jit PRIVATE benchmark::benchmark ddx_jit)
+    target_link_libraries(benchmarks_jit PRIVATE benchmark::benchmark ddx::jit)
     ddx_target_flags(benchmarks_jit)
-    ddx_jit_runtime(benchmarks_jit)
+    ddx_runtime_deps(benchmarks_jit)
 endif ()
 
 add_custom_target(benchmark_json

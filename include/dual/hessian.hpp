@@ -3,11 +3,11 @@
 // The public hessian() entry point: it chooses between the O(N^2) probe driver
 // (numeric.hpp) and the O(N) reverse graph sweep (symbolic.hpp).
 
-#include "drivers/numeric.hpp"
-#include "drivers/seeded_energy.hpp"
-#include "drivers/symbolic.hpp"
+#include "dual/numeric.hpp"
+#include "symbolic/seeded_energy.hpp"
+#include "symbolic/sweep.hpp"
 #include "dual/dual.hpp"
-#include "expr/expressions.hpp" // CExpression
+#include "symbolic/expressions.hpp" // CExpression
 #include "util/error.hpp"
 
 #include <cstddef>
@@ -16,11 +16,6 @@
 #include <type_traits>
 
 namespace ddx::impl {
-
-// The tag seeded_energy() puts on a bridged expression graph.
-template <typename F>
-concept CSeededExprEnergy =
-    requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };
 
 // An expression graph, a graph already bridged by seeded_energy(), or a raw
 // energy callable.

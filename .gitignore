@@ -513,8 +513,7 @@ build/
 docs/ad_jacobian.tex
 docs/ad_jacobian.pdf
 
-# Local-only A/B harness against other AD libraries; never published.
-/compare/
+# Build trees for the comparison harness in compare/, which is itself tracked.
 /build_compare/
 /cmake-build-compare/
 /cmake-build-bench/

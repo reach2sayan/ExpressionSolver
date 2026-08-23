@@ -1,7 +1,7 @@
 #pragma once
 
-#include "expr/operations.hpp" // pow_impl, atan2_impl, hypot_impl, max_impl, min_impl, abs_impl
-#include "expr/unary_math.hpp" // the eighteen descriptors
+#include "ops/operations.hpp" // pow_impl, atan2_impl, hypot_impl, max_impl, min_impl, abs_impl
+#include "ops/unary_math.hpp" // the eighteen descriptors
 #include "rt/opcode.hpp"
 
 #include <functional> // std::plus and friends, for the table's eval column

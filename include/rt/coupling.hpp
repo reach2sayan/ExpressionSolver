@@ -3,16 +3,9 @@
 #include "md/md.hpp"
 #include "rt/builder.hpp"
 #include "rt/opcode.hpp"
+#include "util/export.hpp"
 
 #include <boost/dynamic_bitset.hpp>
-#include <boost/graph/adjacency_list.hpp>
-// shared_array_property_map first: smallest_last_ordering.hpp uses
-// make_shared_array_property_map without including it, still true as of 1.92.
-// Not an unused include, and not safe to sort into the block below.
-#include <boost/property_map/shared_array_property_map.hpp>
-
-#include <boost/graph/sequential_vertex_coloring.hpp>
-#include <boost/graph/smallest_last_ordering.hpp>
 
 #include <algorithm>
 #include <concepts>
@@ -35,13 +28,6 @@ inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
 using SymbolSet = boost::dynamic_bitset<>;
 using CouplingRows = std::vector<SymbolSet>;
 
-// A colouring of the Hessian's columns: two columns share a colour only when no
-// row couples them, so one sweep can seed all of a colour's columns at once and
-// the results still separate.
-// Undirected: the conflict relation is symmetric.
-using ConflictGraph =
-    boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
-
 // Compressed-by-colour storage is always colours-major and n wide -- the
 // scatter table, and every Hessian block harvested against it.  Saying the
 // shape once here is what keeps `c * n + i` from being written out at each of
@@ -52,6 +38,9 @@ using ConflictGraph =
                           impl::md::dextents<std::size_t, 2>{colors, n}};
 }
 
+// A colouring of the Hessian's columns: two columns share a colour only when no
+// row couples them, so one sweep can seed all of a colour's columns at once and
+// the results still separate.
 struct Coloring {
   std::vector<std::size_t> color; // per symbol
   std::size_t count = 0;
@@ -143,50 +132,19 @@ template <impl::Numeric T>
 }
 
 // Columns j and k conflict iff their coupling rows overlap -- the CPR colouring
-// color_columns runs at compile time (drivers/coupling.hpp), which carries the
+// color_columns runs at compile time (symbolic/coupling.hpp), which carries the
 // citations.
 //
 // An invalid colouring does not degrade the Hessian, it corrupts it: two
 // columns sharing a colour have their second derivatives summed into one cell
 // with no way to separate them.  Hence the test that a complete graph colours
 // in n.
-[[nodiscard]] inline Coloring color_columns(const CouplingRows &rows) {
-  const std::size_t n = rows.size();
-  Coloring out{
-      .color = std::vector<std::size_t>(n, 0), .count = 0, .scatter = {}};
-  if (n == 0) {
-    return out;
-  }
-
-  ConflictGraph conflicts(n);
-  for (std::size_t j = 0; j < n; ++j) {
-    for (std::size_t k = j + 1; k < n; ++k) {
-      if (rows[j].intersects(rows[k])) {
-        boost::add_edge(j, k, conflicts);
-      }
-    }
-  }
-
-  // Smallest-last rather than natural vertex order: greedy colouring is only as
-  // good as the order it walks, and this is the one that pairs with it.
-  const auto order = boost::smallest_last_vertex_ordering(conflicts);
-  out.count = static_cast<std::size_t>(boost::sequential_vertex_coloring(
-      conflicts,
-      boost::make_iterator_property_map(order.begin(),
-                                        boost::identity_property_map()),
-      boost::make_iterator_property_map(
-          out.color.begin(), boost::get(boost::vertex_index, conflicts))));
-
-  // scatter[colour][row] is the column that row's sweep result belongs to.  The
-  // colouring guarantees at most one such column, so the harvest needs no
-  // search.
-  out.scatter.assign(out.count * n, no_column);
-  for (std::size_t j = 0; j < n; ++j) {
-    detail::for_each_set(rows[j],
-                         [&, scatter = by_color(out.scatter, out.count, n)](
-                             std::size_t i) { scatter[out.color[j], i] = j; });
-  }
-  return out;
-}
+//
+// Compiled into libddx rather than inlined here: it is the one part of the
+// runtime graph that carries no `T` at all, so a header definition would have
+// every scalar the library is instantiated at emit its own copy of the same
+// Boost.Graph colouring.  src/rt/coupling.cpp is also where the conflict graph,
+// the smallest-last ordering and their include-order quirk now live.
+[[nodiscard]] DDX_API Coloring color_columns(const CouplingRows &rows);
 
 } // namespace ddx::rt

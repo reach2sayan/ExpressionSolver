@@ -1,9 +1,9 @@
 #pragma once
 
-#include "expr/expressions.hpp"
-#include "expr/operations.hpp"
-#include "expr/symbol.hpp"
-#include "expr/traits.hpp"
+#include "symbolic/expressions.hpp"
+#include "ops/operations.hpp"
+#include "symbolic/symbol.hpp"
+#include "symbolic/traits.hpp"
 #include "md/md.hpp"
 
 #include <algorithm>

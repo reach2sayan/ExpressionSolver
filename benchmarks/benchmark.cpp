@@ -1,9 +1,9 @@
 #include "ddx.hpp"
-#include "drivers/symbolic.hpp"
+#include "symbolic/sweep.hpp"
 #include "dual/dual.hpp"
-#include "expr/bound.hpp"
-#include "expr/equation.hpp"
-#include "expr/values.hpp"
+#include "symbolic/bound.hpp"
+#include "symbolic/equation.hpp"
+#include "symbolic/values.hpp"
 #define _USE_MATH_DEFINES
 #include <array>
 #include <benchmark/benchmark.h>

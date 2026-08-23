@@ -1,6 +1,6 @@
 #pragma once
 
-#include "expr/expressions.hpp" // Numeric, symbol_type, Variable
+#include "symbolic/expressions.hpp" // Numeric, symbol_type, Variable
 #include "util/fixed_string.hpp"
 
 #include <concepts>
@@ -78,6 +78,14 @@ template <CSymbolTag Tag, typename V>
 [[nodiscard]] constexpr auto
 named(const Tag &, V v) noexcept(std::is_nothrow_move_constructible_v<V>) {
   return NamedValue<detail::tag_key_t<Tag>::value, V>{std::move(v)};
+}
+
+// "x"_s = 1.25, declared back in expressions.hpp where symbol_type is.
+template <auto S>
+template <typename V>
+  requires std::is_object_v<V>
+constexpr NamedValue<S, V> symbol_type<S>::operator=(V v) const {
+  return NamedValue<S, V>{std::move(v)};
 }
 
 template <typename T> inline constexpr bool is_named_value_v = false;

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "expr/expressions.hpp" // ddx::impl::Numeric
-#include "jit/export.hpp"
+#include "symbolic/expressions.hpp" // ddx::impl::Numeric
+#include "util/export.hpp"
 #include "util/error.hpp"
 #include "util/pinned.hpp"
 

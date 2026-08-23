@@ -1,6 +1,6 @@
 #pragma once
 
-#include "drivers/symbolic.hpp" // DiffMode
+#include "ops/mode.hpp" // DiffMode
 #include "rt/coupling.hpp"
 #include "rt/expr.hpp"
 

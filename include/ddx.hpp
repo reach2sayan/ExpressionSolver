@@ -44,8 +44,8 @@
 //   Baydin, Pearlmutter, Radul & Siskind, "Automatic Differentiation in
 //     Machine Learning: a Survey", JMLR 18(153) (2018).
 // ---------------------------------------------------------------------------
-#include "expr/equation.hpp"
-#include "expr/named_map.hpp"
+#include "symbolic/equation.hpp"
+#include "symbolic/named_map.hpp"
 
 namespace ddx {
 
@@ -54,16 +54,22 @@ using impl::Equation;
 
 // Symbol value types.  A `double` graph answers evaluate()/gradient()/
 // jacobian()/derivative_tensor()/univariate_derivative(); hessian() needs
-// `dual`.
+// `dual`.  Built unless DDX_BUILD_DUAL=OFF, which drops forward mode and with
+// it every second-derivative entry point.
+#if DDX_HAS_DUAL
 using impl::dual;
 using impl::dual2nd;
+#endif
 
 // var<"x">, or "x"_s.  var_of<"x">(v) / dual_var_of<"x">(v) take the scalar
 // type from an exemplar value instead of naming it.
-using impl::dual_var_of;
 using impl::sym;
 using impl::var;
 using impl::var_of;
+using impl::variable;
+#if DDX_HAS_DUAL
+using impl::dual_var_of;
+#endif
 namespace literals = impl::literals;
 
 // constant(3.0) -- a value stored in the tree.

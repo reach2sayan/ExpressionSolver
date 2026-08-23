@@ -4,5 +4,5 @@
 # take the fallback branch in include/util/config.hpp and grey out the deducing-this
 # accessors even when the build compiles them.
 CompileFlags:
-  CompilationDatabase: cmake-build-debug
+  CompilationDatabase: build/debug
   Add: [-std=c++23, -I/usr/include, -DDDX_DEDUCING_THIS=1]
