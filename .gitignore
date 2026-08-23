@@ -513,7 +513,9 @@ build/
 docs/ad_jacobian.tex
 docs/ad_jacobian.pdf
 
-# Build trees for the comparison harness in compare/, which is itself tracked.
+# The comparison harness is an internal check, kept out of the index along with
+# its build trees.
+/compare/
 /build_compare/
 /cmake-build-compare/
 /cmake-build-bench/
