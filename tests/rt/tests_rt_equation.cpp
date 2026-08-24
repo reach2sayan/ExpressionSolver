@@ -997,6 +997,33 @@ TEST(RtEquation, TwoEquationsSharingAnArenaDoNotRaceIt) {
   EXPECT_EQ(c, expected_second);
 }
 
+// The batch overload of the same thing: values for many points, and no
+// gradient computed anywhere along the way.
+TEST(RtEquation, EvaluatingABatchComputesNoPartials) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto eq = ddx::rt::equation(x * log(x) + y * y);
+
+  constexpr std::size_t n = 5;
+  std::vector<double> cx(n), cy(n), f(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.1 * static_cast<double>(i);
+    cy[i] = 1.1 - 0.05 * static_cast<double>(i);
+  }
+  const double *const columns[]{cx.data(), cy.data()};
+  double *const values[]{f.data()};
+  ASSERT_TRUE(eq.evaluate(columns, values, n).has_value());
+
+  for (std::size_t i = 0; i < n; ++i) {
+    EXPECT_NEAR(f[i], cx[i] * std::log(cx[i]) + cy[i] * cy[i], 1e-12)
+        << "value at " << i;
+    // Bit-exact against the scalar accessor: one graph, one sweep.
+    const std::vector<double> at{cx[i], cy[i]};
+    EXPECT_EQ(f[i], *eq.evaluate(std::span<const double>{at}));
+  }
+}
+
 // Evaluating asks for values and nothing else, so its lane's graph carries no
 // Jacobian block at all -- a shape no other caller produces, and one the column
 // checks in dispatch() would reject if the lane and the caller disagreed.  A

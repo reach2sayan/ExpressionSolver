@@ -760,18 +760,49 @@ still until there is one.
 
 Values, gradient and Hessian are three separate graphs. Each is built the first
 time it is asked for, and building one is what starts its compile -- so a caller
-who only ever evaluates never builds a gradient, let alone compiles one. The
-whole dance:
+who only ever evaluates never builds a gradient, let alone compiles one.
+
+Each comes two ways. The scalar accessors take a point and answer with the
+numbers; the batch ones take columns, write into them, and answer
+`result<void>`:
+
+| one point | a batch of `n` |
+| --- | --- |
+| `eq.evaluate(pt)` → `result<T>`, or `result<vector<T>>` for a system | `eq.evaluate(xs, f, n)` |
+| `eq.jacobian(pt)` → `result<vector<T>>`, row-major m×n | `eq.jacobian(xs, f, g, n)` |
+| `eq.hessian(pt)` → `result<vector<T>>`, dense row-major m×n×n | `eq.hessian(xs, f, g, h, n)` |
+
+The whole dance:
 
 ```cpp
-auto eq = ddx::rt::equation(/* ... */);
+auto eq = rt::equation([] {
+  const auto x = rt::var("x");
+  const auto y = rt::var("y");
+  return x * log(x) + y * exp(x * y);
+});
+
+// One point, and a batch of n laid out one column per symbol.
+const std::array pt{0.6, 1.4};
+std::vector<double> cx(n), cy(n), fs(n), gx(n), gy(n);
+const double *const xs[]{cx.data(), cy.data()};
+double *const f[]{fs.data()};
+double *const g[]{gx.data(), gy.data()};
+
+// The Hessian's columns are compressed by colour, so hessian_columns() sizes
+// them -- asking does not build anything.
+std::vector<double> hs(*eq.hessian_columns() * n);
+std::vector<double *> h(*eq.hessian_columns());
+for (std::size_t k = 0; k < h.size(); ++k) {
+  h[k] = hs.data() + k * n;
+}
 
 // No backend asked for, so no compiler exists and none is loaded.
-eq.evaluate(pt);                            // builds the values graph, sweeps it
-eq.jacobian(pt);                            // builds the gradient graph, sweeps it
-                                            //   -- the values graph is untouched
+const double value = *eq.evaluate(pt);      // builds the values graph, sweeps it
+const auto grad = *eq.jacobian(pt);         // builds the gradient graph, sweeps it
+                                            //   -- 2 long, and the values graph
+                                            //      is untouched
 
-eq.options({.backend = ddx::rt::Backend::Compile});
+eq.options({.backend = rt::Backend::Compile});
 // Discards every graph and starts the gradient one's compile here and now.
 // Returns immediately; nothing has been compiled yet.
 
@@ -793,21 +824,27 @@ eq.jacobian(xs, f, g, n);                   // kernel, guaranteed
 // The other two graphs are built the first time they are asked for, and each is
 // launched the moment it is built -- so the compile for this one starts here,
 // not back at options(), and this call is still answered without waiting.
-eq.evaluate(pt);                            // builds the values graph -> swept
+eq.evaluate(xs, f, n);                      // builds the values graph -> swept
 // ... assume that compile finishes ...
-eq.evaluate(pt);                            // kernel
+eq.evaluate(xs, f, n);                      // kernel -- and no partial is ever
+                                            //   computed, on either path
 
 eq.hessian(pt);                             // builds the Hessian graph -> swept
 // ... assume that compile finishes ...
 eq.hessian(xs, f, g, h, n);                 // kernel
 
-eq.options({.backend = ddx::rt::Backend::Interpret});
+eq.options({.backend = rt::Backend::Interpret});
 // Drops a compile still in flight and empties every graph.
 eq.jacobian(xs, f, g, n);                   // swept, no compiler asked
 
-eq.options({.backend = ddx::rt::Backend::Compile});
+eq.options({.backend = rt::Backend::Compile});
 // Starts over from nothing.
 ```
+
+*Swept* is the interpreter: `kLanes` points per pass over the runtime graph, one
+switch per node per block. It is what runs whenever a kernel is not there yet,
+for values, gradients and Hessians alike -- not a Hessian-specific path, and not
+a sad one either, at ~1.4x of a kernel.
 
 `uses_kernel()` says whether the gradient graph has a kernel yet;
 `wait_for_kernel()` is how to insist on one.
@@ -816,8 +853,8 @@ Say what your batch is, since the kernel is built before any call exists to
 infer it from:
 
 ```cpp
-eq.options({.backend = ddx::rt::Backend::Compile, .points = 1});     // a gradient per step
-eq.options({.backend = ddx::rt::Backend::Compile, .points = 4096});  // a batch at a time
+eq.options({.backend = rt::Backend::Compile, .points = 1});     // a gradient per step
+eq.options({.backend = rt::Backend::Compile, .points = 4096});  // a batch at a time
 ```
 
 `points` fixes how many points one loop iteration handles. A call carrying some

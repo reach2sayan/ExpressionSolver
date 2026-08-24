@@ -314,6 +314,16 @@ public:
   // output column, every column n long.  An unchecked column-count mismatch is
   // silent memory corruption.
 
+  // Values alone, over a batch.  Its own graph rather than jacobian()'s with
+  // the partials thrown away: the columns a caller does not ask for are work
+  // nobody does, and on a coupled model the gradient is most of the graph.
+  [[nodiscard]] result<void>
+  evaluate(const rt_detail::CColumns<const T *> auto &xs,
+           const rt_detail::CColumns<T *> auto &f, std::size_t n) const {
+    return dispatch(*snapshot(Want::Values), as_columns(xs), as_columns(f), {},
+                    {}, n);
+  }
+
   [[nodiscard]] result<void>
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f,
