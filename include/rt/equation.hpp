@@ -53,6 +53,24 @@ template <typename R, typename Ptr>
 concept CColumns = std::ranges::contiguous_range<R> &&
                    std::convertible_to<std::ranges::range_value_t<R>, Ptr>;
 
+#ifdef DDX_HAS_JIT
+// One LLJIT for the process, not one per Equation instantiation: a static in a
+// class template is per specialisation, so a program holding a scalar equation
+// and a two-output system used to bring up two of them.  Sharing also gives the
+// kernel names one counter rather than one each, so no two compiles can mint
+// the same name.  Concurrent compiles through it are what
+// ConcurrentIRCompiler's per-module TargetMachine exists for.
+//
+// A function-local static in an inline function, so it is one object across
+// translation units -- and reached only from a compiling backend, which is what
+// keeps an interpret-only program from ever bringing LLVM up.  A Kernel holds a
+// share of what it came from, so nothing here has to outlive anything.
+[[nodiscard]] inline jit::Compiler *shared_compiler() {
+  static jit::result<jit::Compiler> instance = jit::Compiler::create();
+  return instance ? &*instance : nullptr;
+}
+#endif
+
 } // namespace rt_detail
 
 template <Numeric T, typename... Rest>
@@ -287,21 +305,22 @@ public:
                     as_columns(g), as_columns(h), n);
   }
 
-  // What a caller sizes its buffers by.
+  // What a caller sizes its buffers by.  Read off what the constructor already
+  // swept rather than off a frozen graph: these are the three counts
+  // GraphBuilder would compute the layout from, so they answer the same, and
+  // asking must not build -- sizing a Hessian buffer used to compile one.
   [[nodiscard]] std::optional<std::size_t> value_columns() const {
-    return poisoned() ? std::nullopt
-                      : std::optional{snapshot(false)->graph->layout().values};
+    return poisoned() ? std::nullopt : std::optional{roots_.size()};
   }
   [[nodiscard]] std::optional<std::size_t> jacobian_columns() const {
-    return poisoned()
-               ? std::nullopt
-               : std::optional{snapshot(false)->graph->layout().jacobian};
+    return poisoned() ? std::nullopt
+                      : std::optional{derivative_.partial.size()};
   }
   [[nodiscard]] std::optional<std::size_t> hessian_columns() const
     requires(output_dim == 1)
   {
     return poisoned() ? std::nullopt
-                      : std::optional{snapshot(true)->graph->layout().hessian};
+                      : std::optional{hessians_.front().compressed.size()};
   }
 
 private:
@@ -532,10 +551,7 @@ private:
 
   // A Kernel does not own its code, so the compiler outlives every kernel.
   // Null on a host with no JIT, asked once.
-  static jit::Compiler *compiler() {
-    static jit::result<jit::Compiler> instance = jit::Compiler::create();
-    return instance ? &*instance : nullptr;
-  }
+  static jit::Compiler *compiler() { return rt_detail::shared_compiler(); }
 #endif
 
   // Points per block sweep.  Two AVX2 registers of doubles: wide enough that

@@ -557,6 +557,131 @@ TEST(RtEquation, ChoosingABackendStartsTheBuild) {
   EXPECT_TRUE(eq.uses_kernel()) << "an identical options() threw the kernel away";
 }
 
+// Sizing a buffer must not build a kernel.  hessian_columns() reached the
+// Hessian lane and compiled it -- thirteen milliseconds at twelve variables --
+// for a number the constructor already knew.
+TEST(RtEquation, TheColumnCountsCompileNothing) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  auto eq = ddx::rt::equation(x * log(x) + y * exp(x * y));
+  eq.options({.backend = ddx::rt::Backend::Compile});
+
+  // Every count, before any call has been made.
+  EXPECT_EQ(*eq.value_columns(), 1u);
+  EXPECT_EQ(*eq.jacobian_columns(), 2u);
+  EXPECT_GT(*eq.hessian_columns(), 0u);
+
+  // The Hessian lane is still unbuilt: it is the hessian() call that builds it.
+  constexpr std::size_t n = 2;
+  const std::size_t hc = *eq.hessian_columns();
+  std::vector<double> cx(n, 0.6), cy(n, 0.9), f(n), dx(n), dy(n);
+  std::vector<std::vector<double>> hb(hc, std::vector<double>(n));
+  std::vector<double *> hp(hc);
+  for (std::size_t c = 0; c < hc; ++c) {
+    hp[c] = hb[c].data();
+  }
+  const double *const columns[]{cx.data(), cy.data()};
+  double *const values[]{f.data()};
+  double *const partials[]{dx.data(), dy.data()};
+  EXPECT_TRUE(eq.hessian(columns, values, partials, hp, n).has_value());
+
+  // And they still answer once everything is built.
+  EXPECT_EQ(*eq.value_columns(), 1u);
+  EXPECT_EQ(*eq.jacobian_columns(), 2u);
+  EXPECT_EQ(*eq.hessian_columns(), hc);
+}
+
+// One LLJIT serves every Equation type, so equations of different shapes
+// compile through it at the same time.  Results, not timings, so it cannot go
+// flaky.
+TEST(RtEquation, DifferentEquationTypesShareOneCompilerSafely) {
+  const auto scalar_model = [] {
+    return ddx::rt::equation([] {
+      const auto x = ddx::rt::var("x");
+      return x * log(x) + exp(x);
+    });
+  };
+  const auto system_model = [] {
+    return ddx::rt::equation([] {
+      const auto x = ddx::rt::var("x");
+      return std::array{x * log(x), exp(x), sqrt(x + 1.0)};
+    });
+  };
+
+  constexpr std::size_t n = 4;
+  std::vector<double> cx(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.4 + 0.1 * static_cast<double>(i);
+  }
+
+  // Both shapes, from several threads, all compiling at once.
+  const auto one_scalar = [&] {
+    auto eq = scalar_model();
+    eq.options({.backend = ddx::rt::Backend::Compile, .points = n});
+    std::vector<double> f(n), d(n);
+    const double *const columns[]{cx.data()};
+    double *const values[]{f.data()};
+    double *const partials[]{d.data()};
+    EXPECT_TRUE(eq.jacobian(columns, values, partials, n).has_value());
+    EXPECT_TRUE(eq.uses_kernel());
+    return f;
+  };
+  const auto one_system = [&] {
+    auto eq = system_model();
+    eq.options({.backend = ddx::rt::Backend::Compile, .points = n});
+    std::vector<double> f0(n), f1(n), f2(n), d0(n), d1(n), d2(n);
+    const double *const columns[]{cx.data()};
+    double *const values[]{f0.data(), f1.data(), f2.data()};
+    double *const partials[]{d0.data(), d1.data(), d2.data()};
+    EXPECT_TRUE(eq.jacobian(columns, values, partials, n).has_value());
+    EXPECT_TRUE(eq.uses_kernel());
+    return f1;
+  };
+
+  const auto want_scalar = one_scalar();
+  const auto want_system = one_system();
+
+  std::vector<std::thread> racers;
+  std::vector<std::vector<double>> got_scalar(4), got_system(4);
+  for (std::size_t t = 0; t < 4; ++t) {
+    racers.emplace_back([&, t] { got_scalar[t] = one_scalar(); });
+    racers.emplace_back([&, t] { got_system[t] = one_system(); });
+  }
+  for (auto &r : racers) {
+    r.join();
+  }
+  for (std::size_t t = 0; t < 4; ++t) {
+    EXPECT_EQ(got_scalar[t], want_scalar) << "scalar equation on thread " << t;
+    EXPECT_EQ(got_system[t], want_system) << "system equation on thread " << t;
+  }
+}
+
+// A compile in flight when the choice changes is abandoned, not waited for and
+// not recovered: flipping to Interpret leaves the sweep, and flipping back
+// builds afresh.
+TEST(RtEquation, AbandoningACompileLeavesNothingBehind) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  auto eq = ddx::rt::equation(x * log(x) + exp(x));
+
+  eq.options({.backend = ddx::rt::Backend::Compile});
+  eq.options({.backend = ddx::rt::Backend::Interpret});
+
+  double cx = 0.7, f = 0, dx = 0;
+  const double *const columns[]{&cx};
+  double *const values[]{&f};
+  double *const partials[]{&dx};
+  ASSERT_TRUE(eq.jacobian(columns, values, partials, 1).has_value());
+  EXPECT_FALSE(eq.uses_kernel()) << "an abandoned compile came back";
+  EXPECT_NEAR(f, 0.7 * std::log(0.7) + std::exp(0.7), 1e-12);
+
+  eq.options({.backend = ddx::rt::Backend::Compile});
+  ASSERT_TRUE(eq.jacobian(columns, values, partials, 1).has_value());
+  EXPECT_TRUE(eq.uses_kernel()) << "asking again did not build";
+  EXPECT_NEAR(f, 0.7 * std::log(0.7) + std::exp(0.7), 1e-12);
+}
+
 // Compile is the promise that a call answers from the kernel, so the very
 // first one must -- no sweep result may be observed.
 TEST(RtEquation, CompileHasItsKernelOnTheFirstCall) {
