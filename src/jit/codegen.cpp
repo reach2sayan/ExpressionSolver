@@ -1,5 +1,7 @@
 #include "codegen.hpp"
 
+#include "util/ranges.hpp"
+
 #include <llvm/ADT/Twine.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>

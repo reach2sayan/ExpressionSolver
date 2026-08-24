@@ -107,8 +107,7 @@ template <impl::Numeric T>
       support[v] |= support[node.b];
       if (node.op == OpCode::Add) {
         break; // linear: contributes nothing
-      }
-      if (node.op == OpCode::Mul) {
+      } else if (node.op == OpCode::Mul) {
         detail::couple(rows, support[node.a], support[node.b]);
       } else if (node.op == OpCode::Div) {
         detail::couple(rows, support[node.a], support[node.b]);

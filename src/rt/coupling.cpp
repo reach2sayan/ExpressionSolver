@@ -63,7 +63,7 @@ Coloring color_columns(const CouplingRows &rows) {
   // colouring guarantees at most one, so the harvest needs no search.
   out.scatter.assign(out.count * n, no_column);
   const auto scatter = by_color(out.scatter, out.count, n);
-  for (const auto [index, row] : std::views::enumerate(rows)) {
+  for (const auto [index, row] : rows | std::views::enumerate) {
     const auto j = static_cast<std::size_t>(index);
     detail::for_each_set(row,
                          [&](std::size_t i) { scatter[out.color[j], i] = j; });

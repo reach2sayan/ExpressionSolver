@@ -189,6 +189,20 @@ private:
     return result;
   }
 
+  // The symbolic trees, and their partials.  Every other member reduces them to
+  // numbers at a point, and the one thing that wants the trees themselves is
+  // the formatter -- which prints each output with its Jacobian row underneath.
+  friend struct ::std::formatter<Equation<TFirst, TRest...>, char>;
+
+  [[nodiscard]] constexpr const Exprs &functions() const noexcept {
+    return expressions;
+  }
+  // On demand: storing it would instantiate the whole symbolic Jacobian every
+  // time Equation<E> is named.
+  [[nodiscard]] constexpr auto jacobian_rows() const noexcept {
+    return detail::make_jac_rows(expressions, symbols{});
+  }
+
   template <std::size_t N>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     if constexpr (N == 0) {
@@ -207,16 +221,6 @@ public:
   constexpr explicit Equation(TFirst first, TRest... rest) noexcept
       : expressions{detail::canonicalise(first),
                     detail::canonicalise(rest)...} {}
-
-  // The symbolic trees; every other member reduces them to numbers at a point.
-  [[nodiscard]] constexpr const Exprs &functions() const noexcept {
-    return expressions;
-  }
-  // On demand: storing it would instantiate the whole symbolic Jacobian every
-  // time Equation<E> is named.
-  [[nodiscard]] constexpr auto jacobian_rows() const noexcept {
-    return detail::make_jac_rows(expressions, symbols{});
-  }
 
   // A point spelled as a range answers with result<T>, its length being unknown
   // until it arrives; every other spelling is counted by a static_assert.

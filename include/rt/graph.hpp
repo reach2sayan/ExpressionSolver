@@ -17,7 +17,17 @@
 #include <utility>
 #include <vector>
 
+namespace ddx::impl {
+// Redeclared rather than relied on through rt/expressions.hpp: GraphBuilder
+// befriends it below, and the nodes it hands over are ones an Equation has
+// already swept.
+template <typename... Ts> class Equation;
+} // namespace ddx::impl
+
 namespace ddx::rt {
+
+// Befriended by Graph: the CSR itself is the writer's business.
+template <impl::Numeric T> class Dot;
 
 // At namespace scope rather than inside Graph because it carries no `T`: every
 // scalar freezes to the same CSR, so the graphviz writer compiles once.
@@ -30,9 +40,6 @@ using Vertex = boost::graph_traits<Adjacency>::vertex_descriptor;
 // along as an edge attribute, because a CSR row is a set.
 template <impl::Numeric T = double> class Graph {
 public:
-  using adjacency_type = Adjacency;
-  using vertex_type = Vertex;
-
   using value_type = T;
 
   // Codegen and the caller agree on a column's meaning from this, not by
@@ -96,7 +103,6 @@ public:
   [[nodiscard]] const Property &operator[](NodeId v) const {
     return properties_[v];
   }
-  [[nodiscard]] const adjacency_type &children() const { return children_; }
   [[nodiscard]] std::span<const NodeId> outputs() const { return outputs_; }
   [[nodiscard]] const Layout &layout() const { return layout_; }
   [[nodiscard]] const Coloring &coloring() const { return coloring_; }
@@ -105,21 +111,9 @@ public:
   }
   [[nodiscard]] bool live(NodeId v) const { return live_[v]; }
 
-  [[nodiscard]] auto operand_edges(NodeId v) const {
-    const auto [first, last] =
-        boost::out_edges(static_cast<vertex_type>(v), children_);
-    return std::ranges::subrange(first, last);
-  }
-
-  // Id order is topological, so a consumer emits them in one pass.  The view
-  // must not outlive this graph.
-  [[nodiscard]] auto live_nodes() const {
-    return std::views::iota(NodeId{0}, static_cast<NodeId>(size())) |
-           std::views::filter([this](NodeId v) { return live_[v]; });
-  }
-
-  // The same ids materialised, for a consumer that walks them once per point
-  // rather than once per graph.  The view must not outlive this graph.
+  // The ids the freeze kept, for a consumer that walks them once per point
+  // rather than once per graph.  Id order is topological, so a consumer emits
+  // them in one pass.  The span must not outlive this graph.
   [[nodiscard]] std::span<const NodeId> live_order() const {
     return live_order_;
   }
@@ -141,11 +135,6 @@ public:
                                    layout_.hessian)};
   }
 
-  // Properties in id order, for a caller that wants to walk them itself.
-  [[nodiscard]] std::span<const Property> properties() const {
-    return properties_;
-  }
-
   // Operands in slot order; arity is at most two, hence a pair.
   [[nodiscard]] std::array<NodeId, 2> operands(NodeId v) const {
     std::array out{no_node, no_node};
@@ -156,6 +145,25 @@ public:
   }
 
 private:
+  using adjacency_type = Adjacency;
+  using vertex_type = Vertex;
+
+  // The compressed rows themselves.  Only the DOT writer wants them: everything
+  // else reads a node's operands, which is what `operands` answers.
+  friend class Dot<T>;
+  [[nodiscard]] const adjacency_type &children() const { return children_; }
+
+  [[nodiscard]] auto operand_edges(NodeId v) const {
+    const auto [first, last] =
+        boost::out_edges(static_cast<vertex_type>(v), children_);
+    return std::ranges::subrange(first, last);
+  }
+
+  [[nodiscard]] auto live_nodes() const {
+    return std::views::iota(NodeId{0}, static_cast<NodeId>(size())) |
+           std::views::filter([this](NodeId v) { return live_[v]; });
+  }
+
   // Nothing but the outputs and what they reach needs to be emitted.
   void mark_live() {
     live_ = detail::reachable(
@@ -227,15 +235,6 @@ public:
     return *this;
   }
 
-  // The Hessian an Equation already holds, so the arena is not swept again --
-  // rt::hessian appends to the builder, and freeze() must not.
-  constexpr GraphBuilder &hessian_from(const Hessian &h) {
-    outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
-    layout_.hessian = h.compressed.size();
-    coloring_ = h.coloring;
-    return *this;
-  }
-
   // Compressed by colour, not n x n: a handful of columns when banded.
   GraphBuilder &hessian() {
     const auto h = rt::hessian(*builder_, roots_.front());
@@ -245,18 +244,22 @@ public:
     return *this;
   }
 
-  // Anything else worth a column of its own; counted as a value.
-  constexpr GraphBuilder &output(const RTExpression<T> &e) {
-    outputs_.push_back(e.id(*builder_));
-    ++layout_.values;
-    return *this;
-  }
-
   [[nodiscard]] Graph<T> build() const {
     return Graph<T>::freeze(*builder_, outputs_, layout_, coloring_);
   }
 
 private:
+  // The Hessian an Equation already holds, so the arena is not swept again --
+  // rt::hessian appends to the builder, and freeze() must not.  Only an
+  // Equation has one to hand over; everyone else asks for `hessian()`.
+  template <typename... Ts> friend class impl::Equation;
+  constexpr GraphBuilder &hessian_from(const Hessian &h) {
+    outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
+    layout_.hessian = h.compressed.size();
+    coloring_ = h.coloring;
+    return *this;
+  }
+
   Builder<T> *builder_;
   std::vector<NodeId> roots_;
   std::vector<NodeId> outputs_;

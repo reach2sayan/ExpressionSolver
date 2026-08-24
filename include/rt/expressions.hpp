@@ -11,12 +11,26 @@
 #include <type_traits> // std::remove_cvref_t
 #include <utility>     // std::move
 
+namespace ddx::impl {
+// Befriended below: an Equation is the one thing that takes an expression's
+// arena over, and the only reader of the poison an absent arena leaves.
+template <typename... Ts> class Equation;
+} // namespace ddx::impl
+
 namespace ddx::rt {
+
+template <impl::Numeric T = double> class RTExpression;
+
+// Declared ahead of RTExpression, which befriends it: `var` is where a missing
+// arena turns into a poisoned expression.  Defined below, with the arena it
+// reads.
+template <impl::Numeric T = double>
+[[nodiscard]] RTExpression<T> var(std::string_view name) noexcept;
 
 // A handle onto one node, plus the arithmetic surface that builds more.  A null
 // builder is a literal not yet given to a graph, which is what lets
 // RTExpression{1} exist for CFieldLike's constructible_from<int>.
-template <impl::Numeric T = double> class RTExpression {
+template <impl::Numeric T> class RTExpression {
 public:
   using value_type = T;
   using builder_type = Builder<T>;
@@ -24,10 +38,8 @@ public:
   constexpr RTExpression() = default;
 
   // By value: RTExpression is itself Numeric, and a Numeric&& would out-match
-  // the copy constructor for a non-const lvalue.  The same-type exclusion is
-  // first and load-bearing -- conjunction short-circuits, which stops
-  // Numeric<V> from ever being asked about RTExpression itself.  Without it the
-  // check is circular, and clang diagnoses the cycle where GCC accepts it.
+  // the copy constructor for a non-const lvalue.  Prevent circular check
+  // clang diagnoses the cycle where GCC accepts it.
   template <typename V>
     requires(!std::same_as<std::remove_cvref_t<V>, RTExpression> &&
              impl::Numeric<V>)
@@ -40,19 +52,11 @@ public:
     return builder_ == nullptr;
   }
 
-  // A symbol named while no arena was current.  Not a pending literal, which
-  // would materialise into the first graph it meets and put a zero where a
-  // symbol should be; this surfaces as errc::no_arena out of equation().
-  [[nodiscard]] static constexpr RTExpression poison() noexcept {
-    RTExpression e;
-    e.poisoned_ = true;
-    return e;
-  }
+  // Whether a symbol was named while no arena was current -- which surfaces as
+  // errc::no_arena out of equation(), rather than as a zero where a symbol
+  // should be.  What makes one is private; asking is not.
   [[nodiscard]] constexpr bool poisoned() const noexcept { return poisoned_; }
   [[nodiscard]] constexpr const T &literal() const noexcept { return lit_; }
-  [[nodiscard]] constexpr Builder<T> *builder() const noexcept {
-    return builder_;
-  }
 
   // Give the node an identity in `b`, materialising a pending literal.
   [[nodiscard]] constexpr NodeId id(Builder<T> &b) const {
@@ -120,6 +124,25 @@ public:
 #undef DDX_RT_BINFN
 
 private:
+  // The two an Equation needs of an expression it is being built from: which
+  // arena it names, and -- through poison() -- that it names none.  `var` is
+  // where the poison is made; nothing else has cause to make one.
+  template <typename... Ts> friend class impl::Equation;
+  template <impl::Numeric U>
+  friend RTExpression<U> var(std::string_view) noexcept;
+
+  [[nodiscard]] constexpr Builder<T> *builder() const noexcept {
+    return builder_;
+  }
+
+  // Not a pending literal, which would materialise into the first graph it
+  // meets and put a zero where a symbol should be.
+  [[nodiscard]] static constexpr RTExpression poison() noexcept {
+    RTExpression e;
+    e.poisoned_ = true;
+    return e;
+  }
+
   Builder<T> *builder_ = nullptr;
   NodeId id_ = no_node;
   T lit_{};
@@ -157,7 +180,7 @@ template <impl::Numeric T>
 } // namespace detail
 
 // The spelling a model uses; the two-argument form above is the primitive.
-template <impl::Numeric T = double>
+template <impl::Numeric T>
 [[nodiscard]] RTExpression<T> var(std::string_view name) noexcept {
   return (detail::current_arena<T> == nullptr)
              ? RTExpression<T>::poison()

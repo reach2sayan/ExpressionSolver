@@ -481,7 +481,7 @@ compiler is asked at all.
 | `backend` | `Interpret` | `Interpret` or `Compile`; choosing `Compile` starts the build |
 | `points` | `1` | the batch you intend to hand one call — stated, since the kernel is built before any call exists to infer it from |
 | `lanes` | `0` | points per loop iteration; `0` derives it from `points`, `1` is scalar |
-| `opt_level` | `2` | LLVM's IR pipeline, 0–3 |
+| `opt_level` | follows the build type | LLVM's IR pipeline, 0–3 — 3 in a Release build, 1 in a Debug one |
 | `codegen_level` | `1` | LLVM's codegen, 0–3 — the knob that trades kernel speed for compile time |
 | `slp` | `false` | SLP vectorisation: packs subexpressions within one point |
 | `loop_vectorize` | `false` | loop vectorisation, on a loop already emitted `lanes` wide |
@@ -498,6 +498,11 @@ vector width, and over a batch the reverse by 3x.
 eq.options({.backend = rt::Backend::Compile, .points = 1});     // a gradient per step
 eq.options({.backend = rt::Backend::Compile, .points = 4096});  // a batch at a time
 ```
+
+The compile is paid once and nothing waits for it: calls are interpreted until
+it lands. Codegen — instruction selection and register allocation — is 68–92% of
+it, which is why `codegen_level` and not `opt_level` is the knob that moves a
+compile time.
 
 ## Reference
 

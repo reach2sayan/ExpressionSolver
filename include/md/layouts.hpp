@@ -78,12 +78,6 @@ template <std::size_t Lead> struct layout_leading_simplex {
 
     [[nodiscard]] constexpr const Ext &extents() const noexcept { return ext_; }
 
-    // Cells per output block: C(N + Order - 1, Order).
-    [[nodiscard]] constexpr index_type block_size() const noexcept {
-      return static_cast<index_type>(detail::binomial_fixed<kOrder>(
-          static_cast<std::size_t>(ext_.extent(Lead)) + kOrder - 1));
-    }
-
     [[nodiscard]] constexpr index_type required_span_size() const noexcept {
       const index_type lead = std::ranges::fold_left(
           std::views::iota(std::size_t{0}, Lead), index_type{1},
@@ -135,6 +129,13 @@ template <std::size_t Lead> struct layout_leading_simplex {
     }
 
   private:
+    // Cells per output block: C(N + Order - 1, Order).  The packing is what
+    // this layout *is*; required_span_size and operator() are how it is asked.
+    [[nodiscard]] constexpr index_type block_size() const noexcept {
+      return static_cast<index_type>(detail::binomial_fixed<kOrder>(
+          static_cast<std::size_t>(ext_.extent(Lead)) + kOrder - 1));
+    }
+
     Ext ext_{};
   };
 };

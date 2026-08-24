@@ -116,7 +116,13 @@ template <Numeric D> struct SweepWorkspace {
       detail::no_inline_block> block;
   std::vector<D> heap;
 
-  // Storage valid until the next seed on this workspace.
+  [[nodiscard]] D *seed(const std::span<const double> x) {
+    return seed_with(x, [](const double v) { return D{v}; });
+  }
+
+private:
+  // Where the block or the vector is chosen.  Storage valid until the next
+  // seed on this workspace.
   template <std::regular_invocable<double> Make>
     requires std::convertible_to<std::invoke_result_t<Make &, double>, D>
   [[nodiscard]] D *seed_with(const std::span<const double> x, Make make) {
@@ -135,9 +141,6 @@ template <Numeric D> struct SweepWorkspace {
     }
     std::ranges::transform(x, heap.begin(), make);
     return heap.data();
-  }
-  [[nodiscard]] D *seed(const std::span<const double> x) {
-    return seed_with(x, [](const double v) { return D{v}; });
   }
 };
 

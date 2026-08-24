@@ -49,8 +49,6 @@ public:
     return to_dot(graph_.children(), describe(), scope_);
   }
 
-  void write(std::ostream &out) const { out << str(); }
-
 private:
   [[nodiscard]] std::vector<DotNode> describe() const {
     std::vector<char> is_output(graph_.size(), 0);
@@ -93,8 +91,7 @@ private:
   }
 
   friend std::ostream &operator<<(std::ostream &out, const Dot &d) {
-    d.write(out);
-    return out;
+    return out << d.str();
   }
 
   const Graph<T> &graph_;
