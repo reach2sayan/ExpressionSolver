@@ -28,7 +28,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <concepts>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -137,10 +139,7 @@ public:
     auto machine = machine_;
     machine.setCodeGenOptLevel(codegen_level_of(m));
     auto tm = machine.createTargetMachine();
-    if (!tm) {
-      return tm.takeError();
-    }
-    return llvm::orc::SimpleCompiler(**tm)(m);
+    return (!tm) ? tm.takeError() : llvm::orc::SimpleCompiler(**tm)(m);
   }
 
 private:
@@ -297,7 +296,7 @@ private:
   [[nodiscard]] result<llvm::orc::ThreadSafeModule>
   optimized(llvm::orc::ThreadSafeModule m) {
     const impl::scope_exit clock{
-        [this, start = Clock::now()] { rep_.optimize = Clock::now() - start; }};
+        [&, start = Clock::now()] { rep_.optimize = Clock::now() - start; }};
     // One machine per compile -- see Host.
     auto tm = host_.machine.createTargetMachine();
     if (!tm) {
@@ -311,6 +310,7 @@ private:
                            std::move(e));
       }
     });
+
     if (refused) {
       return std::unexpected{*refused};
     }
@@ -361,14 +361,28 @@ private:
 // join. A member completes before the enclosing object does, so compiling
 // inside one puts LLVM's entries strictly below ours however the members are
 // ordered, and the pool cannot be reached without having gone through it.
-// Templated only so it need not name Compiler::Impl, which is private.
-template <typename I> class Compiles : private impl::pinned {
+// Templated only so it need not name Compiler::Impl, which is private -- so
+// what it wants of `I` is spelled here rather than named: the one thing it does
+// with one is compile through it.
+template <typename I>
+  requires requires(const std::shared_ptr<I> &impl, const rt::Graph<double> &g,
+                    CompileReport &rep) {
+    { I::run(impl, g, Options{}, rep) } -> std::same_as<result<Kernel>>;
+  }
+class Compiles : private impl::pinned {
 public:
-  explicit Compiles(const std::shared_ptr<I> &impl) : warm_(impl) {}
+  // The pool every background compile runs on, brought up once and never torn
+  // down before the LLVM statics its workers touch.
+  [[nodiscard]] static Compiles &shared(const std::shared_ptr<I> &impl) {
+    static Compiles instance{impl};
+    return instance;
+  }
 
   [[nodiscard]] llvm::DefaultThreadPool &threads() noexcept { return threads_; }
 
 private:
+  explicit Compiles(const std::shared_ptr<I> &impl) : warm_(impl) {}
+
   // Constructing one compiles something, which is what makes LLVM register.
   // Any live Impl will do: what is being ordered is LLVM's statics, not this.
   struct Warm {
@@ -399,12 +413,6 @@ private:
   Warm warm_; // LLVM registers while this runs, so before we do
   llvm::DefaultThreadPool threads_;
 };
-
-template <typename I>
-[[nodiscard]] Compiles<I> &compiles(const std::shared_ptr<I> &impl) {
-  static Compiles<I> instance{impl};
-  return instance;
-}
 
 } // namespace
 
@@ -438,16 +446,15 @@ struct Compiler::Impl {
     // Named outright rather than reached through setNumCompileThreads, so the
     // backend runs on the thread that asked for the kernel and no idle pool is
     // spawned.
-    auto jit =
-        llvm::orc::LLJITBuilder()
-            .setJITTargetMachineBuilder(std::move(*jtmb))
-            .setCompileFunctionCreator(
-                [](llvm::orc::JITTargetMachineBuilder machine)
-                    -> llvm::Expected<std::unique_ptr<
-                        llvm::orc::IRCompileLayer::IRCompiler>> {
-                  return std::make_unique<LevelledCompiler>(std::move(machine));
-                })
-            .create();
+    auto compiler_factory = [](llvm::orc::JITTargetMachineBuilder machine)
+        -> llvm::Expected<
+            std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
+      return std::make_unique<LevelledCompiler>(std::move(machine));
+    };
+    auto jit = llvm::orc::LLJITBuilder()
+                   .setJITTargetMachineBuilder(std::move(*jtmb))
+                   .setCompileFunctionCreator(std::move(compiler_factory))
+                   .create();
     if (!jit) {
       return std::unexpected{
           as_error(errc::jit_target, "creating the JIT", jit.takeError())};
@@ -533,7 +540,7 @@ Compiler::compile_async(std::shared_ptr<const rt::Graph<double>> g,
   // its copy mid-compile is never the one that tears the shared state down --
   // doing that under a running compile crashes inside LLVM.  A std::function
   // has to be copyable, which a packaged_task is not, hence the shared_ptr.
-  compiles(impl_).threads().async([task, landing] { (*task)(); });
+  Compiles<Impl>::shared(impl_).threads().async([task, landing] { (*task)(); });
   return landing;
 }
 
