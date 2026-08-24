@@ -282,7 +282,7 @@ private:
       return std::nullopt;
     }
     // First match wins, as ops/algebra.hpp is ordered.
-    const auto *const r = std::ranges::find_if(
+    const auto r = std::ranges::find_if(
         impl::algebra::kRules, [&](const impl::algebra::Rule &rule) {
           return rule.op == *kind && impl::algebra::is_unary(rule) == unary &&
                  (!rule.needs_commutative_multiply ||

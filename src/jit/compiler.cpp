@@ -451,15 +451,16 @@ struct Compiler::Impl {
             std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
       return std::make_unique<LevelledCompiler>(std::move(machine));
     };
-    auto jit = llvm::orc::LLJITBuilder()
-                   .setJITTargetMachineBuilder(std::move(*jtmb))
-                   .setCompileFunctionCreator(std::move(compiler_factory))
-                   .create();
-    if (!jit) {
+    if (auto jit = llvm::orc::LLJITBuilder()
+                       .setJITTargetMachineBuilder(std::move(*jtmb))
+                       .setCompileFunctionCreator(std::move(compiler_factory))
+                       .create();
+        !jit) {
       return std::unexpected{
           as_error(errc::jit_target, "creating the JIT", jit.takeError())};
+    } else {
+      impl->jit = std::move(*jit);
     }
-    impl->jit = std::move(*jit);
 
     llvm::orc::JITDylib &jd = impl->jit->getMainJITDylib();
     const llvm::DataLayout &dl = impl->jit->getDataLayout();
@@ -471,13 +472,15 @@ struct Compiler::Impl {
           as_error(errc::jit_target, "defining libm", std::move(e))};
     }
 
-    auto procs =
-        llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(prefix);
-    if (!procs) {
+    if (auto procs =
+            llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+                prefix);
+        !procs) {
       return std::unexpected{as_error(
           errc::jit_target, "opening the process symbols", procs.takeError())};
+    } else {
+      jd.addGenerator(std::move(*procs));
     }
-    jd.addGenerator(std::move(*procs));
 
     // Not loaded in a program that never called it, so the generator above
     // cannot see it.  Loaded even though the default declines to use it: a
@@ -540,7 +543,8 @@ Compiler::compile_async(std::shared_ptr<const rt::Graph<double>> g,
   // its copy mid-compile is never the one that tears the shared state down --
   // doing that under a running compile crashes inside LLVM.  A std::function
   // has to be copyable, which a packaged_task is not, hence the shared_ptr.
-  Compiles<Impl>::shared(impl_).threads().async([task, landing] { (*task)(); });
+  Compiles<Impl>::shared(impl_).threads().async(
+      [task, landing] { std::invoke(*task); });
   return landing;
 }
 

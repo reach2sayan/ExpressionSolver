@@ -62,7 +62,7 @@ llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
 struct Lanes {
   unsigned width;
   llvm::Type *ty;
-  [[nodiscard]] bool vector() const noexcept { return width > 1; }
+  [[nodiscard]] constexpr bool vector() const noexcept { return width > 1; }
 };
 
 class Emitter {

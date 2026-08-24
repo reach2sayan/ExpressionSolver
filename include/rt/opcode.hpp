@@ -64,7 +64,7 @@ struct OpInfo {
 // Arity is which sub-table a row sits in, so the three groups fill one array in
 // three passes.  Each row lands at its own enumerator, so nothing depends on
 // the table order matching the enum's.
-inline constexpr std::array<OpInfo, op_count> op_info = [] {
+inline constexpr std::array op_info = [] {
   std::array<OpInfo, op_count> t{};
 #define DDX_RT_ROW(fn, Op, label, ...)                                         \
   t[static_cast<std::size_t>(OpCode::Op)] = {label, 0};

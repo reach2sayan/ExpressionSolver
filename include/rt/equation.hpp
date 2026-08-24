@@ -170,13 +170,13 @@ public:
   [[nodiscard]] constexpr result<std::vector<T>>
   jacobian(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform(
-        [this](const auto &at) { return harvest(derivative_.partial, at); });
+        [&](const auto &at) { return harvest(derivative_.partial, at); });
   }
 
   // Dense row-major m x n x n; the graph holds it compressed by colour.
   [[nodiscard]] result<std::vector<T>>
   hessian(const rt_detail::CPointArg<T> auto &...args) const {
-    return point(args...).transform([this](const auto &at) {
+    return point(args...).transform([&](const auto &at) {
       const auto &blocks = hessians_;
       const auto values = rt::evaluate_all(*arena_, at);
       const std::size_t n = symbol_count();
@@ -184,9 +184,9 @@ public:
       std::vector<T> out(output_dim * n * n);
       const impl::md::mdspan dense{
           out.data(), impl::md::dextents<std::size_t, 3>{output_dim, n, n}};
-      for (const auto [k, block] : std::views::enumerate(blocks)) {
-        for (const auto [i, j] : std::views::cartesian_product(
-                 std::views::iota(0uz, n), std::views::iota(0uz, n))) {
+      for (const auto [k, block] : blocks | std::views::enumerate) {
+        auto dims = std::views::iota(0uz, n);
+        for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
           dense[static_cast<std::size_t>(k), i, j] = values[block.at(i, j)];
         }
       }
@@ -204,17 +204,13 @@ public:
       return *this; // Asking for what is already running relaunches nothing.
     }
     options_ = opt;
-    // A fresh cache rather than a cleared one: a reader still holding a
-    // snapshot from the old configuration finishes against it, and the compile
-    // the old one had in flight is abandoned rather than waited for.
+    // A fresh cache rather than a cleared one:
     cache_ = std::make_unique<Cache>();
     // Choosing a backend is what starts the build, so that it overlaps whatever
-    // the caller does before their first call.  The values-and-Jacobian lane
-    // only: a caller who never asks for a Hessian should not compile one, and
-    // that lane prepares itself on first use as this one used to.
+    // the caller does before their first call.
     if (opt.backend != jit::Backend::Interpret && !poisoned()) {
       const std::unique_lock fill{cache_->plain.mutex};
-      prepare(cache_->plain, false);
+      prepare(cache_->plain, /*wants hessian =*/false);
     }
     return *this;
   }
@@ -422,9 +418,7 @@ private:
 #endif
   };
 
-  // One shape of graph, filled once and never invalidated -- which is what the
-  // single slot it replaces could not promise, since wanting a Hessian used to
-  // refill it and dangle whatever reference another call was holding.
+  // One shape of graph, filled once and never invalidated
   struct Lane {
     mutable std::shared_mutex mutex;
     std::shared_ptr<const Compiled> ready;
@@ -577,9 +571,8 @@ private:
       std::vector<T> at(symbols);
       std::vector<T> tape(arena_->size());
       for (const std::size_t i : std::views::iota(0uz, n)) {
-        for (const auto [j, column] : std::views::enumerate(xs)) {
-          at[static_cast<std::size_t>(j)] = column[i];
-        }
+        std::ranges::transform(xs, at.begin(),
+                               [i](const T *column) { return column[i]; });
         rt::evaluate_into(*arena_, at, order, std::span<T>{tape});
         for (const auto [columns, block] : std::views::zip(
                  std::array{f, g, h},
@@ -603,9 +596,8 @@ private:
       const std::size_t width = std::min(kLanes, n - base);
       for (const auto [j, column] : std::views::enumerate(xs)) {
         T *const dst = lanes.data() + static_cast<std::size_t>(j) * kLanes;
-        for (const std::size_t l : std::views::iota(0uz, kLanes)) {
-          dst[l] = column[base + std::min(l, width - 1)];
-        }
+        T *const tail = std::ranges::copy_n(column + base, width, dst).out;
+        std::ranges::fill(tail, dst + kLanes, column[base + width - 1]);
       }
       rt::evaluate_block<kLanes>(*arena_, std::span<const T>{lanes}, order,
                                  std::span<T>{tape});
@@ -614,18 +606,15 @@ private:
                std::array{f, g, h},
                std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
         for (const auto [column, o] : std::views::zip(columns, block)) {
-          const T *const src = tape.data() + std::size_t{o} * kLanes;
-          for (const std::size_t l : std::views::iota(0uz, width)) {
-            column[base + l] = src[l];
-          }
+          std::ranges::copy_n(tape.data() + std::size_t{o} * kLanes, width,
+                              column + base);
         }
       }
     }
   }
 
-  template <std::ranges::contiguous_range R>
-  static auto as_columns(const R &r) {
-    using Ptr = std::ranges::range_value_t<R>;
+  static auto as_columns(const std::ranges::contiguous_range auto &r) {
+    using Ptr = std::ranges::range_value_t<std::remove_cvref_t<decltype(r)>>;
     return std::span<Ptr const>{std::ranges::data(r), std::ranges::size(r)};
   }
 
@@ -678,8 +667,7 @@ private:
   // Swept once in the constructor and never touched again, which is the whole
   // of what makes the const members safe to call concurrently: rt::hessian
   // *appends to the arena*, and an arena a caller lent us may be lent to
-  // another Equation as well.  ~1.2M nodes and 350 ms for a 50-species mixture,
-  // against a graph build that would otherwise sweep it a second time.
+  // another Equation as well.
   std::vector<rt::Hessian> hessians_;
   // Owned outright -- nothing outside an Equation holds it -- which is also
   // what keeps a constant-evaluated Equation destructible: unique_ptr's
@@ -706,23 +694,20 @@ template <impl::Numeric T, typename... Ts>
   return impl::Equation<RTExpression<T>, Ts...>::create(first, rest...);
 }
 
-// Build an Equation without naming an arena:
+// Build an Equation:
 //
 //   const auto eq = ddx::rt::equation([] {
 //     const auto x = var("x");
 //     const auto y = var("y");
 //     return exp(x) * sin(y);
 //   });
-//
-// The arena is moved into the Equation, so it can be returned and stored where
-// one over a caller's Builder cannot.  equation() makes an arena current for
-// the callback's duration.  A range of expressions is a system.
-template <impl::Numeric T = double, std::invocable Assemble>
-[[nodiscard]] auto equation(Assemble &&assemble) {
+
+template <impl::Numeric T = double>
+[[nodiscard]] auto equation(std::invocable auto &&assemble) {
   auto arena = std::make_unique<Builder<T>>();
   auto built = [&] {
     const auto scope = detail::scoped_arena(*arena);
-    return std::forward<Assemble>(assemble)();
+    return std::invoke(std::forward<decltype(assemble)>(assemble));
   }();
 
   using Built = std::remove_cvref_t<decltype(built)>;

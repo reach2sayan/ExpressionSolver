@@ -97,7 +97,7 @@ template <COperation Op, CExpression A, CExpression B>
   if constexpr (!kind.has_value()) {
     return std::nullopt;
   } else {
-    const auto *const r = std::ranges::find_if(
+    const auto r = std::ranges::find_if(
         algebra::kRules, [kind](const algebra::Rule &rule) {
           return rule.op == *kind && !algebra::is_unary(rule) &&
                  (!rule.needs_commutative_multiply ||
