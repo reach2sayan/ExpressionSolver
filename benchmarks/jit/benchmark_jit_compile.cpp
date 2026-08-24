@@ -12,6 +12,7 @@
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
 #include "rt/graph.hpp"
+#include "util/ranges.hpp"
 
 #include <chrono>
 #include <charconv>
@@ -104,13 +105,37 @@ RE mse(std::span<const RE> x) {
   return mr + uniquac(x);
 }
 
+// Peng-Robinson's cubic in Z with van der Waals mixing; the last variable is Z.
+// Arithmetic only, where the other three are transcendental-heavy.
+RE pr(std::span<const RE> v) {
+  const auto x = v.first(v.size() - 1);
+  const RE &Z = v.back();
+  const std::size_t n = x.size();
+  RE a_mix = x[0] * x[0] * pseudo(0, 3, 0.3, 2.6);
+  for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t j = 0; j < n; ++j) {
+      const double aij = std::sqrt(pseudo(i, 3, 0.3, 2.6) * pseudo(j, 3, 0.3, 2.6)) *
+                         (1.0 - pseudo(i, j, 0.0, 0.12));
+      a_mix = a_mix + x[i] * x[j] * aij;
+    }
+  }
+  RE b_mix = x[0] * pseudo(0, 4, 0.02, 0.09);
+  for (std::size_t i = 1; i < n; ++i) {
+    b_mix = b_mix + x[i] * pseudo(i, 4, 0.02, 0.09);
+  }
+  const RE A = a_mix * 0.45724;
+  const RE B = b_mix * 0.07780;
+  return Z * Z * Z - (1.0 - B) * Z * Z + (A - 3.0 * B * B - 2.0 * B) * Z -
+         (A * B - B * B - B * B * B);
+}
+
 struct Model {
   std::string_view name;
   RE (*build)(std::span<const RE>);
 };
 
 constexpr Model kModels[] = {
-    {"rss", rss}, {"uniquac", uniquac}, {"mse", mse}};
+    {"rss", rss}, {"uniquac", uniquac}, {"pr", pr}, {"mse", mse}};
 
 // --- one cell ------------------------------------------------------------------
 
@@ -195,35 +220,30 @@ int main(int argc, char **argv) {
 
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg{argv[i]};
-    if (arg == "--lean") {
-      options.pipeline = ddx::jit::Pipeline::Lean;
-    } else if (arg == "--default-pipeline") {
-      options.pipeline = ddx::jit::Pipeline::Default;
+    if (arg.starts_with("--lanes=")) {
+      options.lanes = static_cast<unsigned>(std::strtoul(arg.data() + 8, nullptr, 10));
+    } else if (arg.starts_with("--opt=")) {
+      options.opt_level = static_cast<unsigned>(std::strtoul(arg.data() + 6, nullptr, 10));
+    } else if (arg.starts_with("--codegen=")) {
+      options.codegen_level = static_cast<unsigned>(std::strtoul(arg.data() + 10, nullptr, 10));
     } else if (arg == "--time-passes") {
       options.time_passes = true;
-    } else if (arg.starts_with("--split-above=")) {
-      options.split_above = std::strtoull(arg.data() + 14, nullptr, 10);
-    } else if (arg.starts_with("--slab-factor=")) {
-      options.slab_factor = std::strtoull(arg.data() + 14, nullptr, 10);
-    } else if (arg.starts_with("--min-slab=")) {
-      options.min_slab = std::strtoull(arg.data() + 11, nullptr, 10);
     } else if (arg.starts_with("--budget=")) {
       budget_s = std::strtod(arg.data() + 9, nullptr);
     } else if (arg.starts_with("--sizes=")) {
-      std::vector<std::size_t> v;
-      const std::string_view list = arg.substr(8);
-      for (std::size_t p = 0; p < list.size();) {
-        std::size_t value = 0;
-        const auto *const end = list.data() + list.size();
-        const auto r = std::from_chars(list.data() + p, end, value);
-        if (r.ec != std::errc{}) {
-          break;
-        }
-        v.push_back(value);
-        p = static_cast<std::size_t>(r.ptr - list.data()) + 1;
-      }
-      if (!v.empty()) {
-        sizes = v;
+      const auto parsed =
+          arg.substr(8) | std::views::split(',') |
+          std::views::transform([](const auto field) {
+            std::size_t value = 0;
+            std::from_chars(std::ranges::data(field),
+                            std::ranges::data(field) + std::ranges::size(field),
+                            value);
+            return value;
+          }) |
+          std::views::filter([](std::size_t n) { return n != 0; }) |
+          ddx::impl::to<std::vector<std::size_t>>();
+      if (!parsed.empty()) {
+        sizes = parsed;
       }
     }
   }
@@ -234,11 +254,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::printf("compile cost against graph size, budget %.0fs per cell\n\n",
-              budget_s);
-  std::printf("%-8s %5s %9s %10s %9s %9s %9s %9s %7s %10s %6s %9s\n", "model", "n",
+  std::printf("compile cost against graph size, budget %.0fs per cell, "
+              "lanes %u (0 = host), opt %u, codegen %u\n\n",
+              budget_s, options.lanes, options.opt_level,
+              options.codegen_level);
+  std::printf("%-8s %5s %9s %10s %9s %9s %9s %9s %7s %10s\n", "model", "n",
               "nodes", "ir instrs", "emit ms", "opt ms", "codegen ms",
-              "total ms", "slope", "kernel ns", "slabs", "scratch");
+              "total ms", "slope", "kernel ns");
 
   for (const auto &m : kModels) {
     std::vector<Cell> cells;
@@ -261,12 +283,11 @@ int main(int argc, char **argv) {
               : slope(cell.total_ms, cells.back().total_ms,
                       static_cast<double>(cell.report.nodes),
                       static_cast<double>(cells.back().report.nodes));
-      std::printf("%-8s %5zu %9zu %10zu %9.1f %9.1f %9.1f %9.1f %7.2f %10.1f %6zu %9zu\n",
+      std::printf("%-8s %5zu %9zu %10zu %9.1f %9.1f %9.1f %9.1f %7.2f %10.1f\n",
                   m.name.data(), n, cell.report.nodes, cell.report.instructions,
                   ms(cell.report.emit), ms(cell.report.optimize),
                   ms(cell.report.codegen), cell.total_ms, sl,
-                  kernel_ns_per_point(*kernel, n, 4096), cell.report.slabs,
-                  cell.report.scratch_slots);
+                  kernel_ns_per_point(*kernel, n, 4096));
       std::fflush(stdout);
 
       cells.push_back(cell);

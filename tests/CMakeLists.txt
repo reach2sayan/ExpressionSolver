@@ -16,7 +16,16 @@ add_executable(tests ${DDX_TEST_SOURCES})
 target_include_directories(tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(tests PRIVATE gtest_main ddx)
 ddx_target_flags(tests)
-gtest_discover_tests(tests)
+# libLLVM is a system library and will never be instrumented, so without
+# ignore_noninstrumented_modules every ORC internal is a report rather than a
+# finding.  Empty unless the sanitizer is on, so the calls below are unchanged.
+set(DDX_TEST_ENV "")
+if (DDX_SANITIZE STREQUAL "thread")
+    set(DDX_TEST_ENV PROPERTIES ENVIRONMENT
+        "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp:ignore_noninstrumented_modules=1")
+endif ()
+
+gtest_discover_tests(tests ${DDX_TEST_ENV})
 
 file(GLOB DDX_DUAL_TEST_SOURCES CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/dual/*.cpp")
@@ -24,7 +33,7 @@ add_executable(tests_dual ${DDX_DUAL_TEST_SOURCES})
 target_include_directories(tests_dual PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(tests_dual PRIVATE gtest_main ddx)
 ddx_target_flags(tests_dual)
-gtest_discover_tests(tests_dual)
+gtest_discover_tests(tests_dual ${DDX_TEST_ENV})
 
 # The batch tests are written once and have to give the same answers whether
 # they run interpreted or JIT-compiled, which is only checked if they actually
@@ -35,20 +44,26 @@ add_executable(tests_rt ${DDX_RT_TEST_SOURCES})
 target_link_libraries(tests_rt PRIVATE gtest_main ddx::rt)
 ddx_target_flags(tests_rt)
 ddx_runtime_deps(tests_rt)
-gtest_discover_tests(tests_rt)
+gtest_discover_tests(tests_rt ${DDX_TEST_ENV})
 
 if (DDX_BUILD_JIT)
     file(GLOB DDX_JIT_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/jit/*.cpp")
     add_executable(tests_jit ${DDX_JIT_TEST_SOURCES})
     target_link_libraries(tests_jit PRIVATE gtest_main ddx::jit)
-    # The partitioner is internal to the backend and names no LLVM type, so the
-    # unit test compiles that translation unit rather than reaching into libddx
-    # for a symbol hidden visibility keeps out of it.
-    target_sources(tests_jit PRIVATE ${CMAKE_SOURCE_DIR}/src/jit/partition.cpp)
-    target_include_directories(tests_jit PRIVATE ${CMAKE_SOURCE_DIR}/src/jit)
     ddx_target_flags(tests_jit)
     ddx_runtime_deps(tests_jit)
-    gtest_discover_tests(tests_jit)
+    gtest_discover_tests(tests_jit ${DDX_TEST_ENV})
+
+    # Its own process: what it checks is the exit, after main has returned, so
+    # the exit status is the assertion and gtest has no place in it.
+    add_executable(tests_jit_exit_stress jit/stress/exit_stress.cpp)
+    target_link_libraries(tests_jit_exit_stress PRIVATE ddx::jit)
+    ddx_target_flags(tests_jit_exit_stress)
+    ddx_runtime_deps(tests_jit_exit_stress)
+    add_test(NAME jit.exit_stress COMMAND tests_jit_exit_stress)
+    if (DDX_TEST_ENV)
+        set_tests_properties(jit.exit_stress ${DDX_TEST_ENV})
+    endif ()
 endif ()
 
 # --- packaging ---------------------------------------------------------------
@@ -61,7 +76,9 @@ endif ()
 # per case is slow, and it inherits neither our compiler pick nor our cache, so
 # everything it needs is passed explicitly below.
 option(DDX_TEST_PACKAGE "Build the out-of-tree consumer tests" ${PROJECT_IS_TOP_LEVEL})
-if (DDX_TEST_PACKAGE AND DDX_INSTALL)
+# Not under a sanitizer: these configure and build a consumer out of tree, and
+# an uninstrumented consumer cannot link an instrumented libddx.
+if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
     # rt and dual are in every build; only the backend is a question.
     set(DDX_PACKAGE_COMPONENTS rt dual)
     if (DDX_BUILD_JIT)

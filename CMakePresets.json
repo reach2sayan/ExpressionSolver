@@ -53,6 +53,17 @@
       ]
     },
     {
+      "name": "debug_jit_tsan",
+      "displayName": "Debug + JIT + ThreadSanitizer",
+      "description": "Everything in the tree instrumented, gtest included. libLLVM is not, so TSAN_OPTIONS carries ignore_noninstrumented_modules.",
+      "inherits": [
+        "debug_jit"
+      ],
+      "cacheVariables": {
+        "DDX_SANITIZE": "thread"
+      }
+    },
+    {
       "name": "release_jit",
       "displayName": "Release + JIT",
       "description": "The LLVM backend compiled into libddx. Kernels compile at -O3.",
@@ -74,6 +85,10 @@
     {
       "name": "debug_jit",
       "configurePreset": "debug_jit"
+    },
+    {
+      "name": "debug_jit_tsan",
+      "configurePreset": "debug_jit_tsan"
     },
     {
       "name": "release_jit",
@@ -105,6 +120,13 @@
       "name": "debug_jit",
       "inherits": "tbase",
       "configurePreset": "debug_jit"
+    },
+    {
+      "name": "debug_jit_tsan",
+      "configurePreset": "debug_jit_tsan",
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "release_jit",

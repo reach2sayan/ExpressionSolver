@@ -36,7 +36,8 @@ set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release t
 # Function::lookupIntrinsicID, which 20 removed, so no one spelling compiles
 # against both.  And sys::getHostCPUFeatures() returns bool through an out
 # parameter in 18 where 20 returns the StringMap by value, which compiler.cpp
-# relies on.
+# relies on.  Above 20 the ceiling is real too: 21 replaces the `nocapture`
+# attribute codegen.cpp sets with `captures(none)`.
 set(DDX_LLVM_VERSION_MIN 20)
 set(DDX_LLVM_VERSION_MAX 20)
 

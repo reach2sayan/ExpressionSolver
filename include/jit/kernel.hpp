@@ -5,15 +5,15 @@
 #include "util/export.hpp"
 #include "util/pinned.hpp"
 
-#include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <future>
 #include <memory>
 #include <span>
 #include <string>
-#include <vector>
 
 namespace ddx::rt {
 // The JIT emits machine types, so only a graph over a machine scalar compiles.
@@ -23,18 +23,11 @@ template <impl::Numeric T> class Graph;
 
 namespace ddx::jit {
 
-// Which vector math library the loop vectoriser may call.  Off by default:
-// glibc's vector routines are documented to ~4 ULP where the scalar ones are
-// ~0.5, and a kernel is checked against the interpreter, which calls the scalar
-// ones.  Asking for one is asking for that trade.
+// Which vector math library a transcendental over a vector of lanes may call.
+// Off by default: glibc's vector routines are documented to ~4 ULP where the
+// scalar ones are ~0.5, and a kernel is checked against the interpreter, which
+// calls the scalar ones.  Asking for one is asking for that trade.
 enum class VecLib : std::uint8_t { None, Auto, Libmvec };
-
-// Lean drops the two vectorisers.  On a large body the loop vectoriser is 95%
-// of the pass pipeline and then declines to vectorise -- dropping it took one
-// measured graph from 17.6s to 0.3s at no cost to throughput.  On a small one
-// it succeeds and is worth 1.5-2.2x, so Auto keeps it there and errs high:
-// choosing Default wrongly costs compile time, the reverse costs kernel speed.
-enum class Pipeline : std::uint8_t { Auto, Default, Lean };
 
 // Carries text where the library's other errors do not: LLVM's are not one of
 // a fixed set.
@@ -55,28 +48,54 @@ template <typename T> using result = std::expected<T, error>;
 inline constexpr unsigned default_opt_level = DDX_JIT_DEFAULT_OPT;
 inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 
+// Whether an equation compiles its graph.  Not named Auto: nothing decides, and
+// deciding would need the one thing an equation does not know -- how many times
+// the kernel will be called, which is what a compile has to repay.  Interpret is
+// a real alternative, the block sweep running within ~1.4x of a kernel with no
+// compiler involved -- which is also what makes Background worth having: the
+// compile leaves the critical path and the sweep covers until it lands.
+//
+// Background alone moves results in the last bits at the moment the kernel
+// arrives: the kernel contracts a multiply and an add into an FMA where the
+// sweep evaluates them separately, so the two agree to rounding rather than to
+// the bit.  A loop running across that point sees a ULP or two of movement.
+//
+// A compile still in flight when the process exits is joined then, not
+// abandoned: dropping the equation costs nothing, exiting waits for LLVM.
+enum class Backend : std::uint8_t { Compile, Background, Interpret };
+
 struct Options {
-  // Never 0: that disables the loop vectoriser
+  // Read by Equation::freeze(), never by Compiler::compile(), which is asked
+  // outright.
+  Backend backend = Backend::Compile;
+  // Points per loop iteration: the body is emitted over <lanes x double>.
+  // 0 is the host's widest vector register in doubles -- 4 on AVX2, 8 on
+  // AVX-512 -- and 1 is scalar.  Any width compiles; the backend splits a
+  // vector the host cannot hold.  Every width gives the same bits: the lanes
+  // are independent IEEE operations, and a transcendental is the same scalar
+  // libm call per lane.
+  unsigned lanes = 0;
+  // 0 runs no IR passes at all.  Anything else runs the same short pipeline:
+  // the body is straight-line and already shared by the graph, so what is
+  // left for the middle end is folding, and the levels do not differ in it.
   unsigned opt_level = default_opt_level;
+  // LLVM's codegen level, 0 to 3.  Instruction selection and register
+  // allocation are ~95% of a compile, so this is the knob that trades kernel
+  // speed for compile time, and it is a wide trade: on the gradient of a
+  // 128-species electrolyte model, 0 compiles 8.9x faster and runs 1.6x
+  // slower.  0 selects the fast register allocator and the fast instruction
+  // selector, which does not form FMAs -- so its results differ from the other
+  // levels' in the last bits, where 1, 2 and 3 agree with each other.
+  unsigned codegen_level = 2;
   VecLib veclib = VecLib::None;
   bool contract = default_contract; // Follows DDX_FP_FLAGS
   // Per-pass timing to stderr, through LLVM's own TimePassesHandler.  Off by
   // default: it is a diagnostic for whoever is asking why a compile is slow,
   // and it prints where nothing else in the library does.
   bool time_passes = false;
-  Pipeline pipeline = Pipeline::Auto;
-  // Where Auto turns over, in IR instructions after emission.
-  std::size_t lean_above = 2000;
 
-  // Emit as slabs above this many live nodes; 0 never splits.  Each is
-  // allocated and compiled on its own, at the price of crossing values going
-  // through memory.  Off by default: it measured as a loss at every size
-  // reachable in reasonable time.
-  std::size_t split_above = 0;
-  // Slab size as a multiple of the peak wavefront, which bounds traffic per
-  // node at 2 / slab_factor whatever the graph looks like.
-  std::size_t slab_factor = 10;
-  std::size_t min_slab = 4096;
+  // What Equation::options() compares before discarding a compiled kernel.
+  friend bool operator==(const Options &, const Options &) = default;
 };
 
 // Where a compile spent its time.  `codegen` brackets the symbol lookup too:
@@ -87,8 +106,6 @@ struct CompileReport {
   std::chrono::nanoseconds emit{};
   std::chrono::nanoseconds optimize{};
   std::chrono::nanoseconds codegen{};
-  std::size_t slabs = 1;         // modules emitted; more than one when split
-  std::size_t scratch_slots = 0; // values crossing a slab boundary
 };
 
 // One compiled graph.  A copy is one atomic increment: a Kernel keeps the JIT
@@ -97,15 +114,6 @@ class Kernel {
 public:
   using function_type = void (*)(const double *const *, double *const *,
                                  double *const *, double *const *, std::size_t);
-  // The same, plus the scratch a slab reads its inputs from and leaves its
-  // outputs in.
-  using slab_type = void (*)(const double *const *, double *const *,
-                             double *const *, double *const *, double *,
-                             std::size_t, std::size_t);
-
-  // Scratch is slots * block, so the block is what keeps it in cache --
-  // whole-batch scratch on a large graph is tens of megabytes.
-  static constexpr std::size_t kScratchBudget = 1u << 18; // 256 KiB
 
   Kernel() = default;
   Kernel(function_type fn, std::size_t arity, std::size_t values,
@@ -114,63 +122,21 @@ public:
       : fn_(fn), code_(std::move(code)), arity_(arity), values_(values),
         jacobian_(jacobian), hessian_(hessian) {}
 
-  Kernel(std::vector<slab_type> slabs, std::size_t slots, std::size_t arity,
-         std::size_t values, std::size_t jacobian, std::size_t hessian,
-         std::shared_ptr<void> code) noexcept
-      : code_(std::move(code)), slabs_(std::move(slabs)), slots_(slots),
-        block_(slots == 0
-                   ? std::size_t{256}
-                   : std::clamp(kScratchBudget / (slots * sizeof(double)),
-                                std::size_t{8}, std::size_t{256})),
-        arity_(arity), values_(values), jacobian_(jacobian), hessian_(hessian) {
-  }
-
   // xs[j] is the column for symbol j, g[j] the partial in it, each of length n;
   // a block that was not requested is `{}`.  noexcept because codegen marks the
   // kernel and every libm declaration it calls nounwind.
   void operator()(std::span<const double *const> xs, std::span<double *const> f,
                   std::span<double *const> g, std::span<double *const> h,
                   std::size_t n) const noexcept {
-    if (slabs_.empty()) {
-      fn_(xs.data(), f.data(), g.data(), h.data(), n);
-      return;
-    }
-    // One buffer per thread, so a split kernel stays as callable as an unsplit
-    // one; a caller who cannot allocate here passes its own below.
-    static thread_local std::vector<double> scratch;
-    if (scratch.size() < scratch_size(n)) {
-      scratch.resize(scratch_size(n));
-    }
-    (*this)(xs, f, g, h, n, scratch);
+    // The ABI takes bare pointers; the spans are what say the column count was
+    // right.  A mismatch past here is silent memory corruption.
+    assert(xs.size() == arity_ && f.size() == values_ &&
+           g.size() == jacobian_ && h.size() == hessian_);
+    fn_(xs.data(), f.data(), g.data(), h.data(), n);
   }
-
-  // Every slab over one block, then the next: crossings stay hot in scratch,
-  // and a slab's code is touched once per block rather than once per point.
-  void operator()(std::span<const double *const> xs, std::span<double *const> f,
-                  std::span<double *const> g, std::span<double *const> h,
-                  std::size_t n, std::span<double> scratch) const noexcept {
-    if (slabs_.empty()) {
-      fn_(xs.data(), f.data(), g.data(), h.data(), n);
-      return;
-    }
-    for (std::size_t base = 0; base < n; base += block_) {
-      const std::size_t len = std::min(block_, n - base);
-      for (const slab_type slab : slabs_) {
-        slab(xs.data(), f.data(), g.data(), h.data(), scratch.data(), base,
-             len);
-      }
-    }
-  }
-
-  // What the overload above needs for a batch of n, in doubles; zero unsplit.
-  [[nodiscard]] std::size_t scratch_size(std::size_t n) const noexcept {
-    return slots_ * std::min(block_, n);
-  }
-  [[nodiscard]] std::size_t block() const noexcept { return block_; }
-  [[nodiscard]] std::size_t slabs() const noexcept { return slabs_.size(); }
 
   [[nodiscard]] explicit operator bool() const noexcept {
-    return fn_ != nullptr || !slabs_.empty();
+    return fn_ != nullptr;
   }
   [[nodiscard]] std::size_t arity() const noexcept { return arity_; }
   [[nodiscard]] std::size_t values() const noexcept { return values_; }
@@ -187,9 +153,6 @@ public:
 private:
   function_type fn_ = nullptr;
   std::shared_ptr<void> code_; // Held, never read; operator() calls through fn_
-  std::vector<slab_type> slabs_;
-  std::size_t slots_ = 0;
-  std::size_t block_ = 1;
   std::size_t arity_ = 0;
   std::size_t values_ = 0;
   std::size_t jacobian_ = 0;
@@ -213,6 +176,13 @@ public:
   [[nodiscard]] DDX_JIT_API result<Kernel>
   compile(const rt::Graph<double> &g, const Options &opt = {},
           CompileReport *report = nullptr);
+
+  // The same compile, off the calling thread.  The graph is shared rather than
+  // borrowed because the compile outlives this call, and the future is one
+  // whose destructor does not join: dropping it abandons the result, it does
+  // not wait for it.
+  [[nodiscard]] DDX_JIT_API std::shared_future<result<Kernel>>
+  compile_async(std::shared_ptr<const rt::Graph<double>> g, Options opt = {});
 
 private:
   struct Impl;

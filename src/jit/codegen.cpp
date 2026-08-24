@@ -1,11 +1,13 @@
 #include "codegen.hpp"
 
 #include <llvm/ADT/Twine.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/Alignment.h>
 
 #include <algorithm>
 #include <array>
@@ -38,7 +40,7 @@ llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
 }
 
 // memory(none) is the IR spelling of -fno-math-errno: without it a call is
-// assumed to write errno, which blocks hoisting and vectorisation.
+// assumed to write errno, which blocks hoisting across it.
 llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
                           unsigned args) {
   llvm::Type *f64 = llvm::Type::getDoubleTy(m.getContext());
@@ -53,9 +55,52 @@ llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
   return fn;
 }
 
+// What one loop iteration carries: W points, as a double when W is 1 and as
+// <W x double> otherwise.  Every IRBuilder operation the body uses is typed on
+// `ty`, so the emitter reads the same at either width; only the memory
+// accesses and the calls with no vector intrinsic tell the two apart.
+struct Lanes {
+  unsigned width;
+  llvm::Type *ty;
+  [[nodiscard]] bool vector() const noexcept { return width > 1; }
+};
+
 class Emitter {
 public:
-  Emitter(llvm::Module &m, llvm::IRBuilder<> &b) : m_(m), b_(b) {}
+  Emitter(llvm::Module &m, llvm::IRBuilder<> &b, Lanes lanes)
+      : m_(m), b_(b), lanes_(lanes) {}
+
+  // A splat where the lane type is a vector.
+  [[nodiscard]] llvm::Value *constant(double v) const {
+    return llvm::ConstantFP::get(lanes_.ty, v);
+  }
+
+  // Columns are plain double*, so no alignment past the element's is claimed.
+  // A vector load past the batch reads its inactive lanes as 1.0: they are
+  // never stored, and 1.0 sits inside every op's domain, so a scalarised libm
+  // call on them cannot land on a pole.
+  [[nodiscard]] llvm::Value *load(llvm::Value *column, llvm::Value *index,
+                                  llvm::Value *mask,
+                                  const llvm::Twine &name) const {
+    llvm::Value *const at =
+        b_.CreateInBoundsGEP(b_.getDoubleTy(), column, index);
+    if (!lanes_.vector()) {
+      return b_.CreateLoad(lanes_.ty, at, name);
+    }
+    return b_.CreateMaskedLoad(lanes_.ty, at, llvm::Align(alignof(double)),
+                               mask, constant(1.0), name);
+  }
+
+  void store(llvm::Value *v, llvm::Value *column, llvm::Value *index,
+             llvm::Value *mask) const {
+    llvm::Value *const at =
+        b_.CreateInBoundsGEP(b_.getDoubleTy(), column, index);
+    if (!lanes_.vector()) {
+      b_.CreateStore(v, at);
+      return;
+    }
+    b_.CreateMaskedStore(v, at, llvm::Align(alignof(double)), mask);
+  }
 
   llvm::Value *unary(rt::OpCode op, llvm::Value *u) const {
     if (op == rt::OpCode::Neg) {
@@ -64,13 +109,11 @@ public:
     if (op == rt::OpCode::Sign) {
       // u > 0 ? 1 : u < 0 ? -1 : u - u.  The last arm reaches only ±0 and
       // NaN, giving 0 and NaN as sign_impl does.
-      llvm::Type *const f64 = b_.getDoubleTy();
-      llvm::Value *const zero = llvm::ConstantFP::get(f64, 0.0);
-      return b_.CreateSelect(b_.CreateFCmpOGT(u, zero),
-                             llvm::ConstantFP::get(f64, 1.0),
-                             b_.CreateSelect(b_.CreateFCmpOLT(u, zero),
-                                             llvm::ConstantFP::get(f64, -1.0),
-                                             b_.CreateFSub(u, u)));
+      llvm::Value *const zero = constant(0.0);
+      return b_.CreateSelect(
+          b_.CreateFCmpOGT(u, zero), constant(1.0),
+          b_.CreateSelect(b_.CreateFCmpOLT(u, zero), constant(-1.0),
+                          b_.CreateFSub(u, u)));
     }
     return call(op, {u});
   }
@@ -89,20 +132,36 @@ public:
   }
 
 private:
+  // An intrinsic is declared on the lane type and left to the backend, which
+  // unrolls a vector libcall it has no other lowering for; a libm function has
+  // only its scalar entry point, so a vector operand is unrolled here.
   llvm::Value *call(rt::OpCode op, llvm::ArrayRef<llvm::Value *> args) const {
     const llvm::Intrinsic::ID id = intrinsic_for(op);
     if (id != llvm::Intrinsic::not_intrinsic) {
       return b_.CreateCall(
-          llvm::Intrinsic::getOrInsertDeclaration(&m_, id, {b_.getDoubleTy()}),
-          args);
+          llvm::Intrinsic::getOrInsertDeclaration(&m_, id, {lanes_.ty}), args);
     }
-    return b_.CreateCall(
-        libm_decl(m_, rt::label_of(op), static_cast<unsigned>(args.size())),
-        args);
+    llvm::Function *const fn =
+        libm_decl(m_, rt::label_of(op), static_cast<unsigned>(args.size()));
+    return lanes_.vector() ? scalarised(fn, args) : b_.CreateCall(fn, args);
+  }
+
+  llvm::Value *scalarised(llvm::Function *fn,
+                          llvm::ArrayRef<llvm::Value *> args) const {
+    llvm::Value *out = llvm::PoisonValue::get(lanes_.ty);
+    for (const unsigned lane : std::views::iota(0u, lanes_.width)) {
+      llvm::SmallVector<llvm::Value *, 2> scalar;
+      for (llvm::Value *const a : args) {
+        scalar.push_back(b_.CreateExtractElement(a, lane));
+      }
+      out = b_.CreateInsertElement(out, b_.CreateCall(fn, scalar), lane);
+    }
+    return out;
   }
 
   llvm::Module &m_;
   llvm::IRBuilder<> &b_;
+  Lanes lanes_;
 };
 
 llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
@@ -119,8 +178,10 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   for (const auto [i, arg_name] : names | std::views::enumerate) {
     fn->getArg(static_cast<unsigned>(i))->setName(arg_name);
   }
-  // Saying the columns never alias is what lets the vectoriser skip its
-  // runtime overlap check.
+  // These describe the four pointer *arrays*.  The columns they hold are
+  // reached through a load, so no attribute here can say anything about them,
+  // and in particular the kernel is not argmemonly: its data lives behind
+  // pointers it loads, not in argument memory.
   for (const unsigned i : std::views::iota(0u, 4u)) {
     fn->addParamAttr(i, llvm::Attribute::NoAlias);
     fn->addParamAttr(i, llvm::Attribute::NoCapture);
@@ -131,7 +192,6 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   // calls.  Kernel::operator() matches.
   fn->setDoesNotThrow();
   fn->setWillReturn();
-  fn->setMemoryEffects(llvm::MemoryEffects::argMemOnly());
   return fn;
 }
 
@@ -175,23 +235,19 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
           .hessian = load_columns(3, layout.hessian, "h")};
 }
 
-// Ids are topological, so one pass needs no worklist.  `value` is carried in
-// so a slab can seed it from scratch first.
-void emit_nodes_into(const Emitter &emit, llvm::IRBuilder<> &b,
-                     const rt::Graph<double> &g,
-                     std::span<const rt::NodeId> nodes, const Columns &cols,
-                     llvm::Value *index, std::vector<llvm::Value *> &value) {
-  llvm::Type *const f64 = b.getDoubleTy();
-  for (const rt::NodeId v : nodes) {
+// Ids are topological, so one pass needs no worklist.
+[[nodiscard]] std::vector<llvm::Value *>
+emit_nodes(const Emitter &emit, const rt::Graph<double> &g, const Columns &cols,
+           llvm::Value *index, llvm::Value *mask) {
+  std::vector<llvm::Value *> value(g.size(), nullptr);
+  for (const rt::NodeId v : g.live_order()) {
     const auto &p = g[v];
     const auto operands = g.operands(v);
     switch (rt::arity_of(p.op)) {
     case 0:
-      value[v] =
-          p.op == rt::OpCode::Const
-              ? llvm::cast<llvm::Value>(llvm::ConstantFP::get(f64, p.value))
-              : b.CreateLoad(
-                    f64, b.CreateInBoundsGEP(f64, cols.inputs[p.slot], index));
+      value[v] = p.op == rt::OpCode::Const
+                     ? emit.constant(p.value)
+                     : emit.load(cols.inputs[p.slot], index, mask, "");
       break;
     case 1:
       value[v] = emit.unary(p.op, value[operands[0]]);
@@ -201,180 +257,74 @@ void emit_nodes_into(const Emitter &emit, llvm::IRBuilder<> &b,
       break;
     }
   }
-}
-
-[[nodiscard]] std::vector<llvm::Value *> emit_nodes(const Emitter &emit,
-                                                    llvm::IRBuilder<> &b,
-                                                    const rt::Graph<double> &g,
-                                                    const Columns &cols,
-                                                    llvm::Value *index) {
-  std::vector<llvm::Value *> value(g.size(), nullptr);
-  emit_nodes_into(emit, b, g, g.live_order(), cols, index, value);
   return value;
 }
 
-void emit_stores(llvm::IRBuilder<> &b, const rt::Graph<double> &g,
+void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
                  const Columns &cols, std::span<llvm::Value *const> value,
-                 llvm::Value *index) {
-  llvm::Type *const f64 = b.getDoubleTy();
+                 llvm::Value *index, llvm::Value *mask) {
   const auto blocks = g.output_blocks();
-
   const auto store_block = [&](const std::vector<llvm::Value *> &columns,
                                std::span<const rt::NodeId> block) {
     for (const auto [column, o] : std::views::zip(columns, block)) {
-      b.CreateStore(value[o], b.CreateInBoundsGEP(f64, column, index));
+      emit.store(value[o], column, index, mask);
     }
   };
   store_block(cols.values, blocks.values);
   store_block(cols.jacobian, blocks.jacobian);
   store_block(cols.hessian, blocks.hessian);
-}
-
-// xs, f, g, h, scratch, offset, n.  A slab runs over a block of the batch, so
-// scratch is sized by the block and stays in cache; sizing it by the batch
-// streams tens of megabytes past every cache instead.
-llvm::Function *declare_slab(llvm::Module &m, llvm::StringRef name) {
-  llvm::LLVMContext &ctx = m.getContext();
-  llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
-  llvm::PointerType *const ptr = llvm::PointerType::getUnqual(ctx);
-  auto *const fty = llvm::FunctionType::get(
-      llvm::Type::getVoidTy(ctx), {ptr, ptr, ptr, ptr, ptr, i64, i64}, false);
-  auto *const fn =
-      llvm::Function::Create(fty, llvm::Function::ExternalLinkage, name, m);
-
-  static constexpr std::array names{"xs",      "f",      "g", "h",
-                                    "scratch", "offset", "n"};
-  for (const auto [i, arg_name] : names | std::views::enumerate) {
-    fn->getArg(static_cast<unsigned>(i))->setName(arg_name);
-  }
-  for (const unsigned i : std::views::iota(0u, 5u)) {
-    fn->addParamAttr(i, llvm::Attribute::NoAlias);
-    fn->addParamAttr(i, llvm::Attribute::NoCapture);
-  }
-  fn->addParamAttr(0, llvm::Attribute::ReadOnly);
-  fn->setDoesNotThrow();
-  fn->setWillReturn();
-  fn->setMemoryEffects(llvm::MemoryEffects::argMemOnly());
-  return fn;
-}
-
-// slot-major, so one slot's points are contiguous the way a slab walks them.
-llvm::Value *scratch_at(llvm::IRBuilder<> &b, llvm::Value *scratch,
-                        std::size_t slot, llvm::Value *count,
-                        llvm::Value *index) {
-  llvm::Type *const i64 = b.getInt64Ty();
-  llvm::Value *const base =
-      b.CreateMul(llvm::ConstantInt::get(i64, slot), count);
-  return b.CreateInBoundsGEP(b.getDoubleTy(), scratch,
-                             b.CreateAdd(base, index));
 }
 
 } // namespace
 
-std::unique_ptr<llvm::Module> emit_slab(llvm::LLVMContext &ctx,
-                                        const rt::Graph<double> &g,
-                                        const Partition &p, std::size_t slab,
-                                        const Options &opt,
-                                        llvm::StringRef name) {
-  auto m = std::make_unique<llvm::Module>("ddx.jit", ctx);
-  llvm::Function *const fn = declare_slab(*m, name);
-  llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
-  llvm::Type *const f64 = llvm::Type::getDoubleTy(ctx);
-  llvm::Argument *const scratch = fn->getArg(4);
-  llvm::Argument *const offset = fn->getArg(5);
-  llvm::Argument *const count = fn->getArg(6);
-  const Slab &s = p.slabs[slab];
-
-  auto *const entry = llvm::BasicBlock::Create(ctx, "entry", fn);
-  auto *const loop = llvm::BasicBlock::Create(ctx, "loop", fn);
-  auto *const exit = llvm::BasicBlock::Create(ctx, "exit", fn);
-  const llvm::FastMathFlags fmf = flags_for(opt);
-
-  llvm::IRBuilder<> b(entry);
-  b.setFastMathFlags(fmf);
-  const Columns cols = hoist_columns(b, *fn, g);
-  b.CreateCondBr(b.CreateICmpEQ(count, llvm::ConstantInt::get(i64, 0)), exit,
-                 loop);
-
-  b.SetInsertPoint(loop);
-  b.setFastMathFlags(fmf);
-  llvm::PHINode *const index = b.CreatePHI(i64, 2, "i");
-  index->addIncoming(llvm::ConstantInt::get(i64, 0), entry);
-
-  // What earlier slabs left, before anything reads it.
-  std::vector<llvm::Value *> value(g.size(), nullptr);
-  for (const rt::NodeId v : s.live_in) {
-    value[v] =
-        b.CreateLoad(f64, scratch_at(b, scratch, p.slot[v], count, index));
-  }
-
-  llvm::Value *const column_index = b.CreateAdd(offset, index);
-  const Emitter emit(*m, b);
-  emit_nodes_into(emit, b, g, s.nodes, cols, column_index, value);
-
-  for (const rt::NodeId v : s.live_out) {
-    b.CreateStore(value[v], scratch_at(b, scratch, p.slot[v], count, index));
-  }
-
-  // Every output stored exactly once, by whichever slab computes it.
-  const auto mine = [&](rt::NodeId v) { return value[v] != nullptr; };
-  const auto blocks = g.output_blocks();
-  const auto store_block = [&](const std::vector<llvm::Value *> &columns,
-                               std::span<const rt::NodeId> block) {
-    for (const auto [column, o] : std::views::zip(columns, block)) {
-      if (mine(o)) {
-        b.CreateStore(value[o], b.CreateInBoundsGEP(f64, column, column_index));
-      }
-    }
-  };
-  store_block(cols.values, blocks.values);
-  store_block(cols.jacobian, blocks.jacobian);
-  store_block(cols.hessian, blocks.hessian);
-
-  llvm::Value *const next =
-      b.CreateAdd(index, llvm::ConstantInt::get(i64, 1), "i.next");
-  index->addIncoming(next, loop);
-  b.CreateCondBr(b.CreateICmpEQ(next, count), exit, loop);
-
-  b.SetInsertPoint(exit);
-  b.CreateRetVoid();
-
-  return llvm::verifyFunction(*fn, &llvm::errs()) ? nullptr : std::move(m);
-}
-
 std::unique_ptr<llvm::Module> emit_module(llvm::LLVMContext &ctx,
                                           const rt::Graph<double> &g,
                                           const Options &opt,
-                                          llvm::StringRef name) {
+                                          llvm::StringRef name,
+                                          const unsigned width) {
   auto m = std::make_unique<llvm::Module>("ddx.jit", ctx);
   llvm::Function *const fn = declare_kernel(*m, name);
   llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
+  llvm::Type *const f64 = llvm::Type::getDoubleTy(ctx);
   llvm::Argument *const count = fn->getArg(4);
+  const Lanes lanes{
+      .width = width,
+      .ty = width > 1 ? llvm::FixedVectorType::get(f64, width) : f64};
 
   auto *const entry = llvm::BasicBlock::Create(ctx, "entry", fn);
   auto *const loop = llvm::BasicBlock::Create(ctx, "loop", fn);
   auto *const exit = llvm::BasicBlock::Create(ctx, "exit", fn);
-  const llvm::FastMathFlags fmf = flags_for(opt);
 
   llvm::IRBuilder<> b(entry);
-  b.setFastMathFlags(fmf);
+  b.setFastMathFlags(flags_for(opt));
   const Columns cols = hoist_columns(b, *fn, g);
   b.CreateCondBr(b.CreateICmpEQ(count, llvm::ConstantInt::get(i64, 0)), exit,
                  loop);
 
   b.SetInsertPoint(loop);
-  b.setFastMathFlags(fmf);
   llvm::PHINode *const index = b.CreatePHI(i64, 2, "i");
   index->addIncoming(llvm::ConstantInt::get(i64, 0), entry);
 
-  const Emitter emit(*m, b);
-  const std::vector<llvm::Value *> value = emit_nodes(emit, b, g, cols, index);
-  emit_stores(b, g, cols, value, index);
+  // Lane k is live while k < n - i.  A signed compare, on purpose: both sides
+  // are non-negative, and it is one instruction where the unsigned,
+  // saturating llvm.get.active.lane.mask is a dozen on AVX2.
+  llvm::Value *mask = nullptr;
+  if (lanes.vector()) {
+    llvm::Value *const remaining = b.CreateSub(count, index, "remaining");
+    llvm::Value *const step =
+        b.CreateStepVector(llvm::FixedVectorType::get(i64, width));
+    mask = b.CreateICmpSLT(step, b.CreateVectorSplat(width, remaining), "mask");
+  }
+
+  const Emitter emit(*m, b, lanes);
+  const std::vector<llvm::Value *> value =
+      emit_nodes(emit, g, cols, index, mask);
+  emit_stores(emit, g, cols, value, index, mask);
 
   llvm::Value *const next =
-      b.CreateAdd(index, llvm::ConstantInt::get(i64, 1), "i.next");
+      b.CreateAdd(index, llvm::ConstantInt::get(i64, width), "i.next");
   index->addIncoming(next, loop);
-  b.CreateCondBr(b.CreateICmpEQ(next, count), exit, loop);
+  b.CreateCondBr(b.CreateICmpUGE(next, count), exit, loop);
 
   b.SetInsertPoint(exit);
   b.CreateRetVoid();

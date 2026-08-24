@@ -47,6 +47,22 @@ else ()
     set(DDX_WARNINGS -Wall -Wextra -Wpedantic -Wfatal-errors)
 endif ()
 
+# A sanitizer has to instrument everything in the tree, gtest included, or its
+# reports are unreliable -- so this goes on globally rather than through
+# ddx_target_flags().  MSVC has no TSan and only a partial ASan, so the option is
+# a no-op there rather than a hard error: a preset that asks for it should still
+# configure on Windows.
+set(DDX_SANITIZE "off" CACHE STRING "off | thread | address | undefined")
+set_property(CACHE DDX_SANITIZE PROPERTY STRINGS off thread address undefined)
+if (NOT DDX_SANITIZE STREQUAL "off")
+    if (MSVC)
+        message(WARNING "DDX_SANITIZE=${DDX_SANITIZE} ignored: MSVC has no such sanitizer")
+    else ()
+        add_compile_options(-fsanitize=${DDX_SANITIZE} -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=${DDX_SANITIZE})
+    endif ()
+endif ()
+
 # Our own targets only -- never the INTERFACE library, which must not push flags
 # onto a consumer.
 function(ddx_target_flags target)

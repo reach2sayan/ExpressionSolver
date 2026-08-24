@@ -44,7 +44,7 @@ endif ()
 # -- which nothing outside these two .cpp files includes now.  All of it is
 # header-only, so none of it is a link-time dependency for anyone, and the
 # target names a found package, so the export set carries it as it stands.
-target_link_libraries(ddx_rt PUBLIC ddx Boost::headers)
+target_link_libraries(ddx_rt PUBLIC ddx Boost::headers Threads::Threads)
 ddx_target_flags(ddx_rt)
 
 # Boost leaves boost::throw_exception undefined under -fno-exceptions and makes

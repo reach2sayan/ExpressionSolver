@@ -6,7 +6,7 @@
 # thing a plain target_sources() on ddx_rt could not -- these files need
 # their own private include path (LLVM's), which should not reach the rest of
 # the library.
-add_library(ddx_jit_objs OBJECT codegen.cpp compiler.cpp partition.cpp)
+add_library(ddx_jit_objs OBJECT codegen.cpp compiler.cpp)
 
 # PIC unconditionally: required when libddx is shared, and it costs the static
 # build nothing measurable on x86-64.  Hidden visibility so what leaves libddx

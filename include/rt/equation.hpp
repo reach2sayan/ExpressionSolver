@@ -17,7 +17,12 @@
 // signatures.
 #ifdef DDX_HAS_JIT
 #include "jit/kernel.hpp"
+
+#include <future>
 #endif
+
+#include <mutex>        // unique_lock, which <shared_mutex> does not carry
+#include <shared_mutex>
 
 #include <algorithm>
 #include <array>
@@ -49,13 +54,6 @@ concept CColumns = std::ranges::contiguous_range<R> &&
                    std::convertible_to<std::ranges::range_value_t<R>, Ptr>;
 
 } // namespace rt_detail
-
-// Whether an equation compiles its graph.  Not named Auto: nothing decides,
-// and deciding would need the one thing an equation does not know -- how many
-// times the kernel will be called, which is what a compile has to repay.
-// Interpret is a real alternative, the block sweep running within ~1.4x of a
-// kernel with no compiler involved.
-enum class Backend : std::uint8_t { Compile, Interpret };
 
 template <Numeric T, typename... Rest>
   requires(std::same_as<Rest, rt::RTExpression<T>> && ...)
@@ -161,7 +159,7 @@ public:
   [[nodiscard]] result<std::vector<T>>
   hessian(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform([this](const auto &at) {
-      const auto &blocks = this->cached_hessians();
+      const auto &blocks = hessians_;
       const auto values = rt::evaluate_all(*arena_, at);
       const std::size_t n = symbol_count();
 
@@ -178,36 +176,59 @@ public:
     });
   }
 
-  // One sweep per colour, not per symbol.  A mixing rule couples everything
-  // and colours in n, so it is not always a win.
+#ifdef DDX_HAS_JIT
+  // The whole of a consumer's setup: whether to compile at all, and how.
   // Discards anything already compiled, so the choice holds however late.
-  constexpr Equation &backend(Backend which) noexcept {
-    if (which != backend_) {
-      backend_ = which;
-      compiled_.reset();
+  // The one non-const member: concurrent const calls are safe, a call
+  // overlapping this one is the caller's race.
+  Equation &options(const jit::Options &opt) noexcept {
+    if (opt != options_) {
+      options_ = opt;
+      // A fresh cache rather than a cleared one: a reader still holding a
+      // snapshot from the old configuration finishes against it.
+      cache_ = std::make_unique<Cache>();
     }
     return *this;
   }
-  [[nodiscard]] constexpr Backend backend() const noexcept { return backend_; }
+  [[nodiscard]] const jit::Options &options() const noexcept {
+    return options_;
+  }
+#endif
 
   // Whether a batch call goes through compiled code: false with no backend,
   // on a refused compile, and under Interpret.
   [[nodiscard]] bool uses_kernel() const {
-    if (poisoned() || backend_ == Backend::Interpret) {
-      return false;
-    }
 #ifdef DDX_HAS_JIT
-    return static_cast<bool>(compiled(false).kernel);
+    return !poisoned() && static_cast<bool>(snapshot(false)->kernel);
 #else
     return false;
 #endif
   }
 
+#ifdef DDX_HAS_JIT
+  // Block until a Background compile has landed, and answer uses_kernel().
+  // Nothing else waits: this is for a caller who would rather have the kernel
+  // than the sweep, and for a test that needs the answer to be settled.
+  [[nodiscard]] bool wait_for_kernel() const {
+    if (poisoned()) {
+      return false;
+    }
+    (void)snapshot(false); // launches it, if nothing has yet
+    {
+      const std::shared_lock read{cache_->plain.mutex};
+      if (cache_->plain.pending.valid()) {
+        cache_->plain.pending.wait();
+      }
+    }
+    return static_cast<bool>(snapshot(false)->kernel);
+  }
+#endif
+
   [[nodiscard]] std::optional<std::size_t> hessian_colors() const
     requires(output_dim == 1)
   {
     return poisoned() ? std::nullopt
-                      : std::optional{this->cached_hessians().front().colors()};
+                      : std::optional{hessians_.front().colors()};
   }
 
   // One Taylor sweep: seed c[0] = x0, c[1] = 1, then un-normalise c[Order].
@@ -241,7 +262,7 @@ public:
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f,
            const rt_detail::CColumns<T *> auto &g, std::size_t n) const {
-    return dispatch(compiled(false), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(false), as_columns(xs), as_columns(f),
                     as_columns(g), {}, n);
   }
 
@@ -252,24 +273,24 @@ public:
           const rt_detail::CColumns<T *> auto &h, std::size_t n) const
     requires(output_dim == 1)
   {
-    return dispatch(compiled(true), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(true), as_columns(xs), as_columns(f),
                     as_columns(g), as_columns(h), n);
   }
 
   // What a caller sizes its buffers by.
   [[nodiscard]] std::optional<std::size_t> value_columns() const {
     return poisoned() ? std::nullopt
-                      : std::optional{compiled(false).graph.layout().values};
+                      : std::optional{snapshot(false)->graph->layout().values};
   }
   [[nodiscard]] std::optional<std::size_t> jacobian_columns() const {
     return poisoned() ? std::nullopt
-                      : std::optional{compiled(false).graph.layout().jacobian};
+                      : std::optional{snapshot(false)->graph->layout().jacobian};
   }
   [[nodiscard]] std::optional<std::size_t> hessian_columns() const
     requires(output_dim == 1)
   {
     return poisoned() ? std::nullopt
-                      : std::optional{compiled(true).graph.layout().hessian};
+                      : std::optional{snapshot(true)->graph->layout().hessian};
   }
 
 private:
@@ -282,7 +303,11 @@ private:
   // Both take a graph as a precondition, which create() establishes.  The third
   // construction is none at all: arena_ null, roots_ empty, derivative_
   // default, and every accessor short-circuits before reading them.
-  constexpr explicit Equation(error why) noexcept : bad_(why) {}
+  constexpr explicit Equation(error why) : bad_(why) {
+    if !consteval {
+      cache_ = std::make_unique<Cache>();
+    }
+  }
 
   constexpr explicit Equation(rt::RTExpression<T> first, Rest... rest)
       : arena_(first.builder(), borrow) {
@@ -290,6 +315,16 @@ private:
     roots_.push_back(first.id(*arena_));
     (roots_.push_back(rest.id(*arena_)), ...);
     derivative_ = rt::jacobian(*arena_, roots_);
+    // The colouring rt::hessian needs runs through Boost.Graph, and a Cache
+    // holds a mutex; neither is available while constant-evaluating, and a
+    // constant-evaluated equation reaches neither.
+    if !consteval {
+      hessians_ = roots_ | std::views::transform([&](rt::NodeId r) {
+                    return rt::hessian(*arena_, r);
+                  }) |
+                  to<std::vector<rt::Hessian>>();
+      cache_ = std::make_unique<Cache>();
+    }
   }
 
   Equation(std::unique_ptr<rt::Builder<T>> owned, rt::RTExpression<T> first,
@@ -335,15 +370,6 @@ private:
     return {};
   }
 
-  const std::vector<rt::Hessian> &cached_hessians() const {
-    if (hessians_.empty()) {
-      hessians_ = std::ranges::to<std::vector<rt::Hessian>>(
-          roots_ | std::views::transform(
-                       [&](rt::NodeId r) { return rt::hessian(*arena_, r); }));
-    }
-    return hessians_;
-  }
-
   [[nodiscard]] constexpr std::vector<T>
   harvest(const std::vector<rt::NodeId> &nodes,
           const std::vector<T> &at) const {
@@ -353,44 +379,96 @@ private:
            to<std::vector<T>>();
   }
 
+  // Published, never written: a kernel arrives as a *new* Compiled, so nothing
+  // a reader can see is ever modified under it.
   struct Compiled {
-    rt::Graph<T> graph;
-    // Not readable back off the graph: a zero-arity equation compresses to no
-    // Hessian columns and would re-freeze on every call.
-    bool has_hessian = false;
+    // Shared, not held: a background compile keeps its own share, so the graph
+    // outlives an Equation that went away mid-compile.
+    std::shared_ptr<const rt::Graph<T>> graph;
 #ifdef DDX_HAS_JIT
-    // Empty until freeze(), and for good where T is not the JIT's scalar.
+    // Empty where T is not the JIT's scalar, and under Background until the
+    // compile lands.
     jit::Kernel kernel{};
 #endif
   };
 
-  // The with-Hessian graph is a superset of the without, so one cache serves
-  // both.
-  const Compiled &compiled(bool want_hessian) const {
-    if (!compiled_ || (want_hessian && !compiled_->has_hessian)) {
-      compiled_ = freeze(want_hessian);
+  // One shape of graph, filled once and never invalidated -- which is what the
+  // single slot it replaces could not promise, since wanting a Hessian used to
+  // refill it and dangle whatever reference another call was holding.
+  struct Lane {
+    mutable std::shared_mutex mutex;
+    std::shared_ptr<const Compiled> ready;
+#ifdef DDX_HAS_JIT
+    std::shared_future<jit::result<jit::Kernel>> pending; // set once, then read
+#endif
+  };
+
+  struct Cache {
+    Lane plain;        // values and Jacobian
+    Lane with_hessian; // and the compressed Hessian columns
+  };
+
+  // Ownership, not a reference: a reader holds its share for the whole call, so
+  // publishing cannot pull the graph out from under a dispatch() in flight.
+  [[nodiscard]] std::shared_ptr<const Compiled>
+  snapshot(bool want_hessian) const {
+    Lane &lane = want_hessian ? cache_->with_hessian : cache_->plain;
+    {
+      const std::shared_lock read{lane.mutex};
+      if (lane.ready && !arrived(lane)) {
+        return lane.ready;
+      }
     }
-    return *compiled_;
+    const std::unique_lock fill{lane.mutex}; // another thread may have won
+    if (!lane.ready) {
+      lane.ready = std::make_shared<const Compiled>(freeze(want_hessian, lane));
+    } else if (arrived(lane)) {
+      // A refused compile leaves the kernel empty, and the sweep stays.
+      const auto &landed = lane.pending.get();
+      lane.ready = std::make_shared<const Compiled>(
+          Compiled{.graph = lane.ready->graph,
+                   .kernel = landed ? *landed : jit::Kernel{}});
+      lane.pending = {};
+    }
+    return lane.ready;
   }
 
-  Compiled freeze(bool want_hessian) const {
-    // No arena to build from.  An empty Graph reports zero columns of every
-    // kind; has_hessian spares compiled() from re-freezing on every call.
+  // Whether a background compile has finished but not yet been published.
+  // Polling a shared_future from many threads is well-defined, and `pending` is
+  // written once under the write lock and never reassigned.
+  [[nodiscard]] static bool arrived([[maybe_unused]] const Lane &lane) {
+#ifdef DDX_HAS_JIT
+    using namespace std::chrono_literals;
+    return lane.pending.valid() &&
+           lane.pending.wait_for(0s) == std::future_status::ready;
+#else
+    return false;
+#endif
+  }
+
+  // Every derivative it needs was swept in the constructor, so this only reads
+  // the arena -- Graph::freeze takes it by const reference.
+  Compiled freeze(bool want_hessian, [[maybe_unused]] Lane &lane) const {
+    // No arena to build from.  An empty Graph reports zero columns of any kind.
     if (bad_) {
-      return Compiled{.graph = {}, .has_hessian = true};
+      return Compiled{.graph = std::make_shared<const rt::Graph<T>>()};
     }
     rt::GraphBuilder<T> gb{*arena_};
     gb.values_from(roots_);
     gb.jacobian_from(derivative_.partial);
     if (want_hessian) {
-      gb.hessian();
+      gb.hessian_from(hessians_.front());
     }
-    Compiled out{.graph = gb.build(), .has_hessian = want_hessian};
+    Compiled out{.graph = std::make_shared<const rt::Graph<T>>(gb.build())};
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
+      auto *const c = options_.backend != jit::Backend::Interpret ? compiler()
+                                                                  : nullptr;
       // Not an error a caller handles: run() falls back to interpret().
-      if (auto *const c = backend_ == Backend::Compile ? compiler() : nullptr) {
-        if (auto k = c->compile(out.graph)) {
+      if (c != nullptr) {
+        if (options_.backend == jit::Backend::Background) {
+          lane.pending = c->compile_async(out.graph, options_);
+        } else if (auto k = c->compile(*out.graph, options_)) {
           out.kernel = std::move(*k);
         }
       }
@@ -416,35 +494,16 @@ private:
   void interpret(const Compiled &c, std::span<const T *const> xs,
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
-    const auto blocks = c.graph.output_blocks();
-    const auto order = c.graph.live_order();
+    const auto blocks = c.graph->output_blocks();
+    const auto order = c.graph->live_order();
     const std::size_t symbols = symbol_count();
-
-    // Tapes are sized by the arena rather than the graph: a borrowed builder
-    // may have grown since the freeze, and live ids index below that.
-    if (n < kLanes) {
-      std::vector<T> at(symbols);
-      std::vector<T> tape(arena_->size());
-      for (const std::size_t i : std::views::iota(0uz, n)) {
-        for (const auto [j, column] : std::views::enumerate(xs)) {
-          at[static_cast<std::size_t>(j)] = column[i];
-        }
-        rt::evaluate_into(*arena_, at, order, std::span<T>{tape});
-        for (const auto [columns, block] : std::views::zip(
-                 std::array{f, g, h},
-                 std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
-          for (const auto [column, o] : std::views::zip(columns, block)) {
-            column[i] = tape[o];
-          }
-        }
-      }
-      return;
-    }
 
     // kLanes points per sweep: the switch is paid once per node per block, and
     // each operation becomes a lane loop wide enough to vectorise.  A short
-    // final block repeats its last point rather than falling back to a scalar
-    // path; the repeated lanes are never read back.
+    // final block -- or a batch shorter than a block -- repeats its last point
+    // rather than taking a scalar path; the repeated lanes are never read back.
+    // Tapes are sized by the arena rather than the graph: a borrowed builder
+    // may have grown since the freeze, and live ids index below that.
     std::vector<T> lanes(symbols * kLanes);
     std::vector<T> tape(arena_->size() * kLanes);
 
@@ -485,7 +544,7 @@ private:
     if (bad_) {
       return std::unexpected{*bad_};
     }
-    const auto blocks = c.graph.output_blocks();
+    const auto blocks = c.graph->output_blocks();
     if (xs.size() != symbol_count() || f.size() != blocks.values.size() ||
         g.size() != blocks.jacobian.size() ||
         h.size() != blocks.hessian.size()) {
@@ -518,13 +577,22 @@ private:
   ArenaPtr arena_{nullptr, borrow};
   std::vector<rt::NodeId> roots_;
 
-  Backend backend_ = Backend::Compile;
+#ifdef DDX_HAS_JIT
+  jit::Options options_{};
+#endif
   // Eager: one reverse sweep is microseconds, and it keeps every per-point
   // accessor const and constexpr.
   rt::Jacobian derivative_;
-  // Lazy, being ~1.2M nodes and 350 ms for a 50-species mixture.
-  mutable std::vector<rt::Hessian> hessians_;
-  mutable std::optional<Compiled> compiled_;
+  // Swept once in the constructor and never touched again, which is the whole of
+  // what makes the const members safe to call concurrently: rt::hessian
+  // *appends to the arena*, and an arena a caller lent us may be lent to another
+  // Equation as well.  ~1.2M nodes and 350 ms for a 50-species mixture, against
+  // a graph build that would otherwise sweep it a second time.
+  std::vector<rt::Hessian> hessians_;
+  // Owned outright -- nothing outside an Equation holds it -- which is also
+  // what keeps a constant-evaluated Equation destructible: unique_ptr's
+  // destructor is constexpr where shared_ptr's is not.  Null only there.
+  std::unique_ptr<Cache> cache_;
   // Set exactly when why_not() refused, so poisoned() <=> arena_ == nullptr.
   std::optional<error> bad_{};
 };
@@ -533,8 +601,10 @@ private:
 
 namespace ddx::rt {
 
-// Named here as well as in impl, since choosing it is a caller's business.
-using impl::Backend;
+#ifdef DDX_HAS_JIT
+// Named here as well as in jit, since choosing it is a caller's business.
+using jit::Backend;
+#endif
 
 // Over expressions already built in a caller's own arena.  Partial
 // specialisations contribute no deduction guides, so this is the whole of CTAD.

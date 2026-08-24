@@ -6,7 +6,10 @@
 
 #include <gtest/gtest.h>
 
+#include <bit>
+#include <cstdint>
 #include <numeric>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -158,6 +161,124 @@ TEST(JitValue, MaxMinPropagateNaNSymmetrically) {
   EXPECT_TRUE(std::isnan(got[0]));
   EXPECT_TRUE(std::isnan(got[1]));
   EXPECT_DOUBLE_EQ(got[2], 4.0);
+}
+
+// IEEE 754-2019 maximum/minimum order -0 below +0, which is what llvm.maximum
+// and llvm.minimum compute; the interpreter has to say the same, or 1/min(x, y)
+// changes sign between the two.
+TEST(JitValue, MaxMinSignedZeroTiesMatchTheInterpreter) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto graph = Graph<>::freeze(b, std::array{max(x, y).id(b), min(x, y).id(b)});
+  const auto kernel = must_compile(graph);
+  ASSERT_TRUE(static_cast<bool>(kernel));
+
+  const std::array cx{-0.0, 0.0, -0.0, 0.0};
+  const std::array cy{0.0, -0.0, -0.0, 0.0};
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+  std::array<double, 4> got_max{};
+  std::array<double, 4> got_min{};
+  double *const value_columns[]{got_max.data(), got_min.data()};
+  kernel(xs, value_columns, {}, {}, cx.size());
+
+  for (std::size_t i = 0; i < cx.size(); ++i) {
+    const auto want = ddx::rt::evaluate_all(b, std::array{cx[i], cy[i]});
+    EXPECT_EQ(std::signbit(got_max[i]), std::signbit(want[graph.outputs()[0]]))
+        << "max at " << i;
+    EXPECT_EQ(std::signbit(got_min[i]), std::signbit(want[graph.outputs()[1]]))
+        << "min at " << i;
+  }
+  EXPECT_FALSE(std::signbit(got_max[0])) << "max(-0, +0) is +0";
+  EXPECT_TRUE(std::signbit(got_min[0])) << "min(-0, +0) is -0";
+}
+
+// Every width computes the same bits: a lane is an IEEE operation on its own,
+// contraction happens per lane the same way it does for one, and a
+// transcendental is the same scalar libm call per lane.  Checked over every op
+// the emitter has, on a batch that is not a multiple of any width.
+TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  auto f = x / (y + 1.0) - x * y;
+#define DDX_TEST_OP(fn, Op, label, ...) f = f + fn(x * 0.5);
+  DDX_UNARY_MATH_TABLE(DDX_TEST_OP)
+#undef DDX_TEST_OP
+  f = f + pow(x, y) + atan2(x, y) + hypot(x, y) + abs(x - y) + max(x, y) +
+      min(x, y) + sign(x - y);
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).jacobian().build();
+
+  constexpr std::size_t n = 13;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.2 + 0.05 * static_cast<double>(i);
+    cy[i] = 0.9 - 0.03 * static_cast<double>(i);
+  }
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+
+  const auto run = [&](unsigned lanes) {
+    ddx::jit::Options o;
+    o.lanes = lanes;
+    const auto kernel = must_compile(graph, o);
+    std::vector<double> value(n), dx(n), dy(n);
+    double *const values[]{value.data()};
+    const std::array<double *, 2> partials{dx.data(), dy.data()};
+    kernel(xs, values, partials, {}, n);
+    return std::tuple{value, dx, dy};
+  };
+
+  const auto [v1, dx1, dy1] = run(1);
+  for (const unsigned lanes : {2u, 4u, 8u, 0u}) {
+    const auto [v, dx, dy] = run(lanes);
+    for (std::size_t i = 0; i < n; ++i) {
+      EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
+                std::bit_cast<std::uint64_t>(v1[i]))
+          << "value, lanes " << lanes << " at " << i;
+      EXPECT_EQ(std::bit_cast<std::uint64_t>(dx[i]),
+                std::bit_cast<std::uint64_t>(dx1[i]))
+          << "d/dx, lanes " << lanes << " at " << i;
+      EXPECT_EQ(std::bit_cast<std::uint64_t>(dy[i]),
+                std::bit_cast<std::uint64_t>(dy1[i]))
+          << "d/dy, lanes " << lanes << " at " << i;
+    }
+  }
+}
+
+// The codegen level rides on the module, so one JIT serves compiles at
+// several: two kernels from one Compiler must each get the level they asked
+// for, and only level 0 -- which selects the instruction selector that forms
+// no FMAs -- may differ in the last bits.
+TEST(JitValue, CodegenLevelIsPerCompile) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(x * y + x * x - y).jacobian().build();
+
+  const std::array cx{0.25, 1.5, 2.75, 3.0};
+  const std::array cy{1.25, 0.5, 2.0, 0.75};
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+
+  const auto run = [&](unsigned level) {
+    ddx::jit::Options o;
+    o.codegen_level = level;
+    const auto kernel = must_compile(graph, o);
+    std::vector<double> value(cx.size()), dx(cx.size()), dy(cx.size());
+    double *const values[]{value.data()};
+    const std::array<double *, 2> partials{dx.data(), dy.data()};
+    kernel(xs, values, partials, {}, cx.size());
+    return value;
+  };
+
+  const auto slow = run(0);
+  const auto fast = run(3);
+  for (std::size_t i = 0; i < cx.size(); ++i) {
+    // Same arithmetic, so this graph agrees exactly at every level; a graph
+    // with an FMA to form need not.
+    EXPECT_DOUBLE_EQ(slow[i], fast[i]) << "point " << i;
+    EXPECT_NEAR(slow[i], cx[i] * cy[i] + cx[i] * cx[i] - cy[i], 1e-12);
+  }
 }
 
 TEST(JitValue, SharedAndNested) {

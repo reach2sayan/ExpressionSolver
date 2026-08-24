@@ -20,6 +20,9 @@ set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
 # that work.  Reported when it differs, because if it ever does matter the two
 # versions are the first thing worth knowing.
 find_dependency(Boost CONFIG)
+# ddx_rt links Threads::Threads publicly: rt/equation.hpp compiles on another
+# thread, so the target has to resolve in a consumer's tree too.
+find_dependency(Threads)
 if (NOT Boost_VERSION VERSION_EQUAL "@Boost_VERSION@")
     message(STATUS
             "ddx was built against Boost @Boost_VERSION@; this consumer resolved ${Boost_VERSION}.")

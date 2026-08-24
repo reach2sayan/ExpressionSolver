@@ -7,6 +7,7 @@
 #include <concepts>
 #include <ranges>
 #include <span>
+#include <utility> // std::unreachable
 #include <vector>
 
 namespace ddx::rt {
@@ -44,10 +45,7 @@ constexpr void lanes_unary(OpCode op, const T *DDX_RESTRICT u,
     DDX_UNARY_MATH_TABLE(DDX_RT_LANES)
 #undef DDX_RT_LANES
   default:
-    for (std::size_t k = 0; k < W; ++k) {
-      out[k] = T{};
-    }
-    return;
+    std::unreachable(); // every unary row is above; Builder forms no other
   }
 }
 
@@ -65,10 +63,7 @@ constexpr void lanes_binary(OpCode op, const T *DDX_RESTRICT l,
     DDX_RT_BINARY_TABLE(DDX_RT_LANES)
 #undef DDX_RT_LANES
   default:
-    for (std::size_t k = 0; k < W; ++k) {
-      out[k] = T{};
-    }
-    return;
+    std::unreachable();
   }
 }
 

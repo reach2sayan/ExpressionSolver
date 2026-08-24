@@ -63,9 +63,9 @@ std::string ir_for(auto build, std::size_t nvars, ddx::jit::Options opt = {}) {
   return std::format("{}", ddx::jit::Ir{compiler(), graph, opt});
 }
 
-// nounwind is what Kernel::operator()'s noexcept rests on; willreturn and
-// memory(argmem: readwrite) let the optimiser move code across the call.
-// Asserted on the *optimised* IR, which is what runs.
+// nounwind is what Kernel::operator()'s noexcept rests on, and willreturn lets
+// the optimiser move code across the call.  Asserted on the *optimised* IR,
+// which is what runs.
 TEST(JitVectorize, TheKernelIsNounwind) {
   const auto ir = ir_for([](auto &v) { return exp(v[0]) * sin(v[1]); }, 2);
 
@@ -85,7 +85,9 @@ TEST(JitVectorize, TheKernelIsNounwind) {
   const std::string got = attrs[1].str();
   EXPECT_NE(got.find("nounwind"), std::string::npos) << got;
   EXPECT_NE(got.find("willreturn"), std::string::npos) << got;
-  EXPECT_NE(got.find("memory(argmem: readwrite)"), std::string::npos) << got;
+  // The columns are reached through pointers the kernel loads, so no argmem
+  // claim is true of it; one here would be a lie the optimiser may believe.
+  EXPECT_EQ(got.find("argmem"), std::string::npos) << got;
 }
 
 TEST(JitVectorize, ArithmeticLoopVectorises) {
@@ -116,9 +118,7 @@ TEST(JitVectorize, VecLibLibmvecUsesVectorLibm) {
 }
 
 TEST(JitVectorize, JacobianLoopVectorises) {
-  // Wider and sharing subexpressions, and still has to vectorise.  Arithmetic
-  // only: a loop carrying a transcendental has no vector form to call and is
-  // left scalar by design, so it could not answer this question.
+  // Wider and sharing subexpressions, and still has to vectorise.
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
@@ -126,6 +126,37 @@ TEST(JitVectorize, JacobianLoopVectorises) {
       ddx::rt::GraphBuilder{b}.value(x * y + x * x - y).jacobian().build();
   const auto ir = std::format("{}", ddx::jit::Ir{compiler(), graph});
   EXPECT_TRUE(has_vector_doubles(ir)) << "the Jacobian loop stayed scalar";
+}
+
+// Many columns and a transcendental in every one.  A loop vectoriser would
+// need a runtime alias check per pair of columns and give up past a handful;
+// the body is emitted wide instead, so the column count is not a question.
+TEST(JitVectorize, WideTranscendentalJacobianIsVector) {
+  Builder<> b;
+  std::vector<ddx::rt::RTExpression<>> v;
+  for (std::size_t i = 0; i < 16; ++i) {
+    v.push_back(var(b, "x" + std::to_string(i)));
+  }
+  auto f = v[0] * log(v[0]);
+  for (std::size_t i = 1; i < v.size(); ++i) {
+    f = f + v[i] * log(v[i]) + exp(v[i - 1] * v[i]);
+  }
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).jacobian().build();
+  ASSERT_EQ(graph.layout().values + graph.layout().jacobian, 17u);
+  const auto ir = std::format("{}", ddx::jit::Ir{compiler(), graph});
+  EXPECT_TRUE(has_vector_doubles(ir)) << "33 columns stayed scalar";
+  EXPECT_NE(ir.find("llvm.masked.load"), std::string::npos)
+      << "the batch tail is not masked";
+}
+
+// lanes = 1 is the scalar kernel: no vector type anywhere in it.
+TEST(JitVectorize, OneLaneIsScalar) {
+  ddx::jit::Options scalar;
+  scalar.lanes = 1;
+  const auto ir =
+      ir_for([](auto &v) { return exp(v[0]) * sin(v[1]) + v[0]; }, 2, scalar);
+  EXPECT_FALSE(has_vector_doubles(ir)) << ir;
+  EXPECT_EQ(ir.find("llvm.masked"), std::string::npos) << ir;
 }
 
 // LLVM's table is written against a newer glibc than some hosts ship, so under

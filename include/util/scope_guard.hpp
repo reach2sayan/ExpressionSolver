@@ -31,6 +31,21 @@ private:
   T saved_;
 };
 
+// Run `at_exit` when the enclosing scope ends, however it ends -- the standard
+// spells this std::experimental::scope_exit, which libc++ does not ship, and
+// Boost only outside a macro from 1.85.  Pinned because it owns the work: a
+// moved-from copy would run it twice or not at all.
+template <std::invocable F> class scope_exit : private pinned {
+public:
+  constexpr explicit scope_exit(F at_exit) noexcept(
+      std::is_nothrow_move_constructible_v<F>)
+      : at_exit_(std::move(at_exit)) {}
+  constexpr ~scope_exit() { at_exit_(); }
+
+private:
+  F at_exit_;
+};
+
 // Seed `slot` with Seed for the rest of the enclosing scope:
 //   const auto guard = scoped_seed<1.0>(dof[ai].deriv().value);
 template <auto Seed, CRestorable T>

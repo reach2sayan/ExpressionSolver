@@ -6,7 +6,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <thread>
+#include <tuple>
 #include <iterator>
 #include <numbers>
 #include <ranges>
@@ -423,6 +426,7 @@ TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
 // and its cost grows faster than the graph, so a caller has to be able to
 // decline it on a build that has the backend.
 
+#ifdef DDX_HAS_JIT
 TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -441,7 +445,7 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
     std::vector<double> f(n), dx(n), dy(n);
     double *const values[]{f.data()};
     double *const partials[]{dx.data(), dy.data()};
-    eq.backend(which);
+    eq.options({.backend = which});
     const bool kernel = eq.uses_kernel();
     *eq.jacobian(columns, values, partials, n);
     return std::tuple{f, dx, dy, kernel};
@@ -452,11 +456,9 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   const auto [f_int, dx_int, dy_int, used_none] =
       run(ddx::rt::Backend::Interpret);
 
-  EXPECT_EQ(eq.backend(), ddx::rt::Backend::Interpret);
+  EXPECT_EQ(eq.options().backend, ddx::rt::Backend::Interpret);
   EXPECT_FALSE(used_none) << "Interpret still reached for a kernel";
-#ifdef DDX_HAS_JIT
   EXPECT_TRUE(used_kernel) << "Compile did not compile on a JIT build";
-#endif
 
   // Near, not equal: the kernel contracts a multiply and an add into an FMA
   // where the interpreter evaluates them separately, so the two paths agree to
@@ -468,3 +470,241 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
     EXPECT_NEAR(dy_jit[i], dy_int[i], 1e-12) << "d/dy at " << i;
   }
 }
+
+// Compiling at all is one question and how to compile is another, so the lane
+// width has to be reachable from the Equation rather than only from
+// jit::Compiler -- and choosing it must not change a bit of the answer.
+TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  auto eq = ddx::rt::equation(x * log(x) + y * exp(x * y) + sqrt(x + y));
+
+  constexpr std::size_t n = 16;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.02 * static_cast<double>(i);
+    cy[i] = 0.7 - 0.01 * static_cast<double>(i);
+  }
+  const double *const columns[]{cx.data(), cy.data()};
+
+  const auto run = [&](const ddx::jit::Options &opt) {
+    std::vector<double> f(n), dx(n), dy(n);
+    double *const values[]{f.data()};
+    double *const partials[]{dx.data(), dy.data()};
+    eq.options(opt);
+    const bool kernel = eq.uses_kernel();
+    *eq.jacobian(columns, values, partials, n);
+    return std::tuple{f, dx, dy, kernel};
+  };
+
+  const ddx::jit::Options scalar{.lanes = 1};
+
+  const auto [f0, dx0, dy0, k0] = run({});
+  const auto [f1, dx1, dy1, k1] = run(scalar);
+
+  EXPECT_EQ(eq.options().lanes, 1u) << "the setter did not take";
+  EXPECT_TRUE(k0 && k1) << "an option refused the compile outright";
+
+  // Bit-exact: a lane is its own IEEE operation, so the width changes what is
+  // scheduled, never what is contracted.
+  for (std::size_t i = 0; i < n; ++i) {
+    EXPECT_EQ(f1[i], f0[i]) << "scalar value at " << i;
+    EXPECT_EQ(dx1[i], dx0[i]) << "scalar d/dx at " << i;
+    EXPECT_EQ(dy1[i], dy0[i]) << "scalar d/dy at " << i;
+  }
+}
+
+// Background takes the compile off the critical path: the block sweep answers
+// until the kernel lands, and what lands is what Compile would have blocked for.
+TEST(RtEquation, BackgroundCompilesBehindTheInterpreter) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  auto eq = ddx::rt::equation(x * log(x) + y * exp(x * y) + sqrt(x + y));
+
+  constexpr std::size_t n = 16;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.02 * static_cast<double>(i);
+    cy[i] = 0.7 - 0.01 * static_cast<double>(i);
+  }
+  const double *const columns[]{cx.data(), cy.data()};
+
+  std::vector<double> f0(n), dx0(n), dy0(n), f1(n), dx1(n), dy1(n), f2(n),
+      dx2(n), dy2(n);
+  const auto into = [&](std::vector<double> &f, std::vector<double> &dx,
+                        std::vector<double> &dy) {
+    double *const values[]{f.data()};
+    double *const partials[]{dx.data(), dy.data()};
+    ASSERT_TRUE(eq.jacobian(columns, values, partials, n).has_value());
+  };
+
+  // Whichever path is ready at this instant -- the point is that it answers.
+  eq.options({.backend = ddx::rt::Backend::Background});
+  into(f0, dx0, dy0);
+
+  ASSERT_TRUE(eq.wait_for_kernel()) << "the background compile never landed";
+  EXPECT_TRUE(eq.uses_kernel()) << "a landed kernel was not adopted";
+  into(f1, dx1, dy1);
+
+  // The same compile, blocked for instead of waited on.
+  eq.options({.backend = ddx::rt::Backend::Compile});
+  ASSERT_TRUE(eq.uses_kernel());
+  into(f2, dx2, dy2);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    // Bit-exact: one graph, one Options, so one kernel.
+    EXPECT_DOUBLE_EQ(f1[i], f2[i]) << "landed value at " << i;
+    EXPECT_DOUBLE_EQ(dx1[i], dx2[i]) << "landed d/dx at " << i;
+    EXPECT_DOUBLE_EQ(dy1[i], dy2[i]) << "landed d/dy at " << i;
+    // The first call may have been the sweep, which contracts differently.
+    EXPECT_NEAR(f0[i], f2[i], 1e-12) << "value before landing at " << i;
+    EXPECT_NEAR(dx0[i], dx2[i], 1e-12) << "d/dx before landing at " << i;
+    EXPECT_NEAR(dy0[i], dy2[i], 1e-12) << "d/dy before landing at " << i;
+  }
+}
+
+// Dropping an equation mid-compile abandons the result rather than waiting for
+// it.  std::async's future joins in its destructor, which would put the whole
+// compile back on the critical path of whatever let the equation go.
+TEST(RtEquation, DroppingAMidFlightBackgroundCompileDoesNotBlock) {
+  // Wide enough that the compile is milliseconds, not microseconds: a compile
+  // that finishes first would pass this test without proving anything.
+  ddx::rt::Builder<> b;
+  std::vector<ddx::rt::RTExpression<double>> v;
+  for (std::size_t i = 0; i < 48; ++i) {
+    v.push_back(ddx::rt::var(b, "x" + std::to_string(i)));
+  }
+  auto f = v[0] * log(v[0]);
+  for (std::size_t i = 1; i < v.size(); ++i) {
+    f = f + v[i] * log(v[i]) + exp(v[i - 1] * v[i]);
+  }
+
+  // Calibrated against this machine rather than a constant: a fixed threshold
+  // above the compile would pass whether or not the future joined.
+  const auto blocking = [&] {
+    auto eq = ddx::rt::equation(f);
+    eq.options({.backend = ddx::rt::Backend::Compile});
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_TRUE(eq.uses_kernel());
+    return std::chrono::steady_clock::now() - start;
+  }();
+
+  const auto teardown = [&] {
+    auto eq = ddx::rt::equation(f);
+    eq.options({.backend = ddx::rt::Backend::Background});
+    (void)eq.uses_kernel(); // launches the compile, adopts nothing yet
+
+    const auto start = std::chrono::steady_clock::now();
+    { const auto dropped = std::move(eq); }
+    return std::chrono::steady_clock::now() - start;
+  }();
+
+  const auto us = [](std::chrono::steady_clock::duration d) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(d).count();
+  };
+  // A join would put the whole compile here; abandoning it is ~a microsecond.
+  EXPECT_LT(teardown * 4, blocking)
+      << "teardown " << us(teardown) << "us against a " << us(blocking)
+      << "us compile, so the future joined";
+}
+
+// Many threads on one Equation, mixing both lanes.  std::thread rather than
+// std::jthread: libc++ shipped jthread late and behind _LIBCPP_ENABLE_EXPERIMENTAL.
+//
+// Background, deliberately: it is the path that abandons compiles mid-flight
+// when an equation goes away, which is what compile_async orders its statics
+// against.
+TEST(RtEquation, ConcurrentConstCallsAgreeWithOneThread) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  auto eq = ddx::rt::equation(x * log(x) + y * exp(x * y) + sqrt(x + y));
+  eq.options({.backend = ddx::rt::Backend::Background});
+
+  constexpr std::size_t n = 32;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.02 * static_cast<double>(i);
+    cy[i] = 0.7 - 0.01 * static_cast<double>(i);
+  }
+  const double *const columns[]{cx.data(), cy.data()};
+
+  const std::size_t hcols = *eq.hessian_columns();
+  const auto once = [&] {
+    std::vector<double> f(n), dx(n), dy(n);
+    std::vector<std::vector<double>> hs(hcols, std::vector<double>(n));
+    std::vector<double *> hp(hcols);
+    for (std::size_t c = 0; c < hcols; ++c) {
+      hp[c] = hs[c].data();
+    }
+    double *const values[]{f.data()};
+    double *const partials[]{dx.data(), dy.data()};
+    EXPECT_TRUE(eq.hessian(columns, values, partials, hp, n).has_value());
+    return std::tuple{f, dx, dy, hs};
+  };
+  const auto expected = once();
+
+  std::vector<std::thread> racers;
+  std::vector<decltype(once())> got(8);
+  for (std::size_t t = 0; t < got.size(); ++t) {
+    racers.emplace_back([&, t] {
+      // Interleaved with the read-only accessors, which take the same locks.
+      (void)eq.uses_kernel();
+      (void)eq.value_columns();
+      (void)eq.jacobian_columns();
+      got[t] = once();
+    });
+  }
+  for (auto &r : racers) {
+    r.join();
+  }
+
+  const auto &[ef, edx, edy, ehs] = expected;
+  for (const auto &[f, dx, dy, hs] : got) {
+    for (std::size_t i = 0; i < n; ++i) {
+      EXPECT_NEAR(f[i], ef[i], 1e-12) << "value at " << i;
+      EXPECT_NEAR(dx[i], edx[i], 1e-12) << "d/dx at " << i;
+      EXPECT_NEAR(dy[i], edy[i], 1e-12) << "d/dy at " << i;
+      for (std::size_t c = 0; c < hs.size(); ++c) {
+        EXPECT_NEAR(hs[c][i], ehs[c][i], 1e-12) << "h" << c << " at " << i;
+      }
+    }
+  }
+}
+
+// Two equations over ONE borrowed Builder, each asked for a Hessian from its own
+// thread.  rt::hessian appends to the arena, so before the sweep moved into the
+// constructor no per-Equation lock could have made this safe.
+TEST(RtEquation, TwoEquationsSharingAnArenaDoNotRaceIt) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  auto first = ddx::rt::equation(x * log(x) + y * y);
+  auto second = ddx::rt::equation(y * exp(x) + x * x);
+
+  const auto at = std::array{0.4, 0.9};
+  const auto expected_first = *first.hessian(at);
+  const auto expected_second = *second.hessian(at);
+
+  std::vector<double> a, c;
+  std::thread one{[&] { a = *first.hessian(at); }};
+  std::thread two{[&] { c = *second.hessian(at); }};
+  one.join();
+  two.join();
+
+  EXPECT_EQ(a, expected_first);
+  EXPECT_EQ(c, expected_second);
+}
+
+// Interpret must not launch anything, however long one waits.
+TEST(RtEquation, InterpretNeverCompilesInTheBackground) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  auto eq = ddx::rt::equation(x * log(x));
+  eq.options({.backend = ddx::rt::Backend::Interpret});
+  EXPECT_FALSE(eq.wait_for_kernel());
+  EXPECT_FALSE(eq.uses_kernel());
+}
+#endif

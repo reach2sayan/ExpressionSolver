@@ -8,6 +8,7 @@
 #include <boost/graph/compressed_sparse_row_graph.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <initializer_list>
 #include <iterator>
 #include <ranges>
@@ -53,10 +54,14 @@ public:
                                     Layout layout = {},
                                     Coloring coloring = {}) {
     Graph g;
-    g.layout_ =
-        layout.values == 0
-            ? Layout{.values = outputs.size(), .jacobian = 0, .hessian = 0}
-            : layout;
+    // A default layout means every output is a value; a stated one has to
+    // account for every output, or codegen and the caller disagree on a
+    // column's meaning.
+    const bool unstated =
+        layout.values == 0 && layout.jacobian == 0 && layout.hessian == 0;
+    g.layout_ = unstated ? Layout{.values = outputs.size()} : layout;
+    assert(g.layout_.values + g.layout_.jacobian + g.layout_.hessian ==
+           outputs.size());
     g.coloring_ = std::move(coloring);
     g.symbols_.assign(b.symbols().begin(), b.symbols().end());
     g.outputs_.assign(outputs.begin(), outputs.end());
@@ -219,6 +224,15 @@ public:
     const auto j = rt::jacobian(*builder_, roots_);
     outputs_.insert(outputs_.end(), j.partial.begin(), j.partial.end());
     layout_.jacobian = j.partial.size();
+    return *this;
+  }
+
+  // The Hessian an Equation already holds, so the arena is not swept again --
+  // rt::hessian appends to the builder, and freeze() must not.
+  constexpr GraphBuilder &hessian_from(const Hessian &h) {
+    outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
+    layout_.hessian = h.compressed.size();
+    coloring_ = h.coloring;
     return *this;
   }
 

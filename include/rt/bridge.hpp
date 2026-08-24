@@ -60,18 +60,12 @@ template <impl::Numeric T, impl::CExpression E>
   } else {
     constexpr OpCode code = detail::op_code_of<typename U::op_type>::value;
     return std::apply(
-        [&](const auto &...kids) {
-          if constexpr (sizeof...(kids) == 1) {
-            return make(code, to_graph(b, kids)...);
+        [&](const auto &first, const auto &...rest) {
+          if constexpr (sizeof...(rest) == 0) {
+            return make(code, to_graph(b, first));
           } else {
-            RTExpression<T> acc{};
-            bool first = true;
-            const auto step = [&](const auto &kid) {
-              const RTExpression k = to_graph(b, kid);
-              acc = first ? k : make(code, acc, k);
-              first = false;
-            };
-            (step(kids), ...);
+            RTExpression<T> acc = to_graph(b, first);
+            ((acc = make(code, acc, to_graph(b, rest))), ...);
             return acc;
           }
         },

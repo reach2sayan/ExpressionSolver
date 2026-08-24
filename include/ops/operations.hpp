@@ -204,16 +204,23 @@ DDX_ADL_BINARY_IMPL(midpoint_impl, midpoint)
 #undef DDX_ADL_BINARY_IMPL
 // A tie averages the operands and an unordered pair returns (a-b)*0, NaN from
 // either side: both are symmetric, which is what makes them stable under the
-// commutative reordering the graph builder applies.  Through midpoint_impl so
-// an equal pair at the top of the range cannot overflow -- std::midpoint where
-// R is arithmetic, and a == b compares only the value level on a Dual, so the
-// derivative parts still have to be averaged rather than picked from a side.
+// commutative reordering the graph builder applies.  On a Dual a == b compares
+// only the value level, so the derivative parts are averaged through
+// midpoint_impl rather than picked from a side.  On an arithmetic scalar the
+// only tie that is not simply `a` is the signed zeros, where the answer follows
+// IEEE 754-2019 maximum/minimum -- what the JIT's llvm.maximum/minimum compute
+// -- and is spelled arithmetically: -0 + +0 is +0, so the sum of two zeros is
+// their maximum and the negated sum of their negations is their minimum.
 struct max_impl {
   constexpr auto operator()(const Numeric auto &a,
                             const Numeric auto &b) const noexcept {
     using R = std::remove_cvref_t<decltype(a < b ? b : a)>;
     if (a == b) {
-      return R{midpoint_impl{}(R{a}, R{b})};
+      if constexpr (CArithmetic<R>) {
+        return a == R{} ? R{a + b} : R{a};
+      } else {
+        return R{midpoint_impl{}(R{a}, R{b})};
+      }
     } else if (a < b) {
       return R{b};
     } else if (b < a) {
@@ -227,7 +234,11 @@ struct min_impl {
                             const Numeric auto &b) const noexcept {
     using R = std::remove_cvref_t<decltype(b < a ? b : a)>;
     if (a == b) {
-      return R{midpoint_impl{}(R{a}, R{b})};
+      if constexpr (CArithmetic<R>) {
+        return a == R{} ? R{-((-a) + (-b))} : R{a};
+      } else {
+        return R{midpoint_impl{}(R{a}, R{b})};
+      }
     } else if (b < a) {
       return R{b};
     } else if (a < b) {

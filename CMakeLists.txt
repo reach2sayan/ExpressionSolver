@@ -44,6 +44,10 @@ include(DdxDependencies)
 # put a run-time dependency in their path.
 ddx_use_boost()
 
+# rt/equation.hpp is a public header that compiles a graph on another thread, so
+# a consumer needs the threading library as much as ddx_rt does.
+find_package(Threads REQUIRED)
+
 add_library(ddx_util INTERFACE)
 add_library(ddx::util ALIAS ddx_util)
 set_target_properties(ddx_util PROPERTIES EXPORT_NAME util)
@@ -132,9 +136,7 @@ if (DDX_BUILD_JIT)
 
     # No predefined macro carries the optimisation *level* -- GCC and Clang
     # define only __OPTIMIZE__, and only as a yes/no -- so CMake is the one
-    # place that knows.
-    # O0 is deliberately unreachable: it turns the loop
-    # vectoriser off
+    # place that knows.  Never 0, which runs no IR passes at all.
     string(TOUPPER "${CMAKE_BUILD_TYPE}" DDX_BUILD_TYPE_UPPER)
     if (DDX_BUILD_TYPE_UPPER STREQUAL "DEBUG")
         set(DDX_JIT_DEFAULT_OPT 1)
