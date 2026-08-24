@@ -190,7 +190,15 @@ private:
   timers.setOutStream(llvm::errs());
   timers.registerCallbacks(pic);
 
-  llvm::PassBuilder pb(&tm, llvm::PipelineTuningOptions{}, std::nullopt, &pic);
+  // The two vectorisers the default pipeline would otherwise bring.  Both are
+  // wrong here by default: the loop is already emitted `lanes` wide, and the
+  // loop vectoriser in particular pays for an alias check between every pair
+  // of columns and then declines.
+  llvm::PipelineTuningOptions pto;
+  pto.SLPVectorization = opt.slp;
+  pto.LoopVectorization = opt.loop_vectorize;
+
+  llvm::PassBuilder pb(&tm, pto, std::nullopt, &pic);
   // Before registerFunctionAnalyses, which would otherwise install the default
   // llvm::TargetLibraryAnalysis and with it an empty vector-function table.
   fam.registerPass([&] { return llvm::TargetLibraryAnalysis(tlii); });
@@ -200,19 +208,30 @@ private:
   pb.registerLoopAnalyses(lam);
   pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-  llvm::FunctionPassManager fpm;
-  if (opt.opt_level > 0) {
-    if (auto e = pb.parsePassPipeline(
-            fpm, "early-cse,instcombine<max-iterations=1;no-verify-fixpoint>,"
-                 "simplifycfg")) {
-      return e;
-    }
-    if (want_veclib(triple, opt, have_libmvec)) {
-      fpm.addPass(llvm::ReplaceWithVeclib());
-    }
+  llvm::OptimizationLevel level = llvm::OptimizationLevel::O2;
+  switch (opt.opt_level) {
+  case 0:
+    level = llvm::OptimizationLevel::O0;
+    break;
+  case 1:
+    level = llvm::OptimizationLevel::O1;
+    break;
+  case 3:
+    level = llvm::OptimizationLevel::O3;
+    break;
+  default:
+    break;
   }
-  llvm::ModulePassManager mpm;
-  mpm.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
+
+  llvm::ModulePassManager mpm =
+      level == llvm::OptimizationLevel::O0
+          ? pb.buildO0DefaultPipeline(level)
+          : pb.buildPerModuleDefaultPipeline(level);
+  if (want_veclib(triple, opt, have_libmvec)) {
+    llvm::FunctionPassManager fpm;
+    fpm.addPass(llvm::ReplaceWithVeclib());
+    mpm.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
+  }
   mpm.run(m, mam);
   return llvm::Error::success();
 }

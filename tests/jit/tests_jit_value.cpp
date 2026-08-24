@@ -296,6 +296,56 @@ TEST(JitValue, CodegenLevelsOneToThreeAgreeToTheBit) {
   }
 }
 
+// Both vectorisers pack operations that were already independent, and neither
+// is given `reassoc`, so neither may move a bit.  This is the gate on turning
+// either on: a kernel that is 14% quicker and answers differently is not the
+// same kernel.
+TEST(JitValue, TheVectorisersDoNotMoveABit) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto f = x * log(x) + y * exp(x * y) + sqrt(x + y) + x * y * (x + y);
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).jacobian().build();
+
+  constexpr std::size_t n = 9;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.05 * static_cast<double>(i);
+    cy[i] = 0.9 - 0.03 * static_cast<double>(i);
+  }
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+
+  const auto run = [&](ddx::jit::Options o) {
+    const auto kernel = must_compile(graph, o);
+    std::vector<double> value(n), dx(n), dy(n);
+    double *const values[]{value.data()};
+    const std::array<double *, 2> partials{dx.data(), dy.data()};
+    kernel(xs, values, partials, {}, n);
+    return std::tuple{value, dx, dy};
+  };
+
+  for (const unsigned lanes : {1u, 4u}) {
+    const auto [v0, dx0, dy0] = run({.lanes = lanes});
+    for (const auto &[what, o] :
+         {std::pair{"slp", ddx::jit::Options{.lanes = lanes, .slp = true}},
+          std::pair{"loop_vectorize",
+                    ddx::jit::Options{.lanes = lanes, .loop_vectorize = true}}}) {
+      const auto [v, dx, dy] = run(o);
+      for (std::size_t i = 0; i < n; ++i) {
+        EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
+                  std::bit_cast<std::uint64_t>(v0[i]))
+            << what << ", lanes " << lanes << ", value at " << i;
+        EXPECT_EQ(std::bit_cast<std::uint64_t>(dx[i]),
+                  std::bit_cast<std::uint64_t>(dx0[i]))
+            << what << ", lanes " << lanes << ", d/dx at " << i;
+        EXPECT_EQ(std::bit_cast<std::uint64_t>(dy[i]),
+                  std::bit_cast<std::uint64_t>(dy0[i]))
+            << what << ", lanes " << lanes << ", d/dy at " << i;
+      }
+    }
+  }
+}
+
 TEST(JitValue, SharedAndNested) {
   expect_matches_interpreter(
       [](Builder<> &, auto &v) {

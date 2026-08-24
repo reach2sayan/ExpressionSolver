@@ -82,9 +82,7 @@ struct Options {
   // 16 variables, one point per call, a scalar kernel is 1.2x to 4.1x faster
   // than the host's width.
   unsigned lanes = 0;
-  // 0 runs no IR passes at all.  Anything else runs the same short pipeline:
-  // the body is straight-line and already shared by the graph, so what is
-  // left for the middle end is folding, and the levels do not differ in it.
+  // LLVM's optimisation level for the IR pipeline, 0 to 3.
   unsigned opt_level = default_opt_level;
   // LLVM's codegen level, 0 to 3.  Instruction selection and register
   // allocation are ~95% of a compile, so this is the knob that trades kernel
@@ -99,6 +97,20 @@ struct Options {
   // FastISel, which forms no FMAs, for 8.9x off the compile and 1.6x onto the
   // kernel.
   unsigned codegen_level = 1;
+  // PipelineTuningOptions::SLPVectorization.  Packs independent
+  // subexpressions *within* one point -- a different axis from `lanes`, which
+  // packs one operation across several points, and the only one of the two
+  // available to a caller holding a single point.  Measured at one lane and 64
+  // variables: 14% off uniquac and 5% off mse for 0-66% of compile, nothing on
+  // rss, marginally negative on pr.  Model-dependent, hence off.
+  bool slp = false;
+  // PipelineTuningOptions::LoopVectorization.  Off because the loop is already
+  // emitted `lanes` wide, so there is nothing left to find -- and because it
+  // cannot find it anyway past about nineteen columns, where the runtime alias
+  // check it needs between every pair of them exceeds its own budget and it
+  // gives up having paid for the analysis.  Measured at one lane: it multiplies
+  // the pass pipeline by up to 683x and returns the same kernel or a worse one.
+  bool loop_vectorize = false;
   VecLib veclib = VecLib::None;
   bool contract = default_contract; // Follows DDX_FP_FLAGS
   // Per-pass timing to stderr, through LLVM's own TimePassesHandler.  Off by

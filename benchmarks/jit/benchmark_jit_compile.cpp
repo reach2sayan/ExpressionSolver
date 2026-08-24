@@ -226,6 +226,10 @@ int main(int argc, char **argv) {
       options.opt_level = static_cast<unsigned>(std::strtoul(arg.data() + 6, nullptr, 10));
     } else if (arg.starts_with("--codegen=")) {
       options.codegen_level = static_cast<unsigned>(std::strtoul(arg.data() + 10, nullptr, 10));
+    } else if (arg == "--slp") {
+      options.slp = true;
+    } else if (arg == "--loop-vectorize") {
+      options.loop_vectorize = true;
     } else if (arg == "--time-passes") {
       options.time_passes = true;
     } else if (arg.starts_with("--budget=")) {
