@@ -246,15 +246,17 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
 }
 
 // The codegen level rides on the module, so one JIT serves compiles at
-// several: two kernels from one Compiler must each get the level they asked
-// for, and only level 0 -- which selects the instruction selector that forms
-// no FMAs -- may differ in the last bits.
-TEST(JitValue, CodegenLevelIsPerCompile) {
+// several.  1, 2 and 3 share an instruction selector and a register allocator
+// and must agree to the bit -- which is what lets the default be the cheapest
+// of them.  Level 0 takes FastISel, forms no FMAs, and is not held to it.
+TEST(JitValue, CodegenLevelsOneToThreeAgreeToTheBit) {
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
-  const auto graph =
-      ddx::rt::GraphBuilder{b}.value(x * y + x * x - y).jacobian().build();
+  // Multiply-add shapes throughout, so there is an FMA at every level that
+  // forms one -- the thing the levels could have disagreed about.
+  const auto f = x * y + x * x - y + exp(x * y) * (y + 1.0) + log(x) * y;
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).jacobian().build();
 
   const std::array cx{0.25, 1.5, 2.75, 3.0};
   const std::array cy{1.25, 0.5, 2.0, 0.75};
@@ -268,16 +270,29 @@ TEST(JitValue, CodegenLevelIsPerCompile) {
     double *const values[]{value.data()};
     const std::array<double *, 2> partials{dx.data(), dy.data()};
     kernel(xs, values, partials, {}, cx.size());
-    return value;
+    return std::tuple{value, dx, dy};
   };
 
-  const auto slow = run(0);
-  const auto fast = run(3);
+  const auto [v1, dx1, dy1] = run(1);
+  for (const unsigned level : {2u, 3u}) {
+    const auto [v, dx, dy] = run(level);
+    for (std::size_t i = 0; i < cx.size(); ++i) {
+      EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
+                std::bit_cast<std::uint64_t>(v1[i]))
+          << "value, codegen " << level << " at " << i;
+      EXPECT_EQ(std::bit_cast<std::uint64_t>(dx[i]),
+                std::bit_cast<std::uint64_t>(dx1[i]))
+          << "d/dx, codegen " << level << " at " << i;
+      EXPECT_EQ(std::bit_cast<std::uint64_t>(dy[i]),
+                std::bit_cast<std::uint64_t>(dy1[i]))
+          << "d/dy, codegen " << level << " at " << i;
+    }
+  }
+
+  // 0 is still a correct kernel, just not a bit-identical one.
+  const auto [v0, dx0, dy0] = run(0);
   for (std::size_t i = 0; i < cx.size(); ++i) {
-    // Same arithmetic, so this graph agrees exactly at every level; a graph
-    // with an FMA to form need not.
-    EXPECT_DOUBLE_EQ(slow[i], fast[i]) << "point " << i;
-    EXPECT_NEAR(slow[i], cx[i] * cy[i] + cx[i] * cx[i] - cy[i], 1e-12);
+    EXPECT_NEAR(v0[i], v1[i], 1e-12 * std::max(1.0, std::abs(v1[i])));
   }
 }
 

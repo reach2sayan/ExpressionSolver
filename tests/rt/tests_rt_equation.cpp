@@ -471,6 +471,49 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   }
 }
 
+// A batch of one gets a scalar kernel and a batch gets a wide one, decided
+// from the call rather than from a flag -- and the two must agree to the bit,
+// since a lane is its own IEEE operation.
+TEST(RtEquation, TheBatchPicksTheKernelWidthAndTheAnswerIsTheSame) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto f = x * log(x) + y * exp(x * y) + sqrt(x + y);
+
+  constexpr std::size_t n = 64;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.005 * static_cast<double>(i);
+    cy[i] = 0.7 - 0.002 * static_cast<double>(i);
+  }
+
+  // One equation asked point at a time, another asked for the whole batch.
+  auto stepping = ddx::rt::equation(f);
+  auto batched = ddx::rt::equation(f);
+  std::vector<double> f1(n), dx1(n), dy1(n), f2(n), dx2(n), dy2(n);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    const double *const one[]{cx.data() + i, cy.data() + i};
+    double *const values[]{f1.data() + i};
+    double *const partials[]{dx1.data() + i, dy1.data() + i};
+    ASSERT_TRUE(stepping.jacobian(one, values, partials, 1).has_value());
+  }
+  {
+    const double *const columns[]{cx.data(), cy.data()};
+    double *const values[]{f2.data()};
+    double *const partials[]{dx2.data(), dy2.data()};
+    ASSERT_TRUE(batched.jacobian(columns, values, partials, n).has_value());
+  }
+
+  EXPECT_TRUE(stepping.uses_kernel());
+  EXPECT_TRUE(batched.uses_kernel());
+  for (std::size_t i = 0; i < n; ++i) {
+    EXPECT_EQ(f1[i], f2[i]) << "value at " << i;
+    EXPECT_EQ(dx1[i], dx2[i]) << "d/dx at " << i;
+    EXPECT_EQ(dy1[i], dy2[i]) << "d/dy at " << i;
+  }
+}
+
 // Compiling at all is one question and how to compile is another, so the lane
 // width has to be reachable from the Equation rather than only from
 // jit::Compiler -- and choosing it must not change a bit of the answer.

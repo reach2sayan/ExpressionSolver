@@ -262,7 +262,7 @@ public:
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f,
            const rt_detail::CColumns<T *> auto &g, std::size_t n) const {
-    return dispatch(*snapshot(false), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(false, n), as_columns(xs), as_columns(f),
                     as_columns(g), {}, n);
   }
 
@@ -273,7 +273,7 @@ public:
           const rt_detail::CColumns<T *> auto &h, std::size_t n) const
     requires(output_dim == 1)
   {
-    return dispatch(*snapshot(true), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(true, n), as_columns(xs), as_columns(f),
                     as_columns(g), as_columns(h), n);
   }
 
@@ -410,8 +410,11 @@ private:
 
   // Ownership, not a reference: a reader holds its share for the whole call, so
   // publishing cannot pull the graph out from under a dispatch() in flight.
+  // `points` is the batch the caller is about to run, or 0 where the question
+  // did not come from a batch call -- it decides how wide the kernel is
+  // emitted, and nothing else.
   [[nodiscard]] std::shared_ptr<const Compiled>
-  snapshot(bool want_hessian) const {
+  snapshot(bool want_hessian, std::size_t points = 0) const {
     Lane &lane = want_hessian ? cache_->with_hessian : cache_->plain;
     {
       const std::shared_lock read{lane.mutex};
@@ -421,7 +424,8 @@ private:
     }
     const std::unique_lock fill{lane.mutex}; // another thread may have won
     if (!lane.ready) {
-      lane.ready = std::make_shared<const Compiled>(freeze(want_hessian, lane));
+      lane.ready =
+          std::make_shared<const Compiled>(freeze(want_hessian, lane, points));
     } else if (arrived(lane)) {
       // A refused compile leaves the kernel empty, and the sweep stays.
       const auto &landed = lane.pending.get();
@@ -448,7 +452,8 @@ private:
 
   // Every derivative it needs was swept in the constructor, so this only reads
   // the arena -- Graph::freeze takes it by const reference.
-  Compiled freeze(bool want_hessian, [[maybe_unused]] Lane &lane) const {
+  Compiled freeze(bool want_hessian, [[maybe_unused]] Lane &lane,
+                  [[maybe_unused]] std::size_t points = 0) const {
     // No arena to build from.  An empty Graph reports zero columns of any kind.
     if (bad_) {
       return Compiled{.graph = std::make_shared<const rt::Graph<T>>()};
@@ -466,9 +471,10 @@ private:
                                                                   : nullptr;
       // Not an error a caller handles: run() falls back to interpret().
       if (c != nullptr) {
+        const jit::Options opt = for_batch(points);
         if (options_.backend == jit::Backend::Background) {
-          lane.pending = c->compile_async(out.graph, options_);
-        } else if (auto k = c->compile(*out.graph, options_)) {
+          lane.pending = c->compile_async(out.graph, opt);
+        } else if (auto k = c->compile(*out.graph, opt)) {
           out.kernel = std::move(*k);
         }
       }
@@ -478,6 +484,23 @@ private:
   }
 
 #ifdef DDX_HAS_JIT
+  // How wide to emit, from the batch the first call brought.  A kernel `w`
+  // lanes wide computes `w` points and stores the ones asked for, so on a
+  // batch of one it does a register's worth of work to answer for a single
+  // point -- measured at 16 variables, 1.2x to 4.1x of the scalar kernel.
+  // Below kLanes the sweep goes scalar for the same reason, so the two agree
+  // on where the batch stops being a batch.
+  //
+  // Only when the caller left `lanes` at 0, which is what "pick for me" means;
+  // a stated width is honoured whatever the batch.
+  [[nodiscard]] jit::Options for_batch(std::size_t points) const noexcept {
+    jit::Options opt = options_;
+    if (opt.lanes == 0 && points != 0 && points < kLanes) {
+      opt.lanes = 1;
+    }
+    return opt;
+  }
+
   // A Kernel does not own its code, so the compiler outlives every kernel.
   // Null on a host with no JIT, asked once.
   static jit::Compiler *compiler() {
@@ -498,12 +521,36 @@ private:
     const auto order = c.graph->live_order();
     const std::size_t symbols = symbol_count();
 
-    // kLanes points per sweep: the switch is paid once per node per block, and
-    // each operation becomes a lane loop wide enough to vectorise.  A short
-    // final block -- or a batch shorter than a block -- repeats its last point
-    // rather than taking a scalar path; the repeated lanes are never read back.
     // Tapes are sized by the arena rather than the graph: a borrowed builder
     // may have grown since the freeze, and live ids index below that.
+    //
+    // A batch shorter than a block sweeps one point at a time rather than
+    // padding out to kLanes.  Padding is nearly free on the tail of a long
+    // batch and is the whole cost on a short one -- a minimisation routine
+    // asking for one gradient per step would otherwise pay for eight.
+    if (n < kLanes) {
+      std::vector<T> at(symbols);
+      std::vector<T> tape(arena_->size());
+      for (const std::size_t i : std::views::iota(0uz, n)) {
+        for (const auto [j, column] : std::views::enumerate(xs)) {
+          at[static_cast<std::size_t>(j)] = column[i];
+        }
+        rt::evaluate_into(*arena_, at, order, std::span<T>{tape});
+        for (const auto [columns, block] : std::views::zip(
+                 std::array{f, g, h},
+                 std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
+          for (const auto [column, o] : std::views::zip(columns, block)) {
+            column[i] = tape[o];
+          }
+        }
+      }
+      return;
+    }
+
+    // kLanes points per sweep: the switch is paid once per node per block, and
+    // each operation becomes a lane loop wide enough to vectorise.  A short
+    // final block repeats its last point; the repeated lanes are never read
+    // back.
     std::vector<T> lanes(symbols * kLanes);
     std::vector<T> tape(arena_->size() * kLanes);
 

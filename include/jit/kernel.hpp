@@ -74,6 +74,13 @@ struct Options {
   // vector the host cannot hold.  Every width gives the same bits: the lanes
   // are independent IEEE operations, and a transcendental is the same scalar
   // libm call per lane.
+  //
+  // Set it to 1 for a caller with one point in hand -- a minimisation routine
+  // asking for a gradient per step.  A kernel `lanes` wide computes a
+  // register's worth and stores the one point that was asked for, which is the
+  // right trade for a batch and the wrong one for a single point: measured at
+  // 16 variables, one point per call, a scalar kernel is 1.2x to 4.1x faster
+  // than the host's width.
   unsigned lanes = 0;
   // 0 runs no IR passes at all.  Anything else runs the same short pipeline:
   // the body is straight-line and already shared by the graph, so what is
@@ -81,12 +88,17 @@ struct Options {
   unsigned opt_level = default_opt_level;
   // LLVM's codegen level, 0 to 3.  Instruction selection and register
   // allocation are ~95% of a compile, so this is the knob that trades kernel
-  // speed for compile time, and it is a wide trade: on the gradient of a
-  // 128-species electrolyte model, 0 compiles 8.9x faster and runs 1.6x
-  // slower.  0 selects the fast register allocator and the fast instruction
-  // selector, which does not form FMAs -- so its results differ from the other
-  // levels' in the last bits, where 1, 2 and 3 agree with each other.
-  unsigned codegen_level = 2;
+  // speed for compile time.
+  //
+  // 1 by default, not 2: measured over the four thermodynamic gradients at 16,
+  // 32 and 64 variables, at both lane widths, it compiles 11-15% faster and
+  // its kernels are within the noise either way -- several are nominally
+  // quicker.  3 is 2's compile time for 2's kernel.  All three select the same
+  // instruction selector and the same register allocator, so they agree to the
+  // bit; only 0 differs, and widely -- it takes the linear-time allocator and
+  // FastISel, which forms no FMAs, for 8.9x off the compile and 1.6x onto the
+  // kernel.
+  unsigned codegen_level = 1;
   VecLib veclib = VecLib::None;
   bool contract = default_contract; // Follows DDX_FP_FLAGS
   // Per-pass timing to stderr, through LLVM's own TimePassesHandler.  Off by

@@ -1,0 +1,8 @@
+# ThreadSanitizer suppressions.
+#
+# libLLVM ships uninstrumented, so TSan sees its writes but not the
+# synchronisation guarding them.  ignore_noninstrumented_modules=1 covers the
+# bulk of that; these name what still leaks through.
+called_from_lib:libLLVM
+race:llvm::
+deadlock:llvm::
