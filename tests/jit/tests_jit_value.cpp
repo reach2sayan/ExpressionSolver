@@ -197,6 +197,37 @@ TEST(JitValue, MaxMinSignedZeroTiesMatchTheInterpreter) {
 // Every width computes the same bits: a lane is an IEEE operation on its own,
 // contraction happens per lane the same way it does for one, and a
 // transcendental is the same scalar libm call per lane.  Checked over every op
+// A graph with no Jacobian block at all, which is what Equation::evaluate()
+// freezes: the kernel takes an empty partials span, and the emitter has to
+// produce a function that stores value columns and nothing else.
+TEST(JitValue, AValuesOnlyGraphCompilesAndStoresNoPartials) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(x * log(x) + exp(x * y)).build();
+  ASSERT_EQ(graph.layout().jacobian, 0u);
+
+  constexpr std::size_t n = 5;
+  std::vector<double> cx(n), cy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.1 * static_cast<double>(i);
+    cy[i] = 1.1 - 0.05 * static_cast<double>(i);
+  }
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+
+  const auto kernel = must_compile(graph);
+  std::vector<double> value(n);
+  double *const values[]{value.data()};
+  kernel(xs, values, {}, {}, n);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    EXPECT_NEAR(value[i], cx[i] * std::log(cx[i]) + std::exp(cx[i] * cy[i]),
+                1e-12)
+        << "value at " << i;
+  }
+}
+
 // the emitter has, on a batch that is not a multiple of any width.
 TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
   Builder<> b;

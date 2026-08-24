@@ -56,22 +56,24 @@ inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 //   Interpret   the default.  No compiler is asked, so a program that never
 //               says otherwise never loads LLVM.  Not a fallback: the block
 //               sweep runs within ~1.4x of a kernel.
-//   Background  Equation::options() starts the compile there and then; calls
+//   Compile     Equation::options() starts the compile there and then; calls
 //               before it lands are swept, and switch over when it arrives.
-//   Compile     the same launch, and the first call waits for it, so results
-//               are the kernel's from the start.
 //
-// Both compiling backends start at the moment they are *asked for*, not at the
-// first call, so the compile overlaps whatever the caller does next.
+// It does not block, and the first call does not wait.  The compile starts at
+// the moment it is *asked for*, not at the first call, so it overlaps whatever
+// the caller does next; a caller who would rather have the kernel than an
+// answer now asks outright, with Equation::wait_for_kernel().  There is one
+// compiling backend rather than a blocking and a non-blocking one because
+// waiting is a question a caller asks per call, not a property of the build.
 //
-// Background alone moves results in the last bits at the moment the kernel
-// arrives: the kernel contracts a multiply and an add into an FMA where the
-// sweep evaluates them separately, so the two agree to rounding rather than to
-// the bit.  A loop running across that point sees a ULP or two of movement.
+// Results therefore move in the last bits at the moment the kernel arrives: the
+// kernel contracts a multiply and an add into an FMA where the sweep evaluates
+// them separately, so the two agree to rounding rather than to the bit.  A loop
+// running across that point sees a ULP or two of movement.
 //
 // A compile still in flight when the process exits is joined then, not
 // abandoned: dropping the equation costs nothing, exiting waits for LLVM.
-enum class Backend : std::uint8_t { Interpret, Background, Compile };
+enum class Backend : std::uint8_t { Interpret, Compile };
 
 struct Options {
   // Read by Equation, never by Compiler::compile(), which is asked outright.

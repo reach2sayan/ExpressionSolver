@@ -43,7 +43,7 @@ int main() {
     for (std::size_t t = 0; t < threads; ++t) {
       racers.emplace_back([] {
         auto eq = model(48);
-        eq.options({.backend = ddx::rt::Backend::Background});
+        eq.options({.backend = ddx::rt::Backend::Compile});
         (void)eq.uses_kernel(); // launches the compile; the equation dies now
       });
     }

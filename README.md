@@ -753,20 +753,64 @@ run compiled code. The spellings above do not change, the answers do not change,
 and there is no compiler or kernel object to hold.
 
 Nothing compiles unless you ask. An equation left alone interprets, which costs
-no compiler and runs within ~1.4x of a kernel:
+no compiler and runs within ~1.4x of a kernel. Asking is what starts the build,
+so it overlaps whatever you do next rather than landing inside your first call,
+and **no call ever waits for it**: asking for a kernel is not agreeing to stand
+still until there is one.
+
+Values, gradient and Hessian are three separate graphs. Each is built the first
+time it is asked for, and building one is what starts its compile -- so a caller
+who only ever evaluates never builds a gradient, let alone compiles one. The
+whole dance:
 
 ```cpp
 auto eq = ddx::rt::equation(/* ... */);
 
-eq.options({.backend = ddx::rt::Backend::Compile});     // build now, calls wait for it
-eq.options({.backend = ddx::rt::Backend::Background});  // build now, calls sweep until it lands
+// No backend asked for, so no compiler exists and none is loaded.
+eq.evaluate(pt);                            // builds the values graph, sweeps it
+eq.jacobian(pt);                            // builds the gradient graph, sweeps it
+                                            //   -- the values graph is untouched
+
+eq.options({.backend = ddx::rt::Backend::Compile});
+// Discards every graph and starts the gradient one's compile here and now.
+// Returns immediately; nothing has been compiled yet.
+
+eq.jacobian(xs, f, g, n);                   // compile in flight -> swept
+eq.jacobian(xs, f, g, n);                   // still in flight   -> swept
+// ... assume the compile finishes about here ...
+eq.jacobian(xs, f, g, n);                   // kernel adopted    -> kernel
+eq.uses_kernel();                           // true, and from here on
+
+// Results either side of that switchover agree to rounding rather than to the
+// bit: the kernel contracts a multiply and an add into an FMA, the sweep does
+// not.  A loop running across it sees a ULP or two of movement.
+
+// Would rather have the kernel than an answer sooner?  Ask outright.  This is
+// the only call that blocks, and only because it was asked to.
+eq.wait_for_kernel();                       // true once it lands
+eq.jacobian(xs, f, g, n);                   // kernel, guaranteed
+
+// The other two graphs are built the first time they are asked for, and each is
+// launched the moment it is built -- so the compile for this one starts here,
+// not back at options(), and this call is still answered without waiting.
+eq.evaluate(pt);                            // builds the values graph -> swept
+// ... assume that compile finishes ...
+eq.evaluate(pt);                            // kernel
+
+eq.hessian(pt);                             // builds the Hessian graph -> swept
+// ... assume that compile finishes ...
+eq.hessian(xs, f, g, h, n);                 // kernel
+
+eq.options({.backend = ddx::rt::Backend::Interpret});
+// Drops a compile still in flight and empties every graph.
+eq.jacobian(xs, f, g, n);                   // swept, no compiler asked
+
+eq.options({.backend = ddx::rt::Backend::Compile});
+// Starts over from nothing.
 ```
 
-Asking is what starts the build, so it overlaps whatever you do next rather than
-landing inside your first call. `Background` never blocks: calls made while it
-compiles are swept and switch over when the kernel arrives, agreeing to rounding
-across that point rather than to the bit. `uses_kernel()` says which you are
-getting, and `wait_for_kernel()` waits for one.
+`uses_kernel()` says whether the gradient graph has a kernel yet;
+`wait_for_kernel()` is how to insist on one.
 
 Say what your batch is, since the kernel is built before any call exists to
 infer it from:
