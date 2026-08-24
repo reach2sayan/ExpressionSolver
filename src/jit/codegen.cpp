@@ -110,10 +110,10 @@ public:
       // u > 0 ? 1 : u < 0 ? -1 : u - u.  The last arm reaches only ±0 and
       // NaN, giving 0 and NaN as sign_impl does.
       llvm::Value *const zero = constant(0.0);
-      return b_.CreateSelect(
-          b_.CreateFCmpOGT(u, zero), constant(1.0),
-          b_.CreateSelect(b_.CreateFCmpOLT(u, zero), constant(-1.0),
-                          b_.CreateFSub(u, u)));
+      return b_.CreateSelect(b_.CreateFCmpOGT(u, zero), constant(1.0),
+                             b_.CreateSelect(b_.CreateFCmpOLT(u, zero),
+                                             constant(-1.0),
+                                             b_.CreateFSub(u, u)));
     }
     return call(op, {u});
   }
@@ -277,19 +277,17 @@ void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
 
 } // namespace
 
-std::unique_ptr<llvm::Module> emit_module(llvm::LLVMContext &ctx,
-                                          const rt::Graph<double> &g,
-                                          const Options &opt,
-                                          llvm::StringRef name,
-                                          const unsigned width) {
+std::unique_ptr<llvm::Module>
+emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
+            const Options &opt, llvm::StringRef name, const unsigned width) {
   auto m = std::make_unique<llvm::Module>("ddx.jit", ctx);
   llvm::Function *const fn = declare_kernel(*m, name);
   llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
   llvm::Type *const f64 = llvm::Type::getDoubleTy(ctx);
   llvm::Argument *const count = fn->getArg(4);
-  const Lanes lanes{
-      .width = width,
-      .ty = width > 1 ? llvm::FixedVectorType::get(f64, width) : f64};
+  const Lanes lanes{.width = width,
+                    .ty = width > 1 ? llvm::FixedVectorType::get(f64, width)
+                                    : f64};
 
   auto *const entry = llvm::BasicBlock::Create(ctx, "entry", fn);
   auto *const loop = llvm::BasicBlock::Create(ctx, "loop", fn);

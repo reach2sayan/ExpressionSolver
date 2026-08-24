@@ -748,10 +748,40 @@ for (std::size_t t = 0; t < n; t += chunk) {
 
 ### The JIT
 
-Configure with `-DDDX_BUILD_JIT=ON` and link `ddx::jit`, and the batch calls run
-compiled code; without it they run interpreted. The spellings above do not
-change, the answers do not change, and there is no compiler or kernel object to
-hold. Compilation happens on the first batch call that needs it.
+Configure with `-DDDX_BUILD_JIT=ON` and link `ddx::jit`, and the batch calls can
+run compiled code. The spellings above do not change, the answers do not change,
+and there is no compiler or kernel object to hold.
+
+Nothing compiles unless you ask. An equation left alone interprets, which costs
+no compiler and runs within ~1.4x of a kernel:
+
+```cpp
+auto eq = ddx::rt::equation(/* ... */);
+
+eq.options({.backend = ddx::rt::Backend::Compile});     // build now, calls wait for it
+eq.options({.backend = ddx::rt::Backend::Background});  // build now, calls sweep until it lands
+```
+
+Asking is what starts the build, so it overlaps whatever you do next rather than
+landing inside your first call. `Background` never blocks: calls made while it
+compiles are swept and switch over when the kernel arrives, agreeing to rounding
+across that point rather than to the bit. `uses_kernel()` says which you are
+getting, and `wait_for_kernel()` waits for one.
+
+Say what your batch is, since the kernel is built before any call exists to
+infer it from:
+
+```cpp
+eq.options({.backend = ddx::rt::Backend::Compile, .points = 1});     // a gradient per step
+eq.options({.backend = ddx::rt::Backend::Compile, .points = 4096});  // a batch at a time
+```
+
+`points` fixes how many points one loop iteration handles. A call carrying some
+other number is answered correctly, just not by the kernel that number would
+have built — at one point a scalar kernel is 1.2x to 4.1x quicker than the
+host's vector width, and over a batch the reverse by 3x. Setting `Options` to
+the value it already holds does nothing, and changing it abandons a compile
+still in flight rather than waiting for it.
 
 ---
 

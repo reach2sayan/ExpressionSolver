@@ -8,12 +8,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <thread>
-#include <tuple>
 #include <iterator>
 #include <numbers>
 #include <ranges>
 #include <span>
+#include <thread>
+#include <tuple>
 #include <vector>
 
 // One name for both kinds of expression.  The specialisation is keyed on the
@@ -471,10 +471,10 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   }
 }
 
-// A batch of one gets a scalar kernel and a batch gets a wide one, decided
-// from the call rather than from a flag -- and the two must agree to the bit,
-// since a lane is its own IEEE operation.
-TEST(RtEquation, TheBatchPicksTheKernelWidthAndTheAnswerIsTheSame) {
+// `points` states the batch, which picks the kernel width -- a stepping caller
+// gets a scalar kernel and a batch caller a wide one.  The two must agree to
+// the bit, since a lane is its own IEEE operation.
+TEST(RtEquation, PointsPicksTheKernelWidthAndTheAnswerIsTheSame) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
@@ -487,11 +487,13 @@ TEST(RtEquation, TheBatchPicksTheKernelWidthAndTheAnswerIsTheSame) {
     cy[i] = 0.7 - 0.002 * static_cast<double>(i);
   }
 
-  // One equation asked point at a time, another asked for the whole batch.
+  // One equation says it steps, the other says it batches.
   auto stepping = ddx::rt::equation(f);
   auto batched = ddx::rt::equation(f);
-  std::vector<double> f1(n), dx1(n), dy1(n), f2(n), dx2(n), dy2(n);
+  stepping.options({.backend = ddx::rt::Backend::Compile, .points = 1});
+  batched.options({.backend = ddx::rt::Backend::Compile, .points = n});
 
+  std::vector<double> f1(n), dx1(n), dy1(n), f2(n), dx2(n), dy2(n);
   for (std::size_t i = 0; i < n; ++i) {
     const double *const one[]{cx.data() + i, cy.data() + i};
     double *const values[]{f1.data() + i};
@@ -512,6 +514,64 @@ TEST(RtEquation, TheBatchPicksTheKernelWidthAndTheAnswerIsTheSame) {
     EXPECT_EQ(dx1[i], dx2[i]) << "d/dx at " << i;
     EXPECT_EQ(dy1[i], dy2[i]) << "d/dy at " << i;
   }
+}
+
+// Nothing compiles unless a backend is asked for, and what does not compile is
+// still right.
+TEST(RtEquation, TheDefaultCompilesNothing) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto eq = ddx::rt::equation(x * log(x) + y * y);
+
+  constexpr std::size_t n = 4;
+  std::vector<double> cx(n, 0.6), cy(n, 1.4), f(n), dx(n), dy(n);
+  const double *const columns[]{cx.data(), cy.data()};
+  double *const values[]{f.data()};
+  double *const partials[]{dx.data(), dy.data()};
+
+  ASSERT_TRUE(eq.jacobian(columns, values, partials, n).has_value());
+  EXPECT_FALSE(eq.uses_kernel()) << "a default equation reached for a compiler";
+  EXPECT_FALSE(eq.wait_for_kernel()) << "and one was in flight";
+  for (std::size_t i = 0; i < n; ++i) {
+    EXPECT_NEAR(f[i], 0.6 * std::log(0.6) + 1.4 * 1.4, 1e-12);
+    EXPECT_NEAR(dx[i], std::log(0.6) + 1.0, 1e-12);
+    EXPECT_NEAR(dy[i], 2 * 1.4, 1e-12);
+  }
+}
+
+// Choosing a backend is what starts the compile: it lands with no batch call
+// having been made at all.
+TEST(RtEquation, ChoosingABackendStartsTheBuild) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  auto eq = ddx::rt::equation(x * log(x) + exp(x));
+
+  eq.options({.backend = ddx::rt::Backend::Background});
+  EXPECT_TRUE(eq.wait_for_kernel()) << "options() launched nothing";
+  EXPECT_TRUE(eq.uses_kernel());
+
+  // And asking again for what is already built relaunches nothing: the kernel
+  // that landed is still the one in hand.
+  eq.options({.backend = ddx::rt::Backend::Background});
+  EXPECT_TRUE(eq.uses_kernel()) << "an identical options() threw the kernel away";
+}
+
+// Compile is the promise that a call answers from the kernel, so the very
+// first one must -- no sweep result may be observed.
+TEST(RtEquation, CompileHasItsKernelOnTheFirstCall) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  auto eq = ddx::rt::equation(x * log(x) + exp(x));
+  eq.options({.backend = ddx::rt::Backend::Compile});
+
+  double cx = 0.7, f = 0, dx = 0;
+  const double *const columns[]{&cx};
+  double *const values[]{&f};
+  double *const partials[]{&dx};
+  ASSERT_TRUE(eq.jacobian(columns, values, partials, 1).has_value());
+  EXPECT_TRUE(eq.uses_kernel()) << "the first call did not wait for its kernel";
+  EXPECT_NEAR(f, 0.7 * std::log(0.7) + std::exp(0.7), 1e-12);
 }
 
 // Compiling at all is one question and how to compile is another, so the lane
@@ -541,9 +601,12 @@ TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
     return std::tuple{f, dx, dy, kernel};
   };
 
-  const ddx::jit::Options scalar{.lanes = 1};
+  const ddx::jit::Options wide{.backend = ddx::rt::Backend::Compile,
+                               .lanes = 4};
+  const ddx::jit::Options scalar{.backend = ddx::rt::Backend::Compile,
+                                 .lanes = 1};
 
-  const auto [f0, dx0, dy0, k0] = run({});
+  const auto [f0, dx0, dy0, k0] = run(wide);
   const auto [f1, dx1, dy1, k1] = run(scalar);
 
   EXPECT_EQ(eq.options().lanes, 1u) << "the setter did not take";
@@ -559,7 +622,8 @@ TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
 }
 
 // Background takes the compile off the critical path: the block sweep answers
-// until the kernel lands, and what lands is what Compile would have blocked for.
+// until the kernel lands, and what lands is what Compile would have blocked
+// for.
 TEST(RtEquation, BackgroundCompilesBehindTheInterpreter) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -640,7 +704,9 @@ TEST(RtEquation, DroppingAMidFlightBackgroundCompileDoesNotBlock) {
     (void)eq.uses_kernel(); // launches the compile, adopts nothing yet
 
     const auto start = std::chrono::steady_clock::now();
-    { const auto dropped = std::move(eq); }
+    {
+      const auto dropped = std::move(eq);
+    }
     return std::chrono::steady_clock::now() - start;
   }();
 
@@ -654,7 +720,8 @@ TEST(RtEquation, DroppingAMidFlightBackgroundCompileDoesNotBlock) {
 }
 
 // Many threads on one Equation, mixing both lanes.  std::thread rather than
-// std::jthread: libc++ shipped jthread late and behind _LIBCPP_ENABLE_EXPERIMENTAL.
+// std::jthread: libc++ shipped jthread late and behind
+// _LIBCPP_ENABLE_EXPERIMENTAL.
 //
 // Background, deliberately: it is the path that abandons compiles mid-flight
 // when an equation goes away, which is what compile_async orders its statics
@@ -717,9 +784,9 @@ TEST(RtEquation, ConcurrentConstCallsAgreeWithOneThread) {
   }
 }
 
-// Two equations over ONE borrowed Builder, each asked for a Hessian from its own
-// thread.  rt::hessian appends to the arena, so before the sweep moved into the
-// constructor no per-Equation lock could have made this safe.
+// Two equations over ONE borrowed Builder, each asked for a Hessian from its
+// own thread.  rt::hessian appends to the arena, so before the sweep moved into
+// the constructor no per-Equation lock could have made this safe.
 TEST(RtEquation, TwoEquationsSharingAnArenaDoNotRaceIt) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");

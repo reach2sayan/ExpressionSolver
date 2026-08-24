@@ -170,7 +170,8 @@ TEST(JitValue, MaxMinSignedZeroTiesMatchTheInterpreter) {
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
-  const auto graph = Graph<>::freeze(b, std::array{max(x, y).id(b), min(x, y).id(b)});
+  const auto graph =
+      Graph<>::freeze(b, std::array{max(x, y).id(b), min(x, y).id(b)});
   const auto kernel = must_compile(graph);
   ASSERT_TRUE(static_cast<bool>(kernel));
 
@@ -328,8 +329,9 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
     const auto [v0, dx0, dy0] = run({.lanes = lanes});
     for (const auto &[what, o] :
          {std::pair{"slp", ddx::jit::Options{.lanes = lanes, .slp = true}},
-          std::pair{"loop_vectorize",
-                    ddx::jit::Options{.lanes = lanes, .loop_vectorize = true}}}) {
+          std::pair{
+              "loop_vectorize",
+              ddx::jit::Options{.lanes = lanes, .loop_vectorize = true}}}) {
       const auto [v, dx, dy] = run(o);
       for (std::size_t i = 0; i < n; ++i) {
         EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),

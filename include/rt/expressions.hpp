@@ -127,17 +127,6 @@ private:
 };
 
 template <impl::Numeric T>
-[[nodiscard]] constexpr RTExpression<T> make(OpCode op,
-                                             const RTExpression<T> &u) {
-  return RTExpression<T>::form(op, u);
-}
-template <impl::Numeric T>
-[[nodiscard]] constexpr RTExpression<T>
-make(OpCode op, const RTExpression<T> &l, const RTExpression<T> &r) {
-  return RTExpression<T>::form(op, l, r);
-}
-
-template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> var(Builder<T> &b,
                                             std::string_view name) {
   return RTExpression<T>{b, b.variable(name)};

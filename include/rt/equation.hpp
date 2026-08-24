@@ -21,7 +21,7 @@
 #include <future>
 #endif
 
-#include <mutex>        // unique_lock, which <shared_mutex> does not carry
+#include <mutex> // unique_lock, which <shared_mutex> does not carry
 #include <shared_mutex>
 
 #include <algorithm>
@@ -181,12 +181,22 @@ public:
   // Discards anything already compiled, so the choice holds however late.
   // The one non-const member: concurrent const calls are safe, a call
   // overlapping this one is the caller's race.
-  Equation &options(const jit::Options &opt) noexcept {
-    if (opt != options_) {
-      options_ = opt;
-      // A fresh cache rather than a cleared one: a reader still holding a
-      // snapshot from the old configuration finishes against it.
-      cache_ = std::make_unique<Cache>();
+  Equation &options(const jit::Options &opt) {
+    if (opt == options_) {
+      return *this; // Asking for what is already running relaunches nothing.
+    }
+    options_ = opt;
+    // A fresh cache rather than a cleared one: a reader still holding a
+    // snapshot from the old configuration finishes against it, and the compile
+    // the old one had in flight is abandoned rather than waited for.
+    cache_ = std::make_unique<Cache>();
+    // Choosing a backend is what starts the build, so that it overlaps whatever
+    // the caller does before their first call.  The values-and-Jacobian lane
+    // only: a caller who never asks for a Hessian should not compile one, and
+    // that lane prepares itself on first use as this one used to.
+    if (opt.backend != jit::Backend::Interpret && !poisoned()) {
+      const std::unique_lock fill{cache_->plain.mutex};
+      prepare(cache_->plain, false);
     }
     return *this;
   }
@@ -262,7 +272,7 @@ public:
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f,
            const rt_detail::CColumns<T *> auto &g, std::size_t n) const {
-    return dispatch(*snapshot(false, n), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(false), as_columns(xs), as_columns(f),
                     as_columns(g), {}, n);
   }
 
@@ -273,7 +283,7 @@ public:
           const rt_detail::CColumns<T *> auto &h, std::size_t n) const
     requires(output_dim == 1)
   {
-    return dispatch(*snapshot(true, n), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(true), as_columns(xs), as_columns(f),
                     as_columns(g), as_columns(h), n);
   }
 
@@ -283,8 +293,9 @@ public:
                       : std::optional{snapshot(false)->graph->layout().values};
   }
   [[nodiscard]] std::optional<std::size_t> jacobian_columns() const {
-    return poisoned() ? std::nullopt
-                      : std::optional{snapshot(false)->graph->layout().jacobian};
+    return poisoned()
+               ? std::nullopt
+               : std::optional{snapshot(false)->graph->layout().jacobian};
   }
   [[nodiscard]] std::optional<std::size_t> hessian_columns() const
     requires(output_dim == 1)
@@ -410,31 +421,52 @@ private:
 
   // Ownership, not a reference: a reader holds its share for the whole call, so
   // publishing cannot pull the graph out from under a dispatch() in flight.
-  // `points` is the batch the caller is about to run, or 0 where the question
-  // did not come from a batch call -- it decides how wide the kernel is
-  // emitted, and nothing else.
   [[nodiscard]] std::shared_ptr<const Compiled>
-  snapshot(bool want_hessian, std::size_t points = 0) const {
+  snapshot(bool want_hessian) const {
     Lane &lane = want_hessian ? cache_->with_hessian : cache_->plain;
     {
       const std::shared_lock read{lane.mutex};
-      if (lane.ready && !arrived(lane)) {
+      if (lane.ready && !settling(lane)) {
         return lane.ready;
       }
     }
     const std::unique_lock fill{lane.mutex}; // another thread may have won
     if (!lane.ready) {
-      lane.ready =
-          std::make_shared<const Compiled>(freeze(want_hessian, lane, points));
-    } else if (arrived(lane)) {
-      // A refused compile leaves the kernel empty, and the sweep stays.
-      const auto &landed = lane.pending.get();
-      lane.ready = std::make_shared<const Compiled>(
-          Compiled{.graph = lane.ready->graph,
-                   .kernel = landed ? *landed : jit::Kernel{}});
-      lane.pending = {};
+      prepare(lane, want_hessian);
+    }
+#ifdef DDX_HAS_JIT
+    // Compile is the promise that a call answers from the kernel, so this is
+    // where it is kept -- once, since adopting clears `pending`.
+    if (options_.backend == jit::Backend::Compile && lane.pending.valid()) {
+      lane.pending.wait();
+    }
+#endif
+    if (arrived(lane)) {
+      adopt(lane);
     }
     return lane.ready;
+  }
+
+  // Whether the lane still owes the reader work before its snapshot is the
+  // best one available: a landed kernel to publish, or a compile to wait for.
+  [[nodiscard]] bool settling([[maybe_unused]] const Lane &lane) const {
+#ifdef DDX_HAS_JIT
+    return arrived(lane) || (options_.backend == jit::Backend::Compile &&
+                             lane.pending.valid());
+#else
+    return false;
+#endif
+  }
+
+  // Republish rather than write into what a reader may be holding.
+  void adopt([[maybe_unused]] Lane &lane) const {
+#ifdef DDX_HAS_JIT
+    // A refused compile leaves the kernel empty, and the sweep stays.
+    const auto &landed = lane.pending.get();
+    lane.ready = std::make_shared<const Compiled>(Compiled{
+        .graph = lane.ready->graph, .kernel = landed ? *landed : jit::Kernel{}});
+    lane.pending = {};
+#endif
   }
 
   // Whether a background compile has finished but not yet been published.
@@ -450,13 +482,16 @@ private:
 #endif
   }
 
-  // Every derivative it needs was swept in the constructor, so this only reads
-  // the arena -- Graph::freeze takes it by const reference.
-  Compiled freeze(bool want_hessian, [[maybe_unused]] Lane &lane,
-                  [[maybe_unused]] std::size_t points = 0) const {
+  // Freeze this lane's graph and, under a compiling backend, put the compile in
+  // flight.  Every derivative it needs was swept in the constructor, so this
+  // only reads the arena -- Graph::freeze takes it by const reference.  Called
+  // under the lane's write lock, from options() and from snapshot().
+  void prepare(Lane &lane, bool want_hessian) const {
     // No arena to build from.  An empty Graph reports zero columns of any kind.
     if (bad_) {
-      return Compiled{.graph = std::make_shared<const rt::Graph<T>>()};
+      lane.ready = std::make_shared<const Compiled>(
+          Compiled{.graph = std::make_shared<const rt::Graph<T>>()});
+      return;
     }
     rt::GraphBuilder<T> gb{*arena_};
     gb.values_from(roots_);
@@ -467,35 +502,29 @@ private:
     Compiled out{.graph = std::make_shared<const rt::Graph<T>>(gb.build())};
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
-      auto *const c = options_.backend != jit::Backend::Interpret ? compiler()
-                                                                  : nullptr;
-      // Not an error a caller handles: run() falls back to interpret().
+      // Always asynchronous, Compile included: what separates the two is where
+      // the result is waited for, not where the work starts.  Not an error a
+      // caller handles -- run() falls back to interpret().
+      auto *const c =
+          options_.backend != jit::Backend::Interpret ? compiler() : nullptr;
       if (c != nullptr) {
-        const jit::Options opt = for_batch(points);
-        if (options_.backend == jit::Backend::Background) {
-          lane.pending = c->compile_async(out.graph, opt);
-        } else if (auto k = c->compile(*out.graph, opt)) {
-          out.kernel = std::move(*k);
-        }
+        lane.pending = c->compile_async(out.graph, effective_options());
       }
     }
 #endif
-    return out;
+    lane.ready = std::make_shared<const Compiled>(std::move(out));
   }
 
 #ifdef DDX_HAS_JIT
-  // How wide to emit, from the batch the first call brought.  A kernel `w`
-  // lanes wide computes `w` points and stores the ones asked for, so on a
-  // batch of one it does a register's worth of work to answer for a single
-  // point -- measured at 16 variables, 1.2x to 4.1x of the scalar kernel.
-  // Below kLanes the sweep goes scalar for the same reason, so the two agree
-  // on where the batch stops being a batch.
-  //
-  // Only when the caller left `lanes` at 0, which is what "pick for me" means;
-  // a stated width is honoured whatever the batch.
-  [[nodiscard]] jit::Options for_batch(std::size_t points) const noexcept {
+  // How wide to emit, from the batch the caller said they have.  A kernel `w`
+  // lanes wide computes `w` points and stores the ones asked for, so on a batch
+  // of one it does a register's worth of work to answer for a single point --
+  // measured at 16 variables, 1.2x to 4.1x of the scalar kernel.  Below kLanes
+  // the sweep goes scalar for the same reason, so the two agree on where a
+  // batch stops being a batch.  A stated `lanes` is honoured as it stands.
+  [[nodiscard]] jit::Options effective_options() const noexcept {
     jit::Options opt = options_;
-    if (opt.lanes == 0 && points != 0 && points < kLanes) {
+    if (opt.lanes == 0 && opt.points < kLanes) {
       opt.lanes = 1;
     }
     return opt;
@@ -630,11 +659,11 @@ private:
   // Eager: one reverse sweep is microseconds, and it keeps every per-point
   // accessor const and constexpr.
   rt::Jacobian derivative_;
-  // Swept once in the constructor and never touched again, which is the whole of
-  // what makes the const members safe to call concurrently: rt::hessian
-  // *appends to the arena*, and an arena a caller lent us may be lent to another
-  // Equation as well.  ~1.2M nodes and 350 ms for a 50-species mixture, against
-  // a graph build that would otherwise sweep it a second time.
+  // Swept once in the constructor and never touched again, which is the whole
+  // of what makes the const members safe to call concurrently: rt::hessian
+  // *appends to the arena*, and an arena a caller lent us may be lent to
+  // another Equation as well.  ~1.2M nodes and 350 ms for a 50-species mixture,
+  // against a graph build that would otherwise sweep it a second time.
   std::vector<rt::Hessian> hessians_;
   // Owned outright -- nothing outside an Equation holds it -- which is also
   // what keeps a constant-evaluated Equation destructible: unique_ptr's

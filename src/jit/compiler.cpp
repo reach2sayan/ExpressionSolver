@@ -223,10 +223,9 @@ private:
     break;
   }
 
-  llvm::ModulePassManager mpm =
-      level == llvm::OptimizationLevel::O0
-          ? pb.buildO0DefaultPipeline(level)
-          : pb.buildPerModuleDefaultPipeline(level);
+  llvm::ModulePassManager mpm = level == llvm::OptimizationLevel::O0
+                                    ? pb.buildO0DefaultPipeline(level)
+                                    : pb.buildPerModuleDefaultPipeline(level);
   if (want_veclib(triple, opt, have_libmvec)) {
     llvm::FunctionPassManager fpm;
     fpm.addPass(llvm::ReplaceWithVeclib());
@@ -357,11 +356,11 @@ private:
 // `warm_` being a *member* is the whole point, and it is what makes the order a
 // class invariant rather than a rule about where a call gets written.  LLVM
 // registers atexit entries lazily, *while it compiles*; anything registered
-// after this object is destroyed before it, so the pool's join at exit would run
-// its workers against freed LLVM state -- which faults, or hangs in the join.
-// A member completes before the enclosing object does, so compiling inside one
-// puts LLVM's entries strictly below ours however the members are ordered, and
-// the pool cannot be reached without having gone through it.
+// after this object is destroyed before it, so the pool's join at exit would
+// run its workers against freed LLVM state -- which faults, or hangs in the
+// join. A member completes before the enclosing object does, so compiling
+// inside one puts LLVM's entries strictly below ours however the members are
+// ordered, and the pool cannot be reached without having gone through it.
 // Templated only so it need not name Compiler::Impl, which is private.
 template <typename I> class Compiles : private impl::pinned {
 public:
@@ -444,8 +443,8 @@ struct Compiler::Impl {
             .setJITTargetMachineBuilder(std::move(*jtmb))
             .setCompileFunctionCreator(
                 [](llvm::orc::JITTargetMachineBuilder machine)
-                    -> llvm::Expected<
-                        std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
+                    -> llvm::Expected<std::unique_ptr<
+                        llvm::orc::IRCompileLayer::IRCompiler>> {
                   return std::make_unique<LevelledCompiler>(std::move(machine));
                 })
             .create();
@@ -495,9 +494,7 @@ struct Compiler::Impl {
                                           CompileReport &rep) {
     Compilation work{Host{*self->jit, *self->machine, self->triple,
                           self->libmvec, self->lanes, self},
-                     g,
-                     opt,
-                     "ddx_kernel_" + std::to_string(self->counter++),
+                     g, opt, "ddx_kernel_" + std::to_string(self->counter++),
                      rep};
     return work();
   }

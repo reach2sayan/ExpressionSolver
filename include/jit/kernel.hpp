@@ -48,12 +48,21 @@ template <typename T> using result = std::expected<T, error>;
 inline constexpr unsigned default_opt_level = DDX_JIT_DEFAULT_OPT;
 inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 
-// Whether an equation compiles its graph.  Not named Auto: nothing decides, and
-// deciding would need the one thing an equation does not know -- how many times
-// the kernel will be called, which is what a compile has to repay.  Interpret is
-// a real alternative, the block sweep running within ~1.4x of a kernel with no
-// compiler involved -- which is also what makes Background worth having: the
-// compile leaves the critical path and the sweep covers until it lands.
+// Whether an equation compiles its graph, and what a call does while it is
+// still compiling.  Not named Auto: nothing decides, and deciding would need
+// the one thing an equation does not know -- how many times the kernel will be
+// called, which is what a compile has to repay.
+//
+//   Interpret   the default.  No compiler is asked, so a program that never
+//               says otherwise never loads LLVM.  Not a fallback: the block
+//               sweep runs within ~1.4x of a kernel.
+//   Background  Equation::options() starts the compile there and then; calls
+//               before it lands are swept, and switch over when it arrives.
+//   Compile     the same launch, and the first call waits for it, so results
+//               are the kernel's from the start.
+//
+// Both compiling backends start at the moment they are *asked for*, not at the
+// first call, so the compile overlaps whatever the caller does next.
 //
 // Background alone moves results in the last bits at the moment the kernel
 // arrives: the kernel contracts a multiply and an add into an FMA where the
@@ -62,12 +71,18 @@ inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 //
 // A compile still in flight when the process exits is joined then, not
 // abandoned: dropping the equation costs nothing, exiting waits for LLVM.
-enum class Backend : std::uint8_t { Compile, Background, Interpret };
+enum class Backend : std::uint8_t { Interpret, Background, Compile };
 
 struct Options {
-  // Read by Equation::freeze(), never by Compiler::compile(), which is asked
-  // outright.
-  Backend backend = Backend::Compile;
+  // Read by Equation, never by Compiler::compile(), which is asked outright.
+  Backend backend = Backend::Interpret;
+  // The batch a caller intends to hand to one jacobian() or hessian() call.
+  // Stated rather than inferred: the kernel is built when a backend is chosen,
+  // which is before any call exists to read an `n` from.  It decides the lane
+  // width and nothing else -- a call carrying some other number of points is
+  // answered correctly, just not by the kernel that number would have built.
+  // 1 is the minimisation case: a gradient per step, at one point.
+  std::size_t points = 1;
   // Points per loop iteration: the body is emitted over <lanes x double>.
   // 0 is the host's widest vector register in doubles -- 4 on AVX2, 8 on
   // AVX-512 -- and 1 is scalar.  Any width compiles; the backend splits a
@@ -75,12 +90,11 @@ struct Options {
   // are independent IEEE operations, and a transcendental is the same scalar
   // libm call per lane.
   //
-  // Set it to 1 for a caller with one point in hand -- a minimisation routine
-  // asking for a gradient per step.  A kernel `lanes` wide computes a
-  // register's worth and stores the one point that was asked for, which is the
-  // right trade for a batch and the wrong one for a single point: measured at
-  // 16 variables, one point per call, a scalar kernel is 1.2x to 4.1x faster
-  // than the host's width.
+  // 0 derives it from `points`, which is what a caller who has said what their
+  // batch is should leave it at.  A kernel `lanes` wide computes a register's
+  // worth of points and stores the ones asked for, which is the right trade for
+  // a batch and the wrong one for a single point: measured at 16 variables, one
+  // point per call, a scalar kernel is 1.2x to 4.1x faster than the host's.
   unsigned lanes = 0;
   // LLVM's optimisation level for the IR pipeline, 0 to 3.
   unsigned opt_level = default_opt_level;
