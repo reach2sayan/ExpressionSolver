@@ -126,14 +126,14 @@ namespace detail {
 // stateless node storage.
 template <typename Derived, Numeric T>
 class ConstantOps : public EquationConvertible<Derived> {
-  [[nodiscard]] constexpr const Derived &self() const noexcept {
-    return static_cast<const Derived &>(*this);
-  }
-
 public:
   using value_type = T;
 
-  [[nodiscard]] constexpr T get() const noexcept { return self().read(); }
+  // A constant is the one thing that evaluates without a point, so its own
+  // nullary eval() has to be named alongside the base's pack form.
+  using EquationConvertible<Derived>::eval;
+
+  [[nodiscard]] constexpr T get() const noexcept { return this->self().read(); }
   [[nodiscard]] constexpr T eval() const noexcept { return get(); }
   constexpr operator T() const noexcept { return get(); }
 
@@ -169,17 +169,6 @@ public:
     } else {
       return static_cast<T>(derivative());
     }
-  }
-
-  template <CEvalArg... Args>
-    requires(sizeof...(Args) > 0)
-  [[nodiscard]] constexpr auto eval(const Args &...args) const {
-    return detail::eval_dispatch(self(), args...);
-  }
-
-  template <FixedString Seed, CEvalArg... Args>
-  [[nodiscard]] constexpr auto eval_with_tangent(const Args &...args) const {
-    return detail::tangent_dispatch<Seed>(self(), args...);
   }
 };
 
@@ -232,7 +221,7 @@ public:
   using value_type = T;
 
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    return Lit<T, Frozen ? 0 : 1>{};
+    return Lit < T, Frozen ? 0 : 1 > {};
   }
 
   template <std::size_t Base = 0>
@@ -260,18 +249,6 @@ public:
     } else {
       return vals[idx];
     }
-  }
-
-  [[nodiscard]] constexpr auto eval(const CEvalArg auto &...args) const
-    requires(sizeof...(args) > 0)
-  {
-    return detail::eval_dispatch(*this, args...);
-  }
-
-  template <FixedString Seed>
-  [[nodiscard]] constexpr auto
-  eval_with_tangent(const CEvalArg auto &...args) const {
-    return detail::tangent_dispatch<Seed>(*this, args...);
   }
 };
 

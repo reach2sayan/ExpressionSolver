@@ -2,8 +2,10 @@
 
 #include "ops/unary_math.hpp" // DDX_UNARY_MATH_TABLE
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 // The runtime mirror of the compile-time operation set.  Rows are (factory
@@ -82,6 +84,14 @@ inline constexpr std::array op_info = [] {
   return t;
 }();
 
+// A duplicate would make code_of_label() ambiguous, and the compile-time ops
+// pick their enumerator by label.
+static_assert([] {
+  auto labels = op_info;
+  std::ranges::sort(labels, {}, &OpInfo::label);
+  return std::ranges::adjacent_find(labels, {}, &OpInfo::label) == labels.end();
+}());
+
 } // namespace detail
 
 // An OpCode from outside the builder -- a deserialised graph, a cast byte --
@@ -89,6 +99,19 @@ inline constexpr std::array op_info = [] {
 [[nodiscard]] constexpr std::string_view label_of(OpCode op) noexcept {
   const auto i = static_cast<std::size_t>(op);
   return i < op_count ? detail::op_info[i].label : "?";
+}
+
+// The compile-time operations carry the same labels their enumerators do, so
+// lowering a tree is this lookup rather than a second table.  consteval: a
+// linear scan of 31 rows is the price of not keeping a second table, and
+// lowering is the only caller.
+[[nodiscard]] consteval std::optional<OpCode>
+code_of_label(std::string_view label) noexcept {
+  const auto row =
+      std::ranges::find(detail::op_info, label, &detail::OpInfo::label);
+  return row == detail::op_info.end() ? std::nullopt
+                                      : std::optional{static_cast<OpCode>(
+                                            row - detail::op_info.begin())};
 }
 
 [[nodiscard]] constexpr std::uint8_t arity_of(OpCode op) noexcept {

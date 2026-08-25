@@ -25,28 +25,13 @@ struct frozen_variable<Variable<T, C, F>> {
 template <CVariable T>
 using frozen_variable_t = typename frozen_variable<T>::type;
 
-template <CExpression T> consteval auto make_all_constant_impl() {
+// The two leaf rewrites are complements: one freezes the symbol named, the
+// other freezes every symbol but it.  The rest -- rebuilding a node from
+// rewritten children, leaving any other leaf alone -- is one walk.
+template <CFixedString auto symbol, bool FreezeMatch, CExpression T>
+consteval auto transform_leaves() {
   if constexpr (CVariable<T>) {
-    return std::type_identity<frozen_variable_t<T>>{};
-  } else if constexpr (CExpressionNode<T>) {
-    return []<COperation Op, CExpression... C>(
-               std::type_identity<Expression<Op, C...>>) {
-      return std::type_identity<Expression<
-          Op, typename decltype(make_all_constant_impl<C>())::type...>>{};
-    }(std::type_identity<T>{});
-  } else {
-    return std::type_identity<T>{};
-  }
-}
-
-template <CExpression TExpression>
-using as_const_expression =
-    typename decltype(make_all_constant_impl<TExpression>())::type;
-
-template <CFixedString auto symbol, CExpression T>
-consteval auto replace_matching_var_impl() {
-  if constexpr (CVariable<T>) {
-    if constexpr (T::label == symbol) {
+    if constexpr ((T::label == symbol) == FreezeMatch) {
       return std::type_identity<frozen_variable_t<T>>{};
     } else {
       return std::type_identity<T>{};
@@ -55,8 +40,8 @@ consteval auto replace_matching_var_impl() {
     return []<COperation Op, CExpression... C>(
                std::type_identity<Expression<Op, C...>>) {
       return std::type_identity<
-          Expression<Op, typename decltype(replace_matching_var_impl<
-                                           symbol, C>())::type...>>{};
+          Expression<Op, typename decltype(transform_leaves<symbol, FreezeMatch,
+                                                            C>())::type...>>{};
     }(std::type_identity<T>{});
   } else {
     return std::type_identity<T>{};
@@ -65,7 +50,7 @@ consteval auto replace_matching_var_impl() {
 
 template <CFixedString auto symbol, CExpression T>
 using replace_matching_variable_as_const_t =
-    typename decltype(replace_matching_var_impl<symbol, T>())::type;
+    typename decltype(transform_leaves<symbol, true, T>())::type;
 
 template <CFixedString auto symbol, Numeric T, bool F>
 constexpr auto make_const_variable(const Variable<T, symbol, F> &) noexcept {
@@ -99,28 +84,8 @@ constexpr auto make_const_variable(const Expression<Op, C...> &expr) noexcept
 }
 
 template <CFixedString auto symbol, CExpression Expr>
-consteval auto constify_unmatched_var_impl() {
-  if constexpr (CConstant<Expr>) {
-    return std::type_identity<Expr>{};
-  } else if constexpr (CVariable<Expr>) {
-    if constexpr (Expr::label == symbol) {
-      return std::type_identity<Expr>{};
-    } else {
-      return std::type_identity<frozen_variable_t<Expr>>{};
-    }
-  } else if constexpr (CExpressionNode<Expr>) { // already nested correctly
-    return []<COperation Op, CExpression... C>(
-               std::type_identity<Expression<Op, C...>>) {
-      return std::type_identity<
-          Expression<Op, typename decltype(constify_unmatched_var_impl<
-                                           symbol, C>())::type...>>{};
-    }(std::type_identity<Expr>{});
-  }
-}
-
-template <CFixedString auto symbol, CExpression Expr>
 using constify_unmatched_var_t =
-    typename decltype(constify_unmatched_var_impl<symbol, Expr>())::type;
+    typename decltype(transform_leaves<symbol, false, Expr>())::type;
 
 template <CFixedString auto symbol, Numeric T, bool F>
 constexpr auto

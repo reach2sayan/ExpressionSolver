@@ -22,6 +22,45 @@ TEST(NewMathFunctions, MaxMinTiesAverageAndNaNPropagatesSymmetrically) {
   EXPECT_DOUBLE_EQ(abs(Dual<double>{0.0, 1.0}).deriv(), 0.0);
   EXPECT_TRUE(std::isnan(abs(Dual<double>{qnan, 1.0}).deriv()));
 }
+
+// The scalar-first spellings are separate overloads that run their two
+// comparisons in the opposite order, so each pair is checked in the derivative
+// as well as the value -- Dual's operator== compares only the value.
+TEST(NewMathFunctions, MaxMinAgreeWhicheverSideTheScalarIsOn) {
+  const auto same = [](const Dual<double> &l, const Dual<double> &r) {
+    ASSERT_EQ(std::isnan(l.value()), std::isnan(r.value()));
+    ASSERT_EQ(std::isnan(l.deriv()), std::isnan(r.deriv()));
+    if (!std::isnan(l.value())) {
+      EXPECT_DOUBLE_EQ(l.value(), r.value());
+    }
+    if (!std::isnan(l.deriv())) {
+      EXPECT_DOUBLE_EQ(l.deriv(), r.deriv());
+    }
+  };
+  const Dual<double> below{2.0, 1.0};
+  const Dual<double> above{9.0, 3.0};
+  const Dual<double> tie{5.0, 7.0};
+  const double s = 5.0;
+  const double qnan = std::nan("");
+
+  for (const auto &d : {below, above, tie}) {
+    same(max(d, s), max(s, d));
+    same(min(d, s), min(s, d));
+  }
+  same(max(below, qnan), max(qnan, below));
+  same(min(below, qnan), min(qnan, below));
+
+  // The winner is taken whole, so a losing dual contributes no derivative and
+  // the scalar none either way; a tie halves, as it does between two duals.
+  EXPECT_DOUBLE_EQ(max(below, s).deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(min(below, s).deriv(), 1.0);
+  EXPECT_DOUBLE_EQ(max(above, s).deriv(), 3.0);
+  EXPECT_DOUBLE_EQ(min(above, s).deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(max(tie, s).deriv(), 3.5);
+  EXPECT_DOUBLE_EQ(min(tie, s).deriv(), 3.5);
+  EXPECT_TRUE(std::isnan(max(below, qnan).value()));
+  EXPECT_TRUE(std::isnan(max(below, qnan).deriv()));
+}
 // ---- Forward lazy-dual mode (Variable<Dual>) ------------------------------
 TEST(NewMathFunctions, ForwardDualUnary) {
   double x0 = 0.5;

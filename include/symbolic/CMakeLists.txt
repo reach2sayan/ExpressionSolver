@@ -4,7 +4,6 @@
 # structure is known when the program is compiled should be a type.
 target_sources(ddx_symbolic INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/symbol.hpp>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/workspace.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/expressions.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/simplify.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/traits.hpp>

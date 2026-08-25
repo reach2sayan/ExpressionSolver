@@ -16,7 +16,6 @@ namespace detail {
 // resolve.  Arithmetic short-circuits: ADL has no namespace to search.
 template <typename Fn> inline constexpr bool is_field_op_v = false;
 template <> inline constexpr bool is_field_op_v<std::plus<>> = true;
-template <> inline constexpr bool is_field_op_v<std::minus<>> = true;
 template <> inline constexpr bool is_field_op_v<std::multiplies<>> = true;
 template <> inline constexpr bool is_field_op_v<std::divides<>> = true;
 template <> inline constexpr bool is_field_op_v<std::negate<>> = true;

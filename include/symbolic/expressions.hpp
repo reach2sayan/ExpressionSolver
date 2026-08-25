@@ -49,15 +49,6 @@ template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 // compile-time definition carries the CExpression constraint itself.
 template <typename... Ts> class Equation;
 
-// Declared here and defined out of line, Equation being incomplete.  Keep it a
-// constrained *template*: a plain operator Equation<Derived>() is a candidate
-// for every is_convertible query, and answering one asks again.
-template <typename Derived> struct EquationConvertible {
-  template <typename Eq>
-    requires std::same_as<Eq, Equation<Derived>>
-  constexpr operator Eq() const noexcept;
-};
-
 template <Numeric T, auto... V>
 inline constexpr bool is_expression_type_v<Lit<T, V...>> = true;
 
@@ -143,32 +134,45 @@ template <auto Seed, CExpression Expr, CEvalArg... Args>
                                               const Args &...args);
 } // namespace detail
 
-template <CExpression Derived, COperation Op>
-class ExpressionOps : public BaseExpression<Op>,
-                      public EquationConvertible<Derived> {
-  [[nodiscard]] constexpr const Derived &self() const noexcept {
-    return static_cast<const Derived &>(*this);
-  }
-
-public:
-  using op_type = Op;
-  using value_type = typename BaseExpression<Op>::value_type;
+// Declared here and defined out of line, Equation being incomplete.  Keep the
+// conversion a constrained *template*: a plain operator Equation<Derived>() is
+// a candidate for every is_convertible query, and answering one asks again.
+//
+// It also carries the two members every node and leaf spells the same way --
+// both are a dispatch on self(), and self() was itself written twice.
+template <typename Derived> struct EquationConvertible {
+  template <typename Eq>
+    requires std::same_as<Eq, Equation<Derived>>
+  constexpr operator Eq() const noexcept;
 
   // The tree stores no values, so evaluation always takes a point.
   [[nodiscard]] constexpr auto eval(const CEvalArg auto &...args) const {
     return detail::eval_dispatch(self(), args...);
   }
 
-  [[nodiscard]] constexpr auto derivative() const noexcept {
-    return std::apply(
-        [](const auto &...e) noexcept { return Op::derivative(e...); },
-        self().expressions());
-  }
-
   template <FixedString Seed>
   [[nodiscard]] constexpr auto
   eval_with_tangent(const CEvalArg auto &...args) const {
     return detail::tangent_dispatch<Seed>(self(), args...);
+  }
+
+protected:
+  [[nodiscard]] constexpr const Derived &self() const noexcept {
+    return static_cast<const Derived &>(*this);
+  }
+};
+
+template <CExpression Derived, COperation Op>
+class ExpressionOps : public BaseExpression<Op>,
+                      public EquationConvertible<Derived> {
+public:
+  using op_type = Op;
+  using value_type = typename BaseExpression<Op>::value_type;
+
+  [[nodiscard]] constexpr auto derivative() const noexcept {
+    return std::apply(
+        [](const auto &...e) noexcept { return Op::derivative(e...); },
+        this->self().expressions());
   }
 
   // The one seeded sweep.  U is deduced from the point, so the arithmetic
@@ -180,7 +184,7 @@ public:
         [&](const auto &...e) noexcept {
           return Op::eval(EvalResult<U>{e.template eval_seeded<Syms>(vals)}...);
         },
-        self().expressions());
+        this->self().expressions());
   }
 
   template <std::size_t Base = 0>
@@ -191,7 +195,7 @@ public:
       auto child_adj =
           Op::template adjoints<Base, child_base_at<Base, Kids, I>()...>(adj,
                                                                          cache);
-      (std::get<I>(self().expressions())
+      (std::get<I>(this->self().expressions())
            .template backward<child_base_at<Base, Kids, I>()>(
                syms, std::move(child_adj[I]), grads, cache),
        ...);

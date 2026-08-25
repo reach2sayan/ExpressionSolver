@@ -37,7 +37,8 @@ struct Coloring {
   std::vector<std::size_t> color; // per symbol
   std::size_t count = 0;
   std::vector<std::size_t> scatter; // count * n; column a (colour, row) owns
-  [[nodiscard]] std::size_t target(std::size_t c, std::size_t row) const {
+  [[nodiscard]] constexpr std::size_t target(std::size_t c,
+                                             std::size_t row) const {
     return by_color(scatter, count, color.size())[c, row];
   }
 };

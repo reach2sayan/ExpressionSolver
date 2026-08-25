@@ -55,34 +55,63 @@ static_assert(binomial_fixed<2>(1) == 0);
 
 } // namespace detail
 
+namespace detail {
+// The typedefs, the extents and the six predicates [mdspan.layout.reqmts] asks
+// of every mapping, so a layout writes only what it actually maps.  md.hpp's
+// CLayoutMappingOf checks this contract; this supplies it.  operator== stays
+// with the derived: hoisted, it would compare two different layouts sharing an
+// Ext.
+template <md::CExtents Ext, bool Unique, bool Exhaustive, bool Strided>
+class mapping_base {
+public:
+  using extents_type = Ext;
+  using index_type = typename Ext::index_type;
+  using rank_type = typename Ext::rank_type;
+
+  constexpr mapping_base() noexcept = default;
+  constexpr explicit mapping_base(const Ext &e) noexcept : ext_(e) {}
+
+  [[nodiscard]] constexpr const Ext &extents() const noexcept { return ext_; }
+
+  static constexpr bool is_always_unique() noexcept { return Unique; }
+  static constexpr bool is_always_exhaustive() noexcept { return Exhaustive; }
+  static constexpr bool is_always_strided() noexcept { return Strided; }
+  [[nodiscard]] constexpr bool is_unique() const noexcept { return Unique; }
+  [[nodiscard]] constexpr bool is_exhaustive() const noexcept {
+    return Exhaustive;
+  }
+  [[nodiscard]] constexpr bool is_strided() const noexcept { return Strided; }
+
+protected:
+  Ext ext_{};
+};
+} // namespace detail
+
 // Lead dense leading axes over a simplex-packed remainder.  By Schwarz only
 // non-decreasing multi-indices over the derivative axes carry distinct values:
 // C(N + Order - 1, Order) against N^Order dense cells.  Lead covers a
 // vector-valued Equation's output axis; Lead == 0 is the scalar case.  The
 // symmetric part ranks the sorted multiset in colex order, via b_t = a_t + t.
 template <std::size_t Lead> struct layout_leading_simplex {
-  template <md::CExtents Ext> class mapping {
+  // Two axes can only be interchangeable if they have the same length.
+  template <md::CExtents Ext>
+  class mapping
+      : public detail::mapping_base<Ext, Ext::rank() - Lead == 1, true, false> {
     static_assert(Ext::rank() > Lead,
                   "layout_leading_simplex needs at least one symmetric axis");
     static constexpr std::size_t kOrder = Ext::rank() - Lead;
+    using base_t = detail::mapping_base<Ext, kOrder == 1, true, false>;
 
   public:
-    using extents_type = Ext;
-    using index_type = typename Ext::index_type;
-    using rank_type = typename Ext::rank_type;
+    using base_t::base_t;
+    using typename base_t::index_type;
     using layout_type = layout_leading_simplex;
-
-    // Two axes can only be interchangeable if they have the same length.
-    constexpr mapping() noexcept = default;
-    constexpr explicit mapping(const Ext &e) noexcept : ext_(e) {}
-
-    [[nodiscard]] constexpr const Ext &extents() const noexcept { return ext_; }
 
     [[nodiscard]] constexpr index_type required_span_size() const noexcept {
       const index_type lead = std::ranges::fold_left(
           std::views::iota(std::size_t{0}, Lead), index_type{1},
           [this](index_type acc, std::size_t r) {
-            return acc * ext_.extent(r);
+            return acc * this->ext_.extent(r);
           });
       return lead * block_size();
     }
@@ -97,7 +126,7 @@ template <std::size_t Lead> struct layout_leading_simplex {
       const index_type lead = std::ranges::fold_left(
           std::views::iota(std::size_t{0}, Lead), index_type{0},
           [&](index_type acc, std::size_t r) {
-            return acc * ext_.extent(r) + all[r];
+            return acc * this->ext_.extent(r) + all[r];
           });
 
       std::array<index_type, kOrder> a{};
@@ -114,18 +143,9 @@ template <std::size_t Lead> struct layout_leading_simplex {
       return lead * block_size() + slot;
     }
 
-    static constexpr bool is_always_unique() noexcept { return kOrder == 1; }
-    static constexpr bool is_always_exhaustive() noexcept { return true; }
-    static constexpr bool is_always_strided() noexcept { return false; }
-    [[nodiscard]] constexpr bool is_unique() const noexcept {
-      return kOrder == 1;
-    }
-    [[nodiscard]] constexpr bool is_exhaustive() const noexcept { return true; }
-    [[nodiscard]] constexpr bool is_strided() const noexcept { return false; }
-
     [[nodiscard]] friend constexpr bool operator==(const mapping &a,
                                                    const mapping &b) noexcept {
-      return a.ext_ == b.ext_;
+      return a.extents() == b.extents();
     }
 
   private:
@@ -133,14 +153,18 @@ template <std::size_t Lead> struct layout_leading_simplex {
     // this layout *is*; required_span_size and operator() are how it is asked.
     [[nodiscard]] constexpr index_type block_size() const noexcept {
       return static_cast<index_type>(detail::binomial_fixed<kOrder>(
-          static_cast<std::size_t>(ext_.extent(Lead)) + kOrder - 1));
+          static_cast<std::size_t>(this->ext_.extent(Lead)) + kOrder - 1));
     }
-
-    Ext ext_{};
   };
 };
 
 // The scalar case: every axis is a derivative axis.
 using layout_simplex_packed = layout_leading_simplex<0>;
+
+// md.hpp asserts the standard layouts against the contract; these are ours.
+static_assert(
+    md::CLayoutFor<layout_simplex_packed, md::dextents<std::size_t, 2>>);
+static_assert(
+    md::CLayoutFor<layout_leading_simplex<1>, md::dextents<std::size_t, 3>>);
 
 } // namespace ddx::impl

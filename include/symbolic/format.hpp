@@ -30,10 +30,6 @@ template <CExpression E> consteval int node_precedence() {
   }
 }
 
-template <typename E> inline constexpr bool is_negation_v = false;
-template <Numeric T, CExpression C>
-inline constexpr bool is_negation_v<Expression<NegateOp<T>, C>> = true;
-
 template <typename E> inline constexpr bool is_sum_v = false;
 template <Numeric T, CExpression... C>
 inline constexpr bool is_sum_v<Expression<SumOp<T>, C...>> = true;
@@ -42,7 +38,7 @@ inline constexpr bool is_sum_v<Expression<SumOp<T>, C...>> = true;
 template <CExpression E> consteval bool renders_as_subtraction() {
   using U = std::remove_cvref_t<E>;
   if constexpr (is_sum_v<U> && std::tuple_size_v<typename U::children_t> == 2) {
-    return is_negation_v<
+    return is_negation_expr_v<
         std::remove_cvref_t<std::tuple_element_t<1, typename U::children_t>>>;
   } else {
     return false;

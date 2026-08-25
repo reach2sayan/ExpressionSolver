@@ -10,6 +10,7 @@
 #   ddx_use_llvm()             LLVM 20, found                      DDX_BUILD_JIT
 #   ddx_use_googletest()       GoogleTest, fetched                 top-level only
 #   ddx_use_googlebenchmark()  Google Benchmark, fetched           DDX_BUILD_BENCHMARKS
+#   ddx_use_pybind11()         pybind11, found in the build env    DDX_BUILD_PYTHON
 #
 # Each is idempotent and safe to call from wherever the dependency is first
 # needed.  Macros rather than functions: FetchContent_MakeAvailable() defines
@@ -125,6 +126,43 @@ macro(ddx_use_llvm)
         separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")
         llvm_map_components_to_libnames(DDX_LLVM_LIBS
                 core orcjit native passes support analysis target)
+    endif ()
+endmacro()
+
+# --- pybind11 ---------------------------------------------------------------
+# Found, not fetched, for the same reason Boost and LLVM are: it reaches a binary
+# this project produces.  What makes it unlike those two is *where* it is found --
+# the build environment rather than the machine.  An extension module is built
+# against one interpreter's headers and ABI, and the thing that knows which one
+# is the build frontend: scikit-build-core puts the pybind11 wheel's cmake
+# directory on CMAKE_PREFIX_PATH, so `uv pip install .` resolves the interpreter
+# and the bindings together.  Naming a path here would only fight that.
+#
+# 3.0 is a floor rather than caution: native_enum.h arrived after 2.13, and the
+# bindings use it so Backend and VecLib are enum.IntEnum on the Python side
+# instead of pybind's own enum objects.
+macro(ddx_use_pybind11)
+    if (NOT TARGET pybind11::module)
+        # The interpreter first, so that pybind11 is the one *it* has.  A wheel
+        # build already puts that pair on CMAKE_PREFIX_PATH and this finds it
+        # there; a preset build has only a virtualenv, so the interpreter is
+        # asked where its own cmake directory is.
+        find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
+        if (NOT DEFINED pybind11_DIR)
+            execute_process(
+                    COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+                    OUTPUT_VARIABLE pybind11_DIR
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+            if (NOT pybind11_DIR)
+                message(FATAL_ERROR
+                        "${Python_EXECUTABLE} has no pybind11.  The `python` preset builds "
+                        "against .venv, so install it there: `uv sync`.  Left to search the "
+                        "machine, CMake finds whatever the distro packaged -- which is how a "
+                        "2.x shows up against a 3.0 request.")
+            endif ()
+        endif ()
+        find_package(pybind11 3.0 CONFIG REQUIRED)
     endif ()
 endmacro()
 

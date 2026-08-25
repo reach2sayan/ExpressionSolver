@@ -71,6 +71,35 @@
         "jit",
         "release"
       ]
+    },
+    {
+      "name": "python",
+      "displayName": "Release + JIT + Python",
+      "description": "The extension module beside the library, and pytest as a ctest. Python comes from .venv, which is where uv put pybind11 and numpy.",
+      "inherits": [
+        "jit",
+        "release"
+      ],
+      "cacheVariables": {
+        "DDX_BUILD_PYTHON": "ON",
+        "DDX_BUILD_BENCHMARKS": "OFF",
+        "Python_ROOT_DIR": "${sourceDir}/.venv",
+        "Python_FIND_VIRTUALENV": "ONLY"
+      }
+    },
+    {
+      "name": "python_no_jit",
+      "displayName": "Release + Python, no JIT",
+      "description": "The same module with the backend left out: one shape, no kernel, the sweep answers everything. What proves DDX_BUILD_JIT=OFF still builds and still computes.",
+      "inherits": [
+        "release"
+      ],
+      "cacheVariables": {
+        "DDX_BUILD_PYTHON": "ON",
+        "DDX_BUILD_BENCHMARKS": "OFF",
+        "Python_ROOT_DIR": "${sourceDir}/.venv",
+        "Python_FIND_VIRTUALENV": "ONLY"
+      }
     }
   ],
   "buildPresets": [
@@ -93,6 +122,14 @@
     {
       "name": "release_jit",
       "configurePreset": "release_jit"
+    },
+    {
+      "name": "python",
+      "configurePreset": "python"
+    },
+    {
+      "name": "python_no_jit",
+      "configurePreset": "python_no_jit"
     }
   ],
   "testPresets": [
@@ -132,6 +169,16 @@
       "name": "release_jit",
       "inherits": "tbase",
       "configurePreset": "release_jit"
+    },
+    {
+      "name": "python",
+      "inherits": "tbase",
+      "configurePreset": "python"
+    },
+    {
+      "name": "python_no_jit",
+      "inherits": "tbase",
+      "configurePreset": "python_no_jit"
     }
   ]
 }

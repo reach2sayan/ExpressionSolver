@@ -1,7 +1,11 @@
 #include "ddx.hpp"
 #include "rt/bridge.hpp"
 #include "rt/derivative.hpp"
+#include "rt/equation.hpp"
 #include "rt/interpret.hpp"
+
+#include <algorithm>
+#include <span>
 
 #include <gtest/gtest.h>
 
@@ -84,10 +88,58 @@ consteval bool bridge_agrees_with_equation() {
 }
 static_assert(bridge_agrees_with_equation());
 
+// Liveness is a property of the arena, so the pass the freeze runs is itself a
+// constant expression -- what the freeze then does with it is not.
+consteval std::size_t live_from_root() {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto f = x * x;
+  (void)(x + y); // a node the root does not reach
+  const ddx::rt::NodeId root = f.id(b);
+  const auto live = ddx::rt::detail::reachable(
+      b.size(), std::span{&root, 1}, [&b](ddx::rt::NodeId v, auto &&mark) {
+        for (const ddx::rt::NodeId u : b.operands(v)) {
+          if (u != ddx::rt::no_node) {
+            mark(u);
+          }
+        }
+      });
+  return static_cast<std::size_t>(std::ranges::count(live, true));
+}
+static_assert(live_from_root() == 2); // x and x * x
+
+// The colouring is Boost.Graph's, so it stops at the boundary -- but reading a
+// Hessian back through one does not.
+consteval ddx::rt::NodeId scatter_reads() {
+  // Not const: the vectors are built during this evaluation, and a constant
+  // evaluation may not write through a const object.
+  ddx::rt::Hessian h{
+      .value = 0,
+      .partial = {},
+      .compressed = {7, 8},
+      .coloring = {.color = {0, 0}, .count = 1, .scatter = {0, 1}},
+      .zero = 99};
+  return h.colors() == 1 && h.at(0, 0) == 7 && h.at(1, 1) == 8 ? h.at(0, 1) : 0;
+}
+static_assert(scatter_reads() == 99); // off the pattern: the zero node
+
+// The counts a caller sizes its buffers by come off the constructor's own
+// sweep, so they answer without a frozen graph.
+consteval std::size_t column_counts() {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto eq = ddx::rt::equation(x * y, x + y);
+  return *eq.value_columns() * 10 + *eq.jacobian_columns();
+}
+static_assert(column_counts() == 24); // 2 functions, 2 x 2 partials
+
 TEST(RtConstexpr, EverythingAboveIsAStaticAssert) {
   EXPECT_DOUBLE_EQ(build_and_evaluate(), 13.0);
   EXPECT_DOUBLE_EQ(partial_of_product(), 4.0);
   EXPECT_EQ(nodes_for_repeated_subtree(), 5u);
+  EXPECT_EQ(column_counts(), 24u);
 }
 
 } // namespace

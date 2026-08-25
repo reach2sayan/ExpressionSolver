@@ -221,13 +221,13 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
 
   const auto load_columns = [&](unsigned arg, std::size_t count,
                                 const char *stem) {
-    return std::ranges::to<std::vector<llvm::Value *>>(
-        std::views::iota(0uz, count) |
-        std::views::transform([&](std::size_t j) {
-          llvm::Value *const slot =
-              b.CreateConstInBoundsGEP1_64(ptr, fn.getArg(arg), j);
-          return b.CreateLoad(ptr, slot, stem + std::to_string(j));
-        }));
+    return std::views::iota(0uz, count) |
+           std::views::transform([&](std::size_t j) {
+             llvm::Value *const slot =
+                 b.CreateConstInBoundsGEP1_64(ptr, fn.getArg(arg), j);
+             return b.CreateLoad(ptr, slot, stem + std::to_string(j));
+           }) |
+           impl::to<std::vector<llvm::Value *>>();
   };
 
   const auto &layout = g.layout();

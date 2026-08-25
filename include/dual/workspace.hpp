@@ -1,10 +1,10 @@
 #pragma once
-// symbolic/workspace.hpp's SweepWorkspace pinned to the dual orders the drivers
+// md/workspace.hpp's SweepWorkspace pinned to the dual orders the drivers
 // sweep at.  Only these aliases need Dual complete, which is why the workspace
 // itself lives a layer down.
 
 #include "dual/dual.hpp"
-#include "symbolic/workspace.hpp"
+#include "md/workspace.hpp"
 
 namespace ddx::impl {
 

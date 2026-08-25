@@ -268,22 +268,6 @@ TEST(SymbolTest, CanonicalOrderIsAlphabetical) {
       "canonical symbol order must stay alphabetical and deduplicated");
 }
 TEST(ExpressionTest, StaticTests) {
-  static_assert(std::is_same_v<
-                as_const_expression<Expression<
-                    MultiplyOp<int>, Variable<int, ddx::impl::FixedString{"x"}>,
-                    Constant<int>>>,
-                Expression<MultiplyOp<int>,
-                           Variable<int, ddx::impl::FixedString{"x"}, true>,
-                           Constant<int>>>);
-
-  static_assert(std::is_same_v<
-                as_const_expression<Expression<
-                    MultiplyOp<int>, Variable<int, ddx::impl::FixedString{"x"}>,
-                    Variable<int, ddx::impl::FixedString{"y"}>>>,
-                Expression<MultiplyOp<int>,
-                           Variable<int, ddx::impl::FixedString{"x"}, true>,
-                           Variable<int, ddx::impl::FixedString{"y"}, true>>>);
-
   auto x = 4_vi;
   auto y = 2_vi;
   auto c = 2_ci;

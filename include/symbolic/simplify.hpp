@@ -25,10 +25,6 @@ template <Numeric T> inline constexpr bool is_div_op_v<DivideOp<T>> = true;
 template <typename Op> inline constexpr bool is_pow_op_v = false;
 template <Numeric T> inline constexpr bool is_pow_op_v<PowOp<T>> = true;
 
-template <typename E> inline constexpr bool is_negation_expr_v = false;
-template <Numeric T, CExpression C>
-inline constexpr bool is_negation_expr_v<Expression<NegateOp<T>, C>> = true;
-
 // Q is a quotient whose denominator is exactly the tree X.
 template <typename Q, typename X> inline constexpr bool is_over_v = false;
 template <Numeric T, CExpression N, CExpression D, typename X>

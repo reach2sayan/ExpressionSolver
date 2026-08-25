@@ -178,10 +178,6 @@ struct Jacobian {
   std::vector<NodeId> partial; // m * n, row-major
   std::size_t rows = 0;
   std::size_t columns = 0;
-
-  [[nodiscard]] constexpr NodeId at(std::size_t k, std::size_t j) const {
-    return partial[k * columns + j];
-  }
 };
 
 template <impl::Numeric T>
@@ -231,13 +227,13 @@ struct Hessian {
   NodeId zero = no_node;
 
   // Scattered on read, so a caller never sees the compressed form.
-  [[nodiscard]] NodeId at(std::size_t i, std::size_t j) const {
+  [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
     const std::size_t c = coloring.color[j];
     return coloring.target(c, i) == j ? by_color(compressed, coloring.count,
                                                  coloring.color.size())[c, i]
                                       : zero;
   }
-  [[nodiscard]] std::size_t colors() const { return coloring.count; }
+  [[nodiscard]] constexpr std::size_t colors() const { return coloring.count; }
 };
 
 template <impl::Numeric T>

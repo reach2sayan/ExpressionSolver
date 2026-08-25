@@ -173,7 +173,7 @@ private:
     using U = nth_dual_t<S, Order>;
     nd_stack_t<S, output_dim, input_dim, Order> result{};
 
-    for (const auto &idx : detail::symmetric_index_grid<input_dim, Order>()) {
+    for (const auto &idx : detail::simplex_index_table_v<input_dim, Order>) {
 
       const auto seeds = detail::mixed_seeds<S, Order>(values, idx);
 
@@ -332,30 +332,6 @@ public:
 
 template <CExpression T, CExpression... Ts>
 Equation(T, Ts...) -> Equation<T, Ts...>;
-
-// What the derivative members answer with, spelled once: a conditional_t the
-// caller can name, as std::ranges::borrowed_iterator_t is.  These name the
-// *unwrapped* result -- with_point wraps them in result<> for a range point.
-template <typename Eq>
-using jacobian_t = std::conditional_t<
-    Eq::output_dim == 1,
-    std::array<dual_scalar_t<typename Eq::value_type>, Eq::input_dim>,
-    md_tensor<dual_scalar_t<typename Eq::value_type>,
-              md::extents<std::size_t, Eq::output_dim, Eq::input_dim>>>;
-
-template <typename Eq>
-using hessian_t = std::conditional_t<
-    Eq::output_dim == 1,
-    nd_tensor_t<dual_scalar_t<typename Eq::value_type>, Eq::input_dim, 2>,
-    nd_stack_t<dual_scalar_t<typename Eq::value_type>, Eq::output_dim,
-               Eq::input_dim, 2>>;
-
-template <typename Eq, std::size_t Order>
-using derivative_tensor_t = std::conditional_t<
-    Eq::output_dim == 1,
-    nd_tensor_t<scalar_base_t<typename Eq::value_type>, Eq::input_dim, Order>,
-    nd_stack_t<scalar_base_t<typename Eq::value_type>, Eq::output_dim,
-               Eq::input_dim, Order>>;
 
 // Declared back in expr/expressions.hpp, where Equation was still incomplete.
 template <typename Derived>

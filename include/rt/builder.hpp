@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <ranges>
@@ -40,7 +41,7 @@ namespace detail {
 // Ids are topological, so one descending pass settles it.  Not a filtered view:
 // the body marks entries the pass has not reached, which a lazy filter would
 // read mid-write.  Operand access is the caller's.
-[[nodiscard]] inline std::vector<bool>
+[[nodiscard]] constexpr std::vector<bool>
 reachable(std::size_t n, std::span<const NodeId> roots, auto &&operands_of) {
   std::vector<bool> live(n, false);
   std::ranges::for_each(roots, [&](NodeId r) { live[r] = true; });
@@ -334,6 +335,16 @@ private:
   std::vector<std::string> symbols_;
 };
 
+// What a walker reads: an id-addressed source that answers a node's operation
+// and its operands.  Builder and the frozen Graph both do, which is what lets
+// contraction_at() is written once over the two.
+template <typename S>
+concept CNodeSource = requires(const S &s, NodeId v) {
+  { s.op_of(v) } -> std::same_as<OpCode>;
+  { s.operands(v) } -> std::same_as<std::array<NodeId, 2>>;
+  { s.size() } -> std::convertible_to<std::size_t>;
+};
+
 // fadd(fmul(x, y), z) -> fma(x, y, z): the multiply-add every backend forms
 // under -ffp-contract=fast, formed here instead so that everything reading the
 // graph forms the same ones.  Nothing else contracts -- no reassociation, and a
@@ -347,10 +358,9 @@ private:
 // instruction, so the count is the same either way -- and where it has a reader
 // of its own it is emitted as well, exactly as before.
 //
-// `nodes` is a Builder or a frozen Graph; both answer op_of() and operands().
 // The lower-id operand wins where an add has two products, which is the slot
 // order Builder::make already sorted commutative operands into.
-template <typename Nodes>
+template <CNodeSource Nodes>
 [[nodiscard]] constexpr Contraction contraction_at(const Nodes &nodes,
                                                    NodeId v) {
   if (nodes.op_of(v) != OpCode::Add) {

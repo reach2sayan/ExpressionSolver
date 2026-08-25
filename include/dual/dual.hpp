@@ -369,79 +369,51 @@ template <DualLike A, CArithmetic U> constexpr auto pow(U s, A &&a) noexcept {
   return DT{p, p * (log(s) * ad)};
 }
 
-template <DualLike A, DualCompatible<A> B>
-constexpr auto max(A &&a, B &&b) noexcept {
+namespace detail {
+// A tie averages and an unordered pair is (a-b)*0, NaN from either side: both
+// symmetric, hence stable under the builder's commutative reordering.  The dual
+// is always the left operand, so neither the tie nor the NaN depends on which
+// of the six spellings the caller reached.  val() of an arithmetic is itself,
+// which is what lets the scalar forms share the walk.
+template <bool IsMax, DualLike A, typename B>
+constexpr auto extremum(A &&a, const B &other) noexcept {
   using DT = std::remove_cvref_t<A>;
-  // A tie averages and an unordered pair is (a-b)*0, NaN from either side:
-  // both symmetric, hence stable under the builder's commutative reordering.
-  if (val(a) == val(b)) {
-    return DT{a + (b - a) / 2};
-  } else if (val(a) < val(b)) {
-    return DT{b};
-  } else if (val(b) < val(a)) {
+  if (val(a) == val(other)) {
+    return DT{a + (other - a) / 2};
+  }
+  if (IsMax ? val(a) < val(other) : val(other) < val(a)) {
+    return DT{other};
+  }
+  if (IsMax ? val(other) < val(a) : val(a) < val(other)) {
     return DT{a};
   }
-  return DT{(a - b) * DT{}};
+  return DT{(a - other) * DT{}};
+}
+} // namespace detail
+
+template <DualLike A, DualCompatible<A> B>
+constexpr auto max(A &&a, B &&b) noexcept {
+  return detail::extremum<true>(std::forward<A>(a), b);
 }
 
 template <DualLike A, DualCompatible<A> B>
 constexpr auto min(A &&a, B &&b) noexcept {
-  using DT = std::remove_cvref_t<A>;
-  if (val(a) == val(b)) {
-    return DT{a + (b - a) / 2};
-  } else if (val(b) < val(a)) {
-    return DT{b};
-  } else if (val(a) < val(b)) {
-    return DT{a};
-  }
-  return DT{(a - b) * DT{}};
+  return detail::extremum<false>(std::forward<A>(a), b);
 }
 
 // max/min otherwise select an operand whole, so the bound stays a scalar; at
 // a tie against the constant the derivative halves.
 template <DualLike A, CArithmetic U> constexpr auto max(A &&a, U s) noexcept {
-  using DT = std::remove_cvref_t<A>;
-  if (val(a) == s) {
-    return DT{a + (s - a) / 2};
-  } else if (val(a) < s) {
-    return DT{s};
-  } else if (s < val(a)) {
-    return DT{a};
-  }
-  return DT{(a - s) * DT{}};
+  return detail::extremum<true>(std::forward<A>(a), s);
 }
 template <DualLike A, CArithmetic U> constexpr auto max(U s, A &&a) noexcept {
-  using DT = std::remove_cvref_t<A>;
-  if (val(a) == s) {
-    return DT{a + (s - a) / 2};
-  } else if (s < val(a)) {
-    return DT{a};
-  } else if (val(a) < s) {
-    return DT{s};
-  }
-  return DT{(a - s) * DT{}};
+  return detail::extremum<true>(std::forward<A>(a), s);
 }
 template <DualLike A, CArithmetic U> constexpr auto min(A &&a, U s) noexcept {
-  using DT = std::remove_cvref_t<A>;
-  if (val(a) == s) {
-    return DT{a + (s - a) / 2};
-  } else if (s < val(a)) {
-    return DT{s};
-  } else if (val(a) < s) {
-    return DT{a};
-  }
-  return DT{(a - s) * DT{}};
+  return detail::extremum<false>(std::forward<A>(a), s);
 }
 template <DualLike A, CArithmetic U> constexpr auto min(U s, A &&a) noexcept {
-  using DT = std::remove_cvref_t<A>;
-  if (val(a) == s) {
-    return DT{a + (s - a) / 2};
-  } else if (val(a) < s) {
-    return DT{a};
-  } else if (s < val(a)) {
-    return DT{s};
-  }
-  return DT{(a - s) * DT{}};
+  return detail::extremum<false>(std::forward<A>(a), s);
 }
 
 // atan2(y, x), numerator first:

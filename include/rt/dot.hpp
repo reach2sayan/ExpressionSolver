@@ -4,6 +4,7 @@
 #include "rt/opcode.hpp"
 #include "util/export.hpp"
 #include "util/fmt.hpp" // detail::fmt_put
+#include "util/ranges.hpp"
 
 #include <concepts>
 #include <cstdint>
@@ -55,20 +56,20 @@ private:
     std::ranges::for_each(graph_.outputs(),
                           [&](NodeId o) { is_output[o] = 1; });
 
-    return std::ranges::to<std::vector<DotNode>>(
-        std::views::iota(NodeId{0}, static_cast<NodeId>(graph_.size())) |
-        std::views::transform([&](NodeId v) {
-          const auto op = graph_[v].op;
-          return DotNode{.label = text(v),
-                         .shape = is_output[v]  ? "doubleoctagon"
-                                  : is_leaf(op) ? "box"
-                                                : "ellipse",
-                         .live = graph_.live(v),
-                         // Only where reading it back matters: nothing to tell
-                         // apart on a commutative or unary node.
-                         .show_slots =
-                             arity_of(op) == 2 && !is_commutative<T>(op)};
-        }));
+    return std::views::iota(NodeId{0}, static_cast<NodeId>(graph_.size())) |
+           std::views::transform([&](NodeId v) {
+             const auto op = graph_[v].op;
+             return DotNode{.label = text(v),
+                            .shape = is_output[v]  ? "doubleoctagon"
+                                     : is_leaf(op) ? "box"
+                                                   : "ellipse",
+                            .live = graph_.live(v),
+                            // Only where reading it back matters: nothing to
+                            // tell apart on a commutative or unary node.
+                            .show_slots =
+                                arity_of(op) == 2 && !is_commutative<T>(op)};
+           }) |
+           impl::to<std::vector<DotNode>>();
   }
 
   // `id: what it is` -- codegen, the interpreter and errors all name nodes by

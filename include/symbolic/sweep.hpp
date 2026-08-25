@@ -1,7 +1,7 @@
 #pragma once
 
-#include "symbolic/coupling.hpp"  // compile-time Hessian sparsity + colouring
-#include "symbolic/workspace.hpp" // HessianStatic, symmetrize
+#include "md/workspace.hpp"      // HessianStatic, symmetrize
+#include "symbolic/coupling.hpp" // compile-time Hessian sparsity + colouring
 
 // Forward mode supplies the truncated-polynomial scalar the univariate sweep
 // runs on.
@@ -207,8 +207,8 @@ reverse_mode_hessian(const Expr &expr,
   using E = std::remove_cvref_t<Expr>;
 
   // Sparsity is a property of the type, so the sweep loop carries no search.
-  static constexpr auto kPattern = hessian_pattern<E>();
-  static constexpr auto kColors = color_columns<N>(kPattern);
+  static constexpr const auto &kPattern = hessian_pattern_v<E>;
+  static constexpr const auto &kColors = hessian_colors_v<E, N>;
   static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
 
   // Value-initialised: the scatter writes only the pattern.  Symmetric-packed,
@@ -280,11 +280,6 @@ consteval auto simplex_index_table() noexcept {
 template <std::size_t N, std::size_t Order>
 inline constexpr auto simplex_index_table_v = simplex_index_table<N, Order>();
 
-template <std::size_t N, std::size_t Order>
-[[nodiscard]] constexpr const auto &symmetric_index_grid() noexcept {
-  return simplex_index_table_v<N, Order>;
-}
-
 template <std::size_t N, Numeric T>
 constexpr auto extract_nth(const T &x) noexcept {
   if constexpr (N == 0) {
@@ -334,7 +329,7 @@ derivative_tensor_impl(const Expr &expr,
     return result;
   }
 
-  for (const auto &idx : detail::symmetric_index_grid<N, Order>()) {
+  for (const auto &idx : detail::simplex_index_table_v<N, Order>) {
     const auto seeds = mixed_seeds<S, Order>(values, idx);
     const U val = expr.template eval_seeded<symbols>(seeds);
     result.at_index(idx) = extract_nth<Order>(val);
@@ -387,8 +382,8 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
 
   // A dense Hessian colours in N, so this degenerates to one sweep per column,
   // never worse.
-  static constexpr auto kPattern = hessian_pattern<E>();
-  static constexpr auto kColors = color_columns<N>(kPattern);
+  static constexpr const auto &kPattern = hessian_pattern_v<E>;
+  static constexpr const auto &kColors = hessian_colors_v<E, N>;
   // Value-initialised is load-bearing: the scatter writes only the pattern.
   HessianStatic<N> res{};
   auto &res_jacobian = res.jacobian;
@@ -433,8 +428,7 @@ hessian_values_sparse(const Expr &expr, std::span<const double> x) {
   using Syms = detail::expr_symbols_t<E>;
   constexpr std::size_t N = mp::mp_size<Syms>::value;
 
-  static constexpr auto kPattern = hessian_pattern<E>();
-  static constexpr auto kColors = color_columns<N>(kPattern);
+  static constexpr const auto &kColors = hessian_colors_v<E, N>;
 
   // One past the nonzeros: the sink every structural zero maps onto.
   std::array<double, NNZ + 1> values{};

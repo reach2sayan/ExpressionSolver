@@ -1,5 +1,6 @@
 #pragma once
 
+#include "md/layouts.hpp" // detail::mapping_base
 #include "md/md.hpp"
 #include "ops/operations.hpp"
 #include "symbolic/expressions.hpp"
@@ -149,6 +150,12 @@ color_columns(const coupling_rows<N> &rows) noexcept {
   return coloring;
 }
 
+// A function of the pattern alone, so it too is instantiated once per
+// expression rather than once per driver that sweeps one.
+template <CExpression Expr, std::size_t N>
+inline constexpr auto hessian_colors_v =
+    color_columns<N>(hessian_pattern_v<Expr>);
+
 // No column of this colour writes into this row.
 inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
 
@@ -253,7 +260,7 @@ consteval auto compressed_entries(const sparse_layout_t<N, NNZ> &layout) {
 // is never materialised.
 template <CExpression Expr, std::size_t N = detail::expr_arity_v<Expr>>
 consteval scatter_map<N> sparse_slots() noexcept {
-  constexpr auto coloring = color_columns<N>(hessian_pattern_v<Expr>);
+  constexpr auto coloring = hessian_colors_v<Expr, N>;
   constexpr auto layout = sparse_layout<Expr>();
 
   auto slots = unmapped<N>();
@@ -284,19 +291,15 @@ template <CExpression Expr> struct layout_sparse_pattern {
   static constexpr std::size_t kNnz = hessian_nnz<expr_type>();
   static constexpr auto kTable = sparse_slot_table<expr_type>();
 
-  template <md::CExtents Ext> class mapping {
+  template <md::CExtents Ext>
+  class mapping : public detail::mapping_base<Ext, false, false, false> {
     static_assert(Ext::rank() == 2);
+    using base_t = detail::mapping_base<Ext, false, false, false>;
 
   public:
-    using extents_type = Ext;
-    using index_type = typename Ext::index_type;
-    using rank_type = typename Ext::rank_type;
+    using base_t::base_t;
+    using typename base_t::index_type;
     using layout_type = layout_sparse_pattern;
-
-    constexpr mapping() noexcept = default;
-    constexpr explicit mapping(const Ext &e) noexcept : ext_(e) {}
-
-    [[nodiscard]] constexpr const Ext &extents() const noexcept { return ext_; }
 
     [[nodiscard]] constexpr index_type required_span_size() const noexcept {
       return static_cast<index_type>(kNnz + 1);
@@ -314,22 +317,10 @@ template <CExpression Expr> struct layout_sparse_pattern {
       return static_cast<std::size_t>((*this)(i, j)) != kNnz;
     }
 
-    static constexpr bool is_always_unique() noexcept { return false; }
-    static constexpr bool is_always_exhaustive() noexcept { return false; }
-    static constexpr bool is_always_strided() noexcept { return false; }
-    [[nodiscard]] constexpr bool is_unique() const noexcept { return false; }
-    [[nodiscard]] constexpr bool is_exhaustive() const noexcept {
-      return false;
-    }
-    [[nodiscard]] constexpr bool is_strided() const noexcept { return false; }
-
     [[nodiscard]] friend constexpr bool operator==(const mapping &a,
                                                    const mapping &b) noexcept {
-      return a.ext_ == b.ext_;
+      return a.extents() == b.extents();
     }
-
-  private:
-    Ext ext_{};
   };
 };
 
@@ -338,6 +329,7 @@ template <CExpression Expr>
 sparse_matrix_view(std::span<const double> values) noexcept {
   using L = layout_sparse_pattern<std::remove_cvref_t<Expr>>;
   using Ext = md::extents<std::size_t, L::kN, L::kN>;
+  static_assert(md::CLayoutFor<L, Ext>);
   return md::mdspan<const double, Ext, L>(values.data(),
                                           typename L::template mapping<Ext>{});
 }

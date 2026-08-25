@@ -4,6 +4,7 @@
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/opcode.hpp"
+#include "util/ranges.hpp"
 
 #include <boost/graph/compressed_sparse_row_graph.hpp>
 
@@ -183,7 +184,7 @@ private:
             mark(static_cast<NodeId>(boost::target(edge, children_)));
           }
         });
-    live_order_ = std::ranges::to<std::vector<NodeId>>(live_nodes());
+    live_order_ = live_nodes() | impl::to<std::vector<NodeId>>();
   }
 
   // What a contracting consumer still has to compute.  The contraction itself
@@ -205,8 +206,10 @@ private:
             mark(static_cast<NodeId>(boost::target(edge, children_)));
           }
         });
-    contracted_order_ = std::ranges::to<std::vector<NodeId>>(
-        live_order_ | std::views::filter([&live](NodeId v) { return live[v]; }));
+    contracted_order_ =
+        live_order_ |
+        std::views::filter([&live](NodeId v) { return live[v]; }) |
+        impl::to<std::vector<NodeId>>();
   }
 
   std::vector<Property> properties_;
@@ -239,9 +242,10 @@ public:
 
   // A system: m functions over the same symbols.
   constexpr GraphBuilder &values(std::initializer_list<RTExpression<T>> roots) {
-    roots_ = std::ranges::to<std::vector<NodeId>>(
+    roots_ =
         roots |
-        std::views::transform([&](const auto &e) { return e.id(*builder_); }));
+        std::views::transform([&](const auto &e) { return e.id(*builder_); }) |
+        impl::to<std::vector<NodeId>>();
     outputs_ = roots_;
     layout_.values = roots_.size();
     return *this;

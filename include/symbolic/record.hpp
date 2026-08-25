@@ -153,9 +153,6 @@ template <CEntry... Entries> struct Record : Entries... {
 
 template <CEntry... Entries> Record(Entries...) -> Record<Entries...>;
 
-template <typename T>
-concept CRecord = requires { requires std::remove_cvref_t<T>::kRecord; };
-
 [[nodiscard]] constexpr auto record(CEntry auto... es) {
   // Reached before a duplicate key becomes a duplicate base class.
   static_assert(

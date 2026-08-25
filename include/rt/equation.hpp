@@ -347,10 +347,10 @@ public:
   // swept rather than off a frozen graph: these are the three counts
   // GraphBuilder would compute the layout from, so they answer the same, and
   // asking must not build -- sizing a Hessian buffer used to compile one.
-  [[nodiscard]] std::optional<std::size_t> value_columns() const {
+  [[nodiscard]] constexpr std::optional<std::size_t> value_columns() const {
     return poisoned() ? std::nullopt : std::optional{roots_.size()};
   }
-  [[nodiscard]] std::optional<std::size_t> jacobian_columns() const {
+  [[nodiscard]] constexpr std::optional<std::size_t> jacobian_columns() const {
     return poisoned() ? std::nullopt
                       : std::optional{derivative_.partial.size()};
   }

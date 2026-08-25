@@ -170,6 +170,15 @@ ddx_target_flags(main)
 enable_testing()
 add_subdirectory(tests)
 
+# The extension module.  After enable_testing(), because it registers pytest as
+# a test of its own; below the top-level guard, because a consumer who
+# add_subdirectory()s ddx wants the library, not a wheel's worth of bindings.
+option(DDX_BUILD_PYTHON "Build the pybind11 extension module" OFF)
+if (DDX_BUILD_PYTHON)
+    ddx_use_pybind11()
+    add_subdirectory(python)
+endif ()
+
 option(DDX_BUILD_BENCHMARKS "Build Google Benchmark benchmarks" ON)
 if (DDX_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)

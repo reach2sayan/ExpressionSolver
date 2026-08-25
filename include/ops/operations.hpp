@@ -121,6 +121,14 @@ struct NegateOp
   }
 };
 
+// Both the rewriter and the printer ask this, so it lives with the operation
+// rather than once in each.
+namespace detail {
+template <typename E> inline constexpr bool is_negation_expr_v = false;
+template <Numeric T, CExpression C>
+inline constexpr bool is_negation_expr_v<Expression<NegateOp<T>, C>> = true;
+} // namespace detail
+
 template <Numeric T>
 struct DivideOp
     : BinaryOp<T, std::divides<void>, FixedString{"/"}, Notation::Infix, 20> {
@@ -211,42 +219,45 @@ DDX_ADL_BINARY_IMPL(midpoint_impl, midpoint)
 // IEEE 754-2019 maximum/minimum -- what the JIT's llvm.maximum/minimum compute
 // -- and is spelled arithmetically: -0 + +0 is +0, so the sum of two zeros is
 // their maximum and the negated sum of their negations is their minimum.
-struct max_impl {
+// The two differ only in which operand wins and in how the signed-zero tie is
+// spelled, so they are one template.
+template <bool IsMax> struct extremum_impl {
   constexpr auto operator()(const Numeric auto &a,
                             const Numeric auto &b) const noexcept {
     using R = std::remove_cvref_t<decltype(a < b ? b : a)>;
     if (a == b) {
       if constexpr (CArithmetic<R>) {
-        return a == R{} ? R{a + b} : R{a};
+        if (a == R{}) {
+          if constexpr (IsMax) {
+            return R{a + b};
+          } else {
+            return R{-((-a) + (-b))};
+          }
+        }
+        return R{a};
       } else {
         return R{midpoint_impl{}(R{a}, R{b})};
       }
-    } else if (a < b) {
-      return R{b};
-    } else if (b < a) {
-      return R{a};
+    }
+    if (a < b) {
+      if constexpr (IsMax) {
+        return R{b};
+      } else {
+        return R{a};
+      }
+    }
+    if (b < a) {
+      if constexpr (IsMax) {
+        return R{a};
+      } else {
+        return R{b};
+      }
     }
     return R{(a - b) * R{}};
   }
 };
-struct min_impl {
-  constexpr auto operator()(const Numeric auto &a,
-                            const Numeric auto &b) const noexcept {
-    using R = std::remove_cvref_t<decltype(b < a ? b : a)>;
-    if (a == b) {
-      if constexpr (CArithmetic<R>) {
-        return a == R{} ? R{-((-a) + (-b))} : R{a};
-      } else {
-        return R{midpoint_impl{}(R{a}, R{b})};
-      }
-    } else if (b < a) {
-      return R{b};
-    } else if (a < b) {
-      return R{a};
-    }
-    return R{(a - b) * R{}};
-  }
-};
+using max_impl = extremum_impl<true>;
+using min_impl = extremum_impl<false>;
 } // namespace detail
 
 // Generated from the registry: each op pulls value and derivative from its
@@ -363,24 +374,31 @@ struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"},
   }
 };
 
-// totally_ordered because the rules below branch on a comparison.
-template <Numeric T>
+// max(a, b) = (a + b + |a - b|) / 2, so with s = sign(a - b),
+//   max' = (a' + b' + s*(a' - b')) / 2
+// and min' the same with the sign subtracted.  Branch-free of necessity: a
+// runtime conditional would have to choose between two different *types*.
+// sign(0) = 0 makes a tie the mean, which adjoints() spells as a half to each
+// side.  totally_ordered because both rules branch on a comparison.
+template <Numeric T, bool IsMax, typename func, CFixedString auto symbol>
   requires std::totally_ordered<T>
-struct MaxOp
-    : BinaryOp<T, detail::max_impl, FixedString{"max"}, Notation::Function> {
-  // max(a, b) = (a + b + |a - b|) / 2, so with s = sign(a - b),
-  //   max' = (a' + b' + s*(a' - b')) / 2
-  // Branch-free of necessity: a runtime conditional would have to choose
-  // between two different *types*.  sign(0) = 0 makes a tie the mean.
+struct ExtremumOp : BinaryOp<T, func, symbol, Notation::Function> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
     const auto d = lhs - rhs;
     const auto s = MonoExpression<SignOp<T>, std::decay_t<decltype(d)>>{d};
-    return (lhs.derivative() + rhs.derivative() +
-            s * (lhs.derivative() - rhs.derivative())) /
-           Lit<T, 2>{};
+    if constexpr (IsMax) {
+      return (lhs.derivative() + rhs.derivative() +
+              s * (lhs.derivative() - rhs.derivative())) /
+             Lit<T, 2>{};
+    } else {
+      return (lhs.derivative() + rhs.derivative() -
+              s * (lhs.derivative() - rhs.derivative())) /
+             Lit<T, 2>{};
+    }
   }
+
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -392,10 +410,11 @@ struct MaxOp
       const T half = adj / T{2};
       return ret_t{half, half};
     }
-    if (a < b) {
+    // The winner takes the whole adjoint, the loser none.
+    if (IsMax ? a < b : b < a) {
       return ret_t{T{}, adj};
     }
-    if (b < a) {
+    if (IsMax ? b < a : a < b) {
       return ret_t{adj, T{}};
     }
     const T poison = (a - b) * T{}; // unordered: NaN to both operands
@@ -403,40 +422,13 @@ struct MaxOp
   }
 };
 
-// totally_ordered because the rules below branch on a comparison.
 template <Numeric T>
   requires std::totally_ordered<T>
-struct MinOp
-    : BinaryOp<T, detail::min_impl, FixedString{"min"}, Notation::Function> {
-  // min(a, b) = (a + b - |a - b|) / 2; see MaxOp for why this is branch-free
-  // and what a tie means.
-  [[nodiscard]] static constexpr auto
-  derivative(const CExpression auto &lhs,
-             const CExpression auto &rhs) noexcept {
-    const auto d = lhs - rhs;
-    const auto s = MonoExpression<SignOp<T>, std::decay_t<decltype(d)>>{d};
-    return (lhs.derivative() + rhs.derivative() -
-            s * (lhs.derivative() - rhs.derivative())) /
-           Lit<T, 2>{};
-  }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr auto adjoints(T adj, const auto &cache) noexcept {
-    using ret_t = std::array<T, sizeof...(CB)>;
-    constexpr std::size_t cb[]{CB...};
-    const T &a = cache[cb[0]];
-    const T &b = cache[cb[1]];
-    if (a == b) {
-      const T half = adj / T{2};
-      return ret_t{half, half};
-    } else if (b < a) {
-      return ret_t{T{}, adj};
-    } else if (a < b) {
-      return ret_t{adj, T{}};
-    }
-    const T poison = (a - b) * T{}; // unordered: NaN to both operands
-    return ret_t{poison, poison};
-  }
-};
+struct MaxOp : ExtremumOp<T, true, detail::max_impl, FixedString{"max"}> {};
+
+template <Numeric T>
+  requires std::totally_ordered<T>
+struct MinOp : ExtremumOp<T, false, detail::min_impl, FixedString{"min"}> {};
 
 template <Numeric T>
 constexpr auto PowOp<T>::derivative(const CExpression auto &lhs,

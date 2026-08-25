@@ -13,41 +13,11 @@
 // type, so the walk is a compile-time recursion that emits nodes.
 namespace ddx::rt {
 
-namespace detail {
-
-template <typename Op> struct op_code_of;
-
-#define DDX_RT_MAP_OP(DdxOp, Code)                                             \
-  template <impl::Numeric T> struct op_code_of<impl::DdxOp<T>> {               \
-    static constexpr OpCode value = OpCode::Code;                              \
-  };
-DDX_RT_MAP_OP(SumOp, Add)
-DDX_RT_MAP_OP(MultiplyOp, Mul)
-DDX_RT_MAP_OP(DivideOp, Div)
-DDX_RT_MAP_OP(NegateOp, Neg)
-DDX_RT_MAP_OP(PowOp, Pow)
-DDX_RT_MAP_OP(Atan2Op, Atan2)
-DDX_RT_MAP_OP(HypotOp, Hypot)
-DDX_RT_MAP_OP(MaxOp, Max)
-DDX_RT_MAP_OP(MinOp, Min)
-DDX_RT_MAP_OP(AbsOp, Abs)
-DDX_RT_MAP_OP(SignOp, Sign)
-#undef DDX_RT_MAP_OP
-
-// The eighteen share their spelling with the enumerators, by construction.
-#define DDX_RT_MAP_MATH(fn, Op, label)                                         \
-  template <impl::Numeric T> struct op_code_of<impl::Op<T>> {                  \
-    static constexpr OpCode value = OpCode::Op;                                \
-  };
-DDX_UNARY_MATH_TABLE(DDX_RT_MAP_MATH)
-#undef DDX_RT_MAP_MATH
-
-} // namespace detail
-
 // Sum and Multiply are n-ary in the type but binary in the graph, so a wide
 // node folds left into a chain.
 template <impl::Numeric T>
-[[nodiscard]] constexpr RTExpression<T> to_graph(Builder<T> &b, const impl::CExpression auto &e) {
+[[nodiscard]] constexpr RTExpression<T>
+to_graph(Builder<T> &b, const impl::CExpression auto &e) {
   using U = std::remove_cvref_t<decltype(e)>;
   if constexpr (impl::CVariable<U>) {
     return var(b, U::label.view());
@@ -58,14 +28,15 @@ template <impl::Numeric T>
                static_cast<double>(e.template eval_seeded<impl::mp::mp_list<>>(
                    std::array<double, 1>{})));
   } else {
-    constexpr OpCode code = detail::op_code_of<typename U::op_type>::value;
+    constexpr auto code = code_of_label(U::op_type::label);
+    static_assert(code.has_value(), "no OpCode row carries this op's label");
     return std::apply(
         [&](const auto &first, const auto &...rest) {
           if constexpr (sizeof...(rest) == 0) {
-            return RTExpression<T>::form(code, to_graph(b, first));
+            return RTExpression<T>::form(*code, to_graph(b, first));
           } else {
             RTExpression<T> acc = to_graph(b, first);
-            ((acc = RTExpression<T>::form(code, acc, to_graph(b, rest))), ...);
+            ((acc = RTExpression<T>::form(*code, acc, to_graph(b, rest))), ...);
             return acc;
           }
         },
