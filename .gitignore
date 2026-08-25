@@ -487,7 +487,20 @@ FodyWeavers.xsd
 *.sln.iml
 
 # python
+# The extension module is already covered by *.so above; python/ddx/_ddx.pyi
+# and py.typed are checked in beside it and must stay tracked.
 .venv
+venv/
+*.py[cod]
+*.pyd
+*.egg-info/
+dist/
+wheelhouse/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 #build folder 
 build/
