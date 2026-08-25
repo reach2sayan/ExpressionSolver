@@ -87,6 +87,9 @@ template <Numeric S, std::size_t N> struct TaylorDual {
     return r;
   }
 
+  // The class type and no scalar, which is what the operators above take: the
+  // scalar constructor is explicit, so `t + 2.0` does not compile and `t += 2.0`
+  // has no business doing so either.  Dual's four are gated the same way.
   constexpr TaylorDual &operator+=(const TaylorDual &o) noexcept {
     return *this = *this + o;
   }

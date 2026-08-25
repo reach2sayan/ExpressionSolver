@@ -66,10 +66,11 @@ inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 // compiling backend rather than a blocking and a non-blocking one because
 // waiting is a question a caller asks per call, not a property of the build.
 //
-// Results therefore move in the last bits at the moment the kernel arrives: the
-// kernel contracts a multiply and an add into an FMA where the sweep evaluates
-// them separately, so the two agree to rounding rather than to the bit.  A loop
-// running across that point sees a ULP or two of movement.
+// A result does not move when the kernel arrives.  The two paths contract the
+// same multiply-adds into the same fma, because the contraction is decided in
+// the graph -- rt::contraction_at() reads it off the nodes, the sweep calls
+// std::fma and the kernel emits llvm.fma -- so a loop running across the
+// switchover sees the same bits before and after it.
 //
 // A compile still in flight when the process exits is joined then, not
 // abandoned: dropping the equation costs nothing, exiting waits for LLVM.
@@ -107,11 +108,11 @@ struct Options {
   // 1 by default, not 2: measured over the four thermodynamic gradients at 16,
   // 32 and 64 variables, at both lane widths, it compiles 11-15% faster and
   // its kernels are within the noise either way -- several are nominally
-  // quicker.  3 is 2's compile time for 2's kernel.  All three select the same
-  // instruction selector and the same register allocator, so they agree to the
-  // bit; only 0 differs, and widely -- it takes the linear-time allocator and
-  // FastISel, which forms no FMAs, for 8.9x off the compile and 1.6x onto the
-  // kernel.
+  // quicker.  3 is 2's compile time for 2's kernel.  All four agree to the bit:
+  // 1, 2 and 3 share an instruction selector and a register allocator, and 0
+  // forms no FMAs of its own but is handed llvm.fma outright.  0 is still the
+  // wide trade -- the linear-time allocator and FastISel, 8.9x off the compile
+  // and 1.6x onto the kernel.
   unsigned codegen_level = 1;
   // PipelineTuningOptions::SLPVectorization.  Packs independent
   // subexpressions *within* one point -- a different axis from `lanes`, which

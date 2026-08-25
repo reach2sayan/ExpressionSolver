@@ -5,6 +5,7 @@
 #include "rt/opcode.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <optional>
@@ -18,6 +19,21 @@ namespace ddx::rt {
 
 using NodeId = std::uint32_t;
 inline constexpr NodeId no_node = ~NodeId{0};
+
+// A multiply and an add taken as one rounding: x * y + z, with x negated where
+// the multiply reached the add through a Neg -- which is what a subtraction
+// builds.  Named by the add; the multiply is a node like any other, and stops
+// being emitted only where nothing else reads it.
+struct Contraction {
+  NodeId x = no_node;
+  NodeId y = no_node;
+  NodeId z = no_node;
+  bool negated = false;
+
+  [[nodiscard]] constexpr explicit operator bool() const noexcept {
+    return x != no_node;
+  }
+};
 
 namespace detail {
 
@@ -79,6 +95,15 @@ public:
 
   [[nodiscard]] constexpr const Node<T> &operator[](NodeId id) const {
     return nodes_[id];
+  }
+
+  // What a walker reads that does not care which arity a node has, and the two
+  // Graph answers as well -- contraction_at() is written once over both.
+  [[nodiscard]] constexpr OpCode op_of(NodeId id) const {
+    return nodes_[id].op;
+  }
+  [[nodiscard]] constexpr std::array<NodeId, 2> operands(NodeId id) const {
+    return {nodes_[id].a, nodes_[id].b};
   }
   [[nodiscard]] constexpr std::size_t size() const { return nodes_.size(); }
   [[nodiscard]] constexpr std::span<const Node<T>> nodes() const {
@@ -308,5 +333,47 @@ private:
       table_; // power-of-two capacity; no_node marks a free slot
   std::vector<std::string> symbols_;
 };
+
+// fadd(fmul(x, y), z) -> fma(x, y, z): the multiply-add every backend forms
+// under -ffp-contract=fast, formed here instead so that everything reading the
+// graph forms the same ones.  Nothing else contracts -- no reassociation, and a
+// division is left alone.
+//
+// The rule is structural: it asks the add what its operands are and nothing
+// about how many readers they have.  That is what lets the arena walk, the
+// frozen graph and the kernel agree to the bit, since only the first of the
+// three knows nothing about which nodes the others kept.  A multiply two adds
+// swallow is *not* computed twice -- an fma is the fmul and the fadd in one
+// instruction, so the count is the same either way -- and where it has a reader
+// of its own it is emitted as well, exactly as before.
+//
+// `nodes` is a Builder or a frozen Graph; both answer op_of() and operands().
+// The lower-id operand wins where an add has two products, which is the slot
+// order Builder::make already sorted commutative operands into.
+template <typename Nodes>
+[[nodiscard]] constexpr Contraction contraction_at(const Nodes &nodes,
+                                                   NodeId v) {
+  if (nodes.op_of(v) != OpCode::Add) {
+    return {};
+  }
+  const auto ops = nodes.operands(v);
+  for (const auto side : {0uz, 1uz}) {
+    const NodeId u = ops[side];
+    if (u == no_node) {
+      continue;
+    }
+    const bool negated = nodes.op_of(u) == OpCode::Neg;
+    const NodeId m = negated ? nodes.operands(u)[0] : u;
+    if (m == no_node || nodes.op_of(m) != OpCode::Mul) {
+      continue;
+    }
+    const auto factors = nodes.operands(m);
+    return {.x = factors[0],
+            .y = factors[1],
+            .z = ops[1 - side],
+            .negated = negated};
+  }
+  return {};
+}
 
 } // namespace ddx::rt

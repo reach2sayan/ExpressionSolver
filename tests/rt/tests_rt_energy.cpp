@@ -62,7 +62,7 @@ TEST(RtEnergy, UniquacJacobian) {
   Builder<> b;
   const auto x = species(b, 8);
   const auto f = models::uniquac(x);
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
   expect_jacobian_matches_differences(b, f.id(b), g, composition(8));
 }
 
@@ -71,7 +71,7 @@ TEST(RtEnergy, PengRobinsonJacobian) {
   auto x = species(b, 6);
   const auto Z = var(b, "Z");
   const auto f = models::peng_robinson(x, Z);
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
   auto pt = composition(6);
   pt.push_back(0.93); // Z is the last symbol
   expect_jacobian_matches_differences(b, f.id(b), g, pt);
@@ -81,7 +81,7 @@ TEST(RtEnergy, MseJacobian) {
   Builder<> b;
   const auto x = species(b, 6);
   const auto f = models::mse(x);
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
   expect_jacobian_matches_differences(b, f.id(b), g, composition(6));
 }
 
@@ -91,7 +91,7 @@ TEST(RtEnergy, StableDownToTraceMoleFractions) {
   Builder<> b;
   const auto x = species(b, n);
   const auto f = models::uniquac(x);
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
 
   double previous_value = 0;
   double previous_trace = 0;
@@ -123,7 +123,7 @@ TEST(RtEnergy, HessianMatchesDifferencesOfTheJacobian) {
   Builder<> b;
   const auto x = species(b, n);
   const auto f = models::uniquac(x);
-  const auto h = ddx::rt::hessian(b, f.id(b));
+  const auto h = ddx::rt::build_hessian_impl(b, f.id(b));
   const auto pt = composition(n);
   const auto values = ddx::rt::evaluate_all(b, pt);
 
@@ -171,7 +171,7 @@ TEST(RtEnergy, JacobianStaysCheapAsSpeciesAreAdded) {
     const auto x = species(b, n);
     const auto f = models::uniquac(x);
     const std::size_t built = b.size();
-    (void)ddx::rt::jacobian(b, f.id(b));
+    (void)ddx::rt::build_jacobian_impl(b, f.id(b));
     const std::size_t added = b.size() - built;
 
     // One reverse sweep: a small multiple of the function, not of n.
@@ -231,7 +231,7 @@ TEST(RtEnergySparse, ColouredHessianIsStillCorrect) {
   Builder<> b;
   const auto s = species(b, n);
   const auto e = models::cluster_expansion(s, 2);
-  const auto h = ddx::rt::hessian(b, e.id(b));
+  const auto h = ddx::rt::build_hessian_impl(b, e.id(b));
   EXPECT_LT(h.colors(), n)
       << "a banded pattern should beat one sweep per column";
 

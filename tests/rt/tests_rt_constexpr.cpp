@@ -52,7 +52,7 @@ consteval double partial_of_product() {
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto f = x * y;
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
   return ddx::rt::evaluate_all(b, std::array{3.0, 4.0})[g.partial[0]];
 }
 static_assert(partial_of_product() == 4.0);
@@ -64,7 +64,7 @@ consteval double transcendental_jacobian() {
   Builder<> b;
   const auto x = var(b, "x");
   const auto f = sin(x) * x;
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
   const auto v = ddx::rt::evaluate_all(b, std::array{0.0});
   return v[g.partial[0]]; // d(x sin x)/dx at 0 is sin 0 + 0 cos 0
 }

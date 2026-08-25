@@ -20,7 +20,7 @@ template <ddx::impl::CExpression E, std::size_t N>
 void expect_agrees_with_ddx(const E &e, std::array<double, N> pt) {
   ddx::rt::Builder<> b;
   const auto root = ddx::rt::to_graph(b, e);
-  const auto g = ddx::rt::jacobian(b, root.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, root.id(b));
   const auto values = ddx::rt::evaluate_all(b, std::span<const double>{pt});
 
   const double expected = std::apply(
@@ -92,7 +92,7 @@ TEST(RtJacobian, SelectingOpsAgainstFiniteDifferences) {
     const auto vx = var(b, "x");
     const auto vy = var(b, "y");
     const auto f = build(vx, vy);
-    const auto g = ddx::rt::jacobian(b, f.id(b));
+    const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
     const auto values = ddx::rt::evaluate_all(b, std::span<const double>{pt});
     for (std::size_t i = 0; i < 2; ++i) {
       const double h = 1e-6;
@@ -120,7 +120,7 @@ TEST(RtJacobian, DerivFromValueReusesThePrimalNode) {
   ddx::rt::Builder<> b;
   const auto vx = var(b, "x");
   const auto f = exp(vx);
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
   EXPECT_EQ(g.partial[0], f.id(b));
 }
 
@@ -129,7 +129,7 @@ TEST(RtJacobian, UnusedSymbolHasZeroPartial) {
   const auto vx = var(b, "x");
   const auto vy = var(b, "y");
   const auto f = vx * vx;
-  const auto g = ddx::rt::jacobian(b, f.id(b));
+  const auto g = ddx::rt::build_jacobian_impl(b, f.id(b));
   ASSERT_EQ(g.partial.size(), 2u);
   EXPECT_TRUE(b.is_constant(g.partial[1], 0.0));
   (void)vy;

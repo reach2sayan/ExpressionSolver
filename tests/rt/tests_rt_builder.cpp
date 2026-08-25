@@ -83,6 +83,42 @@ TEST(RtBuilder, SymbolsInternByName) {
   EXPECT_EQ(b.symbols()[0], "x");
 }
 
+// Compound assignment rebinds the handle through the same operators, so an
+// accumulator written either way lands on the same node -- which interning
+// makes an id comparison.
+TEST(RtBuilder, CompoundAssignmentBuildsWhatTheLongFormBuilds) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+
+  auto acc = x;
+  acc += y;
+  acc -= sin(x);
+  acc *= exp(y);
+  acc /= (x + y);
+  const std::size_t after = b.size();
+
+  const auto spelled = (((x + y) - sin(x)) * exp(y)) / (x + y);
+  EXPECT_EQ(acc.id(b), spelled.id(b));
+  EXPECT_EQ(b.size(), after) << "the long form built a node the short one did not";
+}
+
+// The right operand converts, as it does for the binary operators, and two
+// pending literals fold without an arena to fold in.
+TEST(RtBuilder, CompoundAssignmentTakesAScalar) {
+  Builder<> b;
+  const auto x = var(b, "x");
+
+  auto e = x;
+  e += 2.0;
+  EXPECT_EQ(e.id(b), (x + RTExpression<>{2.0}).id(b));
+
+  RTExpression<> lit = 3.0;
+  lit *= 4.0;
+  EXPECT_TRUE(lit.pending()) << "two literals reached the graph";
+  EXPECT_EQ(lit.literal(), 12.0);
+}
+
 TEST(RtInterpreter, EvaluatesSharedNodesOnce) {
   Builder<> b;
   const auto x = var(b, "x");

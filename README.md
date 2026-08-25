@@ -25,7 +25,7 @@ const auto eq = rt::equation([&] {
   rt::RTExpression<double> rss = 0.0;
   for (const auto &s : data) {
     const auto r = s.y - a * exp(-b * s.t);
-    rss = rss + r * r;
+    rss += r * r;
   }
   return rss;
 });
@@ -209,19 +209,20 @@ wrapping:
 ```cpp
 rt::RTExpression<double> acc = 0.0;
 for (const auto &s : data) {
-  acc = acc + (s.y - a * exp(-b * s.t)) * 2.0;
+  acc += (s.y - a * exp(-b * s.t)) * 2.0;
 }
 ```
 
 | Kind | Available |
 |---|---|
-| Arithmetic | `+` `-` `*` `/` unary `-` |
+| Arithmetic | `+` `-` `*` `/` unary `-` `+=` `-=` `*=` `/=` |
 | Unary | `sin` `cos` `tan` `exp` `log` `log10` `sqrt` `cbrt` `abs` `sign` `asin` `acos` `atan` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` `erf` |
 | Binary | `pow` `atan2` `hypot` `max` `min` |
 
 They are found by argument-dependent lookup, so they work whether or not `rt`
-is in scope. Identical subexpressions are shared as they are built, and literal
-arithmetic folds before it reaches the graph.
+is in scope — the compound forms are members, and rebind the handle rather than
+mutating a node. Identical subexpressions are shared as they are built, and
+literal arithmetic folds before it reaches the graph.
 
 ## Points
 
@@ -390,7 +391,7 @@ auto make_model(const std::vector<Sample> &data) {
     rt::RTExpression<double> rss = 0.0;
     for (const auto &s : data) {
       const auto r = s.y - a * exp(-b * s.t);
-      rss = rss + r * r;
+      rss += r * r;
     }
     return rss;
   });
@@ -459,9 +460,10 @@ eq.uses_kernel();              // true
 Values, gradient and Hessian compile separately, each launched the moment its
 graph is built — so a caller who only evaluates never compiles a gradient.
 
-Results either side of the switchover agree to rounding rather than to the bit:
-the kernel contracts a multiply and an add into an FMA, the interpreter does
-not. A loop running across it sees a ULP or two of movement.
+Results either side of the switchover agree **to the bit**. A multiply feeding
+an add is one rounding in both, because the contraction is decided in the graph
+rather than by the backend: the sweep calls `std::fma` where the kernel emits
+`llvm.fma`. A loop running across the switchover sees no movement at all.
 
 `wait_for_kernel()` is the only call that blocks, and only because it was asked
 to:
@@ -488,7 +490,7 @@ compiler is asked at all.
 | `slp` | `false` | SLP vectorisation: packs subexpressions within one point |
 | `loop_vectorize` | `false` | loop vectorisation, on a loop already emitted `lanes` wide |
 | `veclib` | `None` | vector math library for transcendentals; `Libmvec` trades ~0.5 ULP for ~4 |
-| `contract` | follows `DDX_FP_FLAGS` | allow FMA contraction |
+| `contract` | follows `DDX_FP_FLAGS` | fold a multiply feeding an add into one rounding, in both the kernel and the sweep |
 | `time_passes` | `false` | per-pass timing to stderr |
 
 `points` decides the lane width and nothing else: a call carrying some other

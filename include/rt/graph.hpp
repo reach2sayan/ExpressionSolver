@@ -96,6 +96,7 @@ public:
         adjacency_type(boost::edges_are_unsorted_multi_pass, edges.begin(),
                        edges.end(), slots.begin(), b.size());
     g.mark_live();
+    g.contract();
     return g;
   }
 
@@ -120,6 +121,14 @@ public:
 
   [[nodiscard]] std::size_t live_count() const { return live_order_.size(); }
 
+  // live_order() for a consumer that contracts: a multiply every reader
+  // swallowed into an fma is computed by nobody, so it is not in this one.  The
+  // arithmetic is the same walk's -- contraction_at() decides that, off the
+  // nodes, and this only says what is left to compute.
+  [[nodiscard]] std::span<const NodeId> contracted_order() const {
+    return contracted_order_;
+  }
+
   // Derived once, for codegen, the interpreter and the ABI size checks.
   struct Blocks {
     std::span<const NodeId> values;
@@ -134,6 +143,8 @@ public:
             .hessian = all.subspan(layout_.values + layout_.jacobian,
                                    layout_.hessian)};
   }
+
+  [[nodiscard]] OpCode op_of(NodeId v) const { return properties_[v].op; }
 
   // Operands in slot order; arity is at most two, hence a pair.
   [[nodiscard]] std::array<NodeId, 2> operands(NodeId v) const {
@@ -175,6 +186,29 @@ private:
     live_order_ = std::ranges::to<std::vector<NodeId>>(live_nodes());
   }
 
+  // What a contracting consumer still has to compute.  The contraction itself
+  // is not a decision this freeze makes -- contraction_at() reads it off the
+  // nodes, and answers the same for an arena nobody froze -- so all that is
+  // settled here is liveness under it: an add reaches the multiply's operands
+  // rather than the multiply, and a multiply nothing else reads then reaches
+  // nobody and drops out, the Neg of a subtraction with it.
+  void contract() {
+    const std::vector<bool> live = detail::reachable(
+        properties_.size(), outputs_, [this](NodeId v, auto &&mark) {
+          if (const Contraction c = contraction_at(*this, v)) {
+            mark(c.x);
+            mark(c.y);
+            mark(c.z);
+            return;
+          }
+          for (const auto &edge : operand_edges(v)) {
+            mark(static_cast<NodeId>(boost::target(edge, children_)));
+          }
+        });
+    contracted_order_ = std::ranges::to<std::vector<NodeId>>(
+        live_order_ | std::views::filter([&live](NodeId v) { return live[v]; }));
+  }
+
   std::vector<Property> properties_;
   adjacency_type children_;
   std::vector<NodeId> outputs_;
@@ -183,14 +217,15 @@ private:
   std::vector<std::string> symbols_;
   std::vector<bool> live_;
   std::vector<NodeId> live_order_;
+  std::vector<NodeId> contracted_order_;
 };
 
 // Each step names one block of output columns; `build` is the only thing that
 // produces a Graph.
 //
-//   GraphBuilder{b}.value(f).jacobian().build()
-//   GraphBuilder{b}.values({f0, f1}).jacobian().build()
-//   GraphBuilder{b}.value(f).jacobian().hessian().build()
+//   GraphBuilder{b}.value(f).build_jacobian().build()
+//   GraphBuilder{b}.values({f0, f1}).build_jacobian().build()
+//   GraphBuilder{b}.value(f).build_jacobian().build_hessian().build()
 //
 // The class template argument is deduced from the builder.
 template <impl::Numeric T = double> class GraphBuilder {
@@ -228,16 +263,16 @@ public:
   }
 
   // Every partial, in symbol order.  One reverse sweep per function.
-  constexpr GraphBuilder &jacobian() {
-    const auto j = rt::jacobian(*builder_, roots_);
+  constexpr GraphBuilder &build_jacobian() {
+    const auto j = rt::build_jacobian_impl(*builder_, roots_);
     outputs_.insert(outputs_.end(), j.partial.begin(), j.partial.end());
     layout_.jacobian = j.partial.size();
     return *this;
   }
 
   // Compressed by colour, not n x n: a handful of columns when banded.
-  GraphBuilder &hessian() {
-    const auto h = rt::hessian(*builder_, roots_.front());
+  GraphBuilder &build_hessian() {
+    const auto h = rt::build_hessian_impl(*builder_, roots_.front());
     outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
     layout_.hessian = h.compressed.size();
     coloring_ = h.coloring;
@@ -250,8 +285,8 @@ public:
 
 private:
   // The Hessian an Equation already holds, so the arena is not swept again --
-  // rt::hessian appends to the builder, and freeze() must not.  Only an
-  // Equation has one to hand over; everyone else asks for `hessian()`.
+  // rt::build_hessian_impl appends to the builder, and freeze() must not.  Only
+  // an Equation has one to hand over; everyone else asks for `build_hessian()`.
   template <typename... Ts> friend class impl::Equation;
   constexpr GraphBuilder &hessian_from(const Hessian &h) {
     outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());

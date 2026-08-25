@@ -4,7 +4,9 @@
 #include "rt/builder.hpp"
 #include "util/config.hpp"
 
+#include <cmath> // std::fma
 #include <concepts>
+#include <functional>
 #include <ranges>
 #include <span>
 #include <utility> // std::unreachable
@@ -67,6 +69,37 @@ constexpr void lanes_binary(OpCode op, const T *DDX_RESTRICT l,
   }
 }
 
+// x * y + z rounded once, which is what the kernel's llvm.fma lowers to and so
+// what holds the two paths to the same bits.  A scalar with no fma of its own
+// takes the arithmetic unfused: it rounds twice, as it did before the freeze
+// contracted anything, and it has no kernel to disagree with.
+template <impl::Numeric T>
+[[nodiscard]] constexpr T fused_multiply_add(const T &x, const T &y,
+                                             const T &z) noexcept {
+  if constexpr (std::floating_point<T>) {
+    return std::fma(x, y, z);
+  } else {
+    return T{x * y + z};
+  }
+}
+
+template <std::size_t W, impl::Numeric T>
+constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
+                         const T *DDX_RESTRICT y, const T *DDX_RESTRICT z,
+                         T *DDX_RESTRICT out) noexcept {
+  // The sign is hoisted out of the lane loop rather than tested in it.
+  const auto sweep = [&](auto sign) {
+    for (std::size_t k = 0; k < W; ++k) {
+      out[k] = fused_multiply_add<T>(sign(x[k]), y[k], z[k]);
+    }
+  };
+  if (negated) {
+    sweep(std::negate<>{});
+  } else {
+    sweep(std::identity{});
+  }
+}
+
 } // namespace detail
 
 // The nodes named by `order`, for W points at once.  `point_lanes` is
@@ -75,16 +108,33 @@ constexpr void lanes_binary(OpCode op, const T *DDX_RESTRICT l,
 // evaluate_into; the tail of a batch is padded by repeating a point rather
 // than falling back to a scalar path, and the padded lanes are simply not read
 // back.
+//
+// `contract` takes a multiply feeding an add as one rounding, contraction_at()
+// deciding which -- the arithmetic the kernel emits, and the default because a
+// caller who has not said otherwise gets the answer the kernel would give.
+// Graph::contracted_order() is the order that goes with it, dropping the
+// multiplies nothing else reads; live_order() is also correct and merely
+// computes one or two of them for nobody.
 template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
            std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
 constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
-                              Order order, std::span<U> tape) {
+                              Order order, std::span<U> tape,
+                              bool contract = true) {
   const auto at = std::ranges::begin(point_lanes);
+  const auto lane = [&tape](NodeId v) {
+    return tape.data() + std::size_t{v} * W;
+  };
   for (const NodeId i : order) {
     const Node<T> &n = b[i];
-    U *const out = tape.data() + std::size_t{i} * W;
+    U *const out = lane(i);
+    if (contract) {
+      if (const Contraction c = contraction_at(b, i)) {
+        detail::lanes_fma<W>(c.negated, lane(c.x), lane(c.y), lane(c.z), out);
+        continue;
+      }
+    }
     switch (arity_of(n.op)) {
     case 0:
       if (n.op == OpCode::Const) {
@@ -100,11 +150,10 @@ constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
       }
       break;
     case 1:
-      detail::lanes_unary<W>(n.op, tape.data() + std::size_t{n.a} * W, out);
+      detail::lanes_unary<W>(n.op, lane(n.a), out);
       break;
     default:
-      detail::lanes_binary<W>(n.op, tape.data() + std::size_t{n.a} * W,
-                              tape.data() + std::size_t{n.b} * W, out);
+      detail::lanes_binary<W>(n.op, lane(n.a), lane(n.b), out);
       break;
     }
   }
@@ -130,8 +179,8 @@ template <impl::Numeric T, std::ranges::random_access_range R,
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
            std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
 constexpr void evaluate_into(const Builder<T> &b, const R &point, Order order,
-                             std::span<U> v) {
-  evaluate_block<1>(b, point, order, v);
+                             std::span<U> v, bool contract = true) {
+  evaluate_block<1>(b, point, order, v, contract);
 }
 
 // Every node once, in id order: a child always precedes its parent.  The

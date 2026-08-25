@@ -68,8 +68,9 @@ partials(OpCode op, const RTExpression<S> &l, const RTExpression<S> &r,
 
 } // namespace detail
 
-// One root's row of the Jacobian.  jacobian() below is an overload set rather
-// than two names: the number of roots picks the shape, as output_dim does.
+// One root's row of the Jacobian.  build_jacobian_impl() below is an overload
+// set rather than two names: the number of roots picks the shape, as output_dim
+// does.
 struct JacobianRow {
   NodeId value = no_node;      // the node for f itself
   std::vector<NodeId> partial; // one per symbol, in Builder::symbols() order
@@ -78,8 +79,8 @@ struct JacobianRow {
 // reverse_sweep, accumulating *nodes*.  It appends to the builder it reads: new
 // nodes land above the snapshot, so reverse id order stays topological.
 template <impl::Numeric T>
-[[nodiscard]] constexpr JacobianRow reverse_jacobian(Builder<T> &b,
-                                                     NodeId root) {
+[[nodiscard]] constexpr JacobianRow build_reverse_jacobian(Builder<T> &b,
+                                                           NodeId root) {
   const auto n = static_cast<NodeId>(b.size());
   std::vector<NodeId> adj(n, no_node);
   adj[root] = b.constant(T{1});
@@ -132,8 +133,8 @@ template <impl::Numeric T>
 // One pass per symbol, carrying d[v]/dx_s up the graph.  Here to check Reverse
 // against: Reverse produces fewer nodes on everything but a single variable.
 template <impl::Numeric T>
-[[nodiscard]] constexpr JacobianRow symbolic_jacobian(Builder<T> &b,
-                                                      NodeId root) {
+[[nodiscard]] constexpr JacobianRow build_symbolic_jacobian(Builder<T> &b,
+                                                            NodeId root) {
   const auto nsym = b.symbols().size();
   JacobianRow g{.value = root, .partial = std::vector<NodeId>(nsym, no_node)};
 
@@ -184,8 +185,8 @@ struct Jacobian {
 };
 
 template <impl::Numeric T>
-[[nodiscard]] constexpr Jacobian jacobian(Builder<T> &b,
-                                          std::span<const NodeId> roots) {
+[[nodiscard]] constexpr Jacobian
+build_jacobian_impl(Builder<T> &b, std::span<const NodeId> roots) {
   Jacobian j{.value = {roots.begin(), roots.end()},
              .partial = {},
              .rows = roots.size(),
@@ -194,7 +195,7 @@ template <impl::Numeric T>
   // The previous rows' nodes are unreachable from this root, so the sweep
   // skips them; what they provide is subexpressions to share.
   for (const NodeId r : roots) {
-    const auto g = reverse_jacobian(b, r);
+    const auto g = build_reverse_jacobian(b, r);
     j.partial.insert(j.partial.end(), g.partial.begin(), g.partial.end());
   }
   return j;
@@ -204,17 +205,19 @@ template <impl::Numeric T>
 // this and the m-root overload never compete, and DiffMode does not satisfy
 // Numeric, which keeps it clear of the plain spelling below.
 template <impl::DiffMode Mode, impl::Numeric T>
-[[nodiscard]] constexpr JacobianRow jacobian(Builder<T> &b, NodeId root) {
+[[nodiscard]] constexpr JacobianRow build_jacobian_impl(Builder<T> &b,
+                                                        NodeId root) {
   if constexpr (Mode == impl::DiffMode::Symbolic) {
-    return symbolic_jacobian(b, root);
+    return build_symbolic_jacobian(b, root);
   } else {
-    return reverse_jacobian(b, root);
+    return build_reverse_jacobian(b, root);
   }
 }
 
 template <impl::Numeric T>
-[[nodiscard]] constexpr JacobianRow jacobian(Builder<T> &b, NodeId root) {
-  return reverse_jacobian(b, root);
+[[nodiscard]] constexpr JacobianRow build_jacobian_impl(Builder<T> &b,
+                                                        NodeId root) {
+  return build_reverse_jacobian(b, root);
 }
 
 // One sweep per colour.  Sweeping from the sum of a colour's partials gives,
@@ -238,8 +241,8 @@ struct Hessian {
 };
 
 template <impl::Numeric T>
-[[nodiscard]] Hessian hessian(Builder<T> &b, NodeId root) {
-  const auto g = reverse_jacobian(b, root);
+[[nodiscard]] Hessian build_hessian_impl(Builder<T> &b, NodeId root) {
+  const auto g = build_reverse_jacobian(b, root);
   const auto rows = coupling_pattern(b, root);
   Hessian h{.value = g.value,
             .partial = g.partial,
@@ -259,7 +262,7 @@ template <impl::Numeric T>
           return RTExpression<T>{b, h.partial[j]};
         }),
         RTExpression<T>{0}, std::plus<>{});
-    const auto row = reverse_jacobian(b, seed.id(b));
+    const auto row = build_reverse_jacobian(b, seed.id(b));
     const auto out = by_color(h.compressed, h.coloring.count, n);
     for (const auto [i, p] : std::views::enumerate(row.partial)) {
       out[c, static_cast<std::size_t>(i)] = p;

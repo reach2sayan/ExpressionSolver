@@ -45,11 +45,11 @@ RE rss(std::span<const RE> x) {
   const std::size_t n = x.size();
   RE g = x[0] * log(x[0]);
   for (std::size_t i = 1; i < n; ++i) {
-    g = g + x[i] * log(x[i]);
+    g += x[i] * log(x[i]);
   }
   for (std::size_t i = 0; i < n; ++i) {
     for (std::size_t j = i + 1; j < n; ++j) {
-      g = g + pseudo(i, j, 0.2, 0.8) * x[i] * x[j];
+      g += pseudo(i, j, 0.2, 0.8) * x[i] * x[j];
     }
   }
   return g;
@@ -60,8 +60,8 @@ RE uniquac(std::span<const RE> x) {
   RE sum_r = pseudo(0, 1, 0.9, 5.2) * x[0];
   RE sum_q = pseudo(0, 2, 0.8, 4.4) * x[0];
   for (std::size_t i = 1; i < n; ++i) {
-    sum_r = sum_r + pseudo(i, 1, 0.9, 5.2) * x[i];
-    sum_q = sum_q + pseudo(i, 2, 0.8, 4.4) * x[i];
+    sum_r += pseudo(i, 1, 0.9, 5.2) * x[i];
+    sum_q += pseudo(i, 2, 0.8, 4.4) * x[i];
   }
 
   std::vector<RE> phi, theta;
@@ -74,16 +74,16 @@ RE uniquac(std::span<const RE> x) {
 
   RE out = x[0] * log(phi[0] / x[0]);
   for (std::size_t i = 1; i < n; ++i) {
-    out = out + x[i] * log(phi[i] / x[i]);
+    out += x[i] * log(phi[i] / x[i]);
   }
   // The residual: a sum over every species inside a log, per species.  This is
   // the O(n^2) term, and the one that makes the graph deep as well as wide.
   for (std::size_t i = 0; i < n; ++i) {
     RE inner = theta[0] * pseudo(0, i, 0.2, 1.8);
     for (std::size_t j = 1; j < n; ++j) {
-      inner = inner + theta[j] * pseudo(j, i, 0.2, 1.8);
+      inner += theta[j] * pseudo(j, i, 0.2, 1.8);
     }
-    out = out - pseudo(i, 2, 0.8, 4.4) * x[i] * log(inner);
+    out -= pseudo(i, 2, 0.8, 4.4) * x[i] * log(inner);
   }
   return out;
 }
@@ -93,13 +93,13 @@ RE mse(std::span<const RE> x) {
   RE ionic = 0.5 * pseudo(0, 5, -2.0, 2.0) * pseudo(0, 5, -2.0, 2.0) * x[0];
   for (std::size_t i = 1; i < n; ++i) {
     const double z = pseudo(i, 5, -2.0, 2.0);
-    ionic = ionic + 0.5 * z * z * x[i];
+    ionic += 0.5 * z * z * x[i];
   }
   const RE damp = exp(-sqrt(ionic));
   RE mr = -0.3915 * sqrt(ionic) / (1.0 + 1.2 * sqrt(ionic));
   for (std::size_t i = 0; i < n; ++i) {
     for (std::size_t j = 0; j < n; ++j) {
-      mr = mr + x[i] * x[j] * pseudo(i, j, -0.4, 0.4) * damp;
+      mr += x[i] * x[j] * pseudo(i, j, -0.4, 0.4) * damp;
     }
   }
   return mr + uniquac(x);
@@ -116,12 +116,12 @@ RE pr(std::span<const RE> v) {
     for (std::size_t j = 0; j < n; ++j) {
       const double aij = std::sqrt(pseudo(i, 3, 0.3, 2.6) * pseudo(j, 3, 0.3, 2.6)) *
                          (1.0 - pseudo(i, j, 0.0, 0.12));
-      a_mix = a_mix + x[i] * x[j] * aij;
+      a_mix += x[i] * x[j] * aij;
     }
   }
   RE b_mix = x[0] * pseudo(0, 4, 0.02, 0.09);
   for (std::size_t i = 1; i < n; ++i) {
-    b_mix = b_mix + x[i] * pseudo(i, 4, 0.02, 0.09);
+    b_mix += x[i] * pseudo(i, 4, 0.02, 0.09);
   }
   const RE A = a_mix * 0.45724;
   const RE B = b_mix * 0.07780;
@@ -159,7 +159,7 @@ ddx::rt::Graph<double> gradient_graph(const Model &m, std::size_t n) {
     v.push_back(ddx::rt::var(b, "x" + std::to_string(i)));
   }
   const ddx::rt::NodeId root = m.build(std::span<const RE>{v}).id(b);
-  const auto row = ddx::rt::jacobian<ddx::impl::DiffMode::Reverse>(b, root);
+  const auto row = ddx::rt::build_jacobian_impl<ddx::impl::DiffMode::Reverse>(b, root);
   return ddx::rt::GraphBuilder{b}
       .values_from(std::span<const ddx::rt::NodeId>{&root, 1})
       .jacobian_from(row.partial)

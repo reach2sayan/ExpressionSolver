@@ -295,6 +295,22 @@ TEST(DualCompoundAssign, DivEq) {
   EXPECT_DOUBLE_EQ(a.template get<0>(), 2.0);
   EXPECT_DOUBLE_EQ(a.template get<1>(), 1.0);
 }
+// The four are gated on what Dual's own operators take, so the three operand
+// shapes that compile for `+` compile here: a same-T dual, an arithmetic
+// scalar, and -- one nesting up -- the inner Dual, which is dual2nd's scalar.
+TEST(DualCompoundAssign, TakesEveryShapeTheOperatorDoes) {
+  Dual<double> a{3.0, 1.0};
+  a += Dual<double>{2.0, 0.5}; // same-T dual
+  a += 2;                      // integral
+  a += 2.0f;                   // another floating type
+  EXPECT_DOUBLE_EQ(a.template get<0>(), 9.0);
+  EXPECT_DOUBLE_EQ(a.template get<1>(), 1.5);
+
+  ddx::dual2nd d{Dual<double>{2.0, 1.0}, Dual<double>{1.0, 0.0}};
+  d *= Dual<double>{3.0, 0.0}; // the value type, one level down
+  EXPECT_DOUBLE_EQ(d.template get<0>().template get<0>(), 6.0);
+  EXPECT_DOUBLE_EQ(d.template get<1>().template get<0>(), 3.0);
+}
 TEST(ReverseModeAD_Dual, SingleVariable) {
   auto x = var<"x", dual>;
   auto g = Equation{3.0 * x}.jacobian(Dual<double>{5.0, 0.0});

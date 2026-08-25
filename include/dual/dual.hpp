@@ -22,6 +22,15 @@ template <Numeric T>
 inline constexpr bool is_commutative_multiply_v<Dual<T>> =
     is_commutative_multiply_v<T>;
 
+// A zero-derivative operand for the dual A.
+template <typename C, typename A>
+concept ConstOperand =
+    CArithmetic<C> || std::same_as<std::remove_cvref_t<C>, dual_value_t<A>>;
+
+// Anything other than Dual<T>: selects the (Dual, scalar) formulas below.
+template <typename C, typename T>
+concept ScalarOperand = !std::same_as<std::remove_cvref_t<C>, Dual<T>>;
+
 // Ref: Clifford, Proc. LMS s1-4 (1873) 381 -- adjoin ε with ε² = 0.
 template <Numeric T> class Dual {
 private:
@@ -33,16 +42,28 @@ public:
   constexpr explicit Dual(T v, T d = T{}) noexcept : val_(v), deriv_(d) {}
   constexpr Dual(CArithmetic auto s) noexcept : val_(T(s)), deriv_(T{}) {}
 
-  constexpr Dual &operator+=(const Numeric auto &o) noexcept {
+  // Gated on what the binary operators below take, rather than on Numeric:
+  // the body is `*this + o`, so anything looser only moves the refusal from
+  // the call site into here.  TaylorDual's four match its own operators the
+  // same way, which is why they take the class type and no scalar.
+  template <typename B>
+    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
+  constexpr Dual &operator+=(const B &o) noexcept {
     return *this = *this + o;
   }
-  constexpr Dual &operator-=(const Numeric auto &o) noexcept {
+  template <typename B>
+    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
+  constexpr Dual &operator-=(const B &o) noexcept {
     return *this = *this - o;
   }
-  constexpr Dual &operator*=(const Numeric auto &o) noexcept {
+  template <typename B>
+    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
+  constexpr Dual &operator*=(const B &o) noexcept {
     return *this = *this * o;
   }
-  constexpr Dual &operator/=(const Numeric auto &o) noexcept {
+  template <typename B>
+    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
+  constexpr Dual &operator/=(const B &o) noexcept {
     return *this = *this / o;
   }
 
@@ -141,15 +162,6 @@ template <FixedString S, Numeric T>
 [[nodiscard]] constexpr auto dual_var_of(symbol_type<S>, const T &) noexcept {
   return Variable<Dual<T>, S>{};
 }
-
-// A zero-derivative operand for the dual A.
-template <typename C, typename A>
-concept ConstOperand =
-    CArithmetic<C> || std::same_as<std::remove_cvref_t<C>, dual_value_t<A>>;
-
-// Anything other than Dual<T>: selects the (Dual, scalar) formulas below.
-template <typename C, typename T>
-concept ScalarOperand = !std::same_as<std::remove_cvref_t<C>, Dual<T>>;
 
 template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a,

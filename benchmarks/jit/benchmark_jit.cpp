@@ -38,7 +38,7 @@ struct Batch {
 ddx::jit::Kernel compile_jacobian(ddx::jit::Compiler &c, const auto &expr,
                                   Builder<> &b) {
   const auto root = ddx::rt::to_graph(b, expr);
-  return *c.compile(ddx::rt::GraphBuilder{b}.value(root).jacobian().build());
+  return *c.compile(ddx::rt::GraphBuilder{b}.value(root).build_jacobian().build());
 }
 
 template <ddx::impl::CExpression E>

@@ -28,8 +28,8 @@ inline RE uniquac(const std::vector<RE> &x) {
   }
   RE sum_r{0}, sum_q{0};
   for (std::size_t i = 0; i < n; ++i) {
-    sum_r = sum_r + r[i] * x[i];
-    sum_q = sum_q + q[i] * x[i];
+    sum_r += r[i] * x[i];
+    sum_q += q[i] * x[i];
   }
 
   std::vector<RE> phi, theta;
@@ -42,17 +42,17 @@ inline RE uniquac(const std::vector<RE> &x) {
 
   RE comb{0};
   for (std::size_t i = 0; i < n; ++i) {
-    comb = comb + x[i] * log(phi[i] / x[i]) +
-           5.0 * q[i] * x[i] * log(theta[i] / phi[i]); // z/2 = 5
+    comb += x[i] * log(phi[i] / x[i]) +
+            5.0 * q[i] * x[i] * log(theta[i] / phi[i]); // z/2 = 5
   }
 
   RE res{0};
   for (std::size_t i = 0; i < n; ++i) {
     RE inner{0};
     for (std::size_t j = 0; j < n; ++j) {
-      inner = inner + theta[j] * pseudo(j, i, 0.2, 1.8); // tau_ji, T folded in
+      inner += theta[j] * pseudo(j, i, 0.2, 1.8); // tau_ji, T folded in
     }
-    res = res - q[i] * x[i] * log(inner);
+    res -= q[i] * x[i] * log(inner);
   }
   return comb + res;
 }
@@ -72,12 +72,12 @@ inline RE peng_robinson(const std::vector<RE> &x, const RE &Z) {
     for (std::size_t j = 0; j < n; ++j) {
       const double aij =
           std::sqrt(ai[i] * ai[j]) * (1.0 - pseudo(i, j, 0.0, 0.12));
-      a_mix = a_mix + x[i] * x[j] * aij;
+      a_mix += x[i] * x[j] * aij;
     }
   }
   RE b_mix{0};
   for (std::size_t i = 0; i < n; ++i) {
-    b_mix = b_mix + x[i] * bi[i];
+    b_mix += x[i] * bi[i];
   }
 
   const RE A = a_mix * 0.45724; // P/(RT)^2 folded into the constant
@@ -97,7 +97,7 @@ inline RE mse(const std::vector<RE> &x) {
 
   RE ionic{0};
   for (std::size_t i = 0; i < n; ++i) {
-    ionic = ionic + 0.5 * zc[i] * zc[i] * x[i];
+    ionic += 0.5 * zc[i] * zc[i] * x[i];
   }
 
   const RE lr = -0.3915 * sqrt(ionic) / (RE{1} + 1.2 * sqrt(ionic));
@@ -105,7 +105,7 @@ inline RE mse(const std::vector<RE> &x) {
   RE mr{0};
   for (std::size_t i = 0; i < n; ++i) {
     for (std::size_t j = 0; j < n; ++j) {
-      mr = mr + x[i] * x[j] * pseudo(i, j, -0.4, 0.4) * exp(-sqrt(ionic));
+      mr += x[i] * x[j] * pseudo(i, j, -0.4, 0.4) * exp(-sqrt(ionic));
     }
   }
   return lr + mr + uniquac(x);
@@ -120,10 +120,10 @@ inline RE cluster_expansion(const std::vector<RE> &s, std::size_t range = 2) {
   const std::size_t n = s.size();
   RE e{0};
   for (std::size_t i = 0; i < n; ++i) {
-    e = e + pseudo(i, 6, -0.5, 0.5) * s[i]; // point term
+    e += pseudo(i, 6, -0.5, 0.5) * s[i]; // point term
     for (std::size_t d = 1; d <= range; ++d) {
       const std::size_t j = (i + d) % n;
-      e = e + pseudo(i, j, -0.3, 0.3) * s[i] * s[j]; // pair term
+      e += pseudo(i, j, -0.3, 0.3) * s[i] * s[j]; // pair term
     }
   }
   return e;
@@ -135,11 +135,11 @@ inline RE bonded_chain(const std::vector<RE> &r) {
   RE e{0};
   for (std::size_t i = 0; i + 1 < n; ++i) {
     const RE d = r[i + 1] - r[i];
-    e = e + pseudo(i, 7, 0.5, 2.0) * d * d; // stretch
+    e += pseudo(i, 7, 0.5, 2.0) * d * d; // stretch
   }
   for (std::size_t i = 0; i + 2 < n; ++i) {
     const RE bend = r[i + 2] - 2.0 * r[i + 1] + r[i];
-    e = e + pseudo(i, 8, 0.2, 1.0) * bend * bend;
+    e += pseudo(i, 8, 0.2, 1.0) * bend * bend;
   }
   return e;
 }

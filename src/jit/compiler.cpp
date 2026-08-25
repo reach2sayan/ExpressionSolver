@@ -394,13 +394,13 @@ private:
       // what has to be registered before the pool is whatever LLVM touches
       // lazily, and that follows the ops, so enumerate them rather than hope.
       auto e = x / (y + 1.0) - x * y;
-#define DDX_JIT_WARM(fn, Op, label, ...) e = e + fn(x);
+#define DDX_JIT_WARM(fn, Op, label, ...) e += fn(x);
       DDX_UNARY_MATH_TABLE(DDX_JIT_WARM)
 #undef DDX_JIT_WARM
-      e = e + pow(x, y) + atan2(x, y) + hypot(x, y);
-      e = e + abs(x) + max(x, y) + min(x, y) + sign(x) + (-x);
+      e += pow(x, y) + atan2(x, y) + hypot(x, y);
+      e += abs(x) + max(x, y) + min(x, y) + sign(x) + (-x);
       // Jacobian too: reverse mode emits ops the value alone never reaches.
-      const auto row = rt::jacobian<impl::DiffMode::Reverse>(b, e.id(b));
+      const auto row = rt::build_jacobian_impl<impl::DiffMode::Reverse>(b, e.id(b));
       const auto g = rt::GraphBuilder<double>{b}
                          .value(e)
                          .jacobian_from(row.partial)

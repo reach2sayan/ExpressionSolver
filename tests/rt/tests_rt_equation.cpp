@@ -6,8 +6,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <iterator>
 #include <numbers>
 #include <ranges>
@@ -337,6 +339,19 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_TRUE(stray.poisoned());
   EXPECT_TRUE((stray * 2.0 + 1.0).poisoned());
 
+  // Compound assignment goes through the same operators, so it neither loses
+  // the poison nor -- with a live right operand -- picks up that operand's
+  // arena and answers where it should refuse.
+  auto spreading = stray;
+  spreading += 2.0;
+  EXPECT_TRUE(spreading.poisoned());
+  {
+    ddx::rt::Builder<> other;
+    auto adopting = stray;
+    adopting *= var(other, "x");
+    EXPECT_TRUE(adopting.poisoned());
+  }
+
   const auto poisoned = ddx::rt::equation(stray * 2.0);
   EXPECT_TRUE(poisoned.poisoned());
   ASSERT_TRUE(poisoned.status().has_value());
@@ -443,8 +458,8 @@ TEST(RtEquation, ScalarAccessorsAgreeWithTheArenaWalkToTheBit) {
 
   // Before the equation, so interning lands its own sweeps on these same nodes.
   const auto root = expr.id(b);
-  const auto row = ddx::rt::jacobian(b, root);
-  const auto hess = ddx::rt::hessian(b, root);
+  const auto row = ddx::rt::build_jacobian_impl(b, root);
+  const auto hess = ddx::rt::build_hessian_impl(b, root);
   const auto eq = ddx::rt::equation(expr);
 
   const std::vector<double> at{0.7, 1.3, 2.1};
@@ -504,14 +519,21 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   EXPECT_FALSE(used_none) << "Interpret still reached for a kernel";
   EXPECT_TRUE(used_kernel) << "Compile did not compile on a JIT build";
 
-  // Near, not equal: the kernel contracts a multiply and an add into an FMA
-  // where the interpreter evaluates them separately, so the two paths agree to
-  // rounding rather than to the bit.  Declining the backend changes which
-  // arithmetic runs, which is the whole point of being able to decline it.
+  // Equal, not near: the contraction is decided in the graph, so the kernel and
+  // the sweep fold the same products into the same fma and round the same
+  // number of times.  Declining the backend changes which code runs, and must
+  // not change the answer -- a loop that switches over mid-run would otherwise
+  // see its results move.
   for (std::size_t i = 0; i < n; ++i) {
-    EXPECT_NEAR(f_jit[i], f_int[i], 1e-12) << "value at " << i;
-    EXPECT_NEAR(dx_jit[i], dx_int[i], 1e-12) << "d/dx at " << i;
-    EXPECT_NEAR(dy_jit[i], dy_int[i], 1e-12) << "d/dy at " << i;
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(f_jit[i]),
+              std::bit_cast<std::uint64_t>(f_int[i]))
+        << "value at " << i;
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(dx_jit[i]),
+              std::bit_cast<std::uint64_t>(dx_int[i]))
+        << "d/dx at " << i;
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(dy_jit[i]),
+              std::bit_cast<std::uint64_t>(dy_int[i]))
+        << "d/dy at " << i;
   }
 }
 
@@ -974,7 +996,7 @@ TEST(RtEquation, ConcurrentConstCallsAgreeWithOneThread) {
 }
 
 // Two equations over ONE borrowed Builder, each asked for a Hessian from its
-// own thread.  rt::hessian appends to the arena, so before the sweep moved into
+// own thread.  rt::build_hessian_impl appends to the arena, so before the sweep moved into
 // the constructor no per-Equation lock could have made this safe.
 TEST(RtEquation, TwoEquationsSharingAnArenaDoNotRaceIt) {
   ddx::rt::Builder<> b;

@@ -382,13 +382,13 @@ private:
     roots_.reserve(output_dim);
     roots_.push_back(first.id(*arena_));
     (roots_.push_back(rest.id(*arena_)), ...);
-    derivative_ = rt::jacobian(*arena_, roots_);
-    // The colouring rt::hessian needs runs through Boost.Graph, and a Cache
-    // holds a mutex; neither is available while constant-evaluating, and a
-    // constant-evaluated equation reaches neither.
+    derivative_ = rt::build_jacobian_impl(*arena_, roots_);
+    // The colouring rt::build_hessian_impl needs runs through Boost.Graph, and a
+    // Cache holds a mutex; neither is available while constant-evaluating, and
+    // a constant-evaluated equation reaches neither.
     if !consteval {
       hessians_ = roots_ | std::views::transform([&](rt::NodeId r) {
-                    return rt::hessian(*arena_, r);
+                    return rt::build_hessian_impl(*arena_, r);
                   }) |
                   to<std::vector<rt::Hessian>>();
       cache_ = std::make_unique<Cache>();
@@ -643,11 +643,28 @@ private:
   // handful of nodes' worth per lane.
   static constexpr std::size_t kLanes = 8;
 
+  // Whether this equation's arithmetic contracts a multiply and an add into an
+  // FMA.  jit::Options::contract is the knob, and it is read here rather than
+  // by the compiler because the contraction is decided in the *graph*: either
+  // both paths fold a product into one rounding or neither does, which is what
+  // makes a batch answer the same whichever one answered it.  A build with no
+  // JIT has no kernel to agree with and takes the fma anyway, so an answer does
+  // not depend on how the library was configured.
+  [[nodiscard]] bool contracts() const noexcept {
+#ifdef DDX_HAS_JIT
+    return options_.contract;
+#else
+    return true;
+#endif
+  }
+
   void interpret(const Compiled &c, std::span<const T *const> xs,
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
     const auto blocks = c.graph->output_blocks();
-    const auto order = c.graph->live_order();
+    const bool contract = contracts();
+    const auto order =
+        contract ? c.graph->contracted_order() : c.graph->live_order();
     const std::size_t symbols = symbol_count();
 
     // Tapes are sized by the arena rather than the graph: a borrowed builder
@@ -663,7 +680,7 @@ private:
       for (const std::size_t i : std::views::iota(0uz, n)) {
         std::ranges::transform(xs, at.begin(),
                                [i](const T *column) { return column[i]; });
-        rt::evaluate_into(*arena_, at, order, std::span<T>{tape});
+        rt::evaluate_into(*arena_, at, order, std::span<T>{tape}, contract);
         for (const auto [columns, block] : std::views::zip(
                  std::array{f, g, h},
                  std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
@@ -690,7 +707,7 @@ private:
         std::ranges::fill(tail, dst + kLanes, column[base + width - 1]);
       }
       rt::evaluate_block<kLanes>(*arena_, std::span<const T>{lanes}, order,
-                                 std::span<T>{tape});
+                                 std::span<T>{tape}, contract);
 
       for (const auto [columns, block] : std::views::zip(
                std::array{f, g, h},
@@ -755,9 +772,9 @@ private:
   // accessor const and constexpr.
   rt::Jacobian derivative_;
   // Swept once in the constructor and never touched again, which is the whole
-  // of what makes the const members safe to call concurrently: rt::hessian
-  // *appends to the arena*, and an arena a caller lent us may be lent to
-  // another Equation as well.
+  // of what makes the const members safe to call concurrently:
+  // rt::build_hessian_impl *appends to the arena*, and an arena a caller lent us may
+  // be lent to another Equation as well.
   std::vector<rt::Hessian> hessians_;
   // Owned outright -- nothing outside an Equation holds it -- which is also
   // what keeps a constant-evaluated Equation destructible: unique_ptr's

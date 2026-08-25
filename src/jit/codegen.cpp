@@ -120,6 +120,16 @@ public:
     return call(op, {u});
   }
 
+  // llvm.fma, not llvm.fmuladd: fmuladd is the *permission* to fuse, which the
+  // backend may decline, and the sweep has already committed to one rounding.
+  // Where the host has no FMA this lowers to a call to libm's fma(), which is
+  // correctly rounded too -- slow, and still the same bits.
+  llvm::Value *fma(const rt::Contraction &c, llvm::Value *x, llvm::Value *y,
+                   llvm::Value *z) const {
+    return b_.CreateIntrinsic(llvm::Intrinsic::fma, {lanes_.ty},
+                              {c.negated ? b_.CreateFNeg(x) : x, y, z});
+  }
+
   llvm::Value *binary(rt::OpCode op, llvm::Value *l, llvm::Value *r) const {
     switch (op) {
     case rt::OpCode::Add:
@@ -197,16 +207,6 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   return fn;
 }
 
-llvm::FastMathFlags flags_for(const Options &opt) {
-  // Contraction only, matching -ffp-contract=fast: reassociation would change
-  // derivative values.
-  llvm::FastMathFlags fmf;
-  if (opt.contract) {
-    fmf.setAllowContract();
-  }
-  return fmf;
-}
-
 // Loaded once in the entry block, so they are loop-invariant.
 struct Columns {
   std::vector<llvm::Value *> inputs;
@@ -237,13 +237,21 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
           .hessian = load_columns(3, layout.hessian, "h")};
 }
 
-// Ids are topological, so one pass needs no worklist.
+// Ids are topological, so one pass needs no worklist.  Under contraction the
+// walk is the graph's contracted one: the adds it named carry a product, and
+// the multiplies they swallowed are ids this order never reaches.
 [[nodiscard]] std::vector<llvm::Value *>
 emit_nodes(const Emitter &emit, const rt::Graph<double> &g, const Columns &cols,
-           llvm::Value *index, llvm::Value *mask) {
+           llvm::Value *index, llvm::Value *mask, bool contract) {
   std::vector<llvm::Value *> value(g.size(), nullptr);
-  for (const rt::NodeId v : g.live_order()) {
+  for (const rt::NodeId v : contract ? g.contracted_order() : g.live_order()) {
     const auto &p = g[v];
+    if (contract) {
+      if (const rt::Contraction c = rt::contraction_at(g, v)) {
+        value[v] = emit.fma(c, value[c.x], value[c.y], value[c.z]);
+        continue;
+      }
+    }
     const auto operands = g.operands(v);
     switch (rt::arity_of(p.op)) {
     case 0:
@@ -295,8 +303,11 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   auto *const loop = llvm::BasicBlock::Create(ctx, "loop", fn);
   auto *const exit = llvm::BasicBlock::Create(ctx, "exit", fn);
 
+  // No fast-math flags at all.  Contraction is decided in the graph and spelled
+  // llvm.fma, so allowContract here would let the backend fuse a *second* set
+  // of products -- ones the sweep computed separately -- and reassociation was
+  // never wanted.
   llvm::IRBuilder<> b(entry);
-  b.setFastMathFlags(flags_for(opt));
   const Columns cols = hoist_columns(b, *fn, g);
   b.CreateCondBr(b.CreateICmpEQ(count, llvm::ConstantInt::get(i64, 0)), exit,
                  loop);
@@ -318,7 +329,7 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
 
   const Emitter emit(*m, b, lanes);
   const std::vector<llvm::Value *> value =
-      emit_nodes(emit, g, cols, index, mask);
+      emit_nodes(emit, g, cols, index, mask, opt.contract);
   emit_stores(emit, g, cols, value, index, mask);
 
   llvm::Value *const next =

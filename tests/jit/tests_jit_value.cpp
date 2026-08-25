@@ -239,7 +239,7 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
 #undef DDX_TEST_OP
   f = f + pow(x, y) + atan2(x, y) + hypot(x, y) + abs(x - y) + max(x, y) +
       min(x, y) + sign(x - y);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).jacobian().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
 
   constexpr std::size_t n = 13;
   std::vector<double> cx(n), cy(n);
@@ -278,17 +278,19 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
 }
 
 // The codegen level rides on the module, so one JIT serves compiles at
-// several.  1, 2 and 3 share an instruction selector and a register allocator
-// and must agree to the bit -- which is what lets the default be the cheapest
-// of them.  Level 0 takes FastISel, forms no FMAs, and is not held to it.
-TEST(JitValue, CodegenLevelsOneToThreeAgreeToTheBit) {
+// several.  All four must agree to the bit -- which is what lets the default be
+// the cheapest of them.  Level 0 is in that list only because contraction moved
+// into the graph: it takes FastISel, which forms no FMAs of its own, and used to
+// answer differently for exactly that reason.  An llvm.fma it is handed is an
+// operation like any other.
+TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   // Multiply-add shapes throughout, so there is an FMA at every level that
   // forms one -- the thing the levels could have disagreed about.
   const auto f = x * y + x * x - y + exp(x * y) * (y + 1.0) + log(x) * y;
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).jacobian().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
 
   const std::array cx{0.25, 1.5, 2.75, 3.0};
   const std::array cy{1.25, 0.5, 2.0, 0.75};
@@ -306,7 +308,7 @@ TEST(JitValue, CodegenLevelsOneToThreeAgreeToTheBit) {
   };
 
   const auto [v1, dx1, dy1] = run(1);
-  for (const unsigned level : {2u, 3u}) {
+  for (const unsigned level : {0u, 2u, 3u}) {
     const auto [v, dx, dy] = run(level);
     for (std::size_t i = 0; i < cx.size(); ++i) {
       EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
@@ -320,12 +322,6 @@ TEST(JitValue, CodegenLevelsOneToThreeAgreeToTheBit) {
           << "d/dy, codegen " << level << " at " << i;
     }
   }
-
-  // 0 is still a correct kernel, just not a bit-identical one.
-  const auto [v0, dx0, dy0] = run(0);
-  for (std::size_t i = 0; i < cx.size(); ++i) {
-    EXPECT_NEAR(v0[i], v1[i], 1e-12 * std::max(1.0, std::abs(v1[i])));
-  }
 }
 
 // Both vectorisers pack operations that were already independent, and neither
@@ -337,7 +333,7 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto f = x * log(x) + y * exp(x * y) + sqrt(x + y) + x * y * (x + y);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).jacobian().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
 
   constexpr std::size_t n = 9;
   std::vector<double> cx(n), cy(n);

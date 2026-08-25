@@ -46,7 +46,7 @@ int main() {
   // The runtime graph is the header set that needs Boost.
   rt::Builder<> b;
   const auto root = rt::to_graph(b, x * y + sin(x));
-  const auto rg = rt::jacobian(b, root.id(b));
+  const auto rg = rt::build_jacobian_impl(b, root.id(b));
   const auto values = rt::evaluate_all(b, std::array{1.25, 0.5});
   if (!close(values[rg.partial[0]], 0.5 + std::cos(1.25)) ||
       !close(values[rg.partial[1]], 1.25)) {
@@ -61,7 +61,7 @@ int main() {
     return fail(compiler.error().detail.c_str());
   }
   auto kernel =
-      compiler->compile(rt::GraphBuilder{b}.value(root).jacobian().build());
+      compiler->compile(rt::GraphBuilder{b}.value(root).build_jacobian().build());
   if (!kernel) {
     return fail(kernel.error().detail.c_str());
   }

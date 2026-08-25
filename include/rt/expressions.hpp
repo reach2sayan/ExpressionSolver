@@ -107,6 +107,29 @@ public:
     return l + (-r);
   }
 
+  // Through the operators above, never into builder_ and id_ directly: form()
+  // is what propagates poison and folds two pending literals, and an in-place
+  // version that skipped it would take a poisoned accumulator, adopt the other
+  // side's arena, and answer instead of refusing.  `-=` reaches Add(l, Neg(r))
+  // for the same reason -- there is no Sub opcode, and the builder's rewrites
+  // see the shape they already see.
+  //
+  // The parameter is the class type rather than a Numeric auto: the converting
+  // constructor above already promotes `e += 2.0`, and taking it this way is
+  // what makes += accept exactly what + accepts.
+  constexpr RTExpression &operator+=(const RTExpression &o) {
+    return *this = *this + o;
+  }
+  constexpr RTExpression &operator-=(const RTExpression &o) {
+    return *this = *this - o;
+  }
+  constexpr RTExpression &operator*=(const RTExpression &o) {
+    return *this = *this * o;
+  }
+  constexpr RTExpression &operator/=(const RTExpression &o) {
+    return *this = *this / o;
+  }
+
 #define DDX_RT_UNFN(fn, Op, label, ...)                                        \
   friend constexpr RTExpression fn(const RTExpression &u) {                    \
     return form(OpCode::Op, u);                                                \
