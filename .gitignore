@@ -501,6 +501,8 @@ wheelhouse/
 .mypy_cache/
 .coverage
 htmlcov/
+uv.lock
+.python-version
 
 #build folder 
 build/
