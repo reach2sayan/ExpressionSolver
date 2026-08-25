@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <format>
 #include <numeric>
 #include <string>
 
@@ -17,11 +18,14 @@ namespace {
 using ddx::rt::Builder;
 using models::RE;
 
+// Zero-padded: a slot is the symbol's place in the alphabet, so x9 has to sort
+// before x10 for slot order to be site order -- which is what banded means.
 std::vector<RE> species(Builder<> &b, std::size_t n) {
+  const auto width = std::to_string(n - 1).size();
   std::vector<RE> x;
   x.reserve(n);
   for (std::size_t i = 0; i < n; ++i) {
-    x.push_back(var(b, "x" + std::to_string(i)));
+    x.push_back(var(b, std::format("x{:0{}}", i, width)));
   }
   return x;
 }

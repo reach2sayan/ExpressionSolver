@@ -100,6 +100,7 @@ public:
     if (const auto bad = why_not(first, rest...)) {
       return Equation{*bad};
     }
+    first.builder()->seal();
     return Equation{first, rest...};
   }
 
@@ -111,6 +112,7 @@ public:
     if (const auto bad = why_not(first, rest...)) {
       return Equation{*bad};
     }
+    first.builder()->seal();
     return Equation{std::move(owned), first, rest...};
   }
 
@@ -401,12 +403,16 @@ private:
     arena_ = ArenaPtr{owned.release(), reclaim};
   }
 
-  // The graph an expression names, or why it names none.  Poison first: no
-  // arena current is a different mistake from a literal that reached no graph.
+  // The graph an expression names, or why it names none.  Poison first, and by
+  // the code it carries: no arena current, and an arena that has stopped
+  // taking symbols, are different mistakes from a literal that reached no
+  // graph.
   [[nodiscard]] static constexpr std::optional<error>
   why_not(const rt::RTExpression<T> &first, const Rest &...rest) noexcept {
-    if (first.poisoned() || (rest.poisoned() || ...)) {
-      return error{errc::no_arena};
+    for (const auto why : {first.why(), rest.why()...}) {
+      if (why) {
+        return error{*why};
+      }
     }
     if (first.builder() == nullptr) {
       return error{errc::no_graph};

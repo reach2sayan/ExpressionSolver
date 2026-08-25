@@ -3,6 +3,9 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+
 // The builder folds with ids: a rewrite returns an existing node, so the
 // assertions here are on node identity rather than node count.
 
@@ -81,6 +84,22 @@ TEST(RtBuilder, SymbolsInternByName) {
   EXPECT_NE(var(b, "x").id(b), var(b, "y").id(b));
   ASSERT_EQ(b.symbols().size(), 2u);
   EXPECT_EQ(b.symbols()[0], "x");
+}
+
+// The compile-time Equation<...>::symbols is sorted, so a slot here is the same
+// place in the alphabet -- which is what lets a positional point mean the same
+// thing on both sides, however the model happened to name them.  A symbol named
+// late lifts the slots above it, and the node built before it moves with them.
+TEST(RtBuilder, SlotsAreAlphabeticalNotNamingOrder) {
+  Builder<> b;
+  const auto z = var(b, "z");
+  const auto s = sin(z); // built while z is the only symbol
+  const auto a = var(b, "a");
+
+  EXPECT_EQ(b.symbols(), (std::vector<std::string>{"a", "z"}));
+  EXPECT_EQ(b[a.id(b)].slot, 0u);
+  EXPECT_EQ(b[z.id(b)].slot, 1u);
+  EXPECT_EQ(b[s.id(b)].a, z.id(b)) << "the subexpression still names z";
 }
 
 // Compound assignment rebinds the handle through the same operators, so an

@@ -7,6 +7,7 @@
 #include "util/scope_guard.hpp"
 
 #include <concepts> // std::same_as
+#include <optional>
 #include <string_view>
 #include <type_traits> // std::remove_cvref_t
 #include <utility>     // std::move
@@ -26,6 +27,12 @@ template <impl::Numeric T = double> class RTExpression;
 // reads.
 template <impl::Numeric T = double>
 [[nodiscard]] RTExpression<T> var(std::string_view name) noexcept;
+
+// The primitive the one above reaches: it makes poison as well, for the arena
+// that has stopped taking symbols.
+template <impl::Numeric T>
+[[nodiscard]] constexpr RTExpression<T> var(Builder<T> &b,
+                                            std::string_view name);
 
 // A handle onto one node, plus the arithmetic surface that builds more.  A null
 // builder is a literal not yet given to a graph, which is what lets
@@ -52,10 +59,13 @@ public:
     return builder_ == nullptr;
   }
 
-  // Whether a symbol was named while no arena was current -- which surfaces as
-  // errc::no_arena out of equation(), rather than as a zero where a symbol
-  // should be.  What makes one is private; asking is not.
-  [[nodiscard]] constexpr bool poisoned() const noexcept { return poisoned_; }
+  // Whether the symbol named no slot -- no arena was current, or the arena has
+  // been sealed -- which surfaces as that errc out of equation(), rather than
+  // as a zero where a symbol should be.  What makes one is private; asking is
+  // not.
+  [[nodiscard]] constexpr bool poisoned() const noexcept {
+    return why_.has_value();
+  }
   [[nodiscard]] constexpr const T &literal() const noexcept { return lit_; }
 
   // Give the node an identity in `b`, materialising a pending literal.
@@ -67,8 +77,8 @@ public:
   // derivative rules produce never become nodes.
   [[nodiscard]] static constexpr RTExpression form(OpCode op,
                                                    const RTExpression &u) {
-    if (u.poisoned_) {
-      return poison();
+    if (u.why_) {
+      return poison(*u.why_);
     }
     Builder<T> *const b = u.builder();
     return b ? RTExpression{*b, b->make(op, u.id(*b))}
@@ -77,8 +87,8 @@ public:
 
   [[nodiscard]] static constexpr RTExpression
   form(OpCode op, const RTExpression &l, const RTExpression &r) {
-    if (l.poisoned_ || r.poisoned_) {
-      return poison();
+    if (l.why_ || r.why_) {
+      return poison(l.why_ ? *l.why_ : *r.why_);
     }
     Builder<T> *const b = l.builder() ? l.builder() : r.builder();
     return b ? RTExpression{*b, b->make(op, l.id(*b), r.id(*b))}
@@ -153,6 +163,8 @@ private:
   template <typename... Ts> friend class impl::Equation;
   template <impl::Numeric U>
   friend RTExpression<U> var(std::string_view) noexcept;
+  template <impl::Numeric U>
+  friend constexpr RTExpression<U> var(Builder<U> &, std::string_view);
 
   [[nodiscard]] constexpr Builder<T> *builder() const noexcept {
     return builder_;
@@ -160,22 +172,30 @@ private:
 
   // Not a pending literal, which would materialise into the first graph it
   // meets and put a zero where a symbol should be.
-  [[nodiscard]] static constexpr RTExpression poison() noexcept {
+  [[nodiscard]] static constexpr RTExpression poison(errc why) noexcept {
     RTExpression e;
-    e.poisoned_ = true;
+    e.why_ = why;
     return e;
+  }
+
+  // What an Equation reports rather than building over a symbol that is not
+  // there.
+  [[nodiscard]] constexpr std::optional<errc> why() const noexcept {
+    return why_;
   }
 
   Builder<T> *builder_ = nullptr;
   NodeId id_ = no_node;
   T lit_{};
-  bool poisoned_ = false;
+  std::optional<errc> why_;
 };
 
 template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> var(Builder<T> &b,
                                             std::string_view name) {
-  return RTExpression<T>{b, b.variable(name)};
+  const NodeId id = b.variable(name);
+  return id == no_node ? RTExpression<T>::poison(errc::sealed_arena)
+                       : RTExpression<T>{b, id};
 }
 template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> lit(Builder<T> &b, const T &v) {
@@ -206,7 +226,7 @@ template <impl::Numeric T>
 template <impl::Numeric T>
 [[nodiscard]] RTExpression<T> var(std::string_view name) noexcept {
   return (detail::current_arena<T> == nullptr)
-             ? RTExpression<T>::poison()
+             ? RTExpression<T>::poison(errc::no_arena)
              : var(*detail::current_arena<T>, name);
 }
 

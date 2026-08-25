@@ -16,6 +16,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <array>
 #include <exception>
 #include <memory>
 #include <ranges>
@@ -28,10 +29,9 @@ namespace ddx::py {
 namespace {
 
 // The arena a model is assembled in, for the duration of the call.  Ours rather
-// than the one rt::var(name) reads, because what has to survive here is the
-// shared ownership, not a raw pointer -- which also means every symbol below
-// goes through the plain two-argument rt::var, and nothing reaches into rt's
-// own thread-local.
+// than the one rt::var(name) reads, because what has to survive is the shared
+// ownership, not a raw pointer: every symbol below goes through the plain
+// two-argument rt::var.
 thread_local std::shared_ptr<rt::Builder<double>> current_arena;
 
 // The exception type Python sees.  Deliberately leaked: it is a type object
@@ -50,9 +50,9 @@ pyb::handle error_class;
 }
 
 // One root, or m of them from a tuple or list.  The count is a runtime value
-// throughout, which is the whole reason these bindings sit below impl::Equation.
-[[nodiscard]] std::vector<rt::NodeId>
-roots_of(const pyb::object &built, rt::Builder<double> &arena) {
+// throughout, which is why these bindings sit below impl::Equation.
+[[nodiscard]] std::vector<rt::NodeId> roots_of(const pyb::object &built,
+                                               rt::Builder<double> &arena) {
   const bool many =
       pyb::isinstance<pyb::tuple>(built) || pyb::isinstance<pyb::list>(built);
   const auto returned =
@@ -70,19 +70,14 @@ roots_of(const pyb::object &built, rt::Builder<double> &arena) {
            if (e.poisoned()) {
              fail_with(errc::no_arena);
            }
-           if (e.arena() && e.arena().get() != &arena) {
-             // Its ids mean nothing here, and id() would hand back one that
-             // indexes this arena at random rather than refusing.
-             fail_with(errc::no_graph);
-           }
-           return e.id(arena);
+           return e.root_in(arena);
          }) |
          impl::to<std::vector<rt::NodeId>>();
 }
 
 // The whole of ddx.equation: install an arena, run the model in it, take what
-// comes back.  The same three steps rt::equation(assemble) makes, with the
-// output count a number rather than a template parameter.
+// comes back -- rt::equation(assemble)'s three steps, with the output count a
+// number rather than a template parameter.
 [[nodiscard]] pyb::object make_equation(const pyb::object &model) {
   auto arena = std::make_shared<rt::Builder<double>>();
   pyb::object built;
@@ -95,15 +90,17 @@ roots_of(const pyb::object &built, rt::Builder<double> &arena) {
   }
 
   auto roots = roots_of(built, *arena);
-  pyb::object eq =
-      pyb::cast(PyEquation{std::move(arena), std::move(roots)});
+  pyb::object eq = pyb::cast(PyEquation{std::move(arena), std::move(roots)});
 
   // What functools.wraps would do, without a Python wrapper to do it: the
   // equation answers help() and repr() with the model's own name and docstring.
-  for (const char *attr : {"__name__", "__qualname__", "__doc__", "__module__"}) {
-    if (pyb::hasattr(model, attr)) {
-      eq.attr(attr) = model.attr(attr);
-    }
+  static constexpr std::array kWrapped{"__name__", "__qualname__", "__doc__",
+                                       "__module__"};
+  for (const char *attr :
+       kWrapped | std::views::filter([&model](const char *a) {
+         return pyb::hasattr(model, a);
+       })) {
+    eq.attr(attr) = model.attr(attr);
   }
   return eq;
 }
@@ -120,9 +117,8 @@ PYBIND11_MODULE(_ddx, m) {
   m.doc() = "ddx's runtime expression graph and LLVM JIT";
 
   // Whether a kernel can ever land.  Not a shape: Options, Backend and
-  // wait_for_kernel are here either way, because jit::Options and jit::Kernel
-  // are header types -- what a build without the backend takes away is the
-  // LLJIT, so nothing compiles and the sweep answers everything.
+  // wait_for_kernel are here either way -- what a build without the backend
+  // takes away is the LLJIT, so nothing compiles and the sweep answers.
 #ifdef DDX_HAS_JIT
   m.attr("has_jit") = true;
 #else
@@ -147,10 +143,9 @@ PYBIND11_MODULE(_ddx, m) {
   });
 
   // Off the library's own table, so an errc added there reaches Python without
-  // this file changing -- and each member carries that table's text as its
-  // docstring.  The literal rather than detail::kMessages[...] .data(): a
-  // string_view is not required to be null-terminated, and this one only is
-  // because of how it happens to be built.
+  // this file changing, each member carrying that table's text as its
+  // docstring.  The literal rather than detail::kMessages[...].data(): a
+  // string_view need not be null-terminated.
   pyb::native_enum<errc> errors(m, "errc", "enum.IntEnum",
                                 "Why ddx refused; Error.code carries one.");
 #define DDX_PY_ERRC(name, text) errors.value(#name, errc::name, text);
@@ -164,12 +159,16 @@ PYBIND11_MODULE(_ddx, m) {
   // is what reaches the generated stubs, so without it a type checker rejects
   // `x * 2.0` while the interpreter accepts it.
 #define DDX_PY_BINOP(name, body)                                               \
-  def(name, [](const PyExpression &l, const PyExpression &r) { return body; },  \
+  def(                                                                         \
+      name, [](const PyExpression &l, const PyExpression &r) { return body; }, \
       pyb::is_operator())                                                      \
-      .def(name, [](const PyExpression &l, double v) {                         \
-        const PyExpression r{v};                                               \
-        return body;                                                           \
-      }, pyb::is_operator())
+      .def(                                                                    \
+          name,                                                                \
+          [](const PyExpression &l, double v) {                                \
+            const PyExpression r{v};                                           \
+            return body;                                                       \
+          },                                                                   \
+          pyb::is_operator())
 
   pyb::class_<PyExpression>(m, "Expression")
       .def(pyb::init<double>(), pyb::arg("value"))
@@ -184,9 +183,12 @@ PYBIND11_MODULE(_ddx, m) {
       .DDX_PY_BINOP("__rtruediv__", r / l)
       .DDX_PY_BINOP("__pow__", ddx::py::pow(l, r))
       .DDX_PY_BINOP("__rpow__", ddx::py::pow(r, l))
-      .def("__neg__", [](const PyExpression &u) { return -u; }, pyb::is_operator())
-      .def("__abs__", [](const PyExpression &u) { return ddx::py::abs(u); },
-           pyb::is_operator());
+      .def(
+          "__neg__", [](const PyExpression &u) { return -u; },
+          pyb::is_operator())
+      .def(
+          "__abs__", [](const PyExpression &u) { return ddx::py::abs(u); },
+          pyb::is_operator());
 #undef DDX_PY_BINOP
 
   pyb::implicitly_convertible<double, PyExpression>();
@@ -197,17 +199,21 @@ PYBIND11_MODULE(_ddx, m) {
   m.def("equation", &ddx::py::make_equation, pyb::arg("model"));
   m.def("var", &ddx::py::make_var, pyb::arg("name"));
 
-  // The free functions, off the same tables expression.hpp generated them with:
-  // an opcode added to the library reaches Python without this file changing.
 #define DDX_PY_DEF_UN(fn, Op, label, ...)                                      \
-  m.def(#fn, [](const PyExpression &u) { return ddx::py::fn(u); }, pyb::arg("x"));
+  m.def(                                                                       \
+      #fn, [](const PyExpression &u) { return ddx::py::fn(u); },               \
+      pyb::arg("x"));
   DDX_UNARY_MATH_TABLE(DDX_PY_DEF_UN)
   DDX_RT_UNARY_TABLE(DDX_PY_DEF_UN)
 #undef DDX_PY_DEF_UN
 
 #define DDX_PY_DEF_BIN(fn, Op, label, ...)                                     \
-  m.def(#fn, [](const PyExpression &l, const PyExpression &r) { return ddx::py::fn(l, r); }, \
-        pyb::arg("x"), pyb::arg("y"));
+  m.def(                                                                       \
+      #fn,                                                                     \
+      [](const PyExpression &l, const PyExpression &r) {                       \
+        return ddx::py::fn(l, r);                                              \
+      },                                                                       \
+      pyb::arg("x"), pyb::arg("y"));
   DDX_RT_BINARY_TABLE(DDX_PY_DEF_BIN)
 #undef DDX_PY_DEF_BIN
 
@@ -247,13 +253,13 @@ PYBIND11_MODULE(_ddx, m) {
       .def("evaluate", &PyEquation::evaluate, pyb::arg("x"))
       .def("jacobian", &PyEquation::jacobian, pyb::arg("x"))
       .def("hessian", &PyEquation::hessian, pyb::arg("x"))
-      .def("to_dot", &PyEquation::to_dot, pyb::kw_only(), pyb::arg("all") = false)
+      .def("to_dot", &PyEquation::to_dot, pyb::kw_only(),
+           pyb::arg("all") = false)
       .def_property_readonly("symbols", &PyEquation::symbols)
       .def_property_readonly("arity", &PyEquation::arity)
       .def_property_readonly("outputs", &PyEquation::outputs)
       .def_property_readonly("uses_kernel", &PyEquation::uses_kernel)
       .def_property_readonly("hessian_colors", &PyEquation::hessian_colors)
       .def("wait_for_kernel", &PyEquation::wait_for_kernel)
-      .def_property("_options", &PyEquation::options, &PyEquation::set_options)
-      ;
+      .def_property("_options", &PyEquation::options, &PyEquation::set_options);
 }

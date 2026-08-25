@@ -1,5 +1,6 @@
 #pragma once
 
+#include "error.hpp"
 #include "rt/builder.hpp"
 #include "rt/expressions.hpp"
 #include "rt/opcode.hpp"
@@ -13,51 +14,53 @@
 //
 // RTExpression stores a *non-owning* Builder*, because in C++ an arena's
 // lifetime is lexical -- the equation() lambda's.  A Python closure keeps no
-// such discipline: it can capture a symbol and outlive everything, and
-// builder() is private, so a bare handle can neither be checked nor recovered
-// from.  Carrying the arena alongside is the whole of what this adds; the
-// arithmetic, the folding and the interning are all RTExpression's.
+// such discipline: it can capture a symbol and outlive everything.  Carrying
+// the arena alongside is the whole of what this adds; the arithmetic, the
+// folding and the interning are all RTExpression's.
 //
 // It holds one rather than deriving from one, and that is not a preference.
-// pybind11 describes a bound type as descr<N, PyExpression>, so PyExpression
-// becomes a *template argument* of a type pybind11 then applies operator+ to.
-// ADL on that descr pulls in the associated classes of every template
-// argument -- and a base class is associated where a member's type is not.  So
-// deriving puts RTExpression's hidden friend operator+ into the overload set
-// for descr + descr, which asks whether descr converts to RTExpression, which
-// instantiates Numeric<descr>, whose own body is `{ a + b }` over descrs, which
-// re-enters the same overload set.  The constraint recursion is a hard error in
-// the middle of pybind11's type machinery.  RTExpression's converting
-// constructor already carries a comment about exactly this class of cycle; a
-// member keeps PyExpression out of the associated set and the cycle cannot form.
+// pybind11 describes a bound type as descr<N, PyExpression>, so ADL on that
+// descr pulls in the associated classes of every template argument -- and a
+// base class is associated where a member's type is not.  Deriving would put
+// RTExpression's hidden friend operator+ into the overload set for descr +
+// descr, which asks whether descr converts to RTExpression, which instantiates
+// Numeric<descr>, whose body is `{ a + b }` over descrs: a constraint recursion
+// in the middle of pybind11's type machinery.  A member cannot form the cycle.
 namespace ddx::py {
 
 class PyExpression {
 public:
   using Base = rt::RTExpression<double>;
+  using Arena = std::shared_ptr<rt::Builder<double>>;
 
-  PyExpression() = default;
+  constexpr PyExpression() = default;
 
   // Implicit, and the reason `2.0 * x` and `x * 2.0` both work: pybind11 is
   // told about it with implicitly_convertible, and what follows is the base's
   // own folding -- two pending literals never reach a graph.
-  PyExpression(double v) : expression_(v) {} // NOLINT(google-explicit-constructor)
-
-  PyExpression(Base e, std::shared_ptr<rt::Builder<double>> a) noexcept
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  constexpr PyExpression(double v) : expression_(v) {}
+  PyExpression(Base e, Arena a) noexcept
       : expression_(e), arena_(std::move(a)) {}
 
-  [[nodiscard]] const Base &base() const noexcept { return expression_; }
-
-  // Null exactly while this is a pending literal, which names no graph yet.
-  [[nodiscard]] const std::shared_ptr<rt::Builder<double>> &arena() const {
-    return arena_;
+  [[nodiscard]] constexpr const Base &base() const noexcept {
+    return expression_;
   }
 
-  [[nodiscard]] bool poisoned() const noexcept {
+  [[nodiscard]] constexpr bool poisoned() const noexcept {
     return expression_.poisoned();
   }
-  [[nodiscard]] rt::NodeId id(rt::Builder<double> &b) const {
-    return expression_.id(b);
+
+  // The whole of what a caller wanted the arena for: the id this names in
+  // `arena`, or a refusal.  Ids from another arena mean nothing here, and
+  // handing one back would index this one at random rather than refuse; a
+  // pending literal materialises into it.  Asking the question here is what
+  // keeps the arena inside.
+  [[nodiscard]] rt::NodeId root_in(rt::Builder<double> &arena) const {
+    if (arena_ && arena_.get() != &arena) {
+      fail_with(errc::no_graph);
+    }
+    return expression_.id(arena);
   }
 
   [[nodiscard]] std::string repr() const {
@@ -79,8 +82,24 @@ public:
   }
 
 private:
+  // The arithmetic surface below is the only thing that puts an arena back on
+  // a new handle, so it reaches the member rather than a getter anyone could
+  // call.  The friends come off the same tables the bodies do.
+#define DDX_PY_UNFRIEND(fn, Op, label, ...)                                    \
+  friend PyExpression fn(const PyExpression &);
+  DDX_UNARY_MATH_TABLE(DDX_PY_UNFRIEND)
+  DDX_RT_UNARY_TABLE(DDX_PY_UNFRIEND)
+#undef DDX_PY_UNFRIEND
+#define DDX_PY_BINFRIEND(fn, Op, label, ...)                                   \
+  friend PyExpression fn(const PyExpression &, const PyExpression &);
+  DDX_RT_BINARY_TABLE(DDX_PY_BINFRIEND)
+#undef DDX_PY_BINFRIEND
+
+  // Null exactly while this is a pending literal, which names no graph yet.
+  [[nodiscard]] constexpr const Arena &arena() const noexcept { return arena_; }
+
   Base expression_;
-  std::shared_ptr<rt::Builder<double>> arena_;
+  Arena arena_;
 };
 
 // The arithmetic surface, off the same three tables the library builds its own

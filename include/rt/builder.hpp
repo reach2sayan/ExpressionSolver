@@ -9,6 +9,7 @@
 #include <bit>
 #include <concepts>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -16,10 +17,25 @@
 #include <string_view>
 #include <vector>
 
+namespace ddx::impl {
+// Befriended by Builder: an Equation is the one thing that makes an arena's
+// symbols final, and seal() is that and nothing else.
+template <typename... Ts> class Equation;
+} // namespace ddx::impl
+
 namespace ddx::rt {
 
 using NodeId = std::uint32_t;
 inline constexpr NodeId no_node = ~NodeId{0};
+
+template <impl::Numeric T> class RTExpression;
+template <impl::Numeric T = double> class Builder;
+
+// Befriended by Builder: naming a symbol is var()'s alone, since a new one
+// moves the slots above it.
+template <impl::Numeric T>
+[[nodiscard]] constexpr RTExpression<T> var(Builder<T> &b,
+                                            std::string_view name);
 
 // A multiply and an add taken as one rounding: x * y + z, with x negated where
 // the multiply reached the add through a Neg -- which is what a subtraction
@@ -65,23 +81,13 @@ template <impl::Numeric T> struct Node {
 
 // Nodes are interned as they are formed, so an id *is* the identity of a
 // subexpression -- where the compile-time side compares types.
-template <impl::Numeric T = double> class Builder {
+template <impl::Numeric T> class Builder {
 public:
   using value_type = T;
   using node_type = Node<T>;
 
   [[nodiscard]] constexpr NodeId constant(const T &v) {
     return intern({.op = OpCode::Const, .value = v});
-  }
-
-  [[nodiscard]] constexpr NodeId variable(std::string_view name) {
-    const auto it = std::ranges::find(symbols_, name);
-    // Index before growing: emplace_back invalidates `it`.
-    const auto slot = static_cast<std::uint32_t>(it - symbols_.begin());
-    if (it == symbols_.end()) {
-      symbols_.emplace_back(name);
-    }
-    return intern({.op = OpCode::Var, .slot = slot});
   }
 
   [[nodiscard]] constexpr NodeId make(OpCode op, NodeId a, NodeId b = no_node) {
@@ -126,6 +132,41 @@ public:
   }
 
 private:
+  // A slot is the symbol's place in the alphabet, which is the order the
+  // compile-time Equation<...>::symbols is in and the order a positional point
+  // is read in.  Naming one out of order lifts the slots above it: a walk over
+  // vars_, since interning leaves exactly one Var node per symbol.  One caller,
+  // which is what keeps that walk answerable.
+  template <impl::Numeric U>
+  friend constexpr RTExpression<U> var(Builder<U> &, std::string_view);
+  [[nodiscard]] constexpr NodeId variable(std::string_view name) {
+    const auto at = std::ranges::lower_bound(symbols_, name);
+    const auto slot = static_cast<std::uint32_t>(at - symbols_.begin());
+    if (at != symbols_.end() && *at == name) {
+      return vars_[slot];
+    }
+    // A new symbol moves the slots above it, which an Equation that has
+    // already frozen a lane cannot follow.  no_node, which var() turns into a
+    // poisoned expression: naming one again is free, adding one is not.
+    if (sealed_) {
+      return no_node;
+    }
+    symbols_.emplace(at, name);
+    for (const NodeId v : vars_ | std::views::drop(slot)) {
+      ++nodes_[v].slot;
+    }
+    vars_.insert(std::ranges::next(vars_.begin(), slot),
+                 intern({.op = OpCode::Var, .slot = slot}));
+    return vars_[slot];
+  }
+
+  // One way, and one caller: the Equation that takes this arena over makes its
+  // symbols final, so the numbering its lanes are frozen against is the
+  // numbering symbols() reports for good.  Building more expressions over the
+  // symbols already here stays open.
+  template <typename... Ts> friend class impl::Equation;
+  constexpr void seal() noexcept { sealed_ = true; }
+
   // Open addressing in a plain vector rather than a hash map
   static constexpr std::uint64_t payload_of(const Node<T> &n) {
     if (n.op != OpCode::Const) {
@@ -333,6 +374,11 @@ private:
   std::vector<NodeId>
       table_; // power-of-two capacity; no_node marks a free slot
   std::vector<std::string> symbols_;
+  // Slot-addressed, so a renamed slot is a write here rather than a rehash:
+  // a Var node's hash goes stale as its slot moves, and nothing looks one up
+  // through the table.
+  std::vector<NodeId> vars_;
+  bool sealed_ = false;
 };
 
 // What a walker reads: an id-addressed source that answers a node's operation

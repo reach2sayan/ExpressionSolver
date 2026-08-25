@@ -196,10 +196,6 @@ order positional points are read in and the order every result is laid out in.
 *eq.symbols();                // {"x", "y"}
 ```
 
-If you hold an `rt::Builder<T>` of your own, `rt::var(builder, name)` names a
-symbol in it and `rt::equation(expr…)` builds an equation over expressions
-already in it. That equation borrows the builder, which must then outlive it.
-
 ## Expressions
 
 `rt::RTExpression<T>` is the expression type. A bare number converts to one, so

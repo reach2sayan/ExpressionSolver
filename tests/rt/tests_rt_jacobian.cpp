@@ -31,16 +31,12 @@ void expect_agrees_with_ddx(const E &e, std::array<double, N> pt) {
   const auto expected_grad = std::apply(
       [&](auto... a) { return ddx::Equation{e}.jacobian(a...); }, pt);
 
-  auto sorted = b.symbols();
-  std::ranges::sort(sorted);
-  for (std::size_t i = 0; i < sorted.size(); ++i) {
-    const auto it = std::ranges::find(b.symbols(), sorted[i]);
-    ASSERT_NE(it, b.symbols().end());
-    const auto slot = static_cast<std::size_t>(it - b.symbols().begin());
+  // Both sides number their symbols alphabetically, so slot i is partial i.
+  for (std::size_t i = 0; i < b.symbols().size(); ++i) {
     const double want = expected_grad[i];
-    EXPECT_NEAR(values[g.partial[slot]], want,
+    EXPECT_NEAR(values[g.partial[i]], want,
                 1e-12 * std::max(1.0, std::abs(want)))
-        << "partial d/d" << sorted[i];
+        << "partial d/d" << b.symbols()[i];
   }
 }
 

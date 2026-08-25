@@ -33,24 +33,15 @@
 
 // What ddx::impl::Equation is, with the output count a runtime value.
 //
-// That count is the only thing keeping the facade out of Python: it is a
-// template parameter there (output_dim = 1 + sizeof...(Rest)), chosen from
-// std::tuple_size_v.  Everything underneath already takes it as a number --
-// GraphBuilder::values_from(span), Compiler::compile_async, and jit::Kernel,
-// which reports its column counts at run time -- so this assembles the same
-// three lanes off those pieces and holds `roots_` in a vector.
-//
-// It is much smaller than the facade for one reason: the GIL is the lock.  The
-// facade needs a shared_mutex, a republished shared_ptr<const Compiled> and the
-// settling/adopt dance because C++ callers race.  Python callers cannot: every
-// freeze, poll and adopt below runs holding the GIL, and only the kernel or the
-// sweep itself gives it up.
+// Much smaller than the facade for one reason: the GIL is the lock.  Every
+// freeze, poll and adopt below runs holding it, and only the kernel or the
+// sweep itself gives it up -- so none of the facade's shared_mutex, republished
+// shared_ptr<const Compiled> and settling dance is needed here.
 namespace ddx::py {
 
 class PyEquation {
 public:
-  // Ordered, and each level is the one below plus a block, which is what lets
-  // one pass through prepare() build any of them.
+  // Ordered
   enum class Want : std::uint8_t { Values, Jacobian, Hessian };
 
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
@@ -58,7 +49,7 @@ public:
       : arena_(std::move(arena)), roots_(std::move(roots)) {}
 
   [[nodiscard]] std::size_t arity() const { return arena_->symbols().size(); }
-  [[nodiscard]] std::size_t outputs() const { return roots_.size(); }
+  [[nodiscard]] constexpr std::size_t outputs() const { return roots_.size(); }
   [[nodiscard]] const std::vector<std::string> &symbols() const {
     return arena_->symbols();
   }
@@ -91,14 +82,13 @@ public:
 
   // --- the JIT -------------------------------------------------------------
 
-  [[nodiscard]] const jit::Options &options() const noexcept {
+  [[nodiscard]] constexpr const jit::Options &options() const noexcept {
     return options_;
   }
 
   // Discards whatever was compiled, so the choice holds however late it is
-  // made.  Choosing a compiling backend is also what starts the compile, so it
-  // overlaps whatever the caller does next rather than landing in their first
-  // call.
+  // made.  Choosing a compiling backend also starts the compile, so it overlaps
+  // whatever the caller does next rather than landing in their first call.
   void set_options(const jit::Options &opt) {
     if (opt == options_) {
       return;
@@ -115,8 +105,8 @@ public:
   [[nodiscard]] bool wait_for_kernel() {
     Lane &l = lane(Want::Jacobian);
     if (l.pending.valid()) {
-      // The GIL is what serialises everything else here, so it is given up
-      // around the wait alone -- never around the lane bookkeeping.
+      // The GIL serialises everything else here, so it is given up around the
+      // wait alone -- never around the lane bookkeeping.
       const pyb::gil_scoped_release unlocked;
       l.pending.wait();
     }
@@ -194,7 +184,7 @@ private:
 
   // Publish a compile that has landed.  A refused one leaves the kernel empty
   // and the sweep simply stays -- the JIT is never a correctness dependency.
-  void adopt([[maybe_unused]] Lane &l) {
+  void adopt(Lane &l) {
     using namespace std::chrono_literals;
     if (!l.pending.valid() ||
         l.pending.wait_for(0s) != std::future_status::ready) {
@@ -208,7 +198,7 @@ private:
 
   // How wide to emit, from the batch the caller said they have.  A kernel `w`
   // lanes wide does a register's worth of work to answer for a single point.
-  [[nodiscard]] jit::Options effective_options() const noexcept {
+  [[nodiscard]] constexpr jit::Options effective_options() const noexcept {
     jit::Options opt = options_;
     if (opt.lanes == 0 && opt.points < kLanes) {
       opt.lanes = 1;
@@ -218,13 +208,12 @@ private:
 
   // The process's one LLJIT, borrowed rather than founded: a module that made
   // its own would stand a second one up beside whatever C++ Equations in the
-  // same process are already using, which is the thing that static exists to
-  // prevent.
+  // same process already use.
   //
   // Null in a build without the backend, which is the only difference such a
-  // build makes: prepare() launches nothing, no kernel ever lands, and the
-  // sweep answers everything -- the same path a Compile backend takes anyway
-  // while its compile is still in flight.
+  // build makes: nothing compiles, no kernel lands, and the sweep answers
+  // everything -- the path a Compile backend takes anyway while its compile is
+  // still in flight.
   [[nodiscard]] static jit::Compiler *compiler() {
 #ifdef DDX_HAS_JIT
     return impl::rt_detail::shared_compiler();
@@ -234,15 +223,16 @@ private:
   }
 
   // Whether this equation's arithmetic contracts a multiply and an add into an
-  // FMA.  Decided in the graph, so both paths agree: a batch answers the same
-  // whichever one answered it.
-  [[nodiscard]] bool contracts() const noexcept {
+  // FMA.  Decided in the graph, so a batch answers the same whichever path
+  // answered it.
+  [[nodiscard]] constexpr bool contracts() const noexcept {
     return options_.contract;
   }
 
   using BlockMember = std::span<const rt::NodeId> rt::Graph<double>::Blocks::*;
 
-  [[nodiscard]] static std::size_t count(const Lane &l, BlockMember which) {
+  [[nodiscard]] static constexpr std::size_t count(const Lane &l,
+                                                   BlockMember which) {
     return (l.graph->output_blocks().*which).size();
   }
 
@@ -274,11 +264,10 @@ private:
                  std::size_t n) const {
     const auto blocks = graph.output_blocks();
     const bool contract = contracts();
-    const auto order =
-        contract ? graph.contracted_order() : graph.live_order();
+    const auto order = contract ? graph.contracted_order() : graph.live_order();
     const std::size_t symbols = arity();
-    const auto scatter = [&](auto &&tape, std::size_t i, std::size_t stride,
-                             std::size_t width) {
+    const auto scatter = [&](const auto &tape, std::size_t i,
+                             std::size_t stride, std::size_t width) {
       for (const auto [columns, block] : std::views::zip(
                std::array{f, g, h},
                std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
@@ -314,12 +303,14 @@ private:
     std::vector<double> lanes(symbols * kLanes);
     std::vector<double> tape(arena_->size() * kLanes);
 
-    for (std::size_t base = 0; base < n; base += kLanes) {
+    for (const std::size_t base :
+         std::views::iota(0uz, n) | std::views::stride(kLanes)) {
       const std::size_t width = std::min(kLanes, n - base);
-      for (const auto [j, column] : std::views::enumerate(xs)) {
-        double *const dst = lanes.data() + static_cast<std::size_t>(j) * kLanes;
-        double *const tail = std::ranges::copy_n(column + base, width, dst).out;
-        std::ranges::fill(tail, dst + kLanes, column[base + width - 1]);
+      for (const auto [dst, column] :
+           std::views::zip(lanes | std::views::chunk(kLanes), xs)) {
+        const auto tail =
+            std::ranges::copy_n(column + base, width, dst.begin());
+        std::ranges::fill(tail.out, dst.end(), column[base + width - 1]);
       }
       rt::evaluate_block<kLanes>(*arena_, std::span<const double>{lanes}, order,
                                  std::span<double>{tape}, contract);
@@ -393,16 +384,15 @@ private:
         finish(std::move(dense), {ssize(outputs()), ssize(n), ssize(n)}, at));
   }
 
-  // Swept once and kept.  Hash consing makes a repeat sweep return the same
-  // ids and add no nodes, so this is about the colouring's cost, not the
-  // arena's size.
+  // Swept once and kept.  Hash consing makes a repeat sweep return the same ids
+  // and add no nodes, so this is about the colouring's cost, not the arena's
+  // size.
   [[nodiscard]] const std::vector<rt::Hessian> &sweeps() {
     if (!sweeps_) {
-      sweeps_.emplace();
-      sweeps_->reserve(roots_.size());
-      for (const rt::NodeId r : roots_) {
-        sweeps_->push_back(rt::build_hessian_impl(*arena_, r));
-      }
+      sweeps_ = roots_ | std::views::transform([this](rt::NodeId r) {
+                  return rt::build_hessian_impl(*arena_, r);
+                }) |
+                impl::to<std::vector<rt::Hessian>>();
     }
     return *sweeps_;
   }

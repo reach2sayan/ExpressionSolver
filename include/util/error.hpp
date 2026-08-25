@@ -27,6 +27,8 @@ namespace ddx {
   X(no_arena,                                                                  \
     "no arena is current -- name symbols inside ddx::rt::equation()")          \
   X(no_graph, "the expression has no graph (a bare literal names none)")       \
+  X(sealed_arena,                                                              \
+    "the arena already backs an equation, so its symbols are final")           \
   X(not_univariate, "needs exactly one symbol")                                \
   /* The JIT.  Carried with a message by jit::error, which is not this type.   \
    */                                                                          \

@@ -4,7 +4,13 @@ ddx's runtime expression graph and LLVM JIT
 from __future__ import annotations
 import enum
 import typing
-__all__: list[str] = ['Backend', 'Equation', 'Error', 'Expression', 'VecLib', 'abs', 'acos', 'acosh', 'add', 'asin', 'asinh', 'atan', 'atan2', 'atanh', 'cbrt', 'cos', 'cosh', 'div', 'equation', 'erf', 'errc', 'exp', 'has_jit', 'hypot', 'log', 'log10', 'max', 'min', 'mul', 'neg', 'pow', 'sign', 'sin', 'sinh', 'sqrt', 'tan', 'tanh', 'var']
+__all__: list[str] = ['Backend', 'Equation', 'Error', 'Expression',
+                      'VecLib', 'abs', 'acos', 'acosh', 'add', 'asin',
+                      'asinh', 'atan', 'atan2', 'atanh', 'cbrt', 'cos',
+                      'cosh', 'div', 'equation', 'erf', 'errc', 'exp',
+                      'has_jit', 'hypot', 'log', 'log10', 'max', 'min',
+                      'mul', 'neg', 'pow', 'sign', 'sin', 'sinh',
+                      'sqrt', 'tan', 'tanh', 'var']
 class Backend(enum.IntEnum):
     """
     Whether an equation compiles its graph.
@@ -12,114 +18,77 @@ class Backend(enum.IntEnum):
     COMPILE: typing.ClassVar[Backend]  # value = <Backend.COMPILE: 1>
     INTERPRET: typing.ClassVar[Backend]  # value = <Backend.INTERPRET: 0>
     @classmethod
-    def __new__(cls, value):
-        ...
-    def __format__(self, format_spec):
-        """
-        Convert to a string according to format_spec.
-        """
+    def __new__(cls, value): pass
+    def __format__(self, format_spec): pass
+    
 class Equation:
     _options: _Options
-    def __call__(self, x: typing.Any) -> typing.Any:
-        ...
-    def __repr__(self) -> str:
-        ...
-    def evaluate(self, x: typing.Any) -> typing.Any:
-        ...
-    def hessian(self, x: typing.Any) -> tuple:
-        ...
-    def jacobian(self, x: typing.Any) -> tuple:
-        ...
-    def to_dot(self, *, all: bool = False) -> str:
-        ...
-    def wait_for_kernel(self) -> bool:
-        ...
+    def __call__(self, x: typing.Any) -> typing.Any: pass
+    def __repr__(self) -> str: pass
+    def evaluate(self, x: typing.Any) -> typing.Any: pass
+    def hessian(self, x: typing.Any) -> tuple: pass
+    def jacobian(self, x: typing.Any) -> tuple: pass
+    def to_dot(self, *, all: bool = False) -> str: pass
+    def wait_for_kernel(self) -> bool: pass
     @property
-    def arity(self) -> int:
-        ...
+    def arity(self) -> int: pass
     @property
-    def hessian_colors(self) -> int:
-        ...
+    def hessian_colors(self) -> int: pass
     @property
-    def outputs(self) -> int:
-        ...
+    def outputs(self) -> int: pass
     @property
-    def symbols(self) -> list[str]:
-        ...
+    def symbols(self) -> list[str]: pass
     @property
-    def uses_kernel(self) -> bool:
-        ...
+    def uses_kernel(self) -> bool: pass
+    
 class Error(RuntimeError):
     pass
 class Expression:
-    def __abs__(self) -> Expression:
-        ...
+    def __abs__(self) -> Expression: pass
     @typing.overload
-    def __add__(self, arg0: Expression) -> Expression:
-        ...
+    def __add__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __add__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
-    def __init__(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
+    def __add__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    def __init__(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None: pass
     @typing.overload
-    def __mul__(self, arg0: Expression) -> Expression:
-        ...
+    def __mul__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __mul__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
-    def __neg__(self) -> Expression:
-        ...
+    def __mul__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    def __neg__(self) -> Expression: pass
     @typing.overload
-    def __pow__(self, arg0: Expression) -> Expression:
-        ...
+    def __pow__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __pow__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
+    def __pow__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     @typing.overload
-    def __radd__(self, arg0: Expression) -> Expression:
-        ...
+    def __radd__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __radd__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
-    def __repr__(self) -> str:
-        ...
+    def __radd__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    def __repr__(self) -> str: pass
     @typing.overload
-    def __rmul__(self, arg0: Expression) -> Expression:
-        ...
+    def __rmul__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __rmul__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
+    def __rmul__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     @typing.overload
-    def __rpow__(self, arg0: Expression) -> Expression:
-        ...
+    def __rpow__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __rpow__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
+    def __rpow__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     @typing.overload
-    def __rsub__(self, arg0: Expression) -> Expression:
-        ...
+    def __rsub__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __rsub__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
+    def __rsub__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     @typing.overload
-    def __rtruediv__(self, arg0: Expression) -> Expression:
-        ...
+    def __rtruediv__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __rtruediv__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
+    def __rtruediv__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     @typing.overload
-    def __sub__(self, arg0: Expression) -> Expression:
-        ...
+    def __sub__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __sub__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
+    def __sub__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     @typing.overload
-    def __truediv__(self, arg0: Expression) -> Expression:
-        ...
+    def __truediv__(self, arg0: Expression) -> Expression: pass
     @typing.overload
-    def __truediv__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression:
-        ...
+    def __truediv__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    
 class VecLib(enum.IntEnum):
     """
     Which vector math library a lane may call.
@@ -128,12 +97,8 @@ class VecLib(enum.IntEnum):
     LIBMVEC: typing.ClassVar[VecLib]  # value = <VecLib.LIBMVEC: 2>
     NONE: typing.ClassVar[VecLib]  # value = <VecLib.NONE: 0>
     @classmethod
-    def __new__(cls, value):
-        ...
-    def __format__(self, format_spec):
-        """
-        Convert to a string according to format_spec.
-        """
+    def __new__(cls, value): pass
+    def __format__(self, format_spec): pass
 class _Options:
     __hash__: typing.ClassVar[None] = None
     backend: Backend
@@ -142,46 +107,38 @@ class _Options:
     slp: bool
     time_passes: bool
     veclib: VecLib
-    def __eq__(self, arg0: _Options) -> bool:
-        ...
-    def __init__(self) -> None:
-        ...
+    def __eq__(self, arg0: _Options) -> bool: pass
+    def __init__(self) -> None: pass
     @property
-    def codegen_level(self) -> int:
-        ...
+    def codegen_level(self) -> int: pass
     @codegen_level.setter
-    def codegen_level(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
-        ...
+    def codegen_level(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
     @property
-    def lanes(self) -> int:
-        ...
+    def lanes(self) -> int: pass
     @lanes.setter
-    def lanes(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
-        ...
+    def lanes(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
     @property
-    def opt_level(self) -> int:
-        ...
+    def opt_level(self) -> int: pass
     @opt_level.setter
-    def opt_level(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
-        ...
+    def opt_level(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
     @property
-    def points(self) -> int:
-        ...
+    def points(self) -> int: pass
     @points.setter
-    def points(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
-        ...
+    def points(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
+    
 class errc(enum.IntEnum):
     """
     Why ddx refused; Error.code carries one.
     """
     index_out_of_range: typing.ClassVar[errc]  # value = <errc.index_out_of_range: 3>
-    jit_lookup: typing.ClassVar[errc]  # value = <errc.jit_lookup: 11>
-    jit_module: typing.ClassVar[errc]  # value = <errc.jit_module: 9>
-    jit_target: typing.ClassVar[errc]  # value = <errc.jit_target: 8>
-    jit_verify: typing.ClassVar[errc]  # value = <errc.jit_verify: 10>
+    jit_lookup: typing.ClassVar[errc]  # value = <errc.jit_lookup: 12>
+    jit_module: typing.ClassVar[errc]  # value = <errc.jit_module: 10>
+    jit_target: typing.ClassVar[errc]  # value = <errc.jit_target: 9>
+    jit_verify: typing.ClassVar[errc]  # value = <errc.jit_verify: 11>
     no_arena: typing.ClassVar[errc]  # value = <errc.no_arena: 5>
     no_graph: typing.ClassVar[errc]  # value = <errc.no_graph: 6>
-    not_univariate: typing.ClassVar[errc]  # value = <errc.not_univariate: 7>
+    not_univariate: typing.ClassVar[errc]  # value = <errc.not_univariate: 8>
+    sealed_arena: typing.ClassVar[errc]  # value = <errc.sealed_arena: 7>
     short_point: typing.ClassVar[errc]  # value = <errc.short_point: 0>
     unknown_symbol: typing.ClassVar[errc]  # value = <errc.unknown_symbol: 2>
     wrong_arity: typing.ClassVar[errc]  # value = <errc.wrong_arity: 1>

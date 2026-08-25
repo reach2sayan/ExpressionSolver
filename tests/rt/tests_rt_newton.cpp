@@ -67,9 +67,12 @@ TEST(RtNewton, SolvesPengRobinsonForCompressibility) {
 
   ASSERT_EQ(cubic.arity(), species + 1);
 
+  const auto names = *cubic.symbols();
+  const std::size_t z_slot =
+      static_cast<std::size_t>(std::ranges::find(names, "Z") - names.begin());
+
   std::vector<double> at(species + 1, 1.0 / species);
-  at.back() = 0.9; // Z, the unknown
-  const std::size_t z_slot = *cubic.arity() - 1;
+  at[z_slot] = 0.9; // Z, the unknown
 
   int taken = 0;
   for (int iteration = 0; iteration < 60; ++iteration) {

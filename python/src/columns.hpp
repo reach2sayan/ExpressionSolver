@@ -2,6 +2,8 @@
 
 #include "error.hpp"
 
+#include "util/ranges.hpp"
+
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 
@@ -12,18 +14,17 @@
 #include <string>
 #include <vector>
 
-// NumPy on one side, the kernel ABI's column pointers on the other.  They are
-// already the same layout: a C-contiguous (symbols, points) array holds each
-// symbol's column contiguously, which is exactly what `xs[j]` has to be, so
-// nothing here copies unless the caller handed over something that was not
-// already doubles.
+// NumPy and the kernel ABI already agree on layout: a C-contiguous
+// (symbols, points) array holds each symbol's column contiguously, which is
+// what `xs[j]` has to be.  Nothing here copies unless the caller handed over
+// something that was not already doubles.
 namespace ddx::py {
 
 namespace pyb = pybind11;
 
 using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
 
-[[nodiscard]] constexpr pyb::ssize_t ssize(std::size_t n) {
+[[nodiscard]] constexpr pyb::ssize_t ssize(std::size_t n) noexcept {
   return static_cast<pyb::ssize_t>(n);
 }
 
@@ -31,69 +32,69 @@ using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
 // what it points into for as long as it lives, which is the whole of a call.
 class Point {
 public:
-  Point(const pyb::handle &x, std::span<const std::string> symbols) {
-    const std::size_t arity = symbols.size();
-    columns_.assign(arity, nullptr);
-    held_.reserve(arity);
-    filled_.reserve(arity);
-
+  Point(const pyb::handle &x, std::span<const std::string> symbols)
+      : columns_(symbols.size(), nullptr) {
+    held_.reserve(symbols.size());
+    filled_.reserve(symbols.size());
     if (pyb::isinstance<pyb::dict>(x)) {
       from_dict(pyb::reinterpret_borrow<pyb::dict>(x), symbols);
     } else {
-      from_array(x, arity);
+      from_array(x, symbols.size());
     }
   }
 
-  [[nodiscard]] std::span<const double *const> columns() const {
+  [[nodiscard]] constexpr std::span<const double *const> columns() const {
     return columns_;
   }
-  [[nodiscard]] std::size_t size() const noexcept { return n_; }
+  [[nodiscard]] constexpr std::size_t size() const noexcept { return n_; }
   // Whether the caller supplied a points axis, which is what decides whether
   // the answer carries one back.
-  [[nodiscard]] bool batched() const noexcept { return batched_; }
+  [[nodiscard]] constexpr bool batched() const noexcept { return batched_; }
 
 private:
-  // The keyword spelling.  C++ writes it named<"x">(v), whose FixedString is a
-  // template parameter and cannot cross; a dict is the same thing with the name
-  // as data, resolved the way Equation::assign_named resolves it.
+  // The keyword spelling: named<"x">(v) carries the name as a template
+  // parameter, which cannot cross; a dict carries it as data.
   void from_dict(const pyb::dict &d, std::span<const std::string> symbols) {
-    for (const auto item : d) {
-      const auto name = pyb::cast<std::string>(item.first);
-      if (std::ranges::find(symbols, name) == symbols.end()) {
-        fail_with(errc::unknown_symbol);
-      }
+    const auto named = [symbols](const auto item) {
+      return std::ranges::contains(symbols, pyb::cast<std::string>(item.first));
+    };
+    if (!std::ranges::all_of(d, named)) {
+      fail_with(errc::unknown_symbol);
     }
     if (d.size() != symbols.size()) {
       fail_with(errc::wrong_arity); // a name is missing, which is not a typo
     }
 
-    // Two passes: the batch length is whatever the 1-D values agree on, and a
-    // scalar among them is held at every point of it.
-    std::vector<Array> values;
-    values.reserve(symbols.size());
-    for (const auto &name : symbols) {
-      auto a = pyb::cast<Array>(d[pyb::str(name)]);
-      if (a.ndim() > 1) {
+    const auto values = symbols |
+                        std::views::transform([&d](const std::string &name) {
+                          auto a = pyb::cast<Array>(d[pyb::str(name)]);
+                          if (a.ndim() > 1) {
+                            fail_with(errc::wrong_arity);
+                          }
+                          return a;
+                        }) |
+                        impl::to<std::vector<Array>>();
+
+    // The batch length is whatever the 1-D values agree on; a scalar among
+    // them is held at every point of it.
+    for (const Array &a : values | std::views::filter([](const Array &a) {
+                            return a.ndim() == 1;
+                          })) {
+      const auto len = static_cast<std::size_t>(a.shape(0));
+      if (batched_ && len != n_) {
         fail_with(errc::wrong_arity);
       }
-      if (a.ndim() == 1) {
-        const auto len = static_cast<std::size_t>(a.shape(0));
-        if (batched_ && len != n_) {
-          fail_with(errc::wrong_arity);
-        }
-        n_ = len;
-        batched_ = true;
-      }
-      values.push_back(std::move(a));
+      n_ = len;
+      batched_ = true;
     }
 
-    for (const auto [j, a] : std::views::enumerate(values)) {
-      const auto slot = static_cast<std::size_t>(j);
+    // filled_ is reserved to the arity above, so what it hands out stays put.
+    for (auto [column, a] : std::views::zip(columns_, values)) {
       if (a.ndim() == 1 || n_ == 1) {
-        columns_[slot] = a.data();
+        column = a.data();
         held_.push_back(a);
       } else {
-        columns_[slot] = filled_.emplace_back(n_, *a.data()).data();
+        column = filled_.emplace_back(n_, *a.data()).data();
       }
     }
   }
@@ -111,10 +112,9 @@ private:
     n_ = a.ndim() == 2 ? static_cast<std::size_t>(a.shape(1)) : 1;
     batched_ = a.ndim() == 2;
 
-    const double *const base = a.data();
-    for (const std::size_t j : std::views::iota(0uz, arity)) {
-      columns_[j] = base + j * n_;
-    }
+    std::ranges::transform(
+        std::views::iota(0uz, arity), columns_.begin(),
+        [base = a.data(), this](std::size_t j) { return base + j * n_; });
     held_.push_back(std::move(a));
   }
 
@@ -125,26 +125,24 @@ private:
   bool batched_ = false;
 };
 
-// One block of output columns: (columns, n), allocated flat because that is
-// what the ABI writes into, and reshaped on the way out.
+// One block of output columns: (columns, n), flat because that is what the ABI
+// writes into, and reshaped on the way out.
 class Block {
 public:
   Block(std::size_t columns, std::size_t n)
       : array_(std::vector<pyb::ssize_t>{ssize(columns), ssize(n)}),
         rows_(columns, nullptr) {
-    double *const base = array_.mutable_data();
-    for (const std::size_t j : std::views::iota(0uz, columns)) {
-      rows_[j] = base + j * n;
-    }
+    std::ranges::transform(std::views::iota(0uz, columns), rows_.begin(),
+                           [base = array_.mutable_data(), n](std::size_t j) {
+                             return base + j * n;
+                           });
   }
 
-  [[nodiscard]] std::span<double *const> rows() { return rows_; }
-  [[nodiscard]] double *at(std::size_t column) { return rows_[column]; }
+  [[nodiscard]] constexpr std::span<double *const> rows() { return rows_; }
+  [[nodiscard]] constexpr double *at(std::size_t column) {
+    return rows_[column];
+  }
 
-  // The trailing axis goes when the caller gave one point, the leading one when
-  // there is a single function -- so a scalar model at a point answers with a
-  // float, a gradient and an n x n Hessian rather than three arrays with 1s in
-  // them.
   [[nodiscard]] pyb::object reshaped(std::vector<pyb::ssize_t> shape) && {
     return array_.attr("reshape")(pyb::cast(shape));
   }

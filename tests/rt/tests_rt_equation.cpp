@@ -370,6 +370,46 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_FALSE(poisoned.hessian_colors().has_value());
 }
 
+// Lanes are frozen lazily, so a symbol named into a borrowed arena after an
+// Equation has it would move slots under a graph already built.  The arena
+// refuses instead, and the refusal rides out on the equation that asked.
+TEST(RtEquation, AnArenaStopsTakingSymbolsOnceAnEquationHasIt) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto eq = ddx::rt::equation(x * x);
+  ASSERT_EQ(eq.arity(), 1u);
+  EXPECT_NEAR(*eq.evaluate(3.0), 9.0, 1e-12);
+
+  const auto a = var(b, "a"); // would have moved x from slot 0 to slot 1
+  EXPECT_TRUE(a.poisoned());
+
+  const auto second = ddx::rt::equation(a + x);
+  ASSERT_TRUE(second.status().has_value());
+  EXPECT_EQ(second.status()->code, ddx::errc::sealed_arena);
+
+  // The first equation is untouched: same symbol set, same slot, same answers.
+  ASSERT_EQ(eq.arity(), 1u);
+  EXPECT_EQ((*eq.symbols())[0], "x");
+  EXPECT_NEAR((*eq.jacobian(3.0))[0], 6.0, 1e-12);
+}
+
+// Sealed stops symbols being added, not named: expressions -- and equations --
+// over what the arena already holds go on being built.
+TEST(RtEquation, ASealedArenaStillNamesTheSymbolsItHas) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto first = ddx::rt::equation(x * y);
+
+  const auto again = var(b, "x");
+  EXPECT_FALSE(again.poisoned());
+  const auto second = ddx::rt::equation(again + y * y);
+  ASSERT_FALSE(second.poisoned());
+
+  EXPECT_NEAR(*first.evaluate(2.0, 3.0), 6.0, 1e-12);
+  EXPECT_NEAR(*second.evaluate(2.0, 3.0), 11.0, 1e-12);
+}
+
 // A bare literal reaches no graph, so it names no builder -- distinct from
 // no_arena, and surfacing on the poisoned Equation.
 TEST(RtEquation, ALiteralNamesNoGraph) {
