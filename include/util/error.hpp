@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <expected>
+#include <format>
+#include <ostream>
 #include <string_view>
 #include <utility>
 
@@ -28,14 +30,16 @@ enum class errc : std::uint8_t {
 };
 
 // No message string and no source location: an error travels the numeric path,
-// where an allocation is as unwelcome as the throw it replaces.  message()
-// recovers the text from a static table.
+// where an allocation is as unwelcome as the throw it replaces.  The text sits
+// in a static table that the formatter below reads, so printing one costs the
+// same as printing a string_view.
 struct error {
   errc code;
   [[nodiscard]] friend constexpr bool operator==(error,
                                                  error) noexcept = default;
 };
 
+namespace detail {
 [[nodiscard]] constexpr std::string_view message(const errc c) noexcept {
   switch (c) {
   case errc::short_point:
@@ -65,9 +69,14 @@ struct error {
   }
   std::unreachable();
 }
+} // namespace impl
 
-[[nodiscard]] constexpr std::string_view message(const error e) noexcept {
-  return message(e.code);
+inline std::ostream &operator<<(std::ostream &out, const errc c) {
+  return out << detail::message(c);
+}
+
+inline std::ostream &operator<<(std::ostream &out, const error e) {
+  return out << e.code;
 }
 
 template <typename T> using result = std::expected<T, error>;
@@ -76,3 +85,21 @@ template <typename T> using result = std::expected<T, error>;
 }
 
 } // namespace ddx
+
+// Deriving from the string_view formatter, so a caller's "{:>16}" reaches the
+// text.
+template <>
+struct std::formatter<ddx::errc, char>
+    : std::formatter<std::string_view, char> {
+  auto format(const ddx::errc c, std::format_context &ctx) const {
+    return std::formatter<std::string_view, char>::format(ddx::detail::message(c),
+                                                          ctx);
+  }
+};
+
+template <>
+struct std::formatter<ddx::error, char> : std::formatter<ddx::errc, char> {
+  auto format(const ddx::error e, std::format_context &ctx) const {
+    return std::formatter<ddx::errc, char>::format(e.code, ctx);
+  }
+};

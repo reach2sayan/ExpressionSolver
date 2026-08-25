@@ -300,7 +300,7 @@ const std::vector<double *> values{f.data()};
 const std::vector<double *> partials{j.data(), j.data() + n};
 
 if (const auto ok = eq.jacobian(xs, values, partials, n); !ok) {
-  std::println("{}", ddx::message(ok.error().code));
+  std::println("{}", ok.error());
 }
 
 f[2];                    // 4.1343959887e-05  — RSS at (2.0, 0.50)
@@ -338,7 +338,7 @@ on it answers with that error.
 const auto eq = rt::equation([] { return rt::var("x") * 2.0; });
 
 if (const auto bad = eq.status()) {
-  std::println("{}", ddx::message(bad->code));      // errc::no_arena
+  std::println("{}", *bad);      // errc::no_arena
   return;
 }
 ```
@@ -352,7 +352,7 @@ time, so an arity mismatch or an unknown name is a genuine runtime failure.
 ```cpp
 const auto j = eq.jacobian(1.0, 2.0);      // two values, one symbol
 if (!j) {
-  std::println("{}", ddx::message(j.error().code));  // errc::wrong_arity
+  std::println("{}", j.error());  // errc::wrong_arity
 }
 ```
 
@@ -367,7 +367,9 @@ if (!j) {
 | `not_univariate` | `univariate_derivative` on more than one symbol |
 | `jit_target`, `jit_module`, `jit_verify`, `jit_lookup` | the JIT could not compile the graph |
 
-`ddx::message(code)` turns one into text. Nothing here throws.
+An `errc` and an `error` both format and stream as their text, so
+`std::println("{}", j.error())` is the whole of reporting one. Nothing here
+throws.
 
 The accessors that answer no `result` answer `std::optional` instead —
 `arity()`, `symbols()`, `value_columns()`, `jacobian_columns()`,
