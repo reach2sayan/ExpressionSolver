@@ -116,13 +116,11 @@ constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
 // lane loop is contiguous in both.  Same constraints on `order` as
 // evaluate_into; a batch's tail repeats a point, and those lanes are not read.
 //
-// `contractions` is contraction_table() over the same `order`, one entry per
-// node and in step with it -- a multiply feeding an add taken as one rounding,
-// which is the arithmetic the kernel emits.  It is resolved at freeze rather
-// than here because it cannot change between points; a table of falsy entries
-// contracts nothing.  Graph::contracted_order() is the order that goes with a
-// contracting table; live_order() is also correct and computes one or two
-// multiplies for nobody.
+// `contractions` is detail::contraction_table() over the same `order` and in
+// step with it: a multiply feeding an add taken as one rounding, resolved at the
+// freeze because it cannot change between points.  A falsy table contracts
+// nothing.  Graph::contracted_order() is the order that goes with a contracting
+// one; live_order() is also correct and computes a multiply for nobody.
 template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
@@ -199,17 +197,13 @@ template <impl::Numeric T, std::ranges::random_access_range R>
   using U = std::ranges::range_value_t<R>;
   const auto live =
       detail::reachable(b.size(), roots, [&b](NodeId v, auto &&mark) {
-        for (const NodeId u : b.operands(v)) {
-          if (u != no_node) {
-            mark(u);
-          }
-        }
+        std::ranges::for_each(detail::operands_of(b, v), mark);
       });
   std::vector<U> v(b.size());
   // Not const: filter_view caches its begin, so it is not a const range.
   auto order = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())) |
                std::views::filter([&live](NodeId i) { return live[i]; });
-  const auto contractions = contraction_table(b, order);
+  const auto contractions = detail::contraction_table(b, order);
   evaluate_into(b, point, order, contractions, std::span<U>{v});
   return v;
 }
@@ -223,7 +217,7 @@ template <impl::Numeric T, std::ranges::random_access_range R>
   using U = std::ranges::range_value_t<R>;
   std::vector<U> v(b.size());
   const auto order = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size()));
-  const auto contractions = contraction_table(b, order);
+  const auto contractions = detail::contraction_table(b, order);
   evaluate_into(b, point, order, contractions, std::span<U>{v});
   return v;
 }

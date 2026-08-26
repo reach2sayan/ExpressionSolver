@@ -187,7 +187,7 @@ public:
   // Row-major m x n; at m == 1 the leading axis goes and this is n long.
   [[nodiscard]] constexpr result<std::vector<T>>
   jacobian(const rt_detail::CPointArg<T> auto &...args) const {
-    return point(args...).transform([&](const auto &at) {
+    return point(args...).transform([this](const auto &at) {
       std::array<T, output_dim> f{};
       std::vector<T> g(derivative_.partial.size());
       gather(Want::Jacobian, at, std::span<T>{f}, g);
@@ -198,7 +198,7 @@ public:
   // Dense row-major m x n x n; the graph holds it compressed by colour.
   [[nodiscard]] result<std::vector<T>>
   hessian(const rt_detail::CPointArg<T> auto &...args) const {
-    return point(args...).transform([&](const auto &at) {
+    return point(args...).transform([this](const auto &at) {
       const std::size_t n = symbol_count();
       std::vector<T> out(output_dim * n * n);
       const impl::md::mdspan dense{
@@ -547,15 +547,12 @@ private:
     // constant-evaluating, and neither is reached there.
     if !consteval {
 #ifdef DDX_HAS_JIT
-      // The kernel's own roots: blocked spines, differentiated after the
-      // rewrite so the gradient inherits the shape.  Built here rather than at
-      // the freeze because appending to a borrowed arena is the constructor's
-      // privilege alone -- prepare() runs under a lane lock, and the arena may
-      // be lent to another Equation.
-      compile_roots_ = rt::rebalance(*arena_, roots_);
+      // Here rather than at the freeze: appending to a borrowed arena is the
+      // constructor's alone, and prepare() runs under a lane lock.
+      compile_roots_ = rt::detail::rebalance(*arena_, roots_);
       compile_derivative_ = rt::build_jacobian_impl(*arena_, compile_roots_);
 #endif
-      hessians_ = roots_ | std::views::transform([&](rt::NodeId r) {
+      hessians_ = roots_ | std::views::transform([this](rt::NodeId r) {
                     return rt::build_hessian_impl(*arena_, r);
                   }) |
                   to<std::vector<rt::Hessian>>();
@@ -649,7 +646,7 @@ private:
     const auto values = rt::evaluate_reachable(*arena_, wanted, at);
     const auto pick = [&values](std::span<T> out, const auto &nodes) {
       std::ranges::transform(nodes | std::views::take(out.size()), out.begin(),
-                             [&](rt::NodeId v) { return values[v]; });
+                             [&values](rt::NodeId v) { return values[v]; });
     };
     pick(f, roots_);
     pick(g, derivative_.partial);
@@ -660,11 +657,10 @@ private:
     // Shared, so the graph outlives an Equation that went away mid-compile.
     std::shared_ptr<const rt::Graph<T>> graph;
 #ifdef DDX_HAS_JIT
-    // What the kernel is compiled from, which is not what the sweep walks: the
-    // reduction spines are blocked for the kernel, where a dependent chain is
-    // latency nothing can hide, and left alone for the sweep, where the same
-    // rewrite costs tape locality.  Aliases `graph` where they agree.
-    std::shared_ptr<const rt::Graph<T>> compile_graph;
+    // Not what the sweep walks: spines are blocked for the kernel, where the
+    // chain is latency, and left alone for the sweep, where the same rewrite
+    // costs tape locality.  Aliases `graph` where they agree.
+    std::shared_ptr<const rt::Graph<T>> compile_graph{};
     jit::Kernel kernel{};
     // Rungs share one pool and need not land in the order they were asked for,
     // so this is what refuses a late one.
@@ -837,8 +833,11 @@ private:
       rung.pending = {};
     }
     if (best && (!lane.ready->kernel || level > lane.ready->level)) {
-      lane.ready = std::make_shared<const Compiled>(Compiled{
-          .graph = lane.ready->graph, .kernel = std::move(best), .level = level});
+      lane.ready = std::make_shared<const Compiled>(
+          Compiled{.graph = lane.ready->graph,
+                   .compile_graph = lane.ready->compile_graph,
+                   .kernel = std::move(best),
+                   .level = level});
     }
 #endif
   }
@@ -885,9 +884,8 @@ private:
     }
     auto swept = std::make_shared<const rt::Graph<T>>(gb.build(contracts()));
 #ifdef DDX_HAS_JIT
-    // The kernel gets the blocked spines; the sweep keeps the plain ones.  The
-    // Hessian lane shares one graph -- blocking it would mean a second colouring
-    // and a second reverse-over-reverse for a lane the ladder never climbs.
+    // The Hessian lane shares one graph: blocking it would cost a second
+    // colouring and reverse-over-reverse for a lane the ladder never climbs.
     auto compiled = swept;
     if constexpr (std::same_as<T, double>) {
       if (want != Want::Hessian && !compile_roots_.empty()) {
@@ -999,8 +997,7 @@ private:
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
     const auto blocks = c.graph->output_blocks();
-    // The freeze settled both: a non-contracting graph's order is its live one
-    // and its table contracts nothing, so there is no choice left to make here.
+    // The freeze settled both, so there is no choice left here.
     const auto order = c.graph->contracted_order();
     const auto contractions = c.graph->contractions();
     const std::size_t symbols = symbol_count();
@@ -1115,7 +1112,6 @@ private:
   // the arena*, and a borrowed arena may be lent to another Equation too.
   std::vector<rt::Hessian> hessians_;
 #ifdef DDX_HAS_JIT
-  // The same model with its reduction spines blocked, for the kernel only.
   std::vector<rt::NodeId> compile_roots_;
   rt::Jacobian compile_derivative_;
 #endif

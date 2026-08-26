@@ -74,6 +74,13 @@ reachable(std::size_t n, std::span<const NodeId> roots, auto &&operands_of) {
   return live;
 }
 
+// The operands a node actually has.  Arity is at most two and the absent one is
+// no_node, so every walker would otherwise repeat the same skip.
+[[nodiscard]] constexpr auto operands_of(const auto &nodes, NodeId v) {
+  return nodes.operands(v) |
+         std::views::filter([](NodeId u) { return u != no_node; });
+}
+
 } // namespace detail
 
 template <impl::Numeric T> struct Node {
@@ -181,7 +188,7 @@ private:
     // Slot-addressed, as variable() keeps it; interning leaves exactly one Var
     // node per symbol, so this walk fills every entry.
     vars_.assign(symbols_.size(), no_node);
-    for (const auto [id, n] : std::views::enumerate(nodes_)) {
+    for (const auto [id, n] : nodes_ | std::views::enumerate) {
       if (n.op == OpCode::Var) {
         vars_[n.slot] = static_cast<NodeId>(id);
       }
@@ -247,7 +254,7 @@ private:
     table_.assign(
         std::bit_ceil(std::max<std::size_t>(64, 2 * (nodes_.size() + 1))),
         no_node);
-    for (const auto [id, n] : std::views::enumerate(nodes_)) {
+    for (const auto [id, n] : nodes_ | std::views::enumerate) {
       auto run = probe(hash_of(n));
       table_[*std::ranges::find_if(run, [this](std::size_t i) {
         return table_[i] == no_node;
@@ -453,12 +460,10 @@ contraction_at(const CNodeSource auto &nodes, NodeId v) {
   return {};
 }
 
-// The contraction at every node of `order`, resolved once and in that order.
-// Asking contraction_at() inside a sweep re-derives, per point, structure that
-// is a property of the nodes and cannot change between points -- and pays two
-// dependent loads into the node array to do it.  Every consumer takes this
-// table instead, so all of them still form exactly the same fmas.  `on` false
-// contracts nothing, which is what Options::contract off means.
+// The contraction at every node of `order`, resolved once.  Asking
+// contraction_at() inside a sweep re-derives per point what is a property of the
+// nodes, at two dependent loads a time.  `on` false contracts nothing.
+namespace detail {
 template <std::ranges::input_range Order>
   requires std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
 [[nodiscard]] constexpr std::vector<Contraction>
@@ -470,5 +475,6 @@ contraction_table(const CNodeSource auto &nodes, Order &&order,
          }) |
          impl::to<std::vector<Contraction>>();
 }
+} // namespace detail
 
 } // namespace ddx::rt

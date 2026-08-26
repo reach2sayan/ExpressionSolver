@@ -62,9 +62,8 @@ public:
     std::uint32_t slot = 0;
   };
 
-  // `contract` is settled here rather than per sweep: it decides the
-  // arithmetic, and a graph whose readers disagreed about it would not agree to
-  // the bit.  Changing it afterwards means freezing again.
+  // `contract` is settled here, not per sweep: it decides the arithmetic, so
+  // changing it afterwards means freezing again.
   [[nodiscard]] static Graph freeze(const Builder<T> &b,
                                     std::span<const NodeId> outputs,
                                     Layout layout = {}, Coloring coloring = {},
@@ -137,8 +136,8 @@ public:
   }
 
   // The fma at each node of contracted_order(), in step with it.  The freeze
-  // already asks contraction_at() once per node to decide the order; keeping
-  // the answer is what stops every sweep re-deriving it per point.
+  // already asks contraction_at() per node to decide the order; keeping the
+  // answer is what stops every sweep re-deriving it per point.
   [[nodiscard]] std::span<const Contraction> contractions() const {
     return contractions_;
   }
@@ -212,7 +211,7 @@ private:
   void contract(bool on) {
     if (!on) {
       contracted_order_ = live_order_;
-      contractions_ = contraction_table(*this, contracted_order_, false);
+      contractions_ = detail::contraction_table(*this, contracted_order_, false);
       return;
     }
     const std::vector<bool> live = detail::reachable(
@@ -231,7 +230,7 @@ private:
         live_order_ |
         std::views::filter([&live](NodeId v) { return live[v]; }) |
         impl::to<std::vector<NodeId>>();
-    contractions_ = contraction_table(*this, contracted_order_);
+    contractions_ = detail::contraction_table(*this, contracted_order_);
   }
 
   std::vector<Property> properties_;
