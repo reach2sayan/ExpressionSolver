@@ -8,6 +8,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/Alignment.h>
 
@@ -169,7 +170,8 @@ private:
   Lanes lanes_;
 };
 
-llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
+llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name,
+                               const rt::Graph<double> &g) {
   llvm::LLVMContext &ctx = m.getContext();
   llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
   llvm::PointerType *const ptr = llvm::PointerType::getUnqual(ctx);
@@ -183,17 +185,35 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   for (const auto [i, arg_name] : names | std::views::enumerate) {
     fn->getArg(static_cast<unsigned>(i))->setName(arg_name);
   }
-  // The four pointer *arrays*; the columns they hold are reached through a load,
-  // so nothing here says anything about those -- and this is not argmemonly.
-  for (const unsigned i : std::views::iota(0u, 4u)) {
-    fn->addParamAttr(i, llvm::Attribute::NoAlias);
-    fn->addParamAttr(i, llvm::Attribute::NoCapture);
+
+  // Everything here is about the four pointer *arrays*, not the columns they
+  // hold: those are reached through a load, so no parameter attribute reaches
+  // them and the kernel is not argmemonly.  All four are readonly -- the writes
+  // go through loaded pointers, never back into the arrays.  A block that was
+  // not asked for arrives as an empty span, whose data() may be null, so it
+  // gets neither nonnull nor a size.
+  const auto &layout = g.layout();
+  const std::array counts{g.symbols().size(), layout.values, layout.jacobian,
+                          layout.hessian};
+  for (const auto [i, count] : counts | std::views::enumerate) {
+    const auto arg = static_cast<unsigned>(i);
+    fn->addParamAttr(arg, llvm::Attribute::NoAlias);
+    fn->addParamAttr(arg, llvm::Attribute::NoCapture);
+    fn->addParamAttr(arg, llvm::Attribute::ReadOnly);
+    fn->addParamAttr(arg, llvm::Attribute::NoUndef);
+    fn->addParamAttr(arg, llvm::Attribute::getWithAlignment(
+                              ctx, llvm::Align(alignof(void *))));
+    if (count != 0) {
+      fn->addParamAttr(arg, llvm::Attribute::NonNull);
+      fn->addDereferenceableParamAttr(arg, count * sizeof(void *));
+    }
   }
-  fn->addParamAttr(0, llvm::Attribute::ReadOnly);
+  fn->addParamAttr(4, llvm::Attribute::NoUndef);
 
   // nounwind, or the optimiser cannot move code across the libm calls.
   fn->setDoesNotThrow();
   fn->setWillReturn();
+  fn->setMustProgress();
   return fn;
 }
 
@@ -278,9 +298,14 @@ void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
 
 std::unique_ptr<llvm::Module>
 emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
-            const Options &opt, llvm::StringRef name, const unsigned width) {
+            const Options &opt, llvm::StringRef name, const unsigned width,
+            const llvm::DataLayout &layout, llvm::StringRef triple) {
   auto m = std::make_unique<llvm::Module>("ddx.jit", ctx);
-  llvm::Function *const fn = declare_kernel(*m, name);
+  // Before the first instruction: IRBuilder reads the layout for every
+  // alignment it fills in without being told one.
+  m->setDataLayout(layout);
+  m->setTargetTriple(triple);
+  llvm::Function *const fn = declare_kernel(*m, name, g);
   llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
   llvm::Type *const f64 = llvm::Type::getDoubleTy(ctx);
   llvm::Argument *const count = fn->getArg(4);
@@ -292,12 +317,17 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   auto *const loop = llvm::BasicBlock::Create(ctx, "loop", fn);
   auto *const exit = llvm::BasicBlock::Create(ctx, "exit", fn);
 
-  // None at all: contraction is decided in the graph and spelled llvm.fma, so
-  // allowContract would fuse a *second* set the sweep computed separately.
+  // No fast-math flags at all: contraction is decided in the graph and spelled
+  // llvm.fma, so allowContract would fuse a *second* set the sweep computed
+  // separately.
   llvm::IRBuilder<> b(entry);
   const Columns cols = hoist_columns(b, *fn, g);
+
+  // n == 0 is a degenerate call, and saying so is what keeps the loop out of
+  // the cold half of the layout.
+  llvm::MDBuilder md(ctx);
   b.CreateCondBr(b.CreateICmpEQ(count, llvm::ConstantInt::get(i64, 0)), exit,
-                 loop);
+                 loop, md.createBranchWeights(1, 1U << 12));
 
   b.SetInsertPoint(loop);
   llvm::PHINode *const index = b.CreatePHI(i64, 2, "i");
@@ -308,7 +338,9 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   // llvm.get.active.lane.mask is a dozen on AVX2.
   llvm::Value *mask = nullptr;
   if (lanes.vector()) {
-    llvm::Value *const remaining = b.CreateSub(count, index, "remaining");
+    // nuw: i < n on every entry to the body, so the difference never wraps.
+    llvm::Value *const remaining =
+        b.CreateSub(count, index, "remaining", /*HasNUW=*/true);
     llvm::Value *const step =
         b.CreateStepVector(llvm::FixedVectorType::get(i64, width));
     mask = b.CreateICmpSLT(step, b.CreateVectorSplat(width, remaining), "mask");
@@ -319,8 +351,11 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
       emit_nodes(emit, g, cols, index, mask, opt.contract);
   emit_stores(emit, g, cols, value, index, mask);
 
+  // nuw/nsw: n counts doubles the caller has allocated, so n + W is nowhere
+  // near either bound.  It is what lets SCEV name an exact trip count.
   llvm::Value *const next =
-      b.CreateAdd(index, llvm::ConstantInt::get(i64, width), "i.next");
+      b.CreateAdd(index, llvm::ConstantInt::get(i64, width), "i.next",
+                  /*HasNUW=*/true, /*HasNSW=*/true);
   index->addIncoming(next, loop);
   b.CreateCondBr(b.CreateICmpUGE(next, count), exit, loop);
 

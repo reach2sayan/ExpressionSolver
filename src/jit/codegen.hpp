@@ -3,6 +3,7 @@
 #include "jit/kernel.hpp"
 #include "rt/graph.hpp"
 
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Module.h>
 
 namespace ddx::jit::detail {
@@ -11,8 +12,12 @@ namespace ddx::jit::detail {
 // iteration: the body is emitted over <lanes x double>, or over double when
 // lanes is 1.  The caller names the function: every module lands in one
 // JITDylib, where a duplicate symbol is an error.
+//
+// The layout and triple are stamped before the first instruction, not after:
+// IRBuilder reads the layout for every implicit alignment it fills in.
 [[nodiscard]] std::unique_ptr<llvm::Module>
 emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
-            const Options &opt, llvm::StringRef name, unsigned lanes);
+            const Options &opt, llvm::StringRef name, unsigned lanes,
+            const llvm::DataLayout &layout, llvm::StringRef triple);
 
 } // namespace ddx::jit::detail

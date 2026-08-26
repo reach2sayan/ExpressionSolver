@@ -352,14 +352,13 @@ private:
         [this, start = Clock::now()] { rep_.emit = Clock::now() - start; }};
     auto ctx = std::make_unique<llvm::LLVMContext>();
     auto m = detail::emit_module(*ctx, g_, opt_, name_,
-                                 opt_.lanes != 0 ? opt_.lanes : host_.lanes);
+                                 opt_.lanes != 0 ? opt_.lanes : host_.lanes,
+                                 host_.jit.getDataLayout(), host_.triple);
     if (!m) {
       // The emitter has already written the verifier's own diagnosis.
       return std::unexpected{
           error{errc::jit_verify, "the emitted module failed verification"}};
     }
-    m->setDataLayout(host_.jit.getDataLayout());
-    m->setTargetTriple(host_.triple);
     // The object cache keys on the module and LLVM prints this in diagnostics;
     // the kernel's name is already unique per compile.
     m->setModuleIdentifier(name_);
