@@ -9,7 +9,8 @@
 #include <functional>
 #include <ranges>
 #include <span>
-#include <utility> // std::unreachable
+#include <type_traits> // std::bool_constant
+#include <utility>     // std::unreachable
 #include <vector>
 
 namespace ddx::rt {
@@ -77,6 +78,18 @@ template <impl::Numeric T>
 [[nodiscard]] constexpr T fused_multiply_add(const T &x, const T &y,
                                              const T &z) noexcept {
   if constexpr (std::floating_point<T>) {
+    // <cmath> is constexpr only in C++26, and folding a libm call before that
+    // is a GCC extension clang does not have -- so a constant evaluation under
+    // clang takes the arithmetic unfused for the same reason a scalar without
+    // an fma does.  The probe asks the compiler rather than the version macros.
+    if consteval {
+      if constexpr (!requires {
+                      std::bool_constant<(std::fma(T{2}, T{3}, T{4}) ==
+                                          T{10})>{};
+                    }) {
+        return T{x * y + z};
+      }
+    }
     return std::fma(x, y, z);
   } else {
     return T{x * y + z};

@@ -22,9 +22,11 @@ if (MSVC)
     # thousand.  C4365 and C5219 are deliberately left on.  C4866 fires on every
     # subscript of a range view -- an overloaded operator[] whose operands are a
     # view and a loop counter, so there is no evaluation order to get wrong.
-    set(DDX_WARNINGS /Wall /wd4623 /wd4625 /wd4626 /wd5026 /wd5027 /wd4710
-                     /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514 /wd4324
-                     /wd5266 /wd4866)
+    # C4061 wants a case per enumerator even where the switch has a default,
+    # which is what the default is for.
+    set(DDX_WARNINGS /Wall /wd4061 /wd4623 /wd4625 /wd4626 /wd5026 /wd5027
+                     /wd4710 /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514
+                     /wd4324 /wd5266 /wd4866)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
     # C4577 with the flag that causes it rather than among the warnings: it
     # reports `noexcept` under /EHs-c-, which is every noexcept in the project
