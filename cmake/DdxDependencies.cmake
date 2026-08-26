@@ -1,20 +1,15 @@
-# Every third-party dependency ddx uses, in one place: what it is, where it comes
-# from, and what asks for it.  The two the build tools need are fetched, and
-# declaring those is cheap -- FetchContent downloads nothing until the matching
-# ddx_use_*() macro asks -- so the whole manifest can live here while a build
-# still fetches only what its options turned on.  The two that reach ddx's own
-# headers or its binaries are found on the machine instead, because an installed
-# ddx has to be able to name them again on someone else's.
+# Every third-party dependency, in one place.  Anything reaching ddx's headers or
+# binaries is *found*, so an installed ddx can name it again elsewhere; the build
+# tools are fetched, and declaring one downloads nothing until its macro asks.
 #
-#   ddx_use_boost()            Boost.Mp11 + Graph + DynamicBitset  found, always
+#   ddx_use_boost()            Boost, header-only, found           always
 #   ddx_use_llvm()             LLVM 20, found                      DDX_BUILD_JIT
 #   ddx_use_googletest()       GoogleTest, fetched                 top-level only
 #   ddx_use_googlebenchmark()  Google Benchmark, fetched           DDX_BUILD_BENCHMARKS
 #   ddx_use_pybind11()         pybind11, found in the build env    DDX_BUILD_PYTHON
 #
-# Each is idempotent and safe to call from wherever the dependency is first
-# needed.  Macros rather than functions: FetchContent_MakeAvailable() defines
-# variables the caller's scope is expected to see.
+# Each is idempotent.  Macros, not functions: FetchContent_MakeAvailable()
+# defines variables the caller's scope is expected to see.
 include_guard(GLOBAL)
 
 include(CheckCXXSourceCompiles)
@@ -26,27 +21,15 @@ set(DDX_GOOGLETEST_REF "5376968f6948923e2411081fd9372e71a59d8e77"
         CACHE STRING "GoogleTest commit to fetch")
 set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release to fetch")
 
-# The LLVM range ddx::jit has been built against.  A range rather than a floor
-# because the ORC C++ API is not stable across releases; both ends currently
-# name 20, so the range is one release wide.
-#
-# 20 is a hard floor, not caution: src/jit uses three spellings that do not
-# exist below it.  Intrinsic::getOrInsertDeclaration and
-# Intrinsic::lookupIntrinsicID are absent from LLVM 18's Intrinsics.h entirely
-# -- 18 has getDeclaration and offers the lookup only as
-# Function::lookupIntrinsicID, which 20 removed, so no one spelling compiles
-# against both.  And sys::getHostCPUFeatures() returns bool through an out
-# parameter in 18 where 20 returns the StringMap by value, which compiler.cpp
-# relies on.  Above 20 the ceiling is real too: 21 replaces the `nocapture`
-# attribute codegen.cpp sets with `captures(none)`.
+# A range, not a floor: the ORC C++ API is not stable across releases, and both
+# ends are hard.  Below 20, Intrinsic::getOrInsertDeclaration and
+# lookupIntrinsicID do not exist and getHostCPUFeatures() has another signature;
+# above it, 21 replaces the `nocapture` attribute codegen.cpp sets.
 set(DDX_LLVM_VERSION_MIN 20)
 set(DDX_LLVM_VERSION_MAX 20)
 
 # --- declarations -----------------------------------------------------------
 # SYSTEM throughout: a fetched dependency's warnings are not ours to fix.
-# URL_HASH so a cached archive is verified rather than re-fetched: without one
-# CMake reports "File already exists but no hash specified" and downloads 150 MB
-# again every time a stamp goes missing.
 FetchContent_Declare(googletest
         URL https://github.com/google/googletest/archive/${DDX_GOOGLETEST_REF}.zip
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
@@ -59,44 +42,22 @@ FetchContent_Declare(googlebenchmark
 )
 
 # --- Boost -------------------------------------------------------------------
-# Mp11 is the type-list vocabulary the symbol lists are built out of, Boost.Graph
-# supplies the colouring the runtime graph needs, and Boost.DynamicBitset the
-# coupling rows.  Describe, Endian and CRC are the saved graph's: the field lists
-# the one serialisation traversal walks, fixed-width little-endian integers, and
-# the checksum a loader clears before it trusts a byte.  All header-only, so
-# nothing links a compiled Boost library and what a build needs of it is an
-# include path.
-#
-# Boost.Serialization is deliberately not among them, and could not be: it is a
-# compiled library, and its only error channel is throwing, which this tree turns
-# into abort() (src/rt/boost_no_exceptions.cpp).
+# Mp11 for the symbol lists, Graph for the colouring, DynamicBitset for the
+# coupling rows; Describe, Endian and CRC for the saved graph.  All header-only.
+# Boost.Serialization is deliberately absent -- see boost_no_exceptions.cpp.
 #
 # Found, not fetched, and the same find ddx-config.cmake makes: ddx's public
-# headers include boost's, so whatever a build compiles against is what its
-# consumers compile against too.  A fetched Boost could be neither -- it belongs
-# to no export set, so no installed ddx could name it.
+# headers include boost's.  A fetched Boost belongs to no export set, so no
+# installed ddx could name it.  Config mode is the only one CMake 4 has left.
 #
-# Config mode.  BoostConfig.cmake has shipped with Boost since 1.70 and is the
-# only mode CMake 4 has left, FindBoost being removed there and deprecated since
-# 3.30, which is what makes an unqualified find_package(Boost) warn under
-# CMP0167.
-#
-# The cache variable is renamed whenever this list grows: check_cxx_source_compiles
-# trusts a cached answer, so an existing build tree would otherwise never re-probe
-# for a header that was added to it.
-#
-# No version floor: all six have been stable for years, so a release
-# number would turn working Boosts away to answer a question the headers
-# themselves answer.  What does go wrong is a partial install -- vcpkg and the
-# distros that split Boost up can have Mp11 and not Graph -- and that is a
-# missing header, which is what this asks about.
+# No version floor -- a partial install is what goes wrong, and that is a missing
+# header, which is what the probe asks about.  Rename the cache variable whenever
+# this list grows: check_cxx_source_compiles trusts a cached answer.
 macro(ddx_use_boost)
     if (NOT TARGET Boost::headers)
         find_package(Boost REQUIRED CONFIG)
-        # The target rather than its INTERFACE_INCLUDE_DIRECTORIES scraped out of
-        # it: the probe then compiles against whatever Boost::headers carries,
-        # generator expressions and several directories included, which is
-        # exactly what the rest of the build compiles against.
+        # The target, not its scraped include dirs, so the probe compiles
+        # against exactly what the rest of the build does.
         set(CMAKE_REQUIRED_LIBRARIES Boost::headers)
         check_cxx_source_compiles("
                 #include <boost/mp11/algorithm.hpp>
@@ -122,13 +83,11 @@ macro(ddx_use_boost)
 endmacro()
 
 # --- LLVM -------------------------------------------------------------------
-# Sets LLVM_DEFINITIONS_LIST and DDX_LLVM_LIBS for src/jit alongside what
-# LLVMConfig itself defines.
+# Sets LLVM_DEFINITIONS_LIST and DDX_LLVM_LIBS for src/jit.
 macro(ddx_use_llvm)
     if (NOT LLVM_FOUND)
-        # LLVMConfig declares itself compatible only with an exact version
-        # request, so a find_package version range never matches; check the
-        # major ourselves.
+        # LLVMConfig matches only an exact version request, so a find_package
+        # range never does; check the major here.
         find_package(LLVM REQUIRED CONFIG)
         if (LLVM_VERSION_MAJOR LESS DDX_LLVM_VERSION_MIN
                 OR LLVM_VERSION_MAJOR GREATER DDX_LLVM_VERSION_MAX)
@@ -145,23 +104,15 @@ macro(ddx_use_llvm)
 endmacro()
 
 # --- pybind11 ---------------------------------------------------------------
-# Found, not fetched, for the same reason Boost and LLVM are: it reaches a binary
-# this project produces.  What makes it unlike those two is *where* it is found --
-# the build environment rather than the machine.  An extension module is built
-# against one interpreter's headers and ABI, and the thing that knows which one
-# is the build frontend: scikit-build-core puts the pybind11 wheel's cmake
-# directory on CMAKE_PREFIX_PATH, so `uv pip install .` resolves the interpreter
-# and the bindings together.  Naming a path here would only fight that.
-#
-# 3.0 is a floor rather than caution: native_enum.h arrived after 2.13, and the
-# bindings use it so Backend and VecLib are enum.IntEnum on the Python side
-# instead of pybind's own enum objects.
+# Found in the build *environment*, not on the machine: an extension is built
+# against one interpreter's headers and ABI, and scikit-build-core puts the
+# matching wheel's cmake directory on CMAKE_PREFIX_PATH.  Naming a path here
+# would fight that.  3.0 is a hard floor: native_enum.h arrived after 2.13, and
+# the bindings use it to make Backend and VecLib enum.IntEnum.
 macro(ddx_use_pybind11)
     if (NOT TARGET pybind11::module)
-        # The interpreter first, so that pybind11 is the one *it* has.  A wheel
-        # build already puts that pair on CMAKE_PREFIX_PATH and this finds it
-        # there; a preset build has only a virtualenv, so the interpreter is
-        # asked where its own cmake directory is.
+        # The interpreter first, so pybind11 is the one *it* has: a preset
+        # build has only a virtualenv, so ask it for its own cmake directory.
         find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
         if (NOT DEFINED pybind11_DIR)
             execute_process(
@@ -200,8 +151,7 @@ macro(ddx_use_googlebenchmark)
     endif ()
 endmacro()
 
-# SYSTEM on the FetchContent_Declare covers a consumer's include of the headers;
-# this is the other half, the dependency compiling itself.  MSVC only -- the
+# The other half of SYSTEM: the dependency compiling itself.  MSVC only -- the
 # fetched sources build clean under the GCC and Clang warning set.
 function(_ddx_silence_dependency)
     if (NOT MSVC)

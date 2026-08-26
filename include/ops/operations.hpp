@@ -132,10 +132,10 @@ inline constexpr bool is_negation_expr_v<Expression<NegateOp<T>, C>> = true;
 template <Numeric T>
 struct DivideOp
     : BinaryOp<T, std::divides<void>, FixedString{"/"}, Notation::Infix, 20> {
-  // `a / b` means a * b^-1 -- RIGHT division, a stated convention CFieldLike
-  // cannot express.  Under it dc = da*b^-1 - a*b^-1*db*b^-1, which does not
-  // fold into one division by b*b; the familiar quotient rule is that with the
-  // factors commuted, so both spellings are kept and chosen by if constexpr.
+  // `a / b` means a * b^-1 -- RIGHT division, which CFieldLike cannot state.
+  // Under it dc = da*b^-1 - a*b^-1*db*b^-1, which does not fold into one
+  // division by b*b; the familiar quotient rule is that with the factors
+  // commuted, so both spellings are kept.
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -203,16 +203,13 @@ DDX_ADL_BINARY_IMPL(hypot_impl, hypot)
 DDX_ADL_BINARY_IMPL(midpoint_impl, midpoint)
 #undef DDX_ADL_BINARY_IMPL
 // A tie averages the operands and an unordered pair returns (a-b)*0, NaN from
-// either side: both are symmetric, which is what makes them stable under the
-// commutative reordering the graph builder applies.  On a Dual a == b compares
-// only the value level, so the derivative parts are averaged through
-// midpoint_impl rather than picked from a side.  On an arithmetic scalar the
-// only tie that is not simply `a` is the signed zeros, where the answer follows
-// IEEE 754-2019 maximum/minimum -- what the JIT's llvm.maximum/minimum compute
-// -- and is spelled arithmetically: -0 + +0 is +0, so the sum of two zeros is
-// their maximum and the negated sum of their negations is their minimum.
-// The two differ only in which operand wins and in how the signed-zero tie is
-// spelled, so they are one template.
+// either side: both symmetric, and so stable under the graph builder's
+// commutative reordering.  On a Dual a == b compares only the value level, so
+// the derivative parts are averaged rather than picked from a side.  On an
+// arithmetic scalar the only tie that is not simply `a` is the signed zeros,
+// following IEEE 754-2019 maximum/minimum -- what llvm.maximum computes -- and
+// spelled arithmetically: -0 + +0 is +0, so the sum of two zeros is their
+// maximum and the negated sum of their negations their minimum.
 template <bool IsMax> struct extremum_impl {
   constexpr auto operator()(const Numeric auto &a,
                             const Numeric auto &b) const noexcept {
@@ -378,9 +375,9 @@ struct ExtremumOp : BinaryOp<T, func, symbol, Notation::Function> {
     }
   }
 
-  // The one op that does not forward to adjoints.hpp: a compare is cheaper
-  // than ExtremumOpFn's sign expansion, and it can give a tie half to each
-  // side.  The graph has no comparisons and so must use the expansion.
+  // The one op that does not forward to adjoints.hpp: a compare is cheaper than
+  // ExtremumOpFn's sign expansion and can halve a tie.  The graph has no
+  // comparisons and must use the expansion.
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {

@@ -43,12 +43,9 @@ ddx::jit::Kernel must_compile(auto &&...args) {
   return k ? std::move(*k) : ddx::jit::Kernel{};
 }
 
-// A cache directory of this process's own.  A fixed name under
-// temp_directory_path() is shared mutable state between processes however
-// private it looks, and it stays hidden precisely because ctest runs different
-// binaries in parallel and never the same one twice -- so two copies of this
-// binary, which is what a stress run is, would delete each other's entries
-// through remove_all() and fail for reasons that look like the library.
+// A cache directory of this process's own: a fixed name under
+// temp_directory_path() is shared mutable state between processes, and two
+// copies of this binary would delete each other's entries through remove_all().
 [[nodiscard]] std::filesystem::path cache_dir(std::string_view what) {
   static const auto token = std::random_device{}();
   static std::atomic<unsigned> seq{0};
@@ -98,8 +95,8 @@ void expect_matches_interpreter(auto build, std::size_t nvars,
   }
 }
 
-// A Compiler is the LLJIT and a Kernel points into code it owns: one owner,
-// but it must move -- Equation keeps one in a static.
+// A Compiler is the LLJIT and a Kernel points into code it owns: one owner, but
+// it must move -- Equation keeps one in a static.
 TEST(JitValue, CompilerIsMovableButNotCopyable) {
   static_assert(!std::is_copy_constructible_v<ddx::jit::Compiler>);
   static_assert(!std::is_copy_assignable_v<ddx::jit::Compiler>);
@@ -216,8 +213,7 @@ TEST(JitValue, MaxMinSignedZeroTiesMatchTheInterpreter) {
 }
 
 // Every width computes the same bits: a lane is an IEEE operation on its own,
-// contraction happens per lane the same way it does for one, and a
-// transcendental is the same scalar libm call per lane.  Checked over every op
+// and a transcendental is the same scalar libm call per lane.  Every op
 // A graph with no Jacobian block at all, which is what Equation::evaluate()
 // freezes: the kernel takes an empty partials span, and the emitter has to
 // produce a function that stores value columns and nothing else.
@@ -298,18 +294,16 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
   }
 }
 
-// The codegen level rides on the module, so one JIT serves compiles at
-// several.  All four must agree to the bit -- which is what lets the default be
-// the cheapest of them.  Level 0 is in that list only because contraction moved
-// into the graph: it takes FastISel, which forms no FMAs of its own, and used to
-// answer differently for exactly that reason.  An llvm.fma it is handed is an
+// The codegen level rides on the module, so one JIT serves compiles at several,
+// and all four must agree to the bit -- which is what lets the default be the
+// cheapest.  Level 0 qualifies only because contraction moved into the graph:
+// FastISel forms no FMAs of its own but an llvm.fma it is handed is an
 // operation like any other.
 TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
   Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
-  // Multiply-add shapes throughout, so there is an FMA at every level that
-  // forms one -- the thing the levels could have disagreed about.
+  // Multiply-add shapes throughout, so every level that forms an FMA does.
   const auto f = x * y + x * x - y + exp(x * y) * (y + 1.0) + log(x) * y;
   const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
 
@@ -345,10 +339,9 @@ TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
   }
 }
 
-// Both vectorisers pack operations that were already independent, and neither
-// is given `reassoc`, so neither may move a bit.  This is the gate on turning
-// either on: a kernel that is 14% quicker and answers differently is not the
-// same kernel.
+// Both vectorisers pack operations that were already independent and neither is
+// given `reassoc`, so neither may move a bit.  This is the gate on turning
+// either on.
 TEST(JitValue, TheVectorisersDoNotMoveABit) {
   Builder<> b;
   const auto x = var(b, "x");
@@ -489,10 +482,8 @@ TEST(JitValue, ConstantFoldsToAStore) {
   EXPECT_DOUBLE_EQ(got[1], 7.0);
 }
 
-// The object a compile produced links back into the same JIT and answers the
-// same bits.  This is the whole of what makes a compile storable: the bytes are
-// the kernel, and adopting them skips emission, the pass pipeline and codegen
-// alike.
+// The object a compile produced links back and answers the same bits, which is
+// what makes a compile storable.
 TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
   Builder<> b;
   const auto x = var(b, "x");
@@ -509,9 +500,8 @@ TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
   ASSERT_TRUE(compiled);
   ASSERT_FALSE(compiled.object().empty()) << "retain_object kept nothing";
 
-  // The name the compile used is not something a caller can guess, which is why
-  // the kernel carries it: whoever stores the bytes stores the symbol beside
-  // them.
+  // Unguessable, which is why the kernel carries it: whoever stores the bytes
+  // stores the symbol beside them.
   ASSERT_FALSE(compiled.symbol().empty());
   const auto adopted = compiler().adopt(
       compiled.object(), compiled.symbol(), compiled.arity(), compiled.values(),
@@ -536,10 +526,8 @@ TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
   EXPECT_EQ(adopted->object().size(), compiled.object().size());
 }
 
-// The point of the cache: the second compile of the same graph does no codegen
-// at all, and answers the same bits.  Timing is not the assertion -- the report
-// is, because a cache hit does not run the phases rather than running them
-// quickly.
+// The second compile of the same graph does no codegen at all.  The report is
+// the assertion, not timing: a hit does not run the phases at all.
 TEST(JitValue, ACachedObjectSkipsTheWholeCompile) {
   const auto dir = cache_dir("skips");
   std::filesystem::remove_all(dir);
@@ -581,8 +569,8 @@ TEST(JitValue, ACachedObjectSkipsTheWholeCompile) {
   std::filesystem::remove_all(dir);
 }
 
-// A cache entry with a byte flipped in it must not be run.  The checksum is
-// what stands between a corrupt file and machine code being jumped into.
+// The checksum is what stands between a corrupt file and machine code being
+// jumped into.
 TEST(JitValue, ACorruptCacheEntryIsAMissNotACrash) {
   const auto dir = cache_dir("corrupt");
   std::filesystem::remove_all(dir);
@@ -621,11 +609,9 @@ TEST(JitValue, ACorruptCacheEntryIsAMissNotACrash) {
   std::filesystem::remove_all(dir);
 }
 
-// A cache entry is parsed bytes, and it carries a length read out of its own
-// payload -- the shape where a hand-picked corrupt case proves nothing.  Every
-// byte of the prologue and a stride through the payload, each flipped, and every
-// truncation: the assertion is only that a compile still *returns a correct
-// kernel*, because every one of these must degrade to a miss.
+// A cache entry carries a length read out of its own payload -- the shape where
+// a hand-picked corrupt case proves nothing.  Every prologue byte, a stride
+// through the payload and every truncation: each must degrade to a miss.
 TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
   const auto dir =
       cache_dir("fuzz");
@@ -651,11 +637,8 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
   const std::array<const double *, 1> xs{c.data()};
   const double want = 0.7 * 0.7 + std::log(0.7);
 
-  // Two assertions, and the second is the one with teeth.  "Still returns a
-  // correct kernel" is satisfied by an entry that was adopted *and happened to
-  // be harmless*; "the backend ran" says the entry was refused outright, which
-  // is the property that has to hold for every damaged byte.  Reporting only
-  // the first would be a test that passes while corrupt entries are executed.
+  // The second has the teeth: "returns a correct kernel" is satisfied by an
+  // entry adopted and harmless, where "the backend ran" says it was refused.
   const auto rejected = [&](const char *what, std::size_t at) {
     ddx::jit::CompileReport rep;
     const auto k = compiler().compile(graph, opt, &rep);
@@ -668,26 +651,18 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
     EXPECT_NEAR(got, want, 1e-15) << what << " at " << at << " ran wrong code";
   };
 
-  // Every prologue byte under three masks, then a stride through the payload.
-  // The prologue gets no stride because it is the one region no checksum can
-  // cover.  A sweep rather than a spot check on the bytes that matter today,
-  // because what it is really for is the *next* header field somebody adds and
-  // forgets to verify -- both halves of this format have gained fields recently.
+  // Every prologue byte under three masks, then a stride through the payload;
+  // no stride on the prologue, the one region no checksum can cover.  A sweep
+  // rather than a spot check, for the *next* field somebody adds and forgets.
   //
-  // Three masks and not one because one only detects a field that is *entirely*
-  // unverified: relax `scalar_size` to a range check and `~8 = 247` is still
-  // refused while `8 -> 9` is adopted, so `~b` alone would call that field
-  // verified.  Whole-byte, low-bit, high-bit.
+  // Three masks, not one: one detects only an entirely unverified field --
+  // relax `scalar_size` to a range check and `~8 = 247` is still refused while
+  // `8 -> 9` is adopted.  Whole-byte, low-bit, high-bit.
   //
-  // Three and not all 255, which is the honest trade rather than a claim that
-  // three suffices.  Exhaustive was run once -- **0 of 14280 accepted** -- and
-  // costs 98 s against an 18 s suite, because every rejection here provokes a
-  // real recompile where the archive's equivalent sweep only reparses a file.
-  // What makes three adequate *today* is that every field is checked with `!=`
-  // against a value derived elsewhere, and an exact check catches any change at
-  // all.  That is a property of the current fields, not of the sampling: **a
-  // field added with a range check needs this exhaustive again**, and the
-  // scalar_size demonstration above is exactly what that looks like.
+  // Three, not 255, is a trade.  Exhaustive was run once, 0 of 14280 accepted,
+  // at 98 s against an 18 s suite -- a rejection here provokes a real recompile.
+  // Three is adequate only because every field is checked by exact `!=`; a field
+  // added with a range check needs the exhaustive sweep again.
   const std::size_t stride = std::max<std::size_t>(1, pristine.size() / 64);
   for (std::size_t i = 0; i < ddx::rt::header_bytes; ++i) {
     for (const std::byte mask :
@@ -715,12 +690,10 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
     rejected("a truncation to", n);
   }
 
-  // The case the sweep above cannot reach: a symbol length near 2^32, where
-  // `4 + length` in 32-bit arithmetic wraps past the bounds check it is meant
-  // to fail.  Damaging the file cannot get there -- the checksum fails first,
-  // every time -- so the entry is *rebuilt* with the wrapping length and a CRC
-  // that agrees with it, which is what makes this test not vacuous.  CRC32
-  // detects accidents; it does not sign anything.
+  // What the sweep cannot reach: a symbol length near 2^32, where `4 + length`
+  // in 32-bit wraps past the bounds check.  Damage fails the checksum first, so
+  // the entry is *rebuilt* with a CRC that agrees -- which is what makes this
+  // not vacuous.  CRC32 detects accidents, it does not sign anything.
   {
     const auto head = ddx::rt::get_header(pristine, "ddxjitob");
     ASSERT_TRUE(head.has_value());
@@ -747,31 +720,17 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
   std::filesystem::remove_all(dir);
 }
 
-// The cache is the multi-writer case: a parallel build, or two workers warming
-// the same key, all miss together, all compile, and all write one path at once.
-// Every one of them must get a correct kernel, exactly one whole entry must be
-// left, and nothing may be left staged.
+// The multi-writer case: a parallel build, or two workers warming one key, all
+// missing together and writing one path at once.  Each must get a correct
+// kernel, one whole entry must be left, and nothing may be left staged.
 //
-// This is *not* a regression test for rt::write_file's per-writer staging name,
-// and the reason is worth stating because two plausible ones are wrong.
-//
-// Measured against the shared ".tmp" it replaced: this test passes 0/10, while
-// **120 of 160 cache writes fail**.  So the writers do collide, constantly --
-// spacing is not what hides it, and neither is payload size (checked to 40
-// variables).  What hides it is that a losing writer's rename finds nothing to
-// move and `write_entry` discards that error by design: a cache that cannot be
-// written is a cache that misses, which is exactly the degradation this test
-// asserts is survivable.  One writer always wins, so one whole entry always
-// lands, and every assertion below holds either way.
-//
-// There is also no torn file to find, at any size: rename is atomic, so the
-// content race resolves before anything a reader could see, and RtArchive's
-// concurrent-writer test measured zero torn files from 1 KiB to 1 MiB over forty
-// rounds with the bug fully present.  Neither suite has a tearing test because
-// on this platform there is nothing there to test.
-//
-// What this covers is the end of the pipe: whatever the writers did, one whole
-// entry loads afterwards.
+// It is *not* a regression test for rt::write_file's per-writer staging name.
+// Measured against the shared ".tmp" it replaced, this passes 0/10 while 120 of
+// 160 cache writes fail -- so the writers collide constantly, and what hides it
+// is that `write_entry` discards a losing rename's error by design: a cache
+// that cannot be written is a cache that misses.  Nor is there a torn file to
+// find at any size, rename being atomic.  What it covers is the end of the
+// pipe: whatever the writers did, one whole entry loads afterwards.
 TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
   const auto dir =
       cache_dir("writers");
@@ -786,13 +745,9 @@ TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
   std::array<bool, writers> ok{};
   std::array<bool, writers> compiled{};
 
-  // The graphs are built *before* the rendezvous and the compiles start after
-  // it, so every writer reads the cache before any of them has written.  That
-  // makes "all eight miss" structural rather than lucky -- without it, a
-  // straggler thread on a loaded box starts after the first writer has landed
-  // its entry, hits, and the overlap assertion below becomes the same
-  // scheduling-dependent coin flip that the ladder turned
-  // DroppingAMidFlightCompileDoesNotBlock into.
+  // Graphs built *before* the rendezvous and compiles started after it, so
+  // every writer reads the cache before any has written -- which makes "all
+  // eight miss" structural rather than lucky.
   std::latch start{writers};
 
   {
@@ -800,8 +755,7 @@ TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
     for (std::size_t t = 0; t < writers; ++t) {
       threads.emplace_back([&, t] {
         // Its own arena: one Builder is not shared between threads.  Two
-        // independently built graphs hashing alike is also the cache's premise,
-        // so this tests that too.
+        // independent builds hashing alike is also the cache's premise.
         Builder<> b;
         const auto x = var(b, "x");
         const auto graph =
@@ -825,11 +779,9 @@ TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
     }
   }
 
-  // Without this the test can quietly stop being about concurrency: if the
-  // writers ever serialise into one compile and seven cache hits, every
-  // assertion below still passes and nothing races at all.  It is an assertion
-  // about *work done*, not about timing, and the latch above is what keeps it
-  // that way -- assert overlap without one and this is a flake, not a guard.
+  // Without this, writers serialising into one compile and seven hits would
+  // leave every assertion below green.  An assertion about *work done*, not
+  // timing -- which the latch above is what makes safe.
   EXPECT_EQ(std::ranges::count(compiled, true), writers)
       << "a writer hit the cache, so the writers did not all overlap";
 
@@ -838,8 +790,7 @@ TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
     EXPECT_NEAR(got[t], want, 1e-15) << "writer " << t << " ran wrong code";
   }
 
-  // One key, so one entry -- and no staging file left behind by a writer that
-  // lost the rename.
+  // One key, one entry, and nothing left staged by a losing rename.
   std::size_t entries = 0;
   for (const auto &e : std::filesystem::directory_iterator{dir}) {
     EXPECT_EQ(e.path().extension(), ".ddxjit")
@@ -860,8 +811,7 @@ TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
   std::filesystem::remove_all(dir);
 }
 
-// No directory named, nothing written: a library does not put files on a
-// caller's disk because it would be faster.
+// No directory named, nothing written.
 TEST(JitValue, NoCacheDirectoryWritesNothing) {
   const auto dir =
       cache_dir("absent");
@@ -875,30 +825,25 @@ TEST(JitValue, NoCacheDirectoryWritesNothing) {
   EXPECT_FALSE(std::filesystem::exists(dir));
 }
 
-// Nothing is kept unless it was asked for: machine code held for the life of
-// every kernel is not a default anyone should pay.
-TEST(JitValue, AnObjectIsNotKeptUnlessAsked) {
+// Kept by default, and dropped only where a caller says it will never save.
+TEST(JitValue, AnObjectIsKeptUnlessRefused) {
   Builder<> b;
   const auto x = var(b, "x");
-  const auto k = must_compile(Graph<>::freeze(b, std::array{(x * x).id(b)}));
-  EXPECT_TRUE(k.object().empty());
+  const auto g = Graph<>::freeze(b, std::array{(x * x).id(b)});
+  EXPECT_FALSE(must_compile(g).object().empty());
+  EXPECT_TRUE(
+      must_compile(g, ddx::jit::Options{.retain_object = false}).object().empty());
 }
 
 // The symbol is the one thing adopt() takes from the caller and cannot check
-// against the object, so what stops a forged one is that the lookup is scoped to
-// the dylib the object went into.  Resolved through the link order instead, a
-// forged name would find some *other* function and `toPtr<function_type>()`
-// would hand it back to be called under the five-pointer kernel ABI -- which on
-// SysV neither crashes nor writes anything, so the caller gets untouched output
-// buffers and no diagnostic.  Silent wrong answers, which is worse than a fault.
+// against the object, so what stops a forged one is the lookup being scoped to
+// the object's own dylib.  Through the link order a forged name would find some
+// *other* function and be called under the kernel ABI -- which on SysV neither
+// crashes nor writes, so the caller gets untouched buffers and no diagnostic.
 //
-// The scoping already closes it.  This test exists because widening that lookup
-// would look like a simplification -- and it does bite: swapping
-// `lookup(*jd, symbol)` for `lookup(symbol)` fails this test on `memcpy`, which
-// the process generator resolves.  `memcpy` is the case doing the work: measured
-// under that widened lookup, the libm names do *not* resolve by bare name and
-// would not have caught it.  They stay as cheap coverage of the intent, not
-// because they carry the test.
+// This exists because widening the lookup would look like a simplification.
+// `memcpy` is the case doing the work: under `lookup(symbol)` the process
+// generator resolves it, where the libm names do not resolve by bare name.
 TEST(JitValue, AForgedSymbolCannotReachThroughTheLinkOrder) {
   Builder<> b;
   const auto x = var(b, "x");
@@ -913,9 +858,8 @@ TEST(JitValue, AForgedSymbolCannotReachThroughTheLinkOrder) {
                   .adopt(compiled.object(), compiled.symbol(), 1, 1, 0, 0)
                   .has_value());
 
-  // Every one of these resolves in the main dylib -- libm through define_libm,
-  // memcpy through the process generator -- and the object itself defines none
-  // of them.
+  // Every one resolves in the main dylib -- libm through define_libm, memcpy
+  // through the process generator -- and the object defines none of them.
   for (const std::string_view forged :
        {"sin", "exp", "log", "memcpy", "ddx_kernel_999"}) {
     EXPECT_FALSE(

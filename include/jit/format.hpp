@@ -12,8 +12,6 @@ template <> struct std::formatter<ddx::jit::Ir, char> {
     return ctx.begin();
   }
 
-  // A formatter has nowhere to put an error, so a module that would not build
-  // prints why instead.
   auto format(const ddx::jit::Ir &ir, std::format_context &ctx) const {
     const auto text = ir.str();
     ddx::impl::detail::fmt_put(ctx,

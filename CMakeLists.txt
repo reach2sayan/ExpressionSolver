@@ -28,10 +28,9 @@ include(DdxCompileOptions)
 include(DdxDependencies)
 
 # --- the library ------------------------------------------------------------
-# One interface target per header directory, so that what a consumer links and
-# what they can include are the same statement.  ddx_util owns the include path
-# and everything else inherits it by linking, which keeps the install interface
-# in exactly one place.
+# One interface target per header directory, so what a consumer links and what
+# they can include are one statement.  ddx_util owns the include path and the
+# rest inherit it, which keeps the install interface in one place.
 #
 #   ddx::util      language configuration, errors, fixed strings   (leaf)
 #   ddx::ops       the operation vocabulary and its derivative rules
@@ -62,9 +61,8 @@ if (DEFINED DDX_DEDUCING_THIS_VALUE)
     target_compile_definitions(ddx_util INTERFACE DDX_DEDUCING_THIS=${DDX_DEDUCING_THIS_VALUE})
 endif ()
 
-# No Boost here, deliberately: the operation descriptors are written against
-# the concepts in ops/numeric.hpp and nothing else, which is what lets the
-# runtime graph link ops without acquiring the compile-time tree.
+# No Boost, deliberately: the descriptors are written against ops/numeric.hpp
+# alone, so the runtime graph links ops without the compile-time tree.
 add_library(ddx_ops INTERFACE)
 add_library(ddx::ops ALIAS ddx_ops)
 set_target_properties(ddx_ops PROPERTIES EXPORT_NAME ops)
@@ -75,19 +73,16 @@ add_library(ddx::md ALIAS ddx_md)
 set_target_properties(ddx_md PROPERTIES EXPORT_NAME md)
 target_link_libraries(ddx_md INTERFACE ddx_util ddx_ops)
 
-# Boost.Mp11 reaches exactly one header, symbolic/symbol.hpp, so it is declared
-# exactly here.  Boost::headers is the target because that is what a monolithic
-# BoostConfig offers for the header-only libraries, and an include path is all
-# any of them amount to.  It is carried in the export set like any other found
-# package: ddx-config.cmake finds Boost again and the name resolves.
+# Boost.Mp11 reaches exactly one header, so it is declared exactly here.
+# Boost::headers is what a monolithic BoostConfig offers, and it is carried in
+# the export set like any other found package.
 add_library(ddx_symbolic INTERFACE)
 add_library(ddx::symbolic ALIAS ddx_symbolic)
 set_target_properties(ddx_symbolic PROPERTIES EXPORT_NAME symbolic)
 target_link_libraries(ddx_symbolic INTERFACE ddx_ops ddx_md Boost::headers)
 
-# Forward mode, which every build has: ddx computes derivatives both ways and
-# the second-derivative entry points are not something a configuration takes
-# away.
+# Forward mode, which every build has: the second-derivative entry points are
+# not something a configuration takes away.
 add_library(ddx_dual INTERFACE)
 add_library(ddx::dual ALIAS ddx_dual)
 set_target_properties(ddx_dual PROPERTIES EXPORT_NAME dual)
@@ -102,10 +97,8 @@ target_link_libraries(ddx INTERFACE ddx_util ddx_ops ddx_md ddx_symbolic ddx_dua
 add_subdirectory(include)
 
 # --- libddx -----------------------------------------------------------------
-# Everything above is headers.  This is the one binary the project produces: the
-# runtime expression graph always, and the LLVM backend compiled into the same
-# library when it is asked for.  There is no second artifact -- ddx::jit names
-# the same file ddx::rt does.
+# The one binary the project produces: the runtime graph always, and the LLVM
+# backend compiled into it when asked for.  ddx::jit names the same file.
 if (DEFINED DDX_BUILD_RT AND NOT DDX_BUILD_RT)
     message(WARNING "DDX_BUILD_RT is gone: the runtime graph is always built.")
 endif ()
@@ -134,9 +127,8 @@ if (DDX_BUILD_JIT)
         set(DDX_JIT_DEFAULT_CONTRACT 0)
     endif ()
 
-    # No predefined macro carries the optimisation *level* -- GCC and Clang
-    # define only __OPTIMIZE__, and only as a yes/no -- so CMake is the one
-    # place that knows.  Never 0, which runs no IR passes at all.
+    # No predefined macro carries the optimisation *level*, only __OPTIMIZE__
+    # as a yes/no, so CMake is the one place that knows.  Never 0.
     string(TOUPPER "${CMAKE_BUILD_TYPE}" DDX_BUILD_TYPE_UPPER)
     if (DDX_BUILD_TYPE_UPPER STREQUAL "DEBUG")
         set(DDX_JIT_DEFAULT_OPT 1)
@@ -170,9 +162,8 @@ ddx_target_flags(main)
 enable_testing()
 add_subdirectory(tests)
 
-# The extension module.  After enable_testing(), because it registers pytest as
-# a test of its own; below the top-level guard, because a consumer who
-# add_subdirectory()s ddx wants the library, not a wheel's worth of bindings.
+# After enable_testing(), which it registers a pytest run with; below the
+# top-level guard, a consumer add_subdirectory()ing ddx wanting the library.
 option(DDX_BUILD_PYTHON "Build the pybind11 extension module" OFF)
 if (DDX_BUILD_PYTHON)
     ddx_use_pybind11()

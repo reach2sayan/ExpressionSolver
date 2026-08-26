@@ -8,8 +8,8 @@ import pytest
 import ddx
 
 # Every unary the library generates, against math's own.  The list is what the
-# module exports, so an opcode added to the C++ tables is covered here without
-# this file changing -- and one that stops being exported fails collection.
+# module exports, so an opcode added to the C++ tables is covered without this
+# file changing.
 UNARY = {
     "sin": math.sin,
     "cos": math.cos,

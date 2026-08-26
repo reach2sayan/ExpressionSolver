@@ -1,7 +1,6 @@
-// The part of the archive that carries no scalar: the prologue, the checksum,
-// the file itself, and the opcode label table.  Out of line for the reason
-// coupling.cpp and dot.cpp are -- it would otherwise be emitted once per scalar
-// the graph is instantiated at, for byte-identical code.
+// The part of the archive carrying no scalar: prologue, checksum, file and
+// opcode label table.  Out of line like coupling.cpp and dot.cpp, or it would be
+// emitted once per scalar for byte-identical code.
 #include "rt/archive.hpp"
 
 #include "util/ranges.hpp"
@@ -21,9 +20,8 @@
 namespace ddx::rt {
 namespace {
 
-// Fixed offsets rather than a struct laid over the bytes: the on-disk prologue
-// is not this machine's padding, and reading it must not depend on the
-// compiler's opinion of FileHeader.
+// Fixed offsets, not a struct laid over the bytes: the on-disk prologue is not
+// this machine's padding.
 inline constexpr std::size_t off_magic = 0;
 inline constexpr std::size_t off_format = 8;
 inline constexpr std::size_t off_schema = 12;
@@ -42,9 +40,8 @@ void put(std::span<std::byte> into, std::size_t at, U v) {
   std::memcpy(into.data() + at, &w, sizeof w);
 }
 
-// Per-process and per-call, in standard C++ rather than getpid(): drawn once
-// so the cost is not paid per write, and counted so one process staging two
-// files at once cannot collide with itself.
+// Per-process and per-call, in standard C++ rather than getpid(): drawn once so
+// it is not paid per write, counted so one process cannot collide with itself.
 [[nodiscard]] std::string stage_suffix() {
   static const auto salt = std::random_device{}();
   static std::atomic<std::uint32_t> seq{0};
@@ -85,8 +82,8 @@ result<FileHeader> get_header(std::span<const std::byte> bytes,
                   std::min(magic.size(), std::size_t{8})) != 0) {
     return fail(errc::bad_archive);
   }
-  // Reserved bytes are zero until something claims them, and a reader that let
-  // a nonzero one past would make claiming them a silent format change.
+  // Letting a nonzero reserved byte past would make claiming it later a silent
+  // format change.
   if (!std::ranges::all_of(bytes.subspan(off_reserved, header_bytes -
                                                            off_reserved),
                            [](std::byte b) { return b == std::byte{}; })) {
@@ -106,14 +103,10 @@ result<FileHeader> get_header(std::span<const std::byte> bytes,
                          get<std::uint64_t>(bytes, off_payload_bytes),
                      .payload_crc = get<std::uint32_t>(bytes, off_payload_crc)};
 
-  // The payload cannot be longer than the file that carries it.  Checked here
-  // rather than at the far end, so a truncated file is refused before anything
-  // sizes a buffer from it.
-  //
-  // This depends on the `bytes.size() < header_bytes` rejection above having
-  // already happened: `bytes.size() - header_bytes` is unsigned, so on a
-  // shorter file it underflows to about 2^64 and this test passes for any
-  // payload length at all.  The order is load-bearing, not stylistic.
+  // The payload cannot be longer than the file that carries it, checked before
+  // anything sizes a buffer from it.  Depends on the `bytes.size() <
+  // header_bytes` rejection above: the subtraction is unsigned, so on a shorter
+  // file it underflows and this passes for any length at all.
   if (h.payload_bytes > bytes.size() - header_bytes) {
     return fail(errc::archive_corrupt);
   }
@@ -132,32 +125,28 @@ result<std::vector<std::byte>> read_file(const std::filesystem::path &path) {
   if (ec || !std::filesystem::is_regular_file(path, ec)) {
     return fail(errc::archive_io);
   }
-  std::ifstream in{path, std::ios::binary};
-  if (!in) {
+
+  if (std::ifstream in{path, std::ios::binary}; !in) {
     return fail(errc::archive_io);
+  } else {
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    in.read(reinterpret_cast<char *>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+    if (in.gcount() != static_cast<std::streamsize>(bytes.size())) {
+      return fail(errc::archive_io);
+    }
+    return bytes;
   }
-  std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-  in.read(reinterpret_cast<char *>(bytes.data()),
-          static_cast<std::streamsize>(bytes.size()));
-  if (in.gcount() != static_cast<std::streamsize>(bytes.size())) {
-    return fail(errc::archive_io);
-  }
-  return bytes;
+
 }
 
 result<void> write_file(const std::filesystem::path &path,
                         std::span<const std::byte> bytes) {
-  // Beside the target, not in the system temp directory: rename is only atomic
-  // within a filesystem, and a cache written across a mount boundary would
-  // silently become a copy.
-  //
-  // The suffix is unique per writer, not a bare ".tmp".  Two processes writing
-  // one cache file is an ordinary thing -- a parallel build, two workers
-  // warming the same path -- and with a shared staging name they truncate each
-  // other's partial write and then both rename it, so the guarantee this
-  // function exists to make would hold only for a single writer.  Distinct
-  // names make the loser's rename a no-op instead: last writer wins, and every
-  // reader sees one whole file or the other.
+  // Beside the target: rename is only atomic within a filesystem, and one
+  // across a mount boundary would silently become a copy.  The suffix is unique
+  // per writer -- with a shared ".tmp" two processes truncate each other's
+  // partial write and both rename it.  Distinct names make the loser's rename a
+  // no-op: last writer wins, and every reader sees one whole file.
   std::filesystem::path tmp = path;
   tmp += stage_suffix();
   std::error_code ec;
@@ -190,8 +179,8 @@ std::vector<std::string> opcode_labels() {
 }
 
 std::optional<OpCode> opcode_of(std::string_view label) {
-  // opcode_of_label() is the same lookup, but consteval -- the compile-time ops
-  // pick their enumerator this way.  A loader needs it at run time.
+  // opcode_of_label() is the same lookup, consteval; a loader needs it at run
+  // time.
   const auto row =
       std::ranges::find(detail::op_info, label, &detail::OpInfo::label);
   return row == detail::op_info.end()

@@ -29,13 +29,11 @@ template <typename Fn, impl::Numeric T>
 
 // The rule bodies are written against Numeric, so at T = RTExpression the same
 // descriptors build nodes instead of computing.  They return the adjoint
-// contribution rather than the bare partial: on the compile-time side the
-// association of `adj * dU` is what the BitExactness hash records, so the
-// multiply has to live inside the shared rule, not at the call site.
+// contribution rather than the bare partial, the association of `adj * dU`
+// being what the BitExactness hash records.
 //
-// Nothing here passes `f` to a binary rule.  The descriptors recompute it --
-// pow(l, r), hypot(l, r), l / r -- which is free on a graph, because
-// Builder::make interns the recomputed node straight back onto the primal.
+// Nothing here passes `f` to a binary rule: the descriptors recompute it, which
+// is free on a graph since Builder::make interns it back onto the primal.
 template <impl::Numeric S>
 [[nodiscard]] constexpr RTExpression<S>
 contribution(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &u,
@@ -47,9 +45,8 @@ contribution(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &u,
     return impl::detail::Desc<T>::adjoints(adj, u)[0];
     DDX_RT_UNARY_TABLE(DDX_RT_CONTRIB)
 #undef DDX_RT_CONTRIB
-    // The eighteen keep `adj * f'(u)`, already the association
-    // DDX_UNARY_MATH_OP's generated adjoints() uses, and `rule` still prefers
-    // the deriv_from_value spelling where one exists.
+    // `adj * f'(u)` is already the association DDX_UNARY_MATH_OP's generated
+    // adjoints() uses.
 #define DDX_RT_CONTRIB(fn, Op, label)                                          \
   case OpCode::Op:                                                             \
     return adj * rule<impl::detail::Op##Fn<T>>(u, f);
@@ -79,9 +76,8 @@ contributions(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &l,
   }
 }
 
-// The bare partial is the same rule seeded with a unit adjoint: Builder::make
-// fires the x*1 rule before a node exists, so this is the partial itself and
-// not a multiply by one.
+// The same rule seeded with a unit adjoint: Builder::make fires the x*1 rule
+// before a node exists, so this is the partial and not a multiply by one.
 template <impl::Numeric S>
 [[nodiscard]] constexpr RTExpression<S>
 partial(OpCode op, const RTExpression<S> &u, const RTExpression<S> &f) {
@@ -96,9 +92,8 @@ partials(OpCode op, const RTExpression<S> &l, const RTExpression<S> &r) {
 
 } // namespace detail
 
-// One root's row of the Jacobian.  build_jacobian_impl() below is an overload
-// set rather than two names: the number of roots picks the shape, as output_dim
-// does.
+// One root's row of the Jacobian.  build_jacobian_impl() is an overload set:
+// the number of roots picks the shape, as output_dim does.
 struct JacobianRow {
   NodeId value = no_node;      // the node for f itself
   std::vector<NodeId> partial; // one per symbol, in Builder::symbols() order
@@ -115,9 +110,8 @@ template <impl::Numeric T>
 
   const auto add_to = [&](NodeId child, const RTExpression<T> &contribution) {
     const NodeId c = contribution.id(b);
-    // What sign() -- and so abs() -- hands back.  Storing it would mark the
-    // child live and carry a zero adjoint down its whole cone, where every
-    // rule folds it away again; the traversal and the interning are the cost.
+    // What sign(), and so abs(), hands back.  Storing it would mark the child
+    // live and carry a zero adjoint down its whole cone.
     if (b.is_constant(c, T{0})) {
       return;
     }
@@ -129,9 +123,8 @@ template <impl::Numeric T>
   // Not a filtered view: the body writes adjoints into entries this traversal
   // has not reached.
   for (NodeId v = n; v-- > 0;) {
-    // no_node is "nothing reached it"; a folded Const 0 is "what reached it
-    // cancelled".  Neither contributes below, and ids are topological, so by
-    // the time the descending pass arrives every parent has had its say.
+    // no_node is "nothing reached it", a folded Const 0 is "what reached it
+    // cancelled"; neither contributes below.
     if (adj[v] == no_node || b.is_constant(adj[v], T{0})) {
       continue;
     }
@@ -168,7 +161,7 @@ template <impl::Numeric T>
 }
 
 // One pass per symbol, carrying d[v]/dx_s up the graph.  Here to check Reverse
-// against: Reverse produces fewer nodes on everything but a single variable.
+// against, which produces fewer nodes on everything but a single variable.
 template <impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow build_symbolic_jacobian(Builder<T> &b,
                                                             NodeId root) {
@@ -263,9 +256,8 @@ struct Hessian {
   Coloring coloring;
   NodeId zero = no_node;
 
-  // Scattered on read, so a caller never sees the compressed form.  Total over
-  // every (i, j): a cell no column owns has no storage at all, and answers the
-  // structural zero the colouring already promised it was.
+  // Scattered on read, so a caller never sees the compressed form: a cell no
+  // column owns has no storage and answers the colouring's structural zero.
   [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
     const std::size_t c = coloring.color[j];
     return coloring.target(c, i) == j ? compressed[coloring.column(c, i)]
@@ -285,9 +277,8 @@ template <impl::Numeric T>
             .zero = b.constant(T{0})};
 
   const std::size_t n = h.partial.size();
-  // Only the cells a column owns.  The rest were swept and thrown away by
-  // Hessian::at, which cost an output column each and a whole cone of nodes
-  // behind it -- on an arrow-shaped Hessian that is most of the graph.
+  // Only the cells a column owns: the rest cost an output column each and a
+  // whole cone of nodes behind it, which on an arrow Hessian is most of it.
   h.compressed.assign(h.coloring.cells, h.zero);
   for (const std::size_t c : std::views::iota(0uz, h.coloring.count)) {
     // Summing a colour's partials before the sweep is what makes one sweep do

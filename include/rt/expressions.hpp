@@ -23,8 +23,7 @@ namespace ddx::rt {
 template <impl::Numeric T = double> class RTExpression;
 
 // Declared ahead of RTExpression, which befriends it: `var` is where a missing
-// arena turns into a poisoned expression.  Defined below, with the arena it
-// reads.
+// arena turns into a poisoned expression.
 template <impl::Numeric T = double>
 [[nodiscard]] RTExpression<T> var(std::string_view name) noexcept;
 
@@ -59,10 +58,8 @@ public:
     return builder_ == nullptr;
   }
 
-  // Whether the symbol named no slot -- no arena was current, or the arena has
-  // been sealed -- which surfaces as that errc out of equation(), rather than
-  // as a zero where a symbol should be.  What makes one is private; asking is
-  // not.
+  // Whether the symbol named no slot -- no arena current, or a sealed one --
+  // which surfaces as an errc out of equation() rather than as a zero.
   [[nodiscard]] constexpr bool poisoned() const noexcept {
     return why_.has_value();
   }
@@ -118,15 +115,10 @@ public:
   }
 
   // Through the operators above, never into builder_ and id_ directly: form()
-  // is what propagates poison and folds two pending literals, and an in-place
-  // version that skipped it would take a poisoned accumulator, adopt the other
-  // side's arena, and answer instead of refusing.  `-=` reaches Add(l, Neg(r))
-  // for the same reason -- there is no Sub opcode, and the builder's rewrites
-  // see the shape they already see.
-  //
-  // The parameter is the class type rather than a Numeric auto: the converting
-  // constructor above already promotes `e += 2.0`, and taking it this way is
-  // what makes += accept exactly what + accepts.
+  // propagates poison and folds pending literals, where an in-place version
+  // would take a poisoned accumulator, adopt the other side's arena and answer
+  // instead of refusing.  The parameter is the class type rather than a Numeric
+  // auto, so += accepts exactly what + accepts.
   constexpr RTExpression &operator+=(const RTExpression &o) {
     return *this = *this + o;
   }
@@ -157,9 +149,8 @@ public:
 #undef DDX_RT_BINFN
 
 private:
-  // The two an Equation needs of an expression it is being built from: which
-  // arena it names, and -- through poison() -- that it names none.  `var` is
-  // where the poison is made; nothing else has cause to make one.
+  // What an Equation needs of an expression: which arena it names, and --
+  // through poison() -- that it names none.
   template <typename... Ts> friend class impl::Equation;
   template <impl::Numeric U>
   friend RTExpression<U> var(std::string_view) noexcept;
@@ -203,8 +194,7 @@ template <impl::Numeric T>
 }
 
 // The arena var() registers into while an equation() callback runs.  Thread-
-// local, and held by the same guard the drivers seed derivatives with, so
-// nesting works and an escaping exception restores the previous arena.
+// local, and held by the same guard the drivers seed derivatives with.
 namespace detail {
 
 // Spell one type N times in a pack expansion.
@@ -234,11 +224,8 @@ template <impl::Numeric T>
 
 namespace ddx::impl {
 // A node stands for a value in S, so its product commutes exactly when S's
-// does -- and Builder::make already canonicalises Mul operands by asking the
-// same question of the scalar.  Load-bearing rather than decorative:
-// DivideOpFn asks it to pick between the two spellings of the quotient rule,
-// and without this an RTExpression<double> graph would answer as though its
-// scalar did not commute.
+// does.  Load-bearing: DivideOpFn asks it to pick between the two spellings of
+// the quotient rule.
 template <Numeric S>
 inline constexpr bool is_commutative_multiply_v<rt::RTExpression<S>> =
     is_commutative_multiply_v<S>;

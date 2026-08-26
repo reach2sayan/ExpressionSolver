@@ -32,39 +32,28 @@
 #include <utility>
 #include <vector>
 
-// A built equation, on disk.  What is saved is the *arena and the sweeps*, not
-// a frozen Graph: rt::evaluate_* all take a Builder, the interpreter's tape is
-// sized by the arena, and a Graph's CSR, liveness and contracted order are all
-// derived -- freeze() rebuilds them in one linear pass.  What cannot be
-// recovered from a Graph is the Hessian colouring, since coupling_pattern reads
-// a Builder, so that is in the file.
+// A built equation on disk: the arena and the sweeps, not a frozen Graph, which
+// freeze() rebuilds in one pass.  The colouring is in the file because
+// coupling_pattern reads a Builder.
 //
-// Boost.Serialization is not used, and cannot be: it is a compiled library
-// where every other Boost here is header-only, and its sole error channel is
-// throwing, which src/rt/boost_no_exceptions.cpp turns into abort().  Nothing
-// below hands a byte to a container before the checksum and the structural
-// invariants have passed, because there is no throw to catch.
+// Not Boost.Serialization: a compiled library whose only error channel is
+// throwing, which aborts here.  Nothing below hands a byte to a container
+// before the checksum and the invariants pass.
 namespace ddx::rt {
 
-// Machine code for one lane, and everything that has to agree before it may be
-// run.  Best-effort throughout: a mismatch means recompile, never an error.
+// One lane's machine code, and what must agree before it runs; a mismatch means
+// recompile, never an error.
 struct Object {
   std::uint8_t want = 0; // Equation's Want: values, jacobian, hessian
-  // The name the code is linked under.  Chosen by the compile and derivable
-  // from nothing, so adopt() has to be handed it back verbatim.
-  std::string symbol;
-  // jit::Compiler::host_identity() -- triple, CPU, folded feature set and LLVM
-  // version, as one string so a miss can be explained rather than merely
-  // detected.
+  std::string symbol; // underivable, so adopt() is handed it back verbatim
+  // jit::Compiler::host_identity(): triple, CPU, folded features, LLVM version.
   std::string host;
   std::uint64_t digest = 0; // digest() of the lane's frozen graph
   jit::Options options;
   std::vector<std::byte> code;
 };
 
-// The whole of what two equations -- the C++ facade and PyEquation -- have in
-// common, and therefore the only thing this file serialises.  Both fill one in
-// to save and consume one to load; the serialiser is written once, here.
+// All the C++ facade and PyEquation share, and so the only thing serialised.
 template <impl::Numeric T> struct Snapshot {
   std::vector<std::string> symbols;
   std::vector<Node<T>> nodes;
@@ -72,9 +61,7 @@ template <impl::Numeric T> struct Snapshot {
   Jacobian jacobian;
   std::vector<Hessian> hessians;
   jit::Options options;
-  // The arena as it stood before the sweeps appended to it.  The staleness
-  // key: a caller who rebuilds the model gets the same prefix back, and the
-  // sweeps are exactly what it does not want to redo.
+  // The staleness key: rebuilding the model reproduces this prefix.
   std::uint32_t model_nodes = 0;
   std::vector<Object> objects;
 };
@@ -83,19 +70,12 @@ template <impl::Numeric T> struct Snapshot {
 
 // --- the described field lists ----------------------------------------------
 //
-// Here rather than beside each struct, so builder.hpp, derivative.hpp and
-// coupling.hpp keep needing nothing but ddx itself -- the layering
-// include/rt/CMakeLists.txt states.  A field added to one of them and not
-// listed here is safe rather than silent: these names are folded into the
-// schema stamp, so a changed struct refuses old files instead of misreading
-// them.  Class templates cannot take BOOST_DESCRIBE_STRUCT, hence the three
-// member macros spelled out.
+// Here rather than beside each struct, so builder.hpp and its neighbours need
+// nothing but ddx.  Folded into the schema stamp, so an unlisted field refuses
+// old files.  Class templates cannot take BOOST_DESCRIBE_STRUCT.
 namespace ddx::jit {
-// Identity, not policy.  `retain_object` and `cache_dir` are deliberately
-// absent: two compiles differing only in whether the bytes were kept, or in
-// where a cache lives, produce the same machine code, so neither may enter a
-// key that decides whether stored code may be run.  Everything that does
-// change the code is here.
+// Identity, not policy: two compiles differing only in `retain_object` or
+// `cache_dir` emit the same machine code.
 BOOST_DESCRIBE_STRUCT(Options, (),
                       (backend, points, lanes, opt_level, codegen_level, slp,
                        loop_vectorize, veclib, contract, time_passes))
@@ -122,12 +102,8 @@ BOOST_DESCRIBE_STRUCT(Coloring, (), (color, count, scatter, cell, cells))
 BOOST_DESCRIBE_STRUCT(Object, (),
                       (want, symbol, host, digest, options, code))
 
-// Equal in everything that decides what machine code a compile emits, which is
-// the described fields above -- and so deliberately not `retain_object` or
-// `cache_dir`.  jit::Options::operator== compares those two as well, and a
-// stored kernel must not be refused because the caller has since asked for the
-// bytes to be kept, or pointed a cache somewhere else.  The describe list is
-// the definition of identity here, and this is what reads it.
+// The described fields only: jit::Options::operator== compares the policy ones
+// too, and a stored kernel must not be refused for those.
 [[nodiscard]] inline bool same_codegen(const jit::Options &a,
                                        const jit::Options &b) {
   bool same = true;
@@ -142,14 +118,12 @@ BOOST_DESCRIBE_STRUCT(Object, (),
 inline constexpr std::string_view graph_magic = "ddxgraph";
 inline constexpr std::size_t header_bytes = 56;
 
-// Every integer on the wire is little-endian and fixed-width, so the graph half
-// of a file is portable.  size_t is the one host type the format leans on, and
-// the tree is -march=x86-64-v3 or better, so it is pinned rather than encoded.
+// Little-endian and fixed-width throughout, so the graph half is portable;
+// size_t is the one host type it leans on.
 static_assert(sizeof(std::size_t) == 8);
 
-// The fixed prologue of a ddx on-disk artefact.  Public because the JIT's
-// object cache writes its own entries behind the same prologue with its own
-// magic and its own `format` counter -- one convention, two producers.
+// Public because the JIT's object cache writes behind the same prologue, with
+// its own magic and `format`.
 struct FileHeader {
   std::string_view magic = graph_magic;
   std::uint32_t format = 0;
@@ -163,13 +137,9 @@ struct FileHeader {
   std::uint32_t payload_crc = 0;
 };
 
-// Bumped by hand when the layout changes in a way the schema stamp cannot see
-// -- a reordered section, a new prologue field, or a change in what the
-// checksum covers.  2: the checksum covers the opcode table as well as the
-// payload.  At 1 it did not, and a single-bit flip in a label silently remapped
-// an opcode: '+' is 0x2B and '/' is 0x2F, one bit apart and the same arity, so
-// every Add in a file became a Div, `sound()` saw nothing wrong, and a gradient
-// came back quietly wrong.
+// Bumped by hand for what the schema stamp cannot see: a reordered section, a
+// new prologue field, a change in coverage.  2 put the opcode table under the
+// checksum; at 1 a flipped label remapped '+' to '/'.
 inline constexpr std::uint32_t graph_format = 2;
 
 DDX_API void put_header(const FileHeader &h, std::span<std::byte> into);
@@ -177,15 +147,13 @@ DDX_API result<FileHeader> get_header(std::span<const std::byte> bytes,
                                       std::string_view magic);
 DDX_API std::uint32_t checksum(std::span<const std::byte> bytes);
 DDX_API result<std::vector<std::byte>> read_file(const std::filesystem::path &);
-// Written beside the target and renamed over it, so a reader never sees a
-// half-written file and a failed save leaves the old one standing.
+// Staged beside the target and renamed over it: a reader never sees a
+// half-written file, and a failed save leaves the old one standing.
 DDX_API result<void> write_file(const std::filesystem::path &,
                                 std::span<const std::byte>);
 
-// This build's opcode labels, and the inverse a loader needs.  OpCode's byte
-// values are table-order (rt/opcode.hpp), so appending a transcendental shifts
-// every enumerator above it: the file stores labels and remaps on load, which
-// is what keeps old files readable across exactly that change.
+// Byte values are table-order, so appending a transcendental shifts every
+// enumerator above it; the file names them by label and remaps on load.
 DDX_API std::vector<std::string> opcode_labels();
 DDX_API std::optional<OpCode> opcode_of(std::string_view label);
 
@@ -193,9 +161,8 @@ namespace detail {
 
 // --- wire scalars -----------------------------------------------------------
 
-// Fixed width by size, not by name: uint32_t and unsigned are the same type on
-// one platform and different on another, so naming them would be a redefinition
-// here and a gap there.
+// By size, not by name: uint32_t and unsigned are the same type on one platform
+// and different on another.
 template <std::size_t N>
 using wire_uint_t = std::conditional_t<
     N == 1, std::uint8_t,
@@ -266,8 +233,7 @@ public:
     out_->insert(out_->end(), p, p + v.size() * sizeof(E));
   }
 
-  // A Writer cannot run short.  It answers anyway, because that is what lets
-  // one traversal drive both sinks.
+  // A Writer cannot run short; it answers so one traversal drives both sinks.
   [[nodiscard]] static constexpr bool ok() noexcept { return true; }
 
 private:
@@ -284,8 +250,8 @@ public:
          std::span<const std::uint8_t> remap) noexcept
       : in_(from), remap_(remap) {}
 
-  template <CWireScalar U> void scalar(U &v) {
-    using S = std::remove_cvref_t<U>;
+  void scalar(CWireScalar auto &v) {
+    using S = std::remove_cvref_t<decltype(v)>;
     wire_uint_t<sizeof(S)> w{};
     if (!take(&w, sizeof w)) {
       return;
@@ -340,9 +306,8 @@ public:
     (void)take(v.data(), n * sizeof(E)); // credible() bounded the product
   }
 
-  // A length the remaining bytes could not possibly back.  Checked before every
-  // resize: a plausible-but-enormous length is the one corruption that would
-  // otherwise allocate wildly, and there is no bad_alloc to catch here.
+  // Before every resize: an enormous length allocates wildly, and there is no
+  // bad_alloc to catch.
   template <typename V> void resize(V &v, std::size_t n) {
     if (!credible(n, element_floor<typename V::value_type>())) {
       bad_ = true;
@@ -356,8 +321,7 @@ public:
   [[nodiscard]] std::size_t remaining() const noexcept { return in_.size(); }
 
 private:
-  // The fewest bytes one element can occupy on the wire.  A string or a vector
-  // still costs its own length field, so nothing is free.
+  // The fewest bytes an element can occupy: a string still costs its length.
   template <typename U> [[nodiscard]] static constexpr std::size_t
   element_floor() noexcept {
     if constexpr (CWireScalar<U>) {
@@ -390,15 +354,9 @@ template <typename V> constexpr bool is_vector_v = false;
 template <typename U, typename A>
 constexpr bool is_vector_v<std::vector<U, A>> = true;
 
-// Whether a whole vector of these is the same bytes as the elements one at a
-// time -- in which case it moves in one memcpy rather than one per element.
-// The colouring is why this is worth having: `scatter` and `cell` are each
-// colours * n of them, so a graph over 256 symbols carries a megabyte that
-// would otherwise cross the boundary eight bytes at a time.
-//
-// The file does not change: this is the same little-endian, fixed-width layout
-// the element loop writes, which is why a big-endian host may simply fall
-// through to that loop and still read the same file.
+// Whether a vector moves in one memcpy, which the colouring's colours * n tables
+// are what make worth having.  Same bytes either way, so a big-endian host falls
+// through to the loop and reads the same file.
 template <typename E>
 constexpr bool bulk_v =
     CWireScalar<E> && !std::same_as<E, OpCode> && !std::same_as<E, bool> &&
@@ -407,14 +365,10 @@ constexpr bool bulk_v =
 
 // --- the one traversal ------------------------------------------------------
 
-// A described aggregate is its fields in order, a vector is its length then its
-// elements, a string and a blob carry their own length, and everything else is
-// a fixed-width scalar.  Both sinks answer the same calls, so this is written
-// once and read both ways -- which is the whole reason the format has no second
-// implementation to drift from.
-//
-// `V` carries const on the writing pass and not on the reading one; the two
-// differ only in whether a vector's length is written or resized to.
+// A described aggregate is its fields in order, a vector its length then its
+// elements, a string and a blob their own length, everything else a scalar.
+// Both sinks answer the same calls, so there is no second implementation to
+// drift from; `V` is const on the writing pass only.
 template <typename Sink, typename V> void wire(Sink &s, V &v) {
   using U = std::remove_const_t<V>;
   if constexpr (std::same_as<U, std::string> ||
@@ -427,9 +381,8 @@ template <typename Sink, typename V> void wire(Sink &s, V &v) {
   } else if constexpr (CWireScalar<U>) {
     s.scalar(v);
   } else if constexpr (is_vector_v<U>) {
-    // Nested rather than one `&&`: the bulk test names U::value_type, which a
-    // non-vector U does not have, and a template argument is instantiated
-    // whether or not the left of the && already settled it.
+    // Nested, not one `&&`: the bulk test names U::value_type and both
+    // arguments would be instantiated.
     if constexpr (bulk_v<typename U::value_type>) {
       s.array(v);
     } else {
@@ -469,10 +422,8 @@ constexpr void fold32(std::uint32_t &h, std::string_view s) noexcept {
   }
 }
 
-// Every described field name and every leaf's wire width, folded in traversal
-// order.  A renamed, reordered, retyped or added field changes this, and the
-// prologue carries it, so a file written before the change is refused rather
-// than read as though nothing had moved.
+// Field names and leaf widths folded in traversal order and carried in the
+// prologue, so a moved or retyped field refuses old files.
 template <typename V> constexpr void fold_schema(std::uint32_t &h) {
   using U = std::remove_const_t<V>;
   if constexpr (std::same_as<U, std::string>) {
@@ -511,12 +462,8 @@ template <typename V> [[nodiscard]] constexpr std::uint32_t schema_of() {
 
 // --- what a loaded snapshot has to satisfy ----------------------------------
 
-// Every check here is an invariant that the interpreter, the liveness walk and
-// codegen all rely on and none of them re-tests, because until now nothing
-// could build a graph that broke one.  tests/rt/tests_rt_graph.cpp asserts the
-// same set on a freshly frozen graph.  A template rather than an out-of-line
-// DDX_API function because it needs the node array and drags in no Boost.Graph
-// -- which is the only reason coupling.cpp and dot.cpp are compiled at all.
+// What the interpreter, the liveness walk and codegen rely on and none re-tests:
+// until a file, nothing could build a graph that broke one.
 template <impl::Numeric T>
 [[nodiscard]] result<void> sound(const Snapshot<T> &s) {
   const auto n = s.nodes.size();
@@ -530,8 +477,8 @@ template <impl::Numeric T>
 
   for (const auto [i, node] : s.nodes | std::views::enumerate) {
     const auto arity = arity_of(node.op);
-    // Ids are topological -- every operand strictly below its reader.  This is
-    // the one invariant the whole runtime single-passes on.
+    // Topological: every operand strictly below its reader, which is what the
+    // runtime single-passes on.
     const bool a_ok = arity >= 1 ? node.a < static_cast<NodeId>(i)
                                  : node.a == no_node;
     const bool b_ok = arity == 2 ? node.b < static_cast<NodeId>(i)
@@ -544,9 +491,8 @@ template <impl::Numeric T>
     }
   }
 
-  // Interning leaves exactly one Var node per symbol, and Builder::restore
-  // rebuilds its slot-addressed vars_ by walking for them -- a symbol named by
-  // none would leave a no_node there for var() to hand back later.
+  // Builder::restore walks for them, so a symbol named by no Var leaves a
+  // no_node for var() to hand back.
   std::vector<std::uint32_t> named(nsym, 0);
   for (const auto &node : s.nodes) {
     if (node.op == OpCode::Var) {
@@ -562,17 +508,14 @@ template <impl::Numeric T>
       !std::ranges::all_of(s.jacobian.partial, in_range)) {
     return fail(errc::archive_corrupt);
   }
-  // The order here is load-bearing, not stylistic: `||` short-circuits, so
-  // `rows` and `columns` are pinned to lengths this file actually has before
-  // anything multiplies them.  Reversed, the product would be two unchecked
-  // payload scalars and could wrap into agreeing with `partial.size()` -- which
-  // is the hole the colouring's `count` had.  Leave them first.
+  // Load-bearing order: `||` short-circuits, so `rows` and `columns` are pinned
+  // before anything multiplies them, the product otherwise being two unchecked
+  // payload scalars that can wrap into agreeing.
   if (s.jacobian.rows != s.roots.size() || s.jacobian.columns != nsym ||
       s.jacobian.partial.size() != s.jacobian.rows * s.jacobian.columns) {
     return fail(errc::archive_corrupt);
   }
-  // A Hessian per root, or none at all: an equation constant-evaluated its way
-  // past the sweeps, and a loaded one may not have been asked for them.
+  // One per root, or none: a constant-evaluated equation never swept them.
   if (!s.hessians.empty() && s.hessians.size() != s.roots.size()) {
     return fail(errc::archive_corrupt);
   }
@@ -584,16 +527,11 @@ template <impl::Numeric T>
         !std::ranges::all_of(h.compressed, in_range)) {
       return fail(errc::archive_corrupt);
     }
-    // `count` is read straight from the payload and is bounded by nothing yet,
-    // so `count * nsym` is checked by division first: the product is exactly
-    // where a forged count wraps and agrees with a length it has no business
-    // agreeing with.  Reachable only by forgery -- the checksum stops every
-    // damaged file long before this -- which is the point.  A checksum detects
-    // accidents; it does not make the payload trustworthy, and everything the
-    // payload is then indexed by has to be checked as though it were hostile.
+    // `count` comes straight off the payload, so `count * nsym` is checked by
+    // division -- the product is where a forged count wraps into agreeing.  A
+    // checksum detects accidents, it does not confer trust.
     const auto sized = [nsym, &c](const std::vector<std::size_t> &v) {
-      // Colours over no symbols are no colours; the tables are empty either
-      // way, so nothing would otherwise pin `count` at all.
+      // Colours over no symbols are no colours; nothing else pins `count`.
       return nsym == 0 ? v.empty() && c.count == 0
                        : c.count <= v.size() / nsym && v.size() == c.count * nsym;
     };
@@ -606,11 +544,8 @@ template <impl::Numeric T>
         })) {
       return fail(errc::archive_corrupt);
     }
-    // `cells` is the compressed block's width, and every cell a column owns
-    // must name a slot inside it -- two cells sharing one would sum two
-    // second derivatives into a single output column.
-    // Same order dependency: `cells` is pinned against a count over `cell`
-    // before anything indexes with it.
+    // Every cell must name a slot inside the compressed block: two sharing one
+    // would sum two second derivatives into a single column.  Pinned first.
     const auto owned = std::ranges::count_if(
         c.cell, [](std::size_t k) { return k != no_column; });
     if (c.cells != static_cast<std::size_t>(owned) ||
@@ -628,9 +563,8 @@ template <impl::Numeric T>
   return {};
 }
 
-// Builder's side of the loader.  A struct rather than a friended function
-// template, so builder.hpp forward-declares an empty type and gains no include
-// for it.
+// Builder's side of the loader.  A struct, not a friended function template, so
+// builder.hpp forward-declares an empty type and gains no include.
 struct Restore {
   template <impl::Numeric T>
   static void into(Builder<T> &b, std::vector<Node<T>> nodes,
@@ -641,9 +575,7 @@ struct Restore {
 
 } // namespace detail
 
-// The arena a snapshot describes.  Owning, because a loaded equation has no
-// caller's arena to borrow and nothing else refers to this one.  The snapshot
-// is consumed: its node array *is* the arena's.
+// Owning, and it consumes the snapshot: the node array *is* the arena's.
 template <impl::Numeric T>
 [[nodiscard]] std::unique_ptr<Builder<T>> rebuild(Snapshot<T> &snap) {
   auto arena = std::make_unique<Builder<T>>();
@@ -661,9 +593,8 @@ constexpr void fold64(std::uint64_t &h, std::uint64_t w) noexcept {
   }
 }
 
-// The model as the file keys on it: the symbols, then the arena up to `upto`.
-// Field by field, never a memcpy of the node -- Node<double> is 24 bytes with
-// interior padding, so a struct blit is not reproducible.
+// The model as the file keys on it: symbols, then the arena up to `upto`.
+// Field by field, never a memcpy -- Node<double> has interior padding.
 template <impl::Numeric T>
 [[nodiscard]] std::uint64_t digest(std::span<const std::string> symbols,
                                    std::span<const Node<T>> nodes,
@@ -687,12 +618,9 @@ template <impl::Numeric T>
   return h;
 }
 
-// One frozen lane, keyed on exactly what codegen reads of it -- so a consumer
-// can tell that a compile is already done *before* emitting a module, rather
-// than after.  Node ids are assigned in construction order, so this is a
-// within-one-binary key: gcc and clang number the same graph differently, and
-// so would two ddx builds that construct it differently.  A stale key must
-// therefore be a miss, never a reinterpretation.
+// Keyed on what codegen reads of a lane, so a consumer sees a compile is done
+// *before* emitting a module.  Ids are construction-ordered, making this a
+// within-one-binary key, so a stale one must be a miss.
 template <impl::Numeric T>
 [[nodiscard]] std::uint64_t digest(const Graph<T> &g) {
   std::uint64_t h = fnv64_seed;
@@ -734,9 +662,8 @@ template <std::floating_point T>
   detail::Writer tw{table};
   std::ranges::for_each(labels, [&tw](const std::string &l) { tw.text(l); });
 
-  // The table and the payload are checksummed together.  The table is not
-  // decoration: it is what every opcode byte in the payload *means*, so leaving
-  // it outside the checksum let one flipped bit reinterpret the whole graph.
+  // Together: the table is what every opcode byte *means*, so outside the
+  // checksum one flipped bit reinterprets the graph.
   std::vector<std::byte> body = table;
   body.insert(body.end(), payload.begin(), payload.end());
 
@@ -774,8 +701,7 @@ template <std::floating_point T>
   return head;
 }
 
-// Not spelled `load`: rt::load<T, Outputs>() is the one a caller reaches for,
-// and it answers with an Equation.  This is the layer under it.
+// Not `load`: that is rt::load<T, Outputs>(), which answers with an Equation.
 template <std::floating_point T = double>
 [[nodiscard]] result<Snapshot<T>>
 load_snapshot(const std::filesystem::path &path) {
@@ -788,10 +714,7 @@ load_snapshot(const std::filesystem::path &path) {
     return std::unexpected{head.error()};
   }
 
-  // The checksum first, over the table and the payload together, and before a
-  // single byte of either is parsed.  The old order read the table out of
-  // unverified bytes -- and since the table decides what every opcode in the
-  // payload means, that was the one section where corruption changed the
+  // Before a byte of either is parsed: corruption in the table changes the
   // graph's meaning rather than breaking it.
   std::span<const std::byte> body = std::span{*bytes}.subspan(header_bytes);
   if (checksum(body) != head->payload_crc) {
@@ -831,13 +754,9 @@ load_snapshot(const std::filesystem::path &path) {
   if (const auto why = detail::sound(snap); !why) {
     return std::unexpected{why.error()};
   }
-  // The prologue is the one region a checksum cannot cover, because the
-  // checksum lives in it -- so every field it carries is verified here, field
-  // by field, and no field is written that is not.  `model_nodes` is duplicated
-  // in the payload under the checksum and would otherwise be inert: written,
-  // never read, and one edit away from being read and trusted.  Inert but
-  // unprotected is the state a field is in immediately before it is protected
-  // and wrong.
+  // The one region a checksum cannot cover, so every field is verified and none
+  // is written that is not.  `model_nodes` is duplicated under the checksum and
+  // would otherwise be written, never read, and one edit from being trusted.
   if (head->model_nodes != snap.model_nodes ||
       snap.model_nodes > snap.nodes.size() ||
       digest<T>(snap.symbols, snap.nodes, snap.model_nodes) !=
@@ -847,9 +766,8 @@ load_snapshot(const std::filesystem::path &path) {
   return snap;
 }
 
-// Whether this file is one this build can read at all: the prologue, the
-// checksum and the structural invariants.  It says nothing about *which*
-// equation it holds -- Equation::verify() answers that.
+// Whether this build can read the file at all: prologue, checksum, structural
+// invariants.  *Which* equation it holds is Equation::verify().
 template <std::floating_point T = double>
 [[nodiscard]] result<void> verify(const std::filesystem::path &path) {
   return load_snapshot<T>(path).transform([](const Snapshot<T> &) {});

@@ -42,10 +42,8 @@ public:
   constexpr explicit Dual(T v, T d = T{}) noexcept : val_(v), deriv_(d) {}
   constexpr Dual(CArithmetic auto s) noexcept : val_(T(s)), deriv_(T{}) {}
 
-  // Gated on what the binary operators below take, rather than on Numeric:
-  // the body is `*this + o`, so anything looser only moves the refusal from
-  // the call site into here.  TaylorDual's four match its own operators the
-  // same way, which is why they take the class type and no scalar.
+  // Gated on what the binary operators below take rather than on Numeric: the
+  // body is `*this + o`, so anything looser only moves the refusal here.
   template <typename B>
     requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
   constexpr Dual &operator+=(const B &o) noexcept {
@@ -73,9 +71,9 @@ public:
   }
 
 private:
-  // The one place the value category has to be right: a member of an rvalue
-  // Dual is an rvalue, and the parentheses are what make decltype(auto) a
-  // reference rather than a copy.  std::forward_like is libstdc++ 14.
+  // The one place the value category has to be right: the parentheses are what
+  // make decltype(auto) a reference rather than a copy.  forward_like is
+  // libstdc++ 14.
   template <std::size_t Index>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     static_assert(Index < 2, "Dual index out of bounds");
@@ -342,8 +340,8 @@ constexpr auto pow(A &&a, B &&b) noexcept {
 }
 
 // pow(a, s), s constant.  d(a^s) = s a^(s-1) a', a second pow rather than
-// a^s (s a'/a): the quotient form is 0/0 at av == 0 where this one is exact,
-// and with no log a negative av with an integral exponent stays finite.
+// a^s (s a'/a): the quotient is 0/0 at av == 0 where this is exact, and with no
+// log a negative av with an integral exponent stays finite.
 template <DualLike A, CArithmetic U> constexpr auto pow(A &&a, U s) noexcept {
   using std::pow;
   if constexpr (std::unsigned_integral<std::remove_cvref_t<U>>) {
@@ -372,9 +370,7 @@ template <DualLike A, CArithmetic U> constexpr auto pow(U s, A &&a) noexcept {
 namespace detail {
 // A tie averages and an unordered pair is (a-b)*0, NaN from either side: both
 // symmetric, hence stable under the builder's commutative reordering.  The dual
-// is always the left operand, so neither the tie nor the NaN depends on which
-// of the six spellings the caller reached.  val() of an arithmetic is itself,
-// which is what lets the scalar forms share the walk.
+// is always the left operand, so neither depends on which spelling was used.
 template <bool IsMax, DualLike A, typename B>
 constexpr auto extremum(A &&a, const B &other) noexcept {
   using DT = std::remove_cvref_t<A>;

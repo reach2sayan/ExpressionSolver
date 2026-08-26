@@ -39,9 +39,8 @@ template <impl::Numeric T>
                                             std::string_view name);
 
 // A multiply and an add taken as one rounding: x * y + z, with x negated where
-// the multiply reached the add through a Neg -- which is what a subtraction
-// builds.  Named by the add; the multiply is a node like any other, and stops
-// being emitted only where nothing else reads it.
+// the multiply reached the add through a Neg, which is what a subtraction
+// builds.  Named by the add.
 struct Contraction {
   NodeId x = no_node;
   NodeId y = no_node;
@@ -61,8 +60,7 @@ namespace detail {
 struct Restore;
 
 // Ids are topological, so one descending pass settles it.  Not a filtered view:
-// the body marks entries the pass has not reached, which a lazy filter would
-// read mid-write.  Operand access is the caller's.
+// the body marks entries the pass has not reached.
 [[nodiscard]] constexpr std::vector<bool>
 reachable(std::size_t n, std::span<const NodeId> roots, auto &&operands_of) {
   std::vector<bool> live(n, false);
@@ -138,11 +136,9 @@ public:
   }
 
 private:
-  // A slot is the symbol's place in the alphabet, which is the order the
-  // compile-time Equation<...>::symbols is in and the order a positional point
-  // is read in.  Naming one out of order lifts the slots above it: a walk over
-  // vars_, since interning leaves exactly one Var node per symbol.  One caller,
-  // which is what keeps that walk answerable.
+  // A slot is the symbol's place in the alphabet, which is the order a
+  // positional point is read in.  Naming one out of order lifts the slots above
+  // it, which is the walk over vars_ -- interning leaving one Var per symbol.
   template <impl::Numeric U>
   friend constexpr RTExpression<U> var(Builder<U> &, std::string_view);
   [[nodiscard]] constexpr NodeId variable(std::string_view name) {
@@ -151,9 +147,9 @@ private:
     if (at != symbols_.end() && *at == name) {
       return vars_[slot];
     }
-    // A new symbol moves the slots above it, which an Equation that has
-    // already frozen a lane cannot follow.  no_node, which var() turns into a
-    // poisoned expression: naming one again is free, adding one is not.
+    // A new symbol moves the slots above it, which an Equation that has already
+    // frozen a lane cannot follow.  Naming one again is free, adding one is
+    // not; var() turns the no_node into a poisoned expression.
     if (sealed_) {
       return no_node;
     }
@@ -166,22 +162,16 @@ private:
     return vars_[slot];
   }
 
-  // One way, and one caller: the Equation that takes this arena over makes its
-  // symbols final, so the numbering its lanes are frozen against is the
-  // numbering symbols() reports for good.  Building more expressions over the
-  // symbols already here stays open.
+  // One caller: the Equation taking this arena over, so the numbering its lanes
+  // freeze against is the one symbols() reports for good.  Building more
+  // expressions over the symbols already here stays open.
   template <typename... Ts> friend class impl::Equation;
   constexpr void seal() noexcept { sealed_ = true; }
 
-  // An arena as it was, not as make() would form it again.  A saved node
-  // stream cannot be replayed through make(): it folds, and it swaps a
-  // commutative pair, so the ids would come back different -- and here an id
-  // *is* the identity of a subexpression, which the saved sweeps name by
-  // number.  Sealed on arrival, because a loaded arena's numbering is the one
-  // its Jacobian and its colouring were already built against.
-  //
-  // The one caller is the loader, which has checked the invariants this cannot
-  // -- ids topological, slots in range, one Var per symbol.
+  // An arena as it was, not as make() would form it again: make() folds and
+  // swaps commutative operands, and here an id *is* the identity of a
+  // subexpression, which the saved sweeps name by number.  Sealed on arrival.
+  // The one caller is the loader, which has checked what this cannot.
   friend struct detail::Restore;
   constexpr void restore(std::vector<Node<T>> nodes,
                          std::vector<std::string> symbols) {
@@ -242,8 +232,8 @@ private:
     return static_cast<std::size_t>(h);
   }
 
-  // The linear probe run from a hash, written once.  Unbounded because the
-  // table is kept at most half full: every run reaches an empty slot.
+  // Unbounded because the table is kept at most half full: every run reaches an
+  // empty slot.
   constexpr auto probe(std::size_t h) const {
     return std::views::iota(h) |
            std::views::transform(
@@ -252,7 +242,7 @@ private:
 
   constexpr void rehash() {
     // bit_ceil, not doubling: the size is the invariant the mask needs, and
-    // half full is the load factor linear probing degrades sharply past.
+    // half full is where linear probing starts to degrade.
     table_.assign(
         std::bit_ceil(std::max<std::size_t>(64, 2 * (nodes_.size() + 1))),
         no_node);
@@ -405,15 +395,13 @@ private:
   }
 
   std::vector<Node<T>> nodes_;
-  // Open-addressed by hand because interning runs inside constant evaluation
-  // and no library hash container is constexpr -- neither
-  // boost::unordered_flat_map nor std::unordered_map.
+  // Open-addressed by hand: interning runs inside constant evaluation and no
+  // library hash container is constexpr.
   std::vector<NodeId>
       table_; // power-of-two capacity; no_node marks a free slot
   std::vector<std::string> symbols_;
-  // Slot-addressed, so a renamed slot is a write here rather than a rehash:
-  // a Var node's hash goes stale as its slot moves, and nothing looks one up
-  // through the table.
+  // Slot-addressed, so a renamed slot is a write rather than a rehash: a Var
+  // node's hash goes stale as its slot moves.
   std::vector<NodeId> vars_;
   bool sealed_ = false;
 };
@@ -428,24 +416,19 @@ concept CNodeSource = requires(const S &s, NodeId v) {
   { s.size() } -> std::convertible_to<std::size_t>;
 };
 
-// fadd(fmul(x, y), z) -> fma(x, y, z): the multiply-add every backend forms
-// under -ffp-contract=fast, formed here instead so that everything reading the
-// graph forms the same ones.  Nothing else contracts -- no reassociation, and a
-// division is left alone.
+// fadd(fmul(x, y), z) -> fma(x, y, z), formed here rather than left to the
+// backend so that everything reading the graph forms the same ones.  Nothing
+// else contracts: no reassociation, and a division is left alone.
 //
-// The rule is structural: it asks the add what its operands are and nothing
-// about how many readers they have.  That is what lets the arena walk, the
-// frozen graph and the kernel agree to the bit, since only the first of the
-// three knows nothing about which nodes the others kept.  A multiply two adds
-// swallow is *not* computed twice -- an fma is the fmul and the fadd in one
-// instruction, so the count is the same either way -- and where it has a reader
-// of its own it is emitted as well, exactly as before.
+// The rule is structural -- it asks the add what its operands are and nothing
+// about how many readers they have -- which is what lets the arena walk, the
+// frozen graph and the kernel agree to the bit.  A multiply two adds swallow
+// costs nothing extra, an fma being one instruction.
 //
-// The lower-id operand wins where an add has two products, which is the slot
-// order Builder::make already sorted commutative operands into.
-template <CNodeSource Nodes>
-[[nodiscard]] constexpr Contraction contraction_at(const Nodes &nodes,
-                                                   NodeId v) {
+// The lower-id operand wins where an add has two products, which is the order
+// Builder::make already sorted commutative operands into.
+[[nodiscard]] constexpr Contraction
+contraction_at(const CNodeSource auto &nodes, NodeId v) {
   if (nodes.op_of(v) != OpCode::Add) {
     return {};
   }

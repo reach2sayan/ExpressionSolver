@@ -1,16 +1,11 @@
-# The only LLVM-aware code in the project.  include/jit/kernel.hpp names no LLVM
-# type, so nothing here escapes into a consumer's translation unit.
-#
-# An OBJECT library rather than a second shared library: ddx produces one binary,
-# libddx, and these objects are linked into it.  The indirection buys the one
-# thing a plain target_sources() on ddx_rt could not -- these files need
-# their own private include path (LLVM's), which should not reach the rest of
-# the library.
+# The only LLVM-aware code here; kernel.hpp names no LLVM type, so none escapes
+# into a consumer's TU.  An OBJECT library, not a second shared one: these link
+# into libddx, and the indirection is what gives them their own private include
+# path, which a plain target_sources() on ddx_rt could not.
 add_library(ddx_jit_objs OBJECT codegen.cpp compiler.cpp)
 
-# PIC unconditionally: required when libddx is shared, and it costs the static
-# build nothing measurable on x86-64.  Hidden visibility so what leaves libddx
-# is the list DDX_JIT_API marks and not whatever LLVM left visible.
+# PIC unconditionally: required when libddx is shared, free on x86-64 otherwise.
+# Hidden, so what leaves libddx is DDX_JIT_API's list, not LLVM's.
 set_target_properties(ddx_jit_objs PROPERTIES
         POSITION_INDEPENDENT_CODE ON
         CXX_VISIBILITY_PRESET hidden
@@ -20,40 +15,29 @@ set_target_properties(ddx_jit_objs PROPERTIES
 target_compile_definitions(ddx_jit_objs PRIVATE DDX_BUILDING ${LLVM_DEFINITIONS_LIST})
 target_include_directories(ddx_jit_objs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(ddx_jit_objs SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-# The same header dependencies ddx_rt has, not ddx_rt itself: these objects are
-# linked *into* it, so naming it here would be circular.
+# ddx_rt's header dependencies, not ddx_rt: these link *into* it.
 target_link_libraries(ddx_jit_objs PRIVATE ddx Boost::headers)
 
-# Deliberately no -fno-rtti, even against an LLVM built without it.  The flag is
-# only needed by code that derives from an LLVM polymorphic class or applies
-# typeid/dynamic_cast to one; isa<>/cast<> use LLVM's own RTTI, not the
-# language's, and nothing here inherits from LLVM.
-#
-# Exceptions are off through ddx_target_flags() like everywhere else, which
-# suits this file particularly: it is the one place the project meets LLVM, LLVM
-# is itself built -fno-exceptions -funwind-tables (llvm-config --cxxflags), and
-# nothing here throws -- llvm::Error comes out as jit::error instead.
+# No -fno-rtti, even against an LLVM built without it: the flag matters only to
+# code deriving from an LLVM polymorphic class, and isa<>/cast<> use LLVM's own
+# RTTI.  Exceptions are off as everywhere -- LLVM is built the same way, and
+# llvm::Error comes out as jit::error.
 ddx_target_flags(ddx_jit_objs)
 
-# Into libddx, and ddx::jit is that same library under the name a consumer asks
-# for the backend by.
+# Into libddx; ddx::jit is that library under the name the backend is asked for.
 target_sources(ddx_rt PRIVATE $<TARGET_OBJECTS:ddx_jit_objs>)
 add_library(ddx::jit ALIAS ddx_rt)
 
-# PUBLIC on ddx_rt: DDX_HAS_JIT unlocks jit/format.hpp's formatter for jit::Ir
-# and rt/equation.hpp's compiled batch calls, and the two defaults are read by
-# Options in a consumer's own translation unit.
+# PUBLIC: DDX_HAS_JIT unlocks the jit::Ir formatter and equation.hpp's compiled
+# batch calls, and Options reads the two defaults in a consumer's own TU.
 target_compile_definitions(ddx_rt PUBLIC
         DDX_HAS_JIT
         DDX_JIT_DEFAULT_OPT=${DDX_JIT_DEFAULT_OPT}
         DDX_JIT_DEFAULT_CONTRACT=${DDX_JIT_DEFAULT_CONTRACT})
-# The dylib where LLVM ships one, which is the difference between a library of a
-# few hundred KB and one that has swallowed LLVM's codegen archives whole.
-#
-# The static fallback has to hide what it swallowed.  A process that already has
-# LLVM loaded -- Mesa's llvmpipe and radeonsi both do -- would otherwise end up
-# with two copies of LLVM's ManagedStatic and command-line registries, which is
-# a crash rather than a diagnostic.
+# The dylib where LLVM ships one: the difference between a few hundred KB and
+# having swallowed LLVM's codegen archives.  The static fallback has to hide what
+# it swallowed -- a process that already has LLVM loaded (Mesa's llvmpipe does)
+# would get two ManagedStatic registries, which crashes rather than diagnosing.
 if (DDX_SHARED_LIBS AND LLVM_LINK_LLVM_DYLIB)
     target_link_libraries(ddx_rt PRIVATE LLVM)
 else ()

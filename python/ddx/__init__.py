@@ -35,10 +35,9 @@ if TYPE_CHECKING:
 	
 	StrPath = str | PathLike[str]
 	
-	# What the runtime adds and a generated stub cannot see: the code the
-	# exception translator attaches, the pydantic-facing members installed at
-	# the bottom of this file, and the shape of the decorator -- which the
-	# bindings hand over as py::object and so describe only as Any.
+	# What the runtime adds and a generated stub cannot see: the exception
+	# translator's code, the pydantic-facing members installed below, and the
+	# decorator, which the bindings hand over as py::object.
 	class Error(_extension.Error):
 		"""A refusal from ddx, carrying the code it refused with."""
 		code: errc

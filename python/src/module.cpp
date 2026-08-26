@@ -31,8 +31,7 @@ namespace {
 
 // The arena a model is assembled in, for the duration of the call.  Ours rather
 // than the one rt::var(name) reads, because what has to survive is the shared
-// ownership, not a raw pointer: every symbol below goes through the plain
-// two-argument rt::var.
+// ownership: every symbol below goes through the two-argument rt::var.
 thread_local std::shared_ptr<rt::Builder<double>> current_arena;
 
 // The exception type Python sees.  Deliberately leaked: it is a type object
@@ -42,9 +41,8 @@ pyb::handle error_class;
 
 [[nodiscard]] PyExpression make_var(std::string_view name) {
   if (!current_arena) {
-    // C++ carries a poison instead, because it cannot afford a branch per
-    // symbol.  Python already pays far more per call than the branch costs, and
-    // an error where the mistake is beats one at the end of the model.
+    // C++ carries a poison instead, unable to afford a branch per symbol.
+    // Python already pays more per call than the branch costs.
     fail_with(errc::no_arena);
   }
   return {rt::var(*current_arena, name), current_arena};

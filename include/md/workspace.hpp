@@ -37,9 +37,8 @@ namespace detail {
 } // namespace detail
 
 // f(x), n Jacobian entries, and n*n row-major Hessian entries: (i, j) is
-// hessian[i * n + j].  Named members rather than a tuple, since `arity` is what
-// tells a caller how to index `hessian`; the two shapes share the names so code
-// generic over both reads one way.
+// hessian[i * n + j].  Named members rather than a tuple, `arity` being what
+// tells a caller how to index `hessian`.
 struct HessianOwned {
   double value = 0.0;
   std::unique_ptr<double[]> jacobian;

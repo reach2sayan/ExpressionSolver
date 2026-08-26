@@ -1,18 +1,14 @@
 // What a compile costs as a graph grows, phase by phase.
 //
-// Not a Google Benchmark loop: each cell is compiled once, because the question
-// is the cost of the compile itself and it is measured in seconds, not
-// nanoseconds.  What matters is the exponent -- which phase is superlinear in
-// node count -- so the table prints the log-log slope against the row above.
+// Not a Google Benchmark loop: each cell is compiled once, the compile being
+// measured in seconds.  What matters is the exponent -- which phase is
+// superlinear in node count -- so the table prints the log-log slope against
+// the row above.  Sizes ascend and a model stops after the first cell over the
+// budget, a compile in progress not being abandonable.
 //
-// Sizes ascend and a model stops after the first cell over the budget, since a
-// compile in progress cannot be abandoned and the next size is only larger.
-//
-// `--ladder` asks the other question instead: not what a compile costs, but
-// whether it was worth starting.  It compiles each cell at codegen 0 and at the
-// stated level, measures both kernels and the block sweep they replace, and
-// prints how many points each has to be spread over before it has paid for
-// itself.  That is the table Backend::Compile's ladder is argued from.
+// `--ladder` asks whether a compile was worth starting: each cell at codegen 0
+// and at the stated level, both kernels and the sweep they replace, and how
+// many points each has to be spread over before it has paid for itself.
 
 #include "jit/kernel.hpp"
 #include "rt/derivative.hpp"
@@ -42,10 +38,9 @@ using ddx::rt::Builder;
 using RE = ddx::rt::RTExpression<double>;
 
 // --- the models ---------------------------------------------------------------
-// The same three shapes the comparison harness uses, thin: rss is O(n) entropy
-// with an O(n^2) interaction, uniquac nests a sum inside a log, and mse puts
-// uniquac underneath a second O(n^2) double sum.  Deterministic parameters of
-// the right magnitude; the thermodynamics is not what is being measured.
+// The same three shapes the comparison harness uses: rss is O(n) entropy with
+// an O(n^2) interaction, uniquac nests a sum inside a log, and mse puts uniquac
+// underneath a second double sum.  The thermodynamics is not what is measured.
 
 constexpr double pseudo(std::size_t i, std::size_t j, double lo, double hi) {
   const double t = static_cast<double>((i * 7919 + j * 104729) % 1000) / 1000.0;
@@ -160,9 +155,8 @@ struct Cell {
   return static_cast<double>(d.count()) / 1e6;
 }
 
-// A frozen graph and the arena it was frozen from.  The arena is kept because
-// the sweep still reads it -- a frozen graph carries the schedule, the nodes
-// stay where they were built -- and the ladder table compares the two.
+// A frozen graph and the arena it was frozen from, which the sweep still reads:
+// a frozen graph carries the schedule, the nodes stay where they were built.
 struct Frozen {
   std::unique_ptr<Builder<>> arena;
   ddx::rt::Graph<double> graph;
@@ -189,9 +183,8 @@ Frozen gradient_graph(const Model &m, std::size_t n) {
 
 
 // --- what the kernel it produced is worth ------------------------------------
-// Compile time is only half the trade: a pipeline that compiles faster and
-// produces a slower kernel is not a saving.  Min of several passes over the
-// same batch, reported per point.
+// A pipeline that compiles faster and produces a slower kernel is not a saving.
+// Min of several passes over the same batch, reported per point.
 [[nodiscard]] double kernel_ns_per_point(const ddx::jit::Kernel &k,
                                          std::size_t n, std::size_t count) {
   std::vector<std::vector<double>> in(n, std::vector<double>(count));
@@ -227,10 +220,9 @@ Frozen gradient_graph(const Model &m, std::size_t n) {
 }
 
 // --- what the sweep it replaces is worth --------------------------------------
-// The other end of the trade: a compile only repays itself against what the
-// interpreter would have cost, so the crossover has to be measured rather than
-// assumed.  This is Equation::interpret's block sweep, at the same width, so
-// the number is what a caller under Backend::Interpret actually gets.
+// A compile only repays itself against what the interpreter would have cost.
+// Equation::interpret's block sweep at the same width, so this is what a caller
+// under Backend::Interpret actually gets.
 constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
 
 [[nodiscard]] double interp_ns_per_point(const Frozen &fr, std::size_t n,
@@ -301,10 +293,9 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
 }
 
 // --- the ladder ---------------------------------------------------------------
-// What Backend::Compile would look like with a cheap rung under it.  Every
-// number in one row comes from one session against one graph, because this
-// machine moves an unchanged binary by up to 70% between runs and only a
-// within-row reading means anything.
+// What Backend::Compile looks like with a cheap rung under it.  Every number in
+// a row comes from one session against one graph: this machine moves an
+// unchanged binary by up to 70% between runs, so only within-row means anything.
 //
 //   t0/t1     compile ms at codegen 0 and at the stated level
 //   k0/k1     what each kernel is worth, ns per point

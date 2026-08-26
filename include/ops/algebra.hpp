@@ -47,31 +47,29 @@ struct Rule {
 // Order is significant: both simplifiers take the first match.
 inline constexpr std::array kRules{
     // clang-format off
-    Rule{RuleOp::Mul, Pred::ZeroA,    Take::LitZero},
-    Rule{RuleOp::Mul, Pred::ZeroB,    Take::LitZero},
-    Rule{RuleOp::Mul, Pred::OneA,     Take::OperandB},
-    Rule{RuleOp::Mul, Pred::OneB,     Take::OperandA},
-    Rule{RuleOp::Mul, Pred::AOverB,   Take::NumeratorOfA},
-    Rule{RuleOp::Mul, Pred::BOverA,   Take::NumeratorOfB, true},
+    Rule{.op = RuleOp::Mul, .when = Pred::ZeroA,  .then = Take::LitZero},
+    Rule{.op = RuleOp::Mul, .when = Pred::ZeroB,  .then = Take::LitZero},
+    Rule{.op = RuleOp::Mul, .when = Pred::OneA,   .then = Take::OperandB},
+    Rule{.op = RuleOp::Mul, .when = Pred::OneB,   .then = Take::OperandA},
+    Rule{.op = RuleOp::Mul, .when = Pred::AOverB, .then = Take::NumeratorOfA},
+    Rule{.op = RuleOp::Mul, .when = Pred::BOverA, .then = Take::NumeratorOfB, .needs_commutative_multiply = true},
 
-    Rule{RuleOp::Add, Pred::ZeroA,    Take::OperandB},
-    Rule{RuleOp::Add, Pred::ZeroB,    Take::OperandA},
+    Rule{.op = RuleOp::Add, .when = Pred::ZeroA,  .then = Take::OperandB},
+    Rule{.op = RuleOp::Add, .when = Pred::ZeroB,  .then = Take::OperandA},
 
-    Rule{RuleOp::Div, Pred::Same,     Take::LitOne},
-    Rule{RuleOp::Div, Pred::ZeroA,    Take::LitZero},
-    Rule{RuleOp::Div, Pred::OneB,     Take::OperandA},
+    Rule{.op = RuleOp::Div, .when = Pred::Same,   .then = Take::LitOne},
+    Rule{.op = RuleOp::Div, .when = Pred::ZeroA,  .then = Take::LitZero},
+    Rule{.op = RuleOp::Div, .when = Pred::OneB,   .then = Take::OperandA},
 
-    Rule{RuleOp::Pow, Pred::ZeroB,    Take::LitOne},
-    Rule{RuleOp::Pow, Pred::OneB,     Take::OperandA},
-    // x^2 -> x*x is the one integer power that is exact: a square is a single
-    // correctly-rounded multiply, so it *is* pow's answer.  x^3 is not -- two
-    // roundings against one -- which is why nothing here generalises it, and
-    // why LLVM only contracts the square without fast-math.  Worth a rule
-    // because the interpreter otherwise calls libm, and because the reverse
-    // rules manufacture pow(u, r-1) for every integer power a model writes.
-    Rule{RuleOp::Pow, Pred::TwoB,     Take::SquareOfA},
+    Rule{.op = RuleOp::Pow, .when = Pred::ZeroB,  .then = Take::LitOne},
+    Rule{.op = RuleOp::Pow, .when = Pred::OneB,   .then = Take::OperandA},
+    // The one integer power that is exact: a square is a single correctly-
+    // rounded multiply, so it *is* pow's answer, where x^3 is two roundings
+    // against one.  Worth a rule because the reverse rules manufacture
+    // pow(u, r-1) for every integer power a model writes.
+    Rule{.op = RuleOp::Pow, .when = Pred::TwoB,     .then = Take::SquareOfA},
 
-    Rule{RuleOp::Neg, Pred::NegatedA, Take::OperandOfA},
+    Rule{.op = RuleOp::Neg, .when = Pred::NegatedA, .then = Take::OperandOfA},
     // clang-format on
 };
 

@@ -137,9 +137,6 @@ template <auto Seed, CExpression Expr, CEvalArg... Args>
 // Declared here and defined out of line, Equation being incomplete.  Keep the
 // conversion a constrained *template*: a plain operator Equation<Derived>() is
 // a candidate for every is_convertible query, and answering one asks again.
-//
-// It also carries the two members every node and leaf spells the same way --
-// both are a dispatch on self(), and self() was itself written twice.
 template <typename Derived> struct EquationConvertible {
   template <typename Eq>
     requires std::same_as<Eq, Equation<Derived>>

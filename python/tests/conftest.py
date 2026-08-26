@@ -16,11 +16,9 @@ import pytest
 import ddx
 
 # ctest points this at the package it just built.  An editable install registers
-# a sys.meta_path finder, and a meta-path finder beats every sys.path entry --
-# so PYTHONPATH alone does not guarantee that the module under test is the one
-# that was just compiled.  Getting this wrong is silent: the suite passes, and
-# passes against the wrong build.  The no-JIT preset is the case that matters,
-# since it would otherwise be tested entirely against a JIT build.
+# a sys.meta_path finder, which beats every sys.path entry, so PYTHONPATH alone
+# does not pin the module under test.  Failing silently: the suite passes against
+# the wrong build, and the no-JIT preset is the case that matters.
 _EXPECTED = os.environ.get("DDX_PACKAGE_DIR")
 if _EXPECTED and Path(ddx.__file__).parent != Path(_EXPECTED).resolve() / "ddx":
     raise RuntimeError(

@@ -21,11 +21,9 @@
 namespace ddx::jit::detail {
 namespace {
 
-// Which LLVM intrinsic, if any, covers an op; whatever is missing goes out as a
-// libm call under label_of(op).  Everything is derived from the op's own label
-// except three, where the label is not the intrinsic's name: llvm.abs is the
-// *integer* intrinsic, and maximum/minimum are the NaN-propagating pair the
-// interpreter matches where maxnum/minnum are not.
+// Which intrinsic covers an op; the rest go out as libm calls.  Derived from the
+// label except three: llvm.abs is the *integer* one, and maximum/minimum are the
+// NaN-propagating pair the interpreter matches where maxnum/minnum are not.
 llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
   switch (op) {
   case rt::OpCode::Abs:
@@ -41,8 +39,8 @@ llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
       llvm::Twine("llvm.").concat(rt::label_of(op)).str());
 }
 
-// memory(none) is the IR spelling of -fno-math-errno: without it a call is
-// assumed to write errno, which blocks hoisting across it.
+// The IR spelling of -fno-math-errno: without it a call is assumed to write
+// errno, which blocks hoisting across it.
 llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
                           unsigned args) {
   llvm::Type *f64 = llvm::Type::getDoubleTy(m.getContext());
@@ -57,10 +55,9 @@ llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
   return fn;
 }
 
-// What one loop iteration carries: W points, as a double when W is 1 and as
-// <W x double> otherwise.  Every IRBuilder operation the body uses is typed on
-// `ty`, so the emitter reads the same at either width; only the memory
-// accesses and the calls with no vector intrinsic tell the two apart.
+// W points per iteration, as a double at W == 1 and <W x double> otherwise.
+// Every IRBuilder operation is typed on `ty`, so only the memory accesses and
+// the calls with no vector intrinsic tell the two apart.
 struct Lanes {
   unsigned width;
   llvm::Type *ty;
@@ -78,9 +75,8 @@ public:
   }
 
   // Columns are plain double*, so no alignment past the element's is claimed.
-  // A vector load past the batch reads its inactive lanes as 1.0: they are
-  // never stored, and 1.0 sits inside every op's domain, so a scalarised libm
-  // call on them cannot land on a pole.
+  // A load past the batch reads inactive lanes as 1.0: never stored, and inside
+  // every op's domain, so a scalarised libm call cannot hit a pole.
   [[nodiscard]] llvm::Value *load(llvm::Value *column, llvm::Value *index,
                                   llvm::Value *mask,
                                   const llvm::Twine &name) const {
@@ -109,8 +105,7 @@ public:
       return b_.CreateFNeg(u);
     }
     if (op == rt::OpCode::Sign) {
-      // u > 0 ? 1 : u < 0 ? -1 : u - u.  The last arm reaches only ±0 and
-      // NaN, giving 0 and NaN as sign_impl does.
+      // u > 0 ? 1 : u < 0 ? -1 : u - u -- the last arm reaches only ±0 and NaN.
       llvm::Value *const zero = constant(0.0);
       return b_.CreateSelect(b_.CreateFCmpOGT(u, zero), constant(1.0),
                              b_.CreateSelect(b_.CreateFCmpOLT(u, zero),
@@ -120,10 +115,9 @@ public:
     return call(op, {u});
   }
 
-  // llvm.fma, not llvm.fmuladd: fmuladd is the *permission* to fuse, which the
-  // backend may decline, and the sweep has already committed to one rounding.
-  // Where the host has no FMA this lowers to a call to libm's fma(), which is
-  // correctly rounded too -- slow, and still the same bits.
+  // Not llvm.fmuladd, which is only *permission* to fuse and may be declined
+  // where the sweep has committed to one rounding.  With no host FMA this
+  // lowers to libm's fma(): slow, and the same bits.
   llvm::Value *fma(const rt::Contraction &c, llvm::Value *x, llvm::Value *y,
                    llvm::Value *z) const {
     return b_.CreateIntrinsic(llvm::Intrinsic::fma, {lanes_.ty},
@@ -144,9 +138,8 @@ public:
   }
 
 private:
-  // An intrinsic is declared on the lane type and left to the backend, which
-  // unrolls a vector libcall it has no other lowering for; a libm function has
-  // only its scalar entry point, so a vector operand is unrolled here.
+  // An intrinsic is declared on the lane type and left to the backend to unroll;
+  // a libm function has only a scalar entry point, so it is unrolled here.
   llvm::Value *call(rt::OpCode op, llvm::ArrayRef<llvm::Value *> args) const {
     const llvm::Intrinsic::ID id = intrinsic_for(op);
     if (id != llvm::Intrinsic::not_intrinsic) {
@@ -190,18 +183,15 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name) {
   for (const auto [i, arg_name] : names | std::views::enumerate) {
     fn->getArg(static_cast<unsigned>(i))->setName(arg_name);
   }
-  // These describe the four pointer *arrays*.  The columns they hold are
-  // reached through a load, so no attribute here can say anything about them,
-  // and in particular the kernel is not argmemonly: its data lives behind
-  // pointers it loads, not in argument memory.
+  // The four pointer *arrays*; the columns they hold are reached through a load,
+  // so nothing here says anything about those -- and this is not argmemonly.
   for (const unsigned i : std::views::iota(0u, 4u)) {
     fn->addParamAttr(i, llvm::Attribute::NoAlias);
     fn->addParamAttr(i, llvm::Attribute::NoCapture);
   }
   fn->addParamAttr(0, llvm::Attribute::ReadOnly);
 
-  // nounwind: without it the optimiser cannot move code across the libm
-  // calls.  Kernel::operator() matches.
+  // nounwind, or the optimiser cannot move code across the libm calls.
   fn->setDoesNotThrow();
   fn->setWillReturn();
   return fn;
@@ -238,8 +228,7 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
 }
 
 // Ids are topological, so one pass needs no worklist.  Under contraction the
-// walk is the graph's contracted one: the adds it named carry a product, and
-// the multiplies they swallowed are ids this order never reaches.
+// adds carry their product and the multiplies they swallowed are never reached.
 [[nodiscard]] std::vector<llvm::Value *>
 emit_nodes(const Emitter &emit, const rt::Graph<double> &g, const Columns &cols,
            llvm::Value *index, llvm::Value *mask, bool contract) {
@@ -303,10 +292,8 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   auto *const loop = llvm::BasicBlock::Create(ctx, "loop", fn);
   auto *const exit = llvm::BasicBlock::Create(ctx, "exit", fn);
 
-  // No fast-math flags at all.  Contraction is decided in the graph and spelled
-  // llvm.fma, so allowContract here would let the backend fuse a *second* set
-  // of products -- ones the sweep computed separately -- and reassociation was
-  // never wanted.
+  // None at all: contraction is decided in the graph and spelled llvm.fma, so
+  // allowContract would fuse a *second* set the sweep computed separately.
   llvm::IRBuilder<> b(entry);
   const Columns cols = hoist_columns(b, *fn, g);
   b.CreateCondBr(b.CreateICmpEQ(count, llvm::ConstantInt::get(i64, 0)), exit,
@@ -316,9 +303,9 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   llvm::PHINode *const index = b.CreatePHI(i64, 2, "i");
   index->addIncoming(llvm::ConstantInt::get(i64, 0), entry);
 
-  // Lane k is live while k < n - i.  A signed compare, on purpose: both sides
-  // are non-negative, and it is one instruction where the unsigned,
-  // saturating llvm.get.active.lane.mask is a dozen on AVX2.
+  // Lane k is live while k < n - i.  Signed on purpose: both sides are
+  // non-negative, and it is one instruction where the saturating
+  // llvm.get.active.lane.mask is a dozen on AVX2.
   llvm::Value *mask = nullptr;
   if (lanes.vector()) {
     llvm::Value *const remaining = b.CreateSub(count, index, "remaining");

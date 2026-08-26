@@ -19,11 +19,8 @@
 #include <tuple>
 #include <vector>
 
-// One name for both kinds of expression.  The specialisation is keyed on the
-// RTExpression<T> *pattern*, not a constraint: a constraint over
-// <TFirst, TRest...> has the same pattern as the compile-time one and neither
-// subsumes the other.  to_graph lowers a typed expression, so the same function
-// can be asked the same question both ways.
+// One name for both kinds of expression, so the same function can be asked the
+// same question both ways.
 
 namespace {
 constexpr auto sx = ddx::var<"x">;
@@ -58,8 +55,8 @@ TEST(RtEquation, MatchesTheCompileTimeEquation) {
   }
 }
 
-// CEvalArg admits four spellings; the runtime side resolves names against a
-// run-time symbol list where make_point uses a compile-time one.
+// The runtime side resolves names against a run-time symbol list where
+// make_point uses a compile-time one.
 TEST(RtEquation, EveryCallSpellingAgrees) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -86,8 +83,7 @@ TEST(RtEquation, SystemsGiveAJacobian) {
   const auto J = *eq.jacobian(1.3, 0.7);
   ASSERT_EQ(J.size(), 4u); // 2 functions x 2 symbols, row-major
 
-  // Row k is the Jacobian row of function k, which the compile-time side agrees
-  // on.
+  // Row k is the Jacobian row of function k.
   const auto row0 = ddx::Equation{sx * sy + sin(sx)}.jacobian(1.3, 0.7);
   const auto row1 = ddx::Equation{exp(sx) - sy * sy}.jacobian(1.3, 0.7);
   EXPECT_NEAR(J[0], row0[0], 1e-12);
@@ -120,8 +116,8 @@ TEST(RtEquation, AWrongSizedPointIsRejected) {
 
 namespace {
 
-// dual2nd on the compile-time side, because that is what its hessian needs;
-// the runtime graph is over plain double either way.
+// dual2nd on the compile-time side, which is what its hessian needs; the
+// runtime graph is over plain double either way.
 TEST(RtEquation, HessianMatchesTheCompileTimeEquation) {
   using D = ddx::dual2nd;
   constexpr auto dx = ddx::var<"x", D>;
@@ -145,8 +141,7 @@ TEST(RtEquation, HessianMatchesTheCompileTimeEquation) {
   EXPECT_DOUBLE_EQ(got[1], got[2]) << "a Hessian is symmetric";
 }
 
-// The colour count is a property of the expression, and the facade exposes it
-// because whether colouring saves anything is not something a caller can guess.
+// Whether colouring saves anything is not something a caller can guess.
 TEST(RtEquation, HessianColoursReflectTheCoupling) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -168,8 +163,8 @@ TEST(RtEquation, HessianColoursReflectTheCoupling) {
 
 namespace {
 
-// equation() makes the arena, hands out symbols from it and moves it into the
-// result, so a caller never names or keeps a Builder alive.
+// equation() makes the arena and moves it into the result, so a caller never
+// names or keeps a Builder alive.
 TEST(RtEquation, TheFactoryHidesTheArena) {
   const auto eq = ddx::rt::equation([] {
     const auto x = ddx::rt::var("x");
@@ -260,8 +255,7 @@ TEST(RtEquation, BatchHessianFillsTheCompressedColumns) {
 
 namespace {
 
-// Any contiguous range of columns, so a caller reaches for whatever it already
-// has rather than building a span by hand.
+// Any contiguous range of columns.
 TEST(RtEquation, BatchTakesAnyContiguousRange) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -289,8 +283,7 @@ TEST(RtEquation, BatchTakesAnyContiguousRange) {
   EXPECT_DOUBLE_EQ(f[0], 6.0);
 }
 
-// A wrong column count is silent corruption once it reaches the kernel; the
-// ABI cannot notice, so this layer has to.
+// A wrong column count is silent corruption once it reaches the kernel.
 TEST(RtEquation, AMismatchedColumnCountIsRejected) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -333,16 +326,14 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_EQ(eq.arity(), 2u);
   EXPECT_NEAR(*eq.evaluate(2.0, 3.0), 6.0 + std::sin(2.0), 1e-12);
 
-  // var() poisons the expression rather than answering with an error, which
-  // would cost every model lambda a dereference.  The poison survives every
-  // operator and reaches the Equation, which carries it.
+  // var() poisons rather than erroring, which would cost every model lambda a
+  // dereference.  The poison survives every operator and reaches the Equation.
   const auto stray = ddx::rt::var("stray");
   EXPECT_TRUE(stray.poisoned());
   EXPECT_TRUE((stray * 2.0 + 1.0).poisoned());
 
-  // Compound assignment goes through the same operators, so it neither loses
-  // the poison nor -- with a live right operand -- picks up that operand's
-  // arena and answers where it should refuse.
+  // Compound assignment must neither lose the poison nor pick up a live right
+  // operand's arena.
   auto spreading = stray;
   spreading += 2.0;
   EXPECT_TRUE(spreading.poisoned());
@@ -362,7 +353,7 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_EQ(poisoned.evaluate(1.0).error().code, ddx::errc::no_arena);
   EXPECT_EQ(poisoned.jacobian(1.0).error().code, ddx::errc::no_arena);
   EXPECT_EQ(poisoned.point(1.0).error().code, ddx::errc::no_arena);
-  // Every count is nullopt, never a 0 a caller could loop over by accident.
+  // nullopt, never a 0 a caller could loop over by accident.
   EXPECT_FALSE(poisoned.arity().has_value());
   EXPECT_FALSE(poisoned.symbols().has_value());
   EXPECT_FALSE(poisoned.jacobian_columns().has_value());
@@ -371,9 +362,8 @@ TEST(RtEquation, TheArenaIsInvisible) {
   EXPECT_FALSE(poisoned.hessian_colors().has_value());
 }
 
-// Lanes are frozen lazily, so a symbol named into a borrowed arena after an
-// Equation has it would move slots under a graph already built.  The arena
-// refuses instead, and the refusal rides out on the equation that asked.
+// A symbol named into a borrowed arena after an Equation has it would move
+// slots under a graph already built, so the arena refuses.
 TEST(RtEquation, AnArenaStopsTakingSymbolsOnceAnEquationHasIt) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -394,8 +384,7 @@ TEST(RtEquation, AnArenaStopsTakingSymbolsOnceAnEquationHasIt) {
   EXPECT_NEAR((*eq.jacobian(3.0))[0], 6.0, 1e-12);
 }
 
-// Sealed stops symbols being added, not named: expressions -- and equations --
-// over what the arena already holds go on being built.
+// Sealed stops symbols being added, not named.
 TEST(RtEquation, ASealedArenaStillNamesTheSymbolsItHas) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -411,8 +400,7 @@ TEST(RtEquation, ASealedArenaStillNamesTheSymbolsItHas) {
   EXPECT_NEAR(*second.evaluate(2.0, 3.0), 11.0, 1e-12);
 }
 
-// A bare literal reaches no graph, so it names no builder -- distinct from
-// no_arena, and surfacing on the poisoned Equation.
+// A bare literal names no builder -- distinct from no_arena.
 TEST(RtEquation, ALiteralNamesNoGraph) {
   const auto eq = ddx::rt::equation(ddx::rt::RTExpression<double>{2.0});
   ASSERT_TRUE(eq.status().has_value());
@@ -420,8 +408,8 @@ TEST(RtEquation, ALiteralNamesNoGraph) {
   EXPECT_EQ(eq.evaluate(1.0).error().code, ddx::errc::no_graph);
 }
 
-// A system has one Hessian per output -- the shape Equation::hessian returns as
-// nd_stack_t<S, m, n, 2> on the compile-time side.
+// One Hessian per output, the shape the compile-time side returns as
+// nd_stack_t<S, m, n, 2>.
 TEST(RtEquation, HessianOfASystemIsOneBlockPerOutput) {
   const auto eq = ddx::rt::equation([] {
     const auto x = ddx::rt::var("x");
@@ -449,8 +437,7 @@ TEST(RtEquation, HessianOfASystemIsOneBlockPerOutput) {
   }
 }
 
-// One Taylor sweep rather than K nested duals, matching
-// univariate_derivative_impl.
+// One Taylor sweep rather than K nested duals.
 TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
   const auto eq = ddx::rt::equation([] {
     const auto x = ddx::rt::var("x");
@@ -477,24 +464,18 @@ TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
 
 } // namespace
 
-// --- choosing the backend
-// ----------------------------------------------------- Compiling is not free
-// and its cost grows faster than the graph, so a caller has to be able to
-// decline it on a build that has the backend.
+// --- choosing the backend ---------------------------------------------------
 
-// The scalar accessors answer from the frozen graph, which carries only the
-// live nodes; rt::evaluate_all walks the arena, and the constructor sweeps a
-// Hessian into that arena for every equation.  The two must still agree to the
-// bit, so this is EXPECT_EQ rather than a tolerance: the graph changes which
-// nodes are visited, never the arithmetic at any of them.
+// The scalar accessors answer from the frozen graph, the arena walk from every
+// node in the arena.  EXPECT_EQ rather than a tolerance: the graph changes
+// which nodes are visited, never the arithmetic at any of them.
 TEST(RtEquation, ScalarAccessorsAgreeWithTheArenaWalkToTheBit) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto z = var(b, "z");
   // Every symbol under one log, so the Hessian is dense and the colouring
-  // sweeps the arena several times over -- which is the case the scalar path
-  // used to pay for on every call.
+  // sweeps the arena several times over.
   const auto expr = (x * log(x) + y * y * z) * log(x + y + z) / (z + y);
 
   // Before the equation, so interning lands its own sweeps on these same nodes.
@@ -560,11 +541,8 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   EXPECT_FALSE(used_none) << "Interpret still reached for a kernel";
   EXPECT_TRUE(used_kernel) << "Compile did not compile on a JIT build";
 
-  // Equal, not near: the contraction is decided in the graph, so the kernel and
-  // the sweep fold the same products into the same fma and round the same
-  // number of times.  Declining the backend changes which code runs, and must
-  // not change the answer -- a loop that switches over mid-run would otherwise
-  // see its results move.
+  // Equal, not near: the contraction is decided in the graph, so kernel and
+  // sweep fold the same products and round the same number of times.
   for (std::size_t i = 0; i < n; ++i) {
     EXPECT_EQ(std::bit_cast<std::uint64_t>(f_jit[i]),
               std::bit_cast<std::uint64_t>(f_int[i]))
@@ -578,9 +556,8 @@ TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   }
 }
 
-// `points` states the batch, which picks the kernel width -- a stepping caller
-// gets a scalar kernel and a batch caller a wide one.  The two must agree to
-// the bit, since a lane is its own IEEE operation.
+// `points` picks the kernel width, and the two widths must agree to the bit --
+// a lane is its own IEEE operation.
 TEST(RtEquation, PointsPicksTheKernelWidthAndTheAnswerIsTheSame) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -600,9 +577,8 @@ TEST(RtEquation, PointsPicksTheKernelWidthAndTheAnswerIsTheSame) {
   stepping.options({.backend = ddx::rt::Backend::Compile, .points = 1});
   batched.options({.backend = ddx::rt::Backend::Compile, .points = n});
 
-  // Before the calls, not after: what is compared below is one kernel width
-  // against another, and a call made while a compile is still in flight is
-  // answered by the sweep instead.
+  // Before the calls: a call made while a compile is in flight is answered by
+  // the sweep, and what is compared below is one kernel width against another.
   ASSERT_TRUE(stepping.wait_for_kernel());
   ASSERT_TRUE(batched.wait_for_kernel());
 
@@ -630,8 +606,7 @@ TEST(RtEquation, PointsPicksTheKernelWidthAndTheAnswerIsTheSame) {
   }
 }
 
-// Nothing compiles unless a backend is asked for, and what does not compile is
-// still right.
+// Nothing compiles unless a backend is asked for.
 TEST(RtEquation, TheDefaultCompilesNothing) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -654,8 +629,7 @@ TEST(RtEquation, TheDefaultCompilesNothing) {
   }
 }
 
-// Choosing a backend is what starts the compile: it lands with no batch call
-// having been made at all.
+// Choosing a backend starts the compile, with no call having been made.
 TEST(RtEquation, ChoosingABackendStartsTheBuild) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -665,15 +639,13 @@ TEST(RtEquation, ChoosingABackendStartsTheBuild) {
   EXPECT_TRUE(eq.wait_for_kernel()) << "options() launched nothing";
   EXPECT_TRUE(eq.uses_kernel());
 
-  // And asking again for what is already built relaunches nothing: the kernel
-  // that landed is still the one in hand.
+  // Asking again for what is already built relaunches nothing.
   eq.options({.backend = ddx::rt::Backend::Compile});
   EXPECT_TRUE(eq.uses_kernel()) << "an identical options() threw the kernel away";
 }
 
-// Sizing a buffer must not build a kernel.  hessian_columns() reached the
-// Hessian lane and compiled it -- thirteen milliseconds at twelve variables --
-// for a number the constructor already knew.
+// Sizing a buffer must not build a kernel: the counts are ones the constructor
+// already knew.
 TEST(RtEquation, TheColumnCountsCompileNothing) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -706,8 +678,7 @@ TEST(RtEquation, TheColumnCountsCompileNothing) {
   EXPECT_EQ(*eq.hessian_columns(), hc);
 }
 
-// One LLJIT serves every Equation type, so equations of different shapes
-// compile through it at the same time.  Results, not timings, so it cannot go
+// One LLJIT serves every Equation type.  Results, not timings, so it cannot go
 // flaky.
 TEST(RtEquation, DifferentEquationTypesShareOneCompilerSafely) {
   const auto scalar_model = [] {
@@ -733,8 +704,7 @@ TEST(RtEquation, DifferentEquationTypesShareOneCompilerSafely) {
   const auto one_scalar = [&] {
     auto eq = scalar_model();
     eq.options({.backend = ddx::rt::Backend::Compile, .points = n});
-    // The threads below compare their results against this one, so every arm
-    // has to be the kernel's rather than whichever path won a race.
+    // Every arm has to be the kernel's rather than whichever path won a race.
     EXPECT_TRUE(eq.wait_for_kernel());
     std::vector<double> f(n), d(n);
     const double *const columns[]{cx.data()};
@@ -775,9 +745,8 @@ TEST(RtEquation, DifferentEquationTypesShareOneCompilerSafely) {
   }
 }
 
-// A compile in flight when the choice changes is abandoned, not waited for and
-// not recovered: flipping to Interpret leaves the sweep, and flipping back
-// builds afresh.
+// A compile in flight when the choice changes is abandoned: flipping to
+// Interpret leaves the sweep, and flipping back builds afresh.
 TEST(RtEquation, AbandoningACompileLeavesNothingBehind) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -800,9 +769,8 @@ TEST(RtEquation, AbandoningACompileLeavesNothingBehind) {
   EXPECT_NEAR(f, 0.7 * std::log(0.7) + std::exp(0.7), 1e-12);
 }
 
-// Compile is a promise to build a kernel, not to stand still until there is
-// one: the first call is answered by whichever path is ready, and the kernel
-// replaces the sweep when it lands.  Waiting is a separate request.
+// Compile promises to build a kernel, not to stand still until there is one.
+// Waiting is a separate request.
 TEST(RtEquation, CompileDoesNotMakeACallWaitForItsKernel) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -813,8 +781,7 @@ TEST(RtEquation, CompileDoesNotMakeACallWaitForItsKernel) {
   const double *const columns[]{&cx};
   double *const values[]{&f};
   double *const partials[]{&dx};
-  // Right whichever path answered it, which is the point: a caller who has not
-  // asked to wait cannot tell, and does not need to.
+  // Right whichever path answered it, which is the point.
   ASSERT_TRUE(eq.jacobian(columns, values, partials, 1).has_value());
   EXPECT_NEAR(f, 0.7 * std::log(0.7) + std::exp(0.7), 1e-12);
 
@@ -824,9 +791,8 @@ TEST(RtEquation, CompileDoesNotMakeACallWaitForItsKernel) {
   EXPECT_NEAR(f, 0.7 * std::log(0.7) + std::exp(0.7), 1e-12);
 }
 
-// Compiling at all is one question and how to compile is another, so the lane
-// width has to be reachable from the Equation rather than only from
-// jit::Compiler -- and choosing it must not change a bit of the answer.
+// The lane width has to be reachable from the Equation, and choosing it must
+// not change a bit of the answer.
 TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -846,7 +812,7 @@ TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
     double *const values[]{f.data()};
     double *const partials[]{dx.data(), dy.data()};
     eq.options(opt);
-    // The widths are compared bit for bit below, so both have to be kernels.
+    // Compared bit for bit below, so both have to be kernels.
     const bool kernel = eq.wait_for_kernel();
     *eq.jacobian(columns, values, partials, n);
     return std::tuple{f, dx, dy, kernel};
@@ -872,9 +838,8 @@ TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
   }
 }
 
-// The compile is off the critical path: the block sweep answers until the
-// kernel lands, and the answers either side of that switchover are the same
-// question asked of two arithmetics.
+// The compile is off the critical path: the sweep answers until the kernel
+// lands, and the answers either side of the switchover agree.
 TEST(RtEquation, TheCompileRunsBehindTheInterpreter) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -898,7 +863,7 @@ TEST(RtEquation, TheCompileRunsBehindTheInterpreter) {
     ASSERT_TRUE(eq.jacobian(columns, values, partials, n).has_value());
   };
 
-  // Whichever path is ready at this instant -- the point is that it answers.
+  // Whichever path is ready -- the point is that it answers.
   eq.options({.backend = ddx::rt::Backend::Compile});
   into(f0, dx0, dy0);
 
@@ -906,8 +871,7 @@ TEST(RtEquation, TheCompileRunsBehindTheInterpreter) {
   EXPECT_TRUE(eq.uses_kernel()) << "a landed kernel was not adopted";
   into(f1, dx1, dy1);
 
-  // Asking for what is already built relaunches nothing, so this is still the
-  // kernel that landed above.
+  // Still the kernel that landed above.
   eq.options({.backend = ddx::rt::Backend::Compile});
   ASSERT_TRUE(eq.wait_for_kernel());
   into(f2, dx2, dy2);
@@ -924,12 +888,12 @@ TEST(RtEquation, TheCompileRunsBehindTheInterpreter) {
   }
 }
 
-// Dropping an equation mid-compile abandons the result rather than waiting for
-// it.  std::async's future joins in its destructor, which would put the whole
-// compile back on the critical path of whatever let the equation go.
+// Dropping an equation mid-compile abandons the result.  std::async's future
+// joins in its destructor, which would put the compile back on the critical
+// path of whatever let the equation go.
 TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
-  // Wide enough that the compile is milliseconds, not microseconds: a compile
-  // that finishes first would pass this test without proving anything.
+  // Wide enough that the compile is milliseconds: one that finishes first would
+  // pass without proving anything.
   ddx::rt::Builder<> b;
   std::vector<ddx::rt::RTExpression<double>> v;
   for (std::size_t i = 0; i < 48; ++i) {
@@ -941,17 +905,14 @@ TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
   }
 
   // Both arms pin codegen 0, so the ladder is one rung and the two measurements
-  // are the same shape: one whole compile waited for, against being dropped
-  // during one whole compile.  Under the default two rungs, wait_for_kernel()
-  // returns at the *cheap* one -- by design -- so `blocking` would no longer be
-  // a compile's worth of time and the margin below would be a coin flip on a
-  // loaded machine.  Abandoning both rungs at once is what jit.exit_stress
-  // covers.
+  // are the same shape.  Under the default two, wait_for_kernel() returns at the
+  // *cheap* rung and `blocking` stops being a compile's worth of time, making
+  // the margin below a coin flip.  jit.exit_stress covers both rungs at once.
   const ddx::jit::Options one_rung{.backend = ddx::rt::Backend::Compile,
                                    .codegen_level = 0};
 
-  // Calibrated against this machine rather than a constant: a fixed threshold
-  // above the compile would pass whether or not the future joined.
+  // Calibrated against this machine: a fixed threshold above the compile would
+  // pass whether or not the future joined.
   const auto blocking = [&] {
     auto eq = ddx::rt::equation(f);
     eq.options(one_rung);
@@ -975,7 +936,7 @@ TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
   const auto us = [](std::chrono::steady_clock::duration d) {
     return std::chrono::duration_cast<std::chrono::microseconds>(d).count();
   };
-  // A join would put the whole compile here; abandoning it is ~a microsecond.
+  // A join would put the whole compile here.
   EXPECT_LT(teardown * 4, blocking)
       << "teardown " << us(teardown) << "us against a " << us(blocking)
       << "us compile, so the future joined";
@@ -983,11 +944,8 @@ TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
 
 // Many threads on one Equation, mixing both lanes.  std::thread rather than
 // std::jthread: libc++ shipped jthread late and behind
-// _LIBCPP_ENABLE_EXPERIMENTAL.
-//
-// Compiling, deliberately: that is the path that abandons compiles mid-flight
-// when an equation goes away, which is what compile_async orders its statics
-// against.
+// _LIBCPP_ENABLE_EXPERIMENTAL.  Compiling deliberately -- that is the path that
+// abandons compiles mid-flight when an equation goes away.
 TEST(RtEquation, ConcurrentConstCallsAgreeWithOneThread) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1046,9 +1004,9 @@ TEST(RtEquation, ConcurrentConstCallsAgreeWithOneThread) {
   }
 }
 
-// Two equations over ONE borrowed Builder, each asked for a Hessian from its
-// own thread.  rt::build_hessian_impl appends to the arena, so before the sweep moved into
-// the constructor no per-Equation lock could have made this safe.
+// Two equations over ONE borrowed Builder, each asked for a Hessian from its own
+// thread.  rt::build_hessian_impl appends to the arena, so no per-Equation lock
+// could make this safe if the sweep were not in the constructor.
 TEST(RtEquation, TwoEquationsSharingAnArenaDoNotRaceIt) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1070,8 +1028,7 @@ TEST(RtEquation, TwoEquationsSharingAnArenaDoNotRaceIt) {
   EXPECT_EQ(c, expected_second);
 }
 
-// The batch overload of the same thing: values for many points, and no
-// gradient computed anywhere along the way.
+// Values for many points, with no gradient computed anywhere along the way.
 TEST(RtEquation, EvaluatingABatchComputesNoPartials) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1097,10 +1054,8 @@ TEST(RtEquation, EvaluatingABatchComputesNoPartials) {
   }
 }
 
-// Evaluating asks for values and nothing else, so its lane's graph carries no
-// Jacobian block at all -- a shape no other caller produces, and one the column
-// checks in dispatch() would reject if the lane and the caller disagreed.  A
-// system rather than one root, since that is where the block sizes differ.
+// The values lane's graph carries no Jacobian block at all -- a shape no other
+// caller produces.  A system rather than one root, where the sizes differ.
 TEST(RtEquation, EvaluatingUsesAValuesOnlyGraph) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1111,8 +1066,8 @@ TEST(RtEquation, EvaluatingUsesAValuesOnlyGraph) {
   const auto v = *eq.evaluate(std::span<const double>{at});
   ASSERT_EQ(v.size(), 3u);
 
-  // Against the values+Jacobian lane, which is a different graph over the same
-  // nodes: bit-exact, since both sweep and neither reorders anything.
+  // Against the values+Jacobian lane: a different graph over the same nodes,
+  // and bit-exact since neither reorders anything.
   double f0 = 0, f1 = 0, f2 = 0, dx0 = 0, dx1 = 0, dx2 = 0, dy0 = 0, dy1 = 0,
          dy2 = 0;
   const double *const columns[]{&at[0], &at[1]};
@@ -1124,9 +1079,8 @@ TEST(RtEquation, EvaluatingUsesAValuesOnlyGraph) {
   EXPECT_EQ(v[2], f2);
 }
 
-// The scalar Hessian answers from the same lane the batch overload compiles,
-// and the scalar caller is the one that freezes that lane first -- an order the
-// column checks in dispatch() were never exercised in before.
+// Scalar and batch Hessians share a lane, with the scalar caller freezing it
+// first.
 TEST(RtEquation, ScalarAndBatchAgreeAtTheSamePoint) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1134,8 +1088,7 @@ TEST(RtEquation, ScalarAndBatchAgreeAtTheSamePoint) {
   const auto eq = ddx::rt::equation(x * log(x) * y + y * y * y);
 
   const std::vector<double> at{0.6, 1.4};
-  // Scalar first, so the Hessian lane is frozen by the accessor rather than by
-  // a batch call.
+  // Scalar first, so the accessor freezes the lane rather than a batch call.
   const auto dense = *eq.hessian(std::span<const double>{at});
   ASSERT_EQ(dense.size(), 4u);
 
@@ -1154,8 +1107,8 @@ TEST(RtEquation, ScalarAndBatchAgreeAtTheSamePoint) {
   EXPECT_EQ(g[1], dy);
 }
 
-// Evaluating must not reach for a compiler under a backend that declines one:
-// the scalar accessors touch the lane cache now, where they used not to.
+// The scalar accessors touch the lane cache, and must not reach for a compiler
+// under a backend that declines one.
 TEST(RtEquation, EvaluatingUnderInterpretCompilesNothing) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1182,9 +1135,8 @@ TEST(RtEquation, InterpretNeverCompilesBehindTheCaller) {
 
 namespace {
 
-// A graph with enough of the emitter's op set in it that the two codegen levels
-// have somewhere to disagree, and enough nodes that the top rung does not land
-// before the cheap one has been observed.
+// Enough of the emitter's op set that the codegen levels have somewhere to
+// disagree, and enough nodes that the top rung does not land first.
 auto ladder_model() {
   return ddx::rt::equation([] {
     std::vector<ddx::rt::RTExpression<double>> v;
@@ -1219,9 +1171,7 @@ std::vector<double> ladder_gradient(const auto &eq, std::size_t n) {
 
 } // namespace
 
-// Every rung answers the same bits.  This is what makes the swap invisible and
-// therefore safe: a loop running across it sees no movement at all, which is
-// also why nothing else in this file can tell the ladder is there.
+// Every rung answers the same bits, which is what makes the swap invisible.
 TEST(RtEquation, EveryRungOfTheLadderAgreesToTheBit) {
   constexpr std::size_t n = 24;
 
@@ -1241,18 +1191,15 @@ TEST(RtEquation, EveryRungOfTheLadderAgreesToTheBit) {
   EXPECT_EQ(ladder_gradient(top, n), expected) << "the top rung moved a bit";
 }
 
-// The ladder climbs, and never falls back.  Both rungs go to one shared pool,
-// so nothing orders them: a cheap compile can queue behind an expensive one
-// belonging to some other equation and land second.  The rule is the rank, not
-// the arrival, and the answers do not move across either swap.
+// The ladder climbs and never falls back.  One shared pool orders nothing, so a
+// cheap compile can land second; the rule is the rank, not the arrival.
 TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
   constexpr std::size_t n = 24;
 
   auto eq = ladder_model();
   eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 1});
 
-  // wait_for_kernel() waits for the *first* rung, so the cheap one is what is
-  // in hand here -- the whole reason the ladder exists.
+  // wait_for_kernel() waits for the *first* rung, so the cheap one is in hand.
   ASSERT_TRUE(eq.wait_for_kernel());
   ASSERT_TRUE(eq.kernel_level().has_value());
   EXPECT_EQ(*eq.kernel_level(), 0u)
@@ -1260,8 +1207,7 @@ TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
 
   const auto expected = ladder_gradient(eq, n);
 
-  // Then climb, sampling as it goes.  Bounded rather than unbounded: a failure
-  // to climb must fail the test, not hang it.
+  // Bounded: a failure to climb must fail the test, not hang it.
   using namespace std::chrono_literals;
   const auto deadline = std::chrono::steady_clock::now() + 30s;
   unsigned seen = 0;
@@ -1281,8 +1227,7 @@ TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
   EXPECT_TRUE(climbed) << "the top rung never replaced the cheap one";
 }
 
-// At codegen 0 there is nothing cheaper to put underneath, so the ladder is one
-// rung and the level in hand is the one that was asked for.
+// At codegen 0 there is nothing cheaper underneath, so the ladder is one rung.
 TEST(RtEquation, CodegenZeroIsASingleRung) {
   auto eq = ladder_model();
   eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 0});
@@ -1291,11 +1236,9 @@ TEST(RtEquation, CodegenZeroIsASingleRung) {
   EXPECT_EQ(*eq.kernel_level(), 0u);
 }
 
-// The two halves together: with a warm cache both rungs link instead of
-// compiling, so the ladder arrives at its top rung about as fast as it used to
-// reach its first.  Each rung keys separately -- they are different codegen
-// levels and therefore different machine code -- which is why a warm run gets
-// the good kernel rather than the cheap one.
+// With a warm cache both rungs link instead of compiling.  Each rung keys
+// separately, being different machine code, so a warm run gets the good kernel
+// rather than the cheap one.
 TEST(RtEquation, AWarmCacheServesBothRungs) {
   const auto dir =
       std::filesystem::temp_directory_path() / "ddx_rt_ladder_cache";

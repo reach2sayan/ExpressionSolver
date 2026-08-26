@@ -54,9 +54,8 @@ class Options(BaseModel):
 
     retain_object: bool = _DEFAULTS.retain_object
     """Whether a compiled kernel keeps the object file it was linked from, so
-    that ``Equation.save`` can store it. Off by default: a megabyte of machine
-    code held for the life of every kernel that will never be saved is not a
-    cost a compile should pay."""
+    that ``Equation.save`` can store it. On by default: the object is the one
+    part of a saved equation nothing can reconstruct."""
 
     cache_dir: str = _DEFAULTS.cache_dir
     """Where compiled objects are kept between runs; empty disables it."""

@@ -14,10 +14,9 @@
 #include <string>
 #include <vector>
 
-// NumPy and the kernel ABI already agree on layout: a C-contiguous
-// (symbols, points) array holds each symbol's column contiguously, which is
-// what `xs[j]` has to be.  Nothing here copies unless the caller handed over
-// something that was not already doubles.
+// NumPy and the kernel ABI already agree: a C-contiguous (symbols, points)
+// array holds each symbol's column contiguously, which is what `xs[j]` is.
+// Nothing copies unless the caller handed over something that was not doubles.
 namespace ddx::py {
 
 namespace pyb = pybind11;

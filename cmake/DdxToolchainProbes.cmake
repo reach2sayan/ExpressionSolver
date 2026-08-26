@@ -1,6 +1,5 @@
-# What the toolchain can actually do, asked once and answered in cache
-# variables.  Everything here runs at configure time and compiles nothing of
-# ours; the results are consumed by the top-level CMakeLists.txt.
+# What the toolchain can do, asked once and answered in cache variables.
+# Compiles nothing of ours; the top-level CMakeLists.txt consumes the results.
 #
 #   DDX_HAS_STD_EXPECTED       hard requirement, fatal if absent
 #   DDX_DEDUCING_THIS_VALUE    defined only when DDX_DEDUCING_THIS overrides
@@ -10,9 +9,8 @@ include_guard(GLOBAL)
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_FLAGS "-std=c++23")
 
-# libstdc++ offers <expected> only where __cpp_concepts is 202002L
-# -- which Clang first defines in 19.
-# MSVC is exempt because the probe's -std= is not its spelling.
+# libstdc++ gates <expected> on __cpp_concepts 202002L, which Clang first
+# defines in 19.  MSVC is exempt: the probe's -std= is not its spelling.
 check_cxx_source_compiles(
         "#include <expected>
          int main() { return std::expected<int, int>{0}.value(); }"
@@ -28,7 +26,6 @@ endif ()
 #   auto - the compiler's own answer (__cpp_explicit_this_parameter)
 #   on   - deducing this even where the macro is absent
 #   off  - the ref-qualified overload set
-# Two probes: what `auto` picks up, and what `on` would require.
 set(DDX_DEDUCING_THIS "auto" CACHE STRING "Accessor spelling: auto|on|off")
 set_property(CACHE DDX_DEDUCING_THIS PROPERTY STRINGS auto on off)
 

@@ -19,22 +19,14 @@
 #include <system_error>
 #include <vector>
 
-// Saving and loading a built equation.  The file carries the arena and the
-// sweeps; what it must reproduce is every answer, to the bit -- these compare a
-// loaded equation against a freshly built one in the same binary, which is the
-// only comparison the key is good for (node ids are assigned in construction
-// order, so another compiler numbers the same model differently).
+// Saving and loading a built equation: the file must reproduce every answer to
+// the bit.  Compared within one binary, node ids being assigned in construction
+// order and so numbered differently by another compiler.
 namespace {
 
-// A file that removes itself, since a failing EXPECT must not leave one behind
-// for the next run to load.
-//
-// The name carries a per-process token.  Without one, two of these binaries run
-// at once -- a sharded suite, a `ctest --repeat`, two checkouts sharing /tmp --
-// write and delete each other's files, and every save fails for reasons that
-// have nothing to do with what is being tested.  A fixed path in the system
-// temp directory is shared mutable state between processes, however private it
-// looks.
+// A file that removes itself, so a failing EXPECT leaves nothing behind.  The
+// name carries a per-process token: a fixed path in the system temp directory
+// is shared mutable state between processes, however private it looks.
 class Scratch {
 public:
   explicit Scratch(std::string name)
@@ -51,9 +43,7 @@ public:
 
   [[nodiscard]] std::vector<std::byte> bytes() const {
     // Checked, not dereferenced: `*` on a failed result is undefined, so a
-    // fixture bug that made the file vanish would surface as a segfault in the
-    // test rather than as the failure it is.  That is how the shared-path
-    // problem above presented.
+    // vanished file would surface as a segfault rather than as a failure.
     auto read = ddx::rt::read_file(path_);
     EXPECT_TRUE(read.has_value()) << "scratch file went missing";
     return read ? std::move(*read) : std::vector<std::byte>{};
@@ -74,8 +64,8 @@ private:
   std::filesystem::path path_;
 };
 
-// Coupled, so the Hessian colouring is real work rather than a formality --
-// which is the expensive thing the file exists to keep.
+// Coupled, so the Hessian colouring is real work -- the expensive thing the
+// file exists to keep.
 auto coupled() {
   return ddx::rt::equation([] {
     const auto x = ddx::rt::var("x");
@@ -85,8 +75,7 @@ auto coupled() {
   });
 }
 
-// The same model, written the same way.  Not `auto f = coupled()` twice by
-// accident: these must be two independent builds over two arenas.
+// Two independent builds over two arenas, not one expression used twice.
 constexpr std::array kPoint{1.3, 0.7, 2.1};
 
 void same_answers(const auto &want, const auto &got) {
@@ -94,8 +83,7 @@ void same_answers(const auto &want, const auto &got) {
   ASSERT_EQ(want.symbols()->size(), got.symbols()->size());
   EXPECT_TRUE(std::ranges::equal(*want.symbols(), *got.symbols()));
 
-  // Bit-identical, not near: a loaded graph is the same graph, so the same
-  // operations happen in the same order and nothing may round differently.
+  // Bit-identical: a loaded graph is the same graph, in the same order.
   EXPECT_EQ(*want.evaluate(kPoint), *got.evaluate(kPoint));
   EXPECT_EQ(*want.jacobian(kPoint), *got.jacobian(kPoint));
   EXPECT_EQ(*want.hessian(kPoint), *got.hessian(kPoint));
@@ -130,9 +118,8 @@ TEST(RtArchive, RoundTripsASystem) {
   EXPECT_EQ(*built.jacobian(1.3, 0.7), *loaded->jacobian(1.3, 0.7));
 }
 
-// The output count is in the type, so a file holding some other number of
-// functions has to be refused rather than reinterpreted -- reading a
-// two-function file as one would size every caller's buffer wrongly.
+// The output count is in the type, so a file holding some other number is
+// refused: reading a two-function file as one mis-sizes every buffer.
 TEST(RtArchive, RefusesTheWrongOutputCount) {
   const Scratch file{"outputs"};
   const auto two = ddx::rt::equation([] {
@@ -156,8 +143,7 @@ TEST(RtArchive, VerifyAnswersBothQuestions) {
   // ...and it is this equation.
   EXPECT_TRUE(built.verify(file.path()).has_value());
 
-  // A different model over the same symbols: the file still loads, and still
-  // is not this one.
+  // A different model over the same symbols: it loads, and is not this one.
   const auto other = ddx::rt::equation([] {
     const auto x = ddx::rt::var("x");
     const auto y = ddx::rt::var("y");
@@ -174,14 +160,12 @@ TEST(RtArchive, MissingFileIsNotCorruption) {
   const Scratch file{"missing"}; // constructed, deliberately never written
   const auto loaded = ddx::rt::load(file.path());
   ASSERT_FALSE(loaded.has_value());
-  // The first run of a cache, not a damaged file: a caller building one acts
-  // on the difference.
+  // The first run of a cache, not a damaged file.
   EXPECT_EQ(loaded.error().code, ddx::errc::archive_io);
 }
 
-// Nothing below may abort.  Under -fno-exceptions a Boost throw would, which
-// is exactly why the checksum and the invariants are cleared before a byte is
-// trusted -- these are the cases that prove the order holds.
+// Nothing below may abort: under -fno-exceptions a Boost throw would, which is
+// why the checksum and the invariants clear before a byte is trusted.
 TEST(RtArchive, RefusesATruncatedFile) {
   const Scratch file{"truncated"};
   ASSERT_TRUE(coupled().save(file).has_value());
@@ -223,16 +207,15 @@ TEST(RtArchive, RefusesForeignAndFutureFiles) {
   file.write(wrong_magic);
   EXPECT_EQ(ddx::rt::load(file.path()).error().code, ddx::errc::bad_archive);
 
-  // A format counter this build does not read.  Bumped in place: the checksum
-  // covers the payload, not the prologue, so this is what a future writer's
-  // file looks like to us.
+  // Bumped in place: the checksum covers the payload, not the prologue, so this
+  // is what a future writer's file looks like to us.
   auto future = whole;
   future[8] = std::byte{0xFF};
   file.write(future);
   EXPECT_EQ(ddx::rt::load(file.path()).error().code, ddx::errc::bad_archive);
 
-  // A reserved byte claimed by nobody yet.  Letting one through would make
-  // claiming it later a silent format change.
+  // Letting a reserved byte through would make claiming it later a silent
+  // format change.
   auto reserved = whole;
   reserved[44] = std::byte{0x01};
   file.write(reserved);
@@ -249,32 +232,18 @@ TEST(RtArchive, RefusesTheWrongScalar) {
 
 // Concurrent writers to one path all succeed, and the file is one of theirs.
 //
-// What this actually catches, measured rather than assumed: with a shared
-// staging name the *losing rename fails*.  A writer renames `path.tmp` over the
-// target, and the next one finds nothing left to rename -- so a legitimate
-// write reports an error.  Reverting stage_suffix() to a bare ".tmp" produces
-// ~900 failed writes out of 1280 here, every time.
-//
-// It is NOT a torn-file test, though the assertions below would catch one.
-// Tearing was not reachable at all: distinct payloads at 1 KiB, 64 KiB and
-// 1 MiB, forty rounds each, gave 0 torn files and 40/40 whole ones even with
-// the bug present, because rename is atomic and the content race resolves
-// before it.  The whole-file and checksum checks are kept -- they cost nothing
-// and state the property the function is *for* -- but the failing-write
-// assertion is what does the work, and a future reader should not conclude
-// from a green run that tearing is covered.  It is not, and on this platform it
-// may not be reachable to cover.
-//
-// Threads rather than processes because they share the staging name the same
-// way and a test can actually join them.
+// What it catches, measured: with a shared staging name the *losing rename
+// fails* -- a bare ".tmp" gives ~900 failed writes out of 1280 here.  It is NOT
+// a torn-file test.  Tearing was unreachable at 1 KiB, 64 KiB and 1 MiB over
+// forty rounds each with the bug present, rename being atomic; the whole-file
+// checks state the property but the failing-write assertion does the work.
 TEST(RtArchive, ConcurrentWritersToOnePathAllSucceed) {
   const Scratch file{"racing"};
   constexpr std::size_t kWriters = 8;
   static_assert(kWriters >= 2, "one writer races nobody");
 
-  // Built up front: build_hessian_impl appends to its arena, so an equation is
-  // not something two threads may construct over one Builder.  Each thread gets
-  // a distinct model, so the file it wrote is identifiable afterwards.
+  // Built up front: build_hessian_impl appends to its arena, so two threads may
+  // not construct over one Builder.  Distinct models, so a file is traceable.
   std::vector<std::vector<std::byte>> payloads;
   for (std::size_t k = 0; k < kWriters; ++k) {
     const auto eq = ddx::rt::equation([k] {
@@ -286,19 +255,12 @@ TEST(RtArchive, ConcurrentWritersToOnePathAllSucceed) {
     payloads.push_back(one.bytes());
   }
 
-  // Everything below rests on the payloads being pairwise distinct: that is
-  // what makes a torn file detectable at all, since a mixture of two identical
-  // ones is identical to both.  Assert it rather than trust that eight models
-  // written to look different still are -- `x * 1.0` folds to `x`, and a later
-  // tidy-up of these models could quietly make two of them agree and leave
-  // every other assertion here green forever.
+  // Asserted, not assumed: a mixture of two identical payloads is identical to
+  // both, and `x * 1.0` folds to `x`, so a tidy-up of these models could make
+  // two agree and leave every assertion below green forever.
   //
-  // The overlap is *forced*, below, rather than asserted.  Asserting it would
-  // be scheduling-dependent and go intermittent on a loaded runner; leaving it
-  // to chance would let the writers serialise one day and the test would pass
-  // having exercised nothing concurrent.  A latch makes "they all write at
-  // once" a fact about the code instead of about the scheduler, and needs no
-  // assertion at all.
+  // The overlap is *forced* by the latch rather than asserted -- asserting it
+  // would be a fact about the scheduler.
   for (std::size_t a = 0; a < payloads.size(); ++a) {
     for (std::size_t b = a + 1; b < payloads.size(); ++b) {
       ASSERT_NE(payloads[a], payloads[b]) << "writers " << a << " and " << b;
@@ -318,8 +280,7 @@ TEST(RtArchive, ConcurrentWritersToOnePathAllSucceed) {
   }
   writers.clear(); // join
 
-  // The stronger property, which this test states but does not reliably
-  // exercise -- see the note above.
+  // Stated but not reliably exercised -- see the note above.
   const auto landed = file.bytes();
   EXPECT_TRUE(std::ranges::any_of(
       payloads, [&landed](const auto &p) { return p == landed; }))
@@ -371,8 +332,8 @@ TEST(RtArchive, CacheRebuildsWhenTheModelChanges) {
   });
   EXPECT_FALSE(before.loaded());
 
-  // The same symbols, a different model: the key is the arena, so this must
-  // rebuild and overwrite rather than load what is there.
+  // The key is the arena, so the same symbols over a different model must
+  // rebuild and overwrite.
   const auto after = ddx::rt::equation(file.path(), [] {
     const auto x = ddx::rt::var("x");
     return x * x * x;
@@ -409,14 +370,11 @@ TEST(RtArchive, CacheSurvivesACorruptFile) {
       << "and it left a good file behind";
 }
 
-// Every byte of a real file, corrupted every way a single byte can be.  A
-// parser that reads a length out of the payload is exactly the kind that walks
-// off the end when the length is wrong, and there is no throw here to catch it
-// -- a Boost one would abort.  So the claim is not that these are refused with
-// the right code, only that every one of them *returns*.
-//
-// Deterministic: a fixed generator over fixed offsets, so a failure is a
-// failure every run rather than once a week on someone else's machine.
+// Every byte of a real file, corrupted every way a single byte can be.  The
+// claim is not that these are refused with the right code, only that every one
+// *returns*: a parser reading a length out of the payload walks off the end
+// when the length is wrong, and there is no throw here to catch it.
+// Deterministic, so a failure is a failure every run.
 TEST(RtArchive, SurvivesEverySingleByteCorruption) {
   const Scratch file{"fuzz"};
   ASSERT_TRUE(coupled().save(file).has_value());
@@ -434,8 +392,8 @@ TEST(RtArchive, SurvivesEverySingleByteCorruption) {
       auto bytes = whole;
       bytes[at] ^= mask;
       file.write(bytes);
-      // The only requirement: it comes back.  Under ASan this is also where a
-      // read past the payload would be caught.
+      // The only requirement: it comes back.  Under ASan, also where a read
+      // past the payload would be caught.
       if (const auto loaded = ddx::rt::load(file.path())) {
         ++accepted;
       } else {
@@ -443,12 +401,9 @@ TEST(RtArchive, SurvivesEverySingleByteCorruption) {
       }
     }
   }
-  // What this sweep does and does not prove.  It proves every single-byte
-  // corruption *returns* rather than walking off the end.  It does not prove
-  // the file's meaning is protected: measured, 390 of 4290 corruptions get past
-  // the checksum, and none of them happened to be the one bit in the one label
-  // that silently remapped an opcode -- see RefusesAFlippedOpcodeLabel, which
-  // had to be reasoned out rather than stumbled on.
+  // This proves every single-byte corruption *returns*.  It does not prove the
+  // file's meaning is protected: 390 of 4290 get past the checksum, and none
+  // was the one bit that remapped an opcode -- see RefusesAFlippedOpcodeLabel.
   EXPECT_GT(refused, 0u);
   EXPECT_EQ(refused + accepted, 3 * (ddx::rt::header_bytes +
                                      (whole.size() - ddx::rt::header_bytes +
@@ -465,26 +420,20 @@ TEST(RtArchive, SurvivesEveryTruncation) {
     auto cut = whole;
     cut.resize(keep);
     file.write(cut);
-    // No prefix of a valid file is a valid file: the payload length in the
-    // prologue no longer matches what follows it.
+    // No prefix of a valid file is a valid file: the prologue's payload length
+    // no longer matches what follows it.
     EXPECT_FALSE(ddx::rt::load(file.path()).has_value()) << "kept " << keep;
   }
 }
 
-// A payload whose checksum agrees, and whose contents are still a lie.
+// A payload whose checksum agrees and whose contents are still a lie -- the
+// case neither fuzz loop can reach, since damage is caught by the checksum long
+// before anything parses it.  Written through the real serialiser, which
+// recomputes the CRC.
 //
-// This is the case neither fuzz loop above can reach, and the distinction is
-// the point: they *damage* a file, and damage is caught by the checksum long
-// before anything parses it.  Everything past the checksum is untested by
-// construction unless a test forges a consistent payload instead -- so this one
-// writes through the real serialiser, which recomputes the CRC.
-//
-// A colouring's `count` is read straight from the file and is what indexes the
-// two colours-by-n tables.  `count * nsym` is where a forged count wraps and
-// agrees with a length it has no business agreeing with, and the graph then
-// carries a colour count of 4.6e18 into every consumer that walks one.  Only an
-// even symbol count can do it: with an odd nsym the multiply is invertible
-// modulo 2^64, so no second count exists.
+// `count` indexes the two colours-by-n tables, and `count * nsym` is where a
+// forged one wraps into agreeing with a length.  Only an even symbol count can
+// do it: an odd nsym makes the multiply invertible modulo 2^64.
 TEST(RtArchive, RefusesAForgedColouringCount) {
   const Scratch file{"forged"};
   const auto four = ddx::rt::equation([] {
@@ -516,18 +465,13 @@ TEST(RtArchive, RefusesAForgedColouringCount) {
 }
 
 // The opcode table is what every opcode byte in the payload *means*, so it is
-// inside the checksum.  It was not, at format 1, and this is the case that
-// found it: '+' is 0x2B and '/' is 0x2F -- one bit apart, and both binary, so
-// remapping every Add to a Div passes sound()'s arity check untouched.
+// inside the checksum: '+' is 0x2B and '/' is 0x2F, one bit apart and the same
+// arity, so remapping every Add to a Div passes sound() untouched.
 //
-// The model deliberately contains no '+' of its own.  Every Add in it is one
-// the reverse sweep created, which puts it *above* model_nodes and so beyond
-// the reach of the header's model digest -- the defence that catches this same
-// flip when it lands in the model itself.  Both halves are needed: the digest
-// covers the model, the checksum covers everything.
-//
-// Not reachable by the byte-flip sweep above, which is why that sweep did not
-// find it: this needs a specific bit in a specific label.
+// The model deliberately contains no '+' of its own.  Every Add in it is one the
+// reverse sweep created, which puts it above model_nodes and so beyond the model
+// digest -- the digest covers the model, the checksum covers everything.  The
+// byte-flip sweep cannot reach this: it needs a specific bit in one label.
 TEST(RtArchive, RefusesAFlippedOpcodeLabel) {
   const Scratch file{"label"};
   const auto eq = ddx::rt::equation([] {
@@ -554,8 +498,7 @@ TEST(RtArchive, RefusesAFlippedOpcodeLabel) {
 
   const auto loaded = ddx::rt::load(file.path());
   if (loaded) {
-    // Precise, so a future reader sees what was at stake rather than only that
-    // something was refused.
+    // Precise, so a reader sees what was at stake.
     EXPECT_EQ(*loaded->jacobian(0.7), want)
         << "an opcode was remapped and the gradient moved";
     FAIL() << "a flipped opcode label was accepted";
@@ -563,24 +506,15 @@ TEST(RtArchive, RefusesAFlippedOpcodeLabel) {
   EXPECT_EQ(loaded.error().code, ddx::errc::archive_corrupt);
 }
 
-// The prologue is the one region a checksum cannot cover, because the checksum
-// lives in it.  So every field it carries is verified field by field, and no
-// field is written that is not verified -- inert-but-unprotected is the state a
-// field is in immediately before it is read, trusted, and wrong.
+// The prologue is the one region a checksum cannot cover, the checksum living
+// in it, so every field is verified and none is written that is not.
 //
-// Swept rather than spot-checked, deliberately: this is what catches the *next*
-// prologue field somebody adds and forgets to check.  It found `model_nodes`,
-// which was duplicated in the payload under the checksum and so read back by
-// nobody -- 12 of 168 corruptions accepted, all four of its bytes.
+// Swept rather than spot-checked: this catches the *next* field somebody adds
+// and forgets.  It found `model_nodes` -- 12 of 168 corruptions accepted.
 //
-// Exhaustive rather than a few masks, also deliberately.  A sampled mask set is
-// only adequate while every field is checked by *exact* equality against a
-// value derived elsewhere, which is true today -- and a field checked against a
-// range instead, which is the natural shape of a new one, can accept a value
-// that some masks never produce and others do.  Rather than write that
-// precondition down and hope, the sweep tries all 255 corruptions of every
-// byte, so its adequacy does not depend on how the next field gets checked.
-// 1.5 s, nearly all of it writing files.
+// Exhaustive rather than a few masks: a sampled set is adequate only while
+// every field is checked by exact equality, and a range-checked field can
+// accept a value some masks never produce.  1.5 s, nearly all of it file I/O.
 TEST(RtArchive, EveryPrologueByteIsVerified) {
   const Scratch file{"prologue"};
   ASSERT_TRUE(coupled().save(file).has_value());
@@ -602,8 +536,7 @@ TEST(RtArchive, EveryPrologueByteIsVerified) {
 // --- the pieces --------------------------------------------------------------
 
 // Opcode bytes are table-order, so the file names them by label and remaps on
-// load.  That is what keeps a file readable when a transcendental is appended
-// to DDX_UNARY_MATH_TABLE and every enumerator above it shifts.
+// load -- which is what survives appending to DDX_UNARY_MATH_TABLE.
 TEST(RtArchive, OpcodesTravelByLabel) {
   const auto labels = ddx::rt::opcode_labels();
   ASSERT_EQ(labels.size(), ddx::rt::op_count);
@@ -615,8 +548,8 @@ TEST(RtArchive, OpcodesTravelByLabel) {
   EXPECT_FALSE(ddx::rt::opcode_of("no such op").has_value());
 }
 
-// The stamp is what makes a changed struct refuse old files rather than
-// misread them, so it must actually depend on the fields.
+// The stamp refuses old files rather than misreading them, so it must actually
+// depend on the fields.
 TEST(RtArchive, TheSchemaStampSeparatesShapes) {
   constexpr auto snapshot = ddx::rt::detail::schema_of<ddx::rt::Snapshot<double>>();
   constexpr auto narrower = ddx::rt::detail::schema_of<ddx::rt::Snapshot<float>>();
@@ -626,9 +559,8 @@ TEST(RtArchive, TheSchemaStampSeparatesShapes) {
   EXPECT_NE(snapshot, 0u);
 }
 
-// A saved arena is installed verbatim rather than replayed: make() folds and
-// swaps a commutative pair, so a replay would renumber the very ids the saved
-// Jacobian and colouring name.
+// A saved arena is installed verbatim, not replayed: make() folds and swaps a
+// commutative pair, renumbering the ids the saved sweeps name.
 TEST(RtArchive, LoadedIdsAreTheSavedIds) {
   const Scratch file{"ids"};
   const auto built = coupled();
@@ -637,8 +569,7 @@ TEST(RtArchive, LoadedIdsAreTheSavedIds) {
   auto snap = ddx::rt::load_snapshot(file.path());
   ASSERT_TRUE(snap.has_value()) << snap.error().code;
 
-  // rebuild() consumes the node array -- it becomes the arena's -- so the
-  // comparison keeps its own copy.
+  // rebuild() consumes the node array, so the comparison keeps its own copy.
   const auto saved = snap->nodes;
   const auto arena = ddx::rt::rebuild(*snap);
   ASSERT_EQ(arena->size(), saved.size());
@@ -653,11 +584,9 @@ TEST(RtArchive, LoadedIdsAreTheSavedIds) {
 
 // --- the machine code --------------------------------------------------------
 //
-// The graph half of a file saves milliseconds; this half saves a compile, which
-// at these sizes is hundreds of them.  A stored kernel is only ever run when
-// the graph, the host and the options it was emitted under all still agree --
-// adopt() cannot tell that an object came from another graph, so nothing
-// reaches it that has not been checked first.
+// The graph half of a file saves milliseconds; this half saves a compile.  A
+// stored kernel runs only where graph, host and options all still agree --
+// adopt() cannot tell that an object came from another graph.
 #ifdef DDX_HAS_JIT
 TEST(RtArchive, CarriesTheCompiledKernel) {
   const Scratch file{"kernel"};
@@ -673,8 +602,8 @@ TEST(RtArchive, CarriesTheCompiledKernel) {
 
   const auto loaded = ddx::rt::load(file.path());
   ASSERT_TRUE(loaded.has_value()) << loaded.error().code;
-  // No wait_for_kernel(): the kernel was linked from the file during the
-  // freeze, so it is already answering.  That is the whole claim.
+  // No wait_for_kernel(): linked from the file during the freeze, so it is
+  // already answering.  That is the whole claim.
   EXPECT_TRUE(loaded->uses_kernel());
   EXPECT_TRUE(loaded->kernel_level().has_value());
 
@@ -687,12 +616,12 @@ TEST(RtArchive, CarriesTheCompiledKernel) {
 TEST(RtArchive, SavesNoKernelWithoutRetainObject) {
   const Scratch file{"no_retain"};
   auto built = coupled();
-  built.options({.backend = ddx::jit::Backend::Compile});
+  built.options({.backend = ddx::jit::Backend::Compile,
+                 .retain_object = false});
   ASSERT_TRUE(built.wait_for_kernel());
   ASSERT_TRUE(built.save(file).has_value());
 
-  // The graph is there and the code is not, which is a shortfall in what the
-  // file is worth rather than a failure.
+  // A shortfall in what the file is worth rather than a failure.
   const auto snap = ddx::rt::load_snapshot(file.path());
   ASSERT_TRUE(snap.has_value());
   EXPECT_TRUE(snap->objects.empty());
@@ -708,11 +637,10 @@ TEST(RtArchive, RefusesAKernelFromAnotherGraph) {
 
   ASSERT_TRUE(built.save(file).has_value());
 
-  // The right code, relabelled as some other graph's, and written back through
-  // the same serialiser so the checksum still holds.  A stored kernel run
-  // against a graph it was not emitted from is silently wrong arithmetic, so
-  // the digest is what has to gate it -- not the checksum, which would happily
-  // agree.
+  // The right code relabelled as another graph's, written back through the same
+  // serialiser so the checksum still holds: a stored kernel run against a graph
+  // it was not emitted from is silently wrong arithmetic, and the digest is what
+  // gates it.
   auto snap = ddx::rt::load_snapshot(file.path());
   ASSERT_TRUE(snap.has_value());
   ASSERT_FALSE(snap->objects.empty());

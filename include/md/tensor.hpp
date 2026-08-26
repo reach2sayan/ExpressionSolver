@@ -15,9 +15,9 @@
 namespace ddx::impl {
 
 // An owning, constant-evaluable tensor with compile-time extents.  t[i][j][k]
-// is not a slice -- a rank-reducing view needs submdspan, which the packed and
-// sparse layouts do not support -- so the proxy accumulates the prefix and
-// calls the mapping once at the last subscript.  None of it survives -O2.
+// is not a slice: a rank-reducing view needs submdspan, which the packed and
+// sparse layouts do not support, so the proxy accumulates the prefix and calls
+// the mapping once at the last subscript.  None of it survives -O2.
 
 namespace detail {
 

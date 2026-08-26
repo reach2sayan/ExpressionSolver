@@ -9,31 +9,24 @@ option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
 # accuracy for speed belongs here -- in particular never -ffast-math (nor
 # /fp:fast on MSVC, which needs no flags at all).
 option(DDX_FP_FLAGS "Pin FP contraction and drop errno on libm calls" ON)
-# ddx is built without exceptions and throws nothing: errors come back as values
-# -- std::expected from the drivers, jit::error from the backend -- so there is
-# no configuration in which the flag would be wrong, and none to choose.  Our own
-# targets only, as ever: the headers throw nothing either, but what a consumer
-# compiles with is the consumer's business.
+# ddx throws nothing -- errors come back as values -- so -fno-exceptions has no
+# configuration to choose.  Our own targets only: what a consumer compiles with
+# is theirs.
 
 if (MSVC)
     # /bigobj: one TU instantiates past the 2^16 COFF section limit.
     set(DDX_CODEGEN_FLAGS /arch:AVX2 /bigobj)
-    # /Wall noise a header-only expression-template library emits by the
-    # thousand.  C4365 and C5219 are deliberately left on.  C4866 fires on every
-    # subscript of a range view -- an overloaded operator[] whose operands are a
-    # view and a loop counter, so there is no evaluation order to get wrong.
-    # C4061 wants a case per enumerator even where the switch has a default,
-    # which is what the default is for.
+    # /Wall noise an expression-template library emits by the thousand; C4365
+    # and C5219 are deliberately left on.  C4866 fires on every range-view
+    # subscript, where there is no evaluation order to get wrong, and C4061
+    # wants a case per enumerator even where the switch has a default.
     set(DDX_WARNINGS /Wall /wd4061 /wd4623 /wd4625 /wd4626 /wd5026 /wd5027
                      /wd4710 /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514
                      /wd4324 /wd5266 /wd4866)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-    # C4577 with the flag that causes it rather than among the warnings: it
-    # reports `noexcept` under /EHs-c-, which is every noexcept in the project
-    # and in mdspan and Boost besides, so it describes the build ddx chose rather
-    # than a mistake in it -- and it fires at /W1, so anyone applying the
-    # recorded ddx_CODEGEN_FLAGS without our /Wall set gets it by the thousand
-    # too.  tests/package is exactly that consumer.
+    # C4577 sits with the flag that causes it, not among the warnings: it
+    # reports `noexcept` under /EHs-c- and fires at /W1, so a consumer applying
+    # the recorded flags without our /Wall set gets it too.
     list(APPEND DDX_CODEGEN_FLAGS /EHs-c- /D_HAS_EXCEPTIONS=0 /wd4577)
 else ()
     if (ENABLE_NATIVE_ARCH)
@@ -49,11 +42,9 @@ else ()
     set(DDX_WARNINGS -Wall -Wextra -Wpedantic -Wfatal-errors)
 endif ()
 
-# A sanitizer has to instrument everything in the tree, gtest included, or its
-# reports are unreliable -- so this goes on globally rather than through
-# ddx_target_flags().  MSVC has no TSan and only a partial ASan, so the option is
-# a no-op there rather than a hard error: a preset that asks for it should still
-# configure on Windows.
+# Global rather than through ddx_target_flags(): a sanitizer has to instrument
+# everything, gtest included.  A no-op on MSVC rather than an error, so a preset
+# asking for one still configures on Windows.
 set(DDX_SANITIZE "off" CACHE STRING "off | thread | address | undefined")
 set_property(CACHE DDX_SANITIZE PROPERTY STRINGS off thread address undefined)
 if (NOT DDX_SANITIZE STREQUAL "off")

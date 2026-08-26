@@ -31,11 +31,10 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
       ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
 }
 
-// Each arithmetic operator in its three shapes: expression OP expression, with
+// Each arithmetic operator in its three shapes: expression OP expression with
 // the folding ladder, and the two scalar-promoted forms.  Only the node branch
-// differs, so that is the macro argument.  Folding keeps a literal-only subtree
-// from becoming a node; a T-valued template argument exists only for structural
-// T, so a dual scalar can put back only the 0 and 1 differentiation makes.
+// differs, so that is the macro argument.  A T-valued template argument exists
+// only for structural T, so a dual scalar puts back only 0 and 1.
 #define DDX_EXPR_BINOP(OP, ...)                                                \
   template <CExpression LHS, CExpression RHS>                                  \
     requires CompatibleValueTypes<LHS, RHS>                                    \
@@ -122,8 +121,7 @@ DDX_EXPR_BINFN(min, MinOp)
 namespace detail {
 
 // read() is the only member a specialisation supplies.  CRTP rather than a data
-// member: the compile-time form has to stay std::is_empty_v to select the
-// stateless node storage.
+// member: the compile-time form has to stay std::is_empty_v.
 template <typename Derived, Numeric T>
 class ConstantOps : public EquationConvertible<Derived> {
 public:

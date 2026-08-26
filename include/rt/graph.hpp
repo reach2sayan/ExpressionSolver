@@ -20,15 +20,13 @@
 
 namespace ddx::impl {
 // Redeclared rather than relied on through rt/expressions.hpp: GraphBuilder
-// befriends it below, and the nodes it hands over are ones an Equation has
-// already swept.
+// befriends it below.
 template <typename... Ts> class Equation;
 } // namespace ddx::impl
 
 namespace ddx::py {
-// The Python equation, which sweeps once and freezes three lanes off the one
-// result exactly as the facade does -- so it hands over a Hessian for the same
-// reason and is befriended for it.
+// The Python equation freezes three lanes off one sweep as the facade does, so
+// it hands over a Hessian for the same reason.
 class PyEquation;
 } // namespace ddx::py
 
@@ -120,9 +118,8 @@ public:
   }
   [[nodiscard]] bool live(NodeId v) const { return live_[v]; }
 
-  // The ids the freeze kept, for a consumer that walks them once per point
-  // rather than once per graph.  Id order is topological, so a consumer emits
-  // them in one pass.  The span must not outlive this graph.
+  // The ids the freeze kept, in topological order so a consumer emits them in
+  // one pass.  The span must not outlive this graph.
   [[nodiscard]] std::span<const NodeId> live_order() const {
     return live_order_;
   }
@@ -130,9 +127,8 @@ public:
   [[nodiscard]] std::size_t live_count() const { return live_order_.size(); }
 
   // live_order() for a consumer that contracts: a multiply every reader
-  // swallowed into an fma is computed by nobody, so it is not in this one.  The
-  // arithmetic is the same walk's -- contraction_at() decides that, off the
-  // nodes, and this only says what is left to compute.
+  // swallowed into an fma is computed by nobody.  contraction_at() decides the
+  // arithmetic, off the nodes; this only says what is left to compute.
   [[nodiscard]] std::span<const NodeId> contracted_order() const {
     return contracted_order_;
   }
@@ -167,8 +163,7 @@ private:
   using adjacency_type = Adjacency;
   using vertex_type = Vertex;
 
-  // The compressed rows themselves.  Only the DOT writer wants them: everything
-  // else reads a node's operands, which is what `operands` answers.
+  // Only the DOT writer wants these; everything else reads `operands`.
   friend class Dot<T>;
   [[nodiscard]] const adjacency_type &children() const { return children_; }
 
@@ -194,12 +189,9 @@ private:
     live_order_ = live_nodes() | impl::to<std::vector<NodeId>>();
   }
 
-  // What a contracting consumer still has to compute.  The contraction itself
-  // is not a decision this freeze makes -- contraction_at() reads it off the
-  // nodes, and answers the same for an arena nobody froze -- so all that is
-  // settled here is liveness under it: an add reaches the multiply's operands
-  // rather than the multiply, and a multiply nothing else reads then reaches
-  // nobody and drops out, the Neg of a subtraction with it.
+  // Liveness under contraction, which is all this freeze settles -- an add
+  // reaches the multiply's operands rather than the multiply, so a multiply
+  // nothing else reads drops out with the Neg of a subtraction behind it.
   void contract() {
     const std::vector<bool> live = detail::reachable(
         properties_.size(), outputs_, [this](NodeId v, auto &&mark) {
@@ -295,9 +287,8 @@ public:
   }
 
 private:
-  // The Hessian an Equation already holds, so the arena is not swept again --
-  // rt::build_hessian_impl appends to the builder, and freeze() must not.  Only
-  // an Equation has one to hand over; everyone else asks for `build_hessian()`.
+  // The Hessian an Equation already holds, so the arena is not swept again:
+  // rt::build_hessian_impl appends to the builder, and freeze() must not.
   template <typename... Ts> friend class impl::Equation;
   friend class py::PyEquation;
   constexpr GraphBuilder &hessian_from(const Hessian &h) {

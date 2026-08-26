@@ -189,9 +189,8 @@ private:
     return result;
   }
 
-  // The symbolic trees, and their partials.  Every other member reduces them to
-  // numbers at a point, and the one thing that wants the trees themselves is
-  // the formatter -- which prints each output with its Jacobian row underneath.
+  // The symbolic trees and their partials.  Every other member reduces them to
+  // numbers at a point; the formatter is what wants the trees themselves.
   friend struct ::std::formatter<Equation<TFirst, TRest...>, char>;
 
   [[nodiscard]] constexpr const Exprs &functions() const noexcept {
@@ -254,11 +253,10 @@ public:
                       requires(output_dim == 1 && N <= input_dim))
 
   // Symbolic evaluates the stored partial trees; Reverse never builds them.
-  // The leading output axis appears only with more than one output, here as in
-  // hessian() and derivative_tensor(): output_dim picks the shape, see
-  // jacobian_t.  The two reverse branches sweep different symbol lists -- the
-  // m == 1 one over the canonicalised expression's own -- and part company only
-  // when canonicalisation folds a symbol away.
+  // The leading output axis appears only with more than one output, as in
+  // hessian() and derivative_tensor().  The two reverse branches sweep
+  // different symbol lists and part company only when canonicalisation folds a
+  // symbol away.
   template <DiffMode Mode = DiffMode::Reverse>
   [[nodiscard]] constexpr auto
   jacobian(const CEvalArg auto &...args) const noexcept
@@ -317,9 +315,8 @@ public:
         args...);
   }
 
-  // A plain number, not a one-entry tensor.  Spelled over a plain scalar, so
-  // unlike hessian() and derivative_tensor() it has to be guarded rather than
-  // disappearing with forward mode.
+  // A plain number, not a one-entry tensor.  Spelled over a plain scalar, so it
+  // has to be guarded rather than disappearing with forward mode.
   template <std::size_t Order>
   [[nodiscard]] DDX_ALWAYS_INLINE constexpr auto
   univariate_derivative(scalar_base_t<value_type> x0) const noexcept

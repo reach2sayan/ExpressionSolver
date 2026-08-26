@@ -568,7 +568,7 @@ thousands — so there the saving worth having is the machine code, which the
 file also carries:
 
 ```cpp
-eq.options({.backend = rt::Backend::Compile, .retain_object = true});
+eq.options({.backend = rt::Backend::Compile});
 eq.wait_for_kernel();
 eq.save("f.ddx");                 // the kernel travels with the graph
 
@@ -578,9 +578,10 @@ warm.uses_kernel();               // true, with nothing having compiled
 
 Measured at 64, 128 and 256 variables: 38/79/179 ms to build and compile, against
 0.40/0.63/1.12 ms to load — 96× to 160×, with emission, the pass pipeline and
-codegen not run at all. `retain_object` is off by default, since a kernel does
-not keep a megabyte of machine code alive on the chance that someone saves it;
-an equation compiled without it saves its graph and no code.
+codegen not run at all. `retain_object` is on by default, so the bytes are
+there when a save comes; the price is that every kernel holds its object alive,
+and a caller that never saves turns it off — the equation then saves its graph
+and no code.
 
 A stored kernel is run only where the graph, the host and the options it was
 emitted under all still agree. Anything else compiles instead — a mismatch is

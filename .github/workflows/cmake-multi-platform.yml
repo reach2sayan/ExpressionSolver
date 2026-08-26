@@ -30,34 +30,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # g++-14, not the image's default g++/libstdc++: the library floor is
-      # libstdc++ 14 (std::ranges::to), and clang on Linux compiles against the
-      # newest libstdc++ installed, so this line is what feeds both Linux jobs.
-      #
-      # clang-20, not the image's default clang-18: libstdc++ gates <expected>
-      # on __cpp_concepts >= 202002L, and Clang first defines that in 19.
-      #
-      # libboost-dev is what both the build and the consumer find: ddx finds
-      # Boost rather than fetching it, so ddx_use_boost() needs it here, and
-      # tests/package configures a separate project against the built and the
-      # installed ddx whose find_package(Boost) has to answer for itself.
+      # g++-14 for the libstdc++ 14 floor (std::ranges::to), which clang on
+      # Linux compiles against too, so this line feeds both jobs.  clang-20
+      # because libstdc++ gates <expected> on __cpp_concepts, first defined in
+      # 19.  libboost-dev because ddx finds Boost rather than fetching it -- and
+      # so does tests/package, configuring on its own.
       - name: Install compilers and Boost (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y clang-20 gcc-14 g++-14 libboost-dev
 
-      # The core depends on the standard library and Boost.Mp11, the header-only
-      # type-list vocabulary the symbol lists are built out of, declared on
-      # ddx::ddx and found again by ddx-config.cmake.  Standard headers carry no
-      # '/', so any other angle-include with a path is a third-party leak; the
-      # vendored mdspan copy is the one exception.
-      # Recursive — the headers live in subdirectories.
+      # The core may depend on the standard library and Boost.Mp11 and nothing
+      # else.  Standard headers carry no '/', so any other angle-include with a
+      # path is a third-party leak; the vendored mdspan is the one exception.
       #
-      # include/rt/ is scoped out of that rule and given its own: it is the
-      # runtime expression graph, a separate opt-in target (ddx::rt) whose
-      # dependencies are declared, and it may reach for boost and nothing
-      # else.  The core must not depend on it in either direction.
+      # include/rt/ gets its own rule: a separate opt-in target that may reach
+      # for boost, and which the core must not depend on in either direction.
       - name: Header dependencies stay declared
         if: runner.os == 'Linux'
         shell: bash
@@ -104,9 +93,8 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -S ${{ github.workspace }}
 
-      # The runner's own vcpkg, which is preinstalled: ddx no longer fetches a
-      # Boost of its own, and the Windows image ships none.  Headers only --
-      # every Boost library ddx names is header-only.
+      # The runner's preinstalled vcpkg: ddx finds Boost and the Windows image
+      # ships none.  Headers only -- every Boost library ddx names is such.
       - name: Install Boost (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

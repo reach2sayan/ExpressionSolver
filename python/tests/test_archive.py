@@ -1,9 +1,9 @@
 """Saving and loading a built equation.
 
-The file carries the arena and the sweeps, so a loaded equation must answer
-exactly what the model that built it answers -- bit for bit, since it is the
-same graph and not merely an equivalent one.  ``tests/rt/tests_rt_archive.cpp``
-asserts the same round trip on the C++ side, over the same serialiser.
+A loaded equation must answer bit for bit what the model that built it answers,
+being the same graph and not an equivalent one.
+``tests/rt/tests_rt_archive.cpp`` asserts the same round trip over the same
+serialiser.
 """
 
 from __future__ import annotations
@@ -228,15 +228,12 @@ def test_the_kernel_travels_with_the_graph(tmp_path: Path) -> None:
 
     path = tmp_path / "kernel.ddx"
     built = _coupled()
-    # Off by default: a kernel does not hold a megabyte of machine code alive
-    # on the chance that someone saves it.
-    built.compile(retain_object=True)
+    built.compile(retain_object=True)  # the default, stated for what it does
     assert built.uses_kernel
     built.save(path)
 
     loaded = ddx.load(path)
-    # No compile() call: the kernel was linked from the file, so it is already
-    # answering.  That is the whole claim.
+    # No compile() call: linked from the file, so already answering.
     assert loaded.uses_kernel
     np.testing.assert_array_equal(loaded(POINT), built(POINT))
     for got, want in zip(loaded.jacobian(POINT), built.jacobian(POINT), strict=True):

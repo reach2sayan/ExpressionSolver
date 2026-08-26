@@ -12,9 +12,8 @@
 #include "rt/interpret.hpp"
 #include "util/ranges.hpp"
 
-// Unconditional, both of them: jit::Options and jit::Kernel are header types,
-// so the Python surface has one shape whether or not the backend was compiled
-// in.  Only bringing an LLJIT up needs the library, and that is compiler().
+// Unconditional: jit::Options and jit::Kernel are header types, so the Python
+// surface has one shape whether or not the backend was compiled in.
 #include "jit/kernel.hpp"
 #include "rt/equation.hpp"
 
@@ -33,12 +32,9 @@
 #include <utility>
 #include <vector>
 
-// What ddx::impl::Equation is, with the output count a runtime value.
-//
-// Much smaller than the facade for one reason: the GIL is the lock.  Every
-// freeze, poll and adopt below runs holding it, and only the kernel or the
-// sweep itself gives it up -- so none of the facade's shared_mutex, republished
-// shared_ptr<const Compiled> and settling dance is needed here.
+// What ddx::impl::Equation is, with the output count a runtime value.  Much
+// smaller than the facade because the GIL is the lock: every freeze, poll and
+// adopt below runs holding it, and only the kernel or the sweep gives it up.
 namespace ddx::py {
 
 class PyEquation {
@@ -51,8 +47,7 @@ public:
       : arena_(std::move(arena)), roots_(std::move(roots)),
         model_nodes_(static_cast<std::uint32_t>(arena_->size())) {}
 
-  // From a file.  The sweeps arrive filled, so nothing below ever computes
-  // them -- which is the whole of what the file is for.
+  // From a file: the sweeps arrive filled, so nothing below computes them.
   explicit PyEquation(rt::Snapshot<double> &&snap)
       : arena_(rt::rebuild(snap)), roots_(std::move(snap.roots)),
         derivative_(std::move(snap.jacobian)),
@@ -60,15 +55,12 @@ public:
         objects_(std::move(snap.objects)), model_nodes_(snap.model_nodes),
         loaded_(true) {}
 
-  // The same struct the C++ facade fills, which is what keeps one serialiser
-  // for two equations.
+  // The same struct the C++ facade fills: one serialiser, two equations.
   [[nodiscard]] rt::Snapshot<double> snapshot() {
     rt::Snapshot<double> snap;
-    // The sweeps first, and the arena after them: build_jacobian_impl and
-    // build_hessian_impl *append*, so a node array taken before they run does
-    // not contain the ids they hand back.  Lazily swept here where the facade
-    // sweeps in its constructor, which is the whole of why the order matters
-    // on this side and not on that one.
+    // The sweeps first, the arena after: they *append*, so a node array taken
+    // before they run lacks the ids they hand back.  The order matters here and
+    // not in the facade because this side sweeps lazily.
     snap.jacobian = derivative();
     snap.hessians = sweeps();
     snap.symbols = arena_->symbols();
@@ -115,9 +107,7 @@ public:
   }
 
   // The machine code the lanes are holding, for the file to carry.  Only
-  // kernels that kept their bytes -- Options.retain_object, off by default,
-  // since a megabyte held for the life of every kernel that will never be saved
-  // is not a cost a compile should pay.
+  // kernels that kept their bytes -- Options.retain_object, on by default.
   [[nodiscard]] std::vector<rt::Object> objects() {
     jit::Compiler *const c = compiler();
     if (c == nullptr) {
@@ -145,9 +135,8 @@ public:
     return options_;
   }
 
-  // Discards whatever was compiled, so the choice holds however late it is
-  // made.  Choosing a compiling backend also starts the compile, so it overlaps
-  // whatever the caller does next rather than landing in their first call.
+  // Discards whatever was compiled, so the choice holds however late.  Choosing
+  // a compiling backend starts the compile, so it overlaps what comes next.
   void set_options(const jit::Options &opt) {
     if (opt == options_) {
       return;
@@ -160,12 +149,11 @@ public:
   }
 
   // The only thing that waits.  A call does not: until the kernel lands the
-  // graph is swept, and the kernel replaces the sweep the moment it arrives.
+  // graph is swept, and the kernel replaces the sweep when it arrives.
   [[nodiscard]] bool wait_for_kernel() {
     Lane &l = lane(Want::Jacobian);
     if (l.pending.valid()) {
-      // The GIL serialises everything else here, so it is given up around the
-      // wait alone -- never around the lane bookkeeping.
+      // Given up around the wait alone, never around the lane bookkeeping.
       const pyb::gil_scoped_release unlocked;
       l.pending.wait();
     }
@@ -184,7 +172,7 @@ public:
   }
 
   // Only what is free to answer: uses_kernel() would freeze a lane, and a repr
-  // that compiles something is a repr nobody can call in a debugger.
+  // that compiles something is one nobody can call in a debugger.
   [[nodiscard]] std::string repr() const {
     return std::format("<ddx.Equation ({}) -> {} output{}>",
                        symbols() | std::views::join_with(std::string{", "}) |
@@ -198,9 +186,8 @@ public:
     unwrap(rt::save(snapshot(), path));
   }
 
-  // Whether `path` holds this equation.  Raises rather than answering false:
-  // "no" has three quite different reasons -- unreadable, unloadable, or a
-  // different equation -- and only the errc says which.
+  // Raises rather than answering false: "no" has three reasons -- unreadable,
+  // unloadable, a different equation -- and only the errc says which.
   void verify(const std::filesystem::path &path) {
     auto snap = rt::load_snapshot<double>(path);
     if (!snap) {
@@ -211,9 +198,8 @@ public:
     }
   }
 
-  // Whether a file describes this equation: the roots as well as the model,
-  // since two equations over one arena share every node and differ only in
-  // which ids they call outputs.
+  // The roots as well as the model: two equations over one arena share every
+  // node and differ only in which ids they call outputs.
   [[nodiscard]] bool describes(const rt::Snapshot<double> &snap) const {
     return snap.roots.size() == roots_.size() &&
            std::ranges::equal(snap.roots, roots_) &&
@@ -249,10 +235,9 @@ private:
     return l;
   }
 
-  // Freezing a lane and launching its compile are one step, deliberately.
-  // Split, a lane could be ready having compiled nothing, and the next caller
-  // would find it ready, conclude there was nothing to do, and interpret
-  // forever -- with every answer still right, so nothing would ever say so.
+  // Freezing a lane and launching its compile are one step deliberately: split,
+  // a lane could be ready having compiled nothing, and the next caller would
+  // find it ready and interpret forever with every answer still right.
   void prepare(Lane &l, Want want) {
     rt::GraphBuilder<double> gb{*arena_};
     gb.values_from(roots_);
@@ -270,10 +255,9 @@ private:
     if (c == nullptr) {
       return;
     }
-    // A kernel this equation was saved with is a compile already done.  Only
-    // where the graph, the host and the codegen-deciding options all still
-    // agree: adopt() cannot see that an object came from another graph, and
-    // running one that did is silently wrong arithmetic.
+    // A compile already done, adopted only where graph, host and codegen
+    // options all still agree: adopt() cannot see that an object came from
+    // another graph, and running one that did is silently wrong arithmetic.
     const auto lane_id = static_cast<std::uint8_t>(want);
     const auto digest = rt::digest(*l.graph);
     const auto stored =
@@ -285,8 +269,7 @@ private:
         });
     if (stored != objects_.end()) {
       // Shapes from the graph just frozen, never from the file: a forged entry
-      // may supply code and a symbol but cannot claim an arity, which is what
-      // bounds what one can do.
+      // may supply code and a symbol but cannot claim an arity.
       const auto &layout = l.graph->layout();
       if (auto adopted =
               c->adopt(stored->code, stored->symbol, l.graph->symbols().size(),
@@ -299,8 +282,8 @@ private:
     l.pending = c->compile_async(l.graph, effective_options());
   }
 
-  // Publish a compile that has landed.  A refused one leaves the kernel empty
-  // and the sweep simply stays -- the JIT is never a correctness dependency.
+  // A refused compile leaves the kernel empty and the sweep stays: the JIT is
+  // never a correctness dependency.
   void adopt(Lane &l) {
     using namespace std::chrono_literals;
     if (!l.pending.valid() ||
@@ -313,8 +296,8 @@ private:
     l.pending = {};
   }
 
-  // How wide to emit, from the batch the caller said they have.  A kernel `w`
-  // lanes wide does a register's worth of work to answer for a single point.
+  // How wide to emit, from the batch the caller said they have: a wide kernel
+  // does a register's worth of work to answer for a single point.
   [[nodiscard]] constexpr jit::Options effective_options() const noexcept {
     jit::Options opt = options_;
     if (opt.lanes == 0 && opt.points < kLanes) {
@@ -323,14 +306,10 @@ private:
     return opt;
   }
 
-  // The process's one LLJIT, borrowed rather than founded: a module that made
-  // its own would stand a second one up beside whatever C++ Equations in the
-  // same process already use.
-  //
-  // Null in a build without the backend, which is the only difference such a
-  // build makes: nothing compiles, no kernel lands, and the sweep answers
-  // everything -- the path a Compile backend takes anyway while its compile is
-  // still in flight.
+  // The process's one LLJIT, borrowed rather than founded: making its own would
+  // stand a second one up beside whatever C++ Equations already use.  Null in a
+  // build without the backend, where the sweep answers everything -- the path a
+  // Compile backend takes anyway while its compile is in flight.
   [[nodiscard]] static jit::Compiler *compiler() {
 #ifdef DDX_HAS_JIT
     return impl::rt_detail::shared_compiler();
@@ -339,9 +318,7 @@ private:
 #endif
   }
 
-  // Whether this equation's arithmetic contracts a multiply and an add into an
-  // FMA.  Decided in the graph, so a batch answers the same whichever path
-  // answered it.
+  // Decided in the graph, so a batch answers the same whichever path ran it.
   [[nodiscard]] constexpr bool contracts() const noexcept {
     return options_.contract;
   }
@@ -364,8 +341,8 @@ private:
         h.size() != blocks.hessian.size()) {
       fail_with(errc::wrong_column_count);
     }
-    // Past here nothing touches Python, so the GIL goes -- which is also what
-    // lets another thread call into this equation while a long batch runs.
+    // Past here nothing touches Python, so the GIL goes -- which is what lets
+    // another thread call in while a long batch runs.
     const pyb::gil_scoped_release unlocked;
     if (l.kernel) {
       l.kernel(xs, f, g, h, at.size());
@@ -374,7 +351,7 @@ private:
     interpret(*l.graph, xs, f, g, h, at.size());
   }
 
-  // The block sweep, which runs within ~1.4x of a kernel and is not a sad path.
+  // The block sweep, within ~1.4x of a kernel and not a sad path.
   void interpret(const rt::Graph<double> &graph,
                  std::span<const double *const> xs, std::span<double *const> f,
                  std::span<double *const> g, std::span<double *const> h,
@@ -396,11 +373,8 @@ private:
     };
 
     // Tapes are sized by the arena rather than the graph: it may have grown
-    // since the freeze, and live ids index below that.
-    //
-    // A batch shorter than a block sweeps one point at a time rather than
-    // padding out to kLanes -- padding is nearly free on the tail of a long
-    // batch and is the whole cost on a short one.
+    // since the freeze, and live ids index below that.  A short batch sweeps one
+    // point at a time rather than padding out to kLanes.
     if (n < kLanes) {
       std::vector<double> at(symbols);
       std::vector<double> tape(arena_->size());
@@ -416,7 +390,7 @@ private:
 
     // kLanes points per sweep: the switch is paid once per node per block, and
     // each operation becomes a lane loop wide enough to vectorise.  A short
-    // final block repeats its last point; the repeated lanes are never read.
+    // final block repeats its last point, and those lanes are never read.
     std::vector<double> lanes(symbols * kLanes);
     std::vector<double> tape(arena_->size() * kLanes);
 
@@ -437,8 +411,8 @@ private:
 
   // --- the Hessian ---------------------------------------------------------
 
-  // One function: the compiled lane holds it compressed by colour, and the
-  // colouring is what says which (colour, row) column owns a given (i, j).
+  // One function: the lane holds it compressed by colour, and the colouring says
+  // which (colour, row) column owns a given (i, j).
   [[nodiscard]] pyb::tuple hessian_from_lane(const Point &at) {
     Lane &l = lane(Want::Hessian);
     const std::size_t n = arity();
@@ -466,9 +440,8 @@ private:
   }
 
   // A system: one sweep per root, read off the arena.  A frozen graph carries a
-  // single colouring, so there is no lane that could hold m of these -- which
-  // is also why this one is a point at a time and says so rather than quietly
-  // walking the whole arena once per column of a batch.
+  // single colouring, so no lane could hold m of these -- which is why this is a
+  // point at a time and says so.
   [[nodiscard]] pyb::tuple hessian_from_arena(const Point &at) {
     if (at.batched() && at.size() != 1) {
       fail_with(errc::wrong_column_count);
@@ -479,8 +452,8 @@ private:
     std::vector<double> point(n);
     std::ranges::transform(at.columns(), point.begin(),
                            [](const double *c) { return *c; });
-    // Values, partials and Hessian::at's compressed cells -- what the three
-    // blocks below read, and nothing of the arena beyond it.
+    // Values, partials and Hessian::at's compressed cells: what the three blocks
+    // below read, and nothing of the arena beyond it.
     auto wanted = blocks | std::views::transform(&rt::Hessian::compressed) |
                   std::views::join | impl::to<std::vector<rt::NodeId>>();
     impl::append(wanted, blocks |
@@ -510,9 +483,8 @@ private:
         finish(std::move(dense), {ssize(outputs()), ssize(n), ssize(n)}, at));
   }
 
-  // Swept once and kept.  Hash consing makes a repeat sweep return the same ids
-  // and add no nodes, so this is about the colouring's cost, not the arena's
-  // size.
+  // Swept once and kept.  Hash consing makes a repeat sweep add no nodes, so
+  // this is about the colouring's cost, not the arena's size.
   [[nodiscard]] const std::vector<rt::Hessian> &sweeps() {
     if (!sweeps_) {
       sweeps_ = roots_ | std::views::transform([this](rt::NodeId r) {
@@ -523,9 +495,8 @@ private:
     return *sweeps_;
   }
 
-  // Held for the same reason the Hessians are: prepare() used to ask
-  // GraphBuilder to sweep, which swept once per lane and left a loaded
-  // equation recomputing exactly what its file had just handed it.
+  // Held for the same reason the Hessians are: swept per lane otherwise, which
+  // leaves a loaded equation recomputing what its file just handed it.
   [[nodiscard]] const rt::Jacobian &derivative() {
     if (!derivative_) {
       derivative_ = rt::build_jacobian_impl(*arena_, roots_);
@@ -535,10 +506,9 @@ private:
 
   // --- shapes --------------------------------------------------------------
 
-  // The leading axis goes when there is one function and the trailing one when
-  // the caller gave one point, so a scalar model at a point answers with a
-  // float, an (n,) gradient and an (n, n) Hessian rather than three arrays with
-  // 1s in them.
+  // The leading axis goes at one function and the trailing one at one point, so
+  // a scalar model at a point answers with a float, an (n,) gradient and an
+  // (n, n) Hessian rather than three arrays with 1s in them.
   [[nodiscard]] pyb::object finish(Block &&b, std::vector<pyb::ssize_t> dims,
                                    const Point &at) const {
     if (outputs() == 1 && !dims.empty()) {
@@ -560,8 +530,8 @@ private:
   jit::Options options_{};
   // Machine code a file handed over, consulted once per lane by prepare().
   std::vector<rt::Object> objects_{};
-  // Where the model ends and the sweeps begin; 0 on an equation built here,
-  // which is set by make_equation once the roots are in.
+  // Where the model ends and the sweeps begin; set by make_equation once the
+  // roots are in.
   std::uint32_t model_nodes_ = 0;
   bool loaded_ = false;
   std::array<Lane, 3> lanes_;

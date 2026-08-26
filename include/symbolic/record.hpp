@@ -136,10 +136,9 @@ template <CEntry... Entries> struct Record : Entries... {
         detail::entry_unless<Key>(static_cast<const Entries &>(*this))...));
   }
 
-  // f(key, value) in entry order; key.name feeds straight back into
-  // operator[].  Unconstrained on purpose: std::invocable would instantiate a
-  // generic lambda's body, and the const overload would then hard-error on an
-  // `f` that writes through its second parameter.
+  // f(key, value) in entry order.  Unconstrained on purpose: std::invocable
+  // would instantiate a generic lambda's body, and the const overload would
+  // hard-error on an `f` that writes through its second parameter.
   constexpr void for_each(auto &&f) const {
     (f(sym<Entries::symbol>, static_cast<const Entries &>(*this).value), ...);
   }

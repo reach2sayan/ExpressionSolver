@@ -10,22 +10,16 @@
 #include <string>
 #include <utility>
 
-// The handle Python holds: an RTExpression that knows its own arena.
+// The handle Python holds: an RTExpression that owns its arena.  RTExpression
+// stores a *non-owning* Builder* because in C++ an arena's lifetime is lexical;
+// a Python closure can capture a symbol and outlive everything.  Shared
+// ownership is the whole of what this adds.
 //
-// RTExpression stores a *non-owning* Builder*, because in C++ an arena's
-// lifetime is lexical -- the equation() lambda's.  A Python closure keeps no
-// such discipline: it can capture a symbol and outlive everything.  Carrying
-// the arena alongside is the whole of what this adds; the arithmetic, the
-// folding and the interning are all RTExpression's.
-//
-// It holds one rather than deriving from one, and that is not a preference.
-// pybind11 describes a bound type as descr<N, PyExpression>, so ADL on that
-// descr pulls in the associated classes of every template argument -- and a
-// base class is associated where a member's type is not.  Deriving would put
-// RTExpression's hidden friend operator+ into the overload set for descr +
-// descr, which asks whether descr converts to RTExpression, which instantiates
-// Numeric<descr>, whose body is `{ a + b }` over descrs: a constraint recursion
-// in the middle of pybind11's type machinery.  A member cannot form the cycle.
+// It holds one rather than deriving from one: pybind11 describes a bound type
+// as descr<N, PyExpression>, and a base class is an associated class where a
+// member's type is not.  Deriving would put RTExpression's hidden operator+
+// into the overload set for descr + descr, instantiating Numeric<descr> whose
+// body is `{ a + b }` -- constraint recursion inside pybind11's machinery.
 namespace ddx::py {
 
 class PyExpression {
@@ -51,11 +45,8 @@ public:
     return expression_.poisoned();
   }
 
-  // The whole of what a caller wanted the arena for: the id this names in
-  // `arena`, or a refusal.  Ids from another arena mean nothing here, and
-  // handing one back would index this one at random rather than refuse; a
-  // pending literal materialises into it.  Asking the question here is what
-  // keeps the arena inside.
+  // The id this names in `arena`, or a refusal: an id from another arena would
+  // index this one at random.  A pending literal materialises into it.
   [[nodiscard]] rt::NodeId root_in(rt::Builder<double> &arena) const {
     if (arena_ && arena_.get() != &arena) {
       fail_with(errc::no_graph);
@@ -82,9 +73,8 @@ public:
   }
 
 private:
-  // The arithmetic surface below is the only thing that puts an arena back on
-  // a new handle, so it reaches the member rather than a getter anyone could
-  // call.  The friends come off the same tables the bodies do.
+  // The arithmetic surface below is the only thing that puts an arena back on a
+  // new handle, so it reaches the member rather than a public getter.
 #define DDX_PY_UNFRIEND(fn, Op, label, ...)                                    \
   friend PyExpression fn(const PyExpression &);
   DDX_UNARY_MATH_TABLE(DDX_PY_UNFRIEND)

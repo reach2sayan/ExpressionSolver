@@ -9,9 +9,8 @@
 namespace ddx::impl {
 
 // `r | to<C>()`, forwarding to std::ranges::to but piped by us: libstdc++ 14.2
-// pipes through an adaptor whose call operator names std::forward_like's
-// deduced return type while constraints are still being checked, which clang
-// rejects outright.  14.3 rewrote it as a trait;
+// pipes through an adaptor naming std::forward_like's deduced return type while
+// constraints are still being checked, which clang rejects.
 template <typename C> struct to_closure {
   template <std::ranges::input_range R>
     requires requires(R &&r) { std::ranges::to<C>(std::forward<R>(r)); }
@@ -24,8 +23,8 @@ template <typename C> [[nodiscard]] constexpr to_closure<C> to() noexcept {
   return {};
 }
 
-// `c.append_range(r)`: libstdc++ grew the containers' range members in 15 and
-// the project still builds against 14, so the append is spelled out.
+// `c.append_range(r)`: libstdc++ grew the range members in 15 and this builds
+// against 14.
 template <typename C, std::ranges::input_range R>
   requires std::convertible_to<std::ranges::range_reference_t<R>,
                                typename C::value_type>

@@ -54,8 +54,7 @@ enum class errc : std::uint8_t {
 
 // No message string and no source location: an error travels the numeric path,
 // where an allocation is as unwelcome as the throw it replaces.  The text sits
-// in a static table that the formatter below reads, so printing one costs the
-// same as printing a string_view.
+// in a static table the formatter reads.
 struct error {
   errc code;
   [[nodiscard]] friend constexpr bool operator==(error,

@@ -17,14 +17,12 @@ namespace ddx::rt {
 
 // --- block sweep -----------------------------------------------------------
 // W points per node instead of one, so the switch is paid once per node per
-// block rather than once per node per point, and each operation becomes a
-// counted lane loop the vectoriser can take whole -- including the libm call,
-// which is most of a Jacobian.  The lane loops are deliberately raw counted
-// loops over a constant bound, as in vector_dual.hpp: whole-register stores
-// with no peel prologue.
+// block and each operation becomes a counted lane loop the vectoriser can take
+// whole -- including the libm call, which is most of a Jacobian.  Raw counted
+// loops over a constant bound, as in vector_dual.hpp: no peel prologue.
 //
-// The cases are generated from the same tables as apply(), so the operation
-// set cannot drift between the scalar sweep and this one.
+// The cases are generated from the same tables as apply(), so the operation set
+// cannot drift between the scalar sweep and this one.
 namespace detail {
 
 template <std::size_t W, impl::Numeric T>
@@ -70,18 +68,16 @@ constexpr void lanes_binary(OpCode op, const T *DDX_RESTRICT l,
   }
 }
 
-// x * y + z rounded once, which is what the kernel's llvm.fma lowers to and so
-// what holds the two paths to the same bits.  A scalar with no fma of its own
-// takes the arithmetic unfused: it rounds twice, as it did before the freeze
-// contracted anything, and it has no kernel to disagree with.
+// x * y + z rounded once, which is what the kernel's llvm.fma lowers to.  A
+// scalar with no fma of its own rounds twice and has no kernel to disagree
+// with.
 template <impl::Numeric T>
 [[nodiscard]] constexpr T fused_multiply_add(const T &x, const T &y,
                                              const T &z) noexcept {
   if constexpr (std::floating_point<T>) {
-    // <cmath> is constexpr only in C++26, and folding a libm call before that
-    // is a GCC extension clang does not have -- so a constant evaluation under
-    // clang takes the arithmetic unfused for the same reason a scalar without
-    // an fma does.  The probe asks the compiler rather than the version macros.
+    // <cmath> is constexpr only in C++26 and folding a libm call before that is
+    // a GCC extension, so clang takes the arithmetic unfused here.  The probe
+    // asks the compiler rather than the version macros.
     if consteval {
       if constexpr (!requires {
                       std::bool_constant<(std::fma(T{2}, T{3}, T{4}) ==
@@ -118,16 +114,12 @@ constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
 // The nodes named by `order`, for W points at once.  `point_lanes` is
 // symbol-major (symbol s, lane k at s * W + k) and `tape` node-major, so every
 // lane loop is contiguous in both.  Same constraints on `order` as
-// evaluate_into; the tail of a batch is padded by repeating a point rather
-// than falling back to a scalar path, and the padded lanes are simply not read
-// back.
+// evaluate_into; a batch's tail repeats a point, and those lanes are not read.
 //
-// `contract` takes a multiply feeding an add as one rounding, contraction_at()
-// deciding which -- the arithmetic the kernel emits, and the default because a
-// caller who has not said otherwise gets the answer the kernel would give.
-// Graph::contracted_order() is the order that goes with it, dropping the
-// multiplies nothing else reads; live_order() is also correct and merely
-// computes one or two of them for nobody.
+// `contract` takes a multiply feeding an add as one rounding -- the arithmetic
+// the kernel emits, and so the default.  Graph::contracted_order() is the order
+// that goes with it; live_order() is also correct and computes one or two
+// multiplies for nobody.
 template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
@@ -180,13 +172,9 @@ template <impl::Numeric T, std::ranges::random_access_range R>
 }
 
 // The nodes named by `order`, one point at a time, into caller-owned scratch
-// indexed by node id.  `order` must be topological and closed under operands,
-// so that every entry read has already been written; plain id order and
-// Graph::live_order() are both.  Entries outside `order` are left alone.
-//
-// The width-one block sweep, not a second implementation of it: a lane loop
-// over one lane is the scalar walk, and having the two drift apart is the one
-// bug neither would show on its own.
+// indexed by node id.  `order` must be topological and closed under operands;
+// plain id order and Graph::live_order() are both.  Entries outside it are left
+// alone.  The width-one block sweep, not a second implementation of it.
 template <impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
@@ -196,11 +184,10 @@ constexpr void evaluate_into(const Builder<T> &b, const R &point, Order order,
   evaluate_block<1>(b, point, order, v, contract);
 }
 
-// evaluate_all narrowed to what `roots` reach.  The result is still id-indexed
-// and arena-sized, so a caller reads it by node id exactly as it reads
-// evaluate_all's -- entries the roots miss are left value-initialised and must
-// not be read.  Worth the extra pass because a derivative sweep leaves a whole
-// Hessian in the arena that one root's walk has no use for.
+// evaluate_all narrowed to what `roots` reach.  Still id-indexed and
+// arena-sized, with the entries the roots miss left value-initialised and not
+// to be read.  Worth the extra pass: a derivative sweep leaves a whole Hessian
+// in the arena that one root's walk has no use for.
 template <impl::Numeric T, std::ranges::random_access_range R>
   requires impl::Numeric<std::ranges::range_value_t<R>>
 [[nodiscard]] constexpr auto evaluate_reachable(const Builder<T> &b,
@@ -223,10 +210,9 @@ template <impl::Numeric T, std::ranges::random_access_range R>
   return v;
 }
 
-// Every node once, in id order: a child always precedes its parent.  The
+// Every node once, in id order: a child always precedes its parent, and the
 // reference the JIT is checked against.  The point's element type chooses the
-// arithmetic, as eval_seeded does, so Dual<double> carries derivatives through
-// the same walk.
+// arithmetic, so Dual<double> carries derivatives through the same walk.
 template <impl::Numeric T, std::ranges::random_access_range R>
   requires impl::Numeric<std::ranges::range_value_t<R>>
 [[nodiscard]] constexpr auto evaluate_all(const Builder<T> &b, const R &point) {
