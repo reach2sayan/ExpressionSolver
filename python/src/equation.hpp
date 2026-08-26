@@ -4,6 +4,7 @@
 #include "error.hpp"
 #include "expression.hpp"
 
+#include "rt/archive.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/dot.hpp"
@@ -21,6 +22,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <format>
 #include <future>
 #include <memory>
@@ -46,7 +48,39 @@ public:
 
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
              std::vector<rt::NodeId> roots)
-      : arena_(std::move(arena)), roots_(std::move(roots)) {}
+      : arena_(std::move(arena)), roots_(std::move(roots)),
+        model_nodes_(static_cast<std::uint32_t>(arena_->size())) {}
+
+  // From a file.  The sweeps arrive filled, so nothing below ever computes
+  // them -- which is the whole of what the file is for.
+  explicit PyEquation(rt::Snapshot<double> &&snap)
+      : arena_(rt::rebuild(snap)), roots_(std::move(snap.roots)),
+        derivative_(std::move(snap.jacobian)),
+        sweeps_(std::move(snap.hessians)), options_(snap.options),
+        objects_(std::move(snap.objects)), model_nodes_(snap.model_nodes),
+        loaded_(true) {}
+
+  // The same struct the C++ facade fills, which is what keeps one serialiser
+  // for two equations.
+  [[nodiscard]] rt::Snapshot<double> snapshot() {
+    rt::Snapshot<double> snap;
+    // The sweeps first, and the arena after them: build_jacobian_impl and
+    // build_hessian_impl *append*, so a node array taken before they run does
+    // not contain the ids they hand back.  Lazily swept here where the facade
+    // sweeps in its constructor, which is the whole of why the order matters
+    // on this side and not on that one.
+    snap.jacobian = derivative();
+    snap.hessians = sweeps();
+    snap.symbols = arena_->symbols();
+    snap.nodes.assign(arena_->nodes().begin(), arena_->nodes().end());
+    snap.roots = roots_;
+    snap.options = options_;
+    snap.model_nodes = model_nodes_;
+    snap.objects = objects();
+    return snap;
+  }
+
+  [[nodiscard]] constexpr bool loaded() const noexcept { return loaded_; }
 
   [[nodiscard]] std::size_t arity() const { return arena_->symbols().size(); }
   [[nodiscard]] constexpr std::size_t outputs() const { return roots_.size(); }
@@ -78,6 +112,31 @@ public:
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
     const Point at{x, symbols()};
     return outputs() == 1 ? hessian_from_lane(at) : hessian_from_arena(at);
+  }
+
+  // The machine code the lanes are holding, for the file to carry.  Only
+  // kernels that kept their bytes -- Options.retain_object, off by default,
+  // since a megabyte held for the life of every kernel that will never be saved
+  // is not a cost a compile should pay.
+  [[nodiscard]] std::vector<rt::Object> objects() {
+    jit::Compiler *const c = compiler();
+    if (c == nullptr) {
+      return {};
+    }
+    std::vector<rt::Object> out;
+    for (const auto [i, l] : lanes_ | std::views::enumerate) {
+      if (!l.graph || !l.kernel || l.kernel.object().empty()) {
+        continue;
+      }
+      const auto code = l.kernel.object();
+      out.push_back({.want = static_cast<std::uint8_t>(i),
+                     .symbol = std::string{l.kernel.symbol()},
+                     .host = std::string{c->host_identity()},
+                     .digest = rt::digest(*l.graph),
+                     .options = effective_options(),
+                     .code = {code.begin(), code.end()}});
+    }
+    return out;
   }
 
   // --- the JIT -------------------------------------------------------------
@@ -133,6 +192,36 @@ public:
                        outputs(), outputs() == 1 ? "" : "s");
   }
 
+  // --- the equation on disk ------------------------------------------------
+
+  void save(const std::filesystem::path &path) {
+    unwrap(rt::save(snapshot(), path));
+  }
+
+  // Whether `path` holds this equation.  Raises rather than answering false:
+  // "no" has three quite different reasons -- unreadable, unloadable, or a
+  // different equation -- and only the errc says which.
+  void verify(const std::filesystem::path &path) {
+    auto snap = rt::load_snapshot<double>(path);
+    if (!snap) {
+      throw PyError{snap.error()};
+    }
+    if (!describes(*snap)) {
+      fail_with(errc::archive_mismatch);
+    }
+  }
+
+  // Whether a file describes this equation: the roots as well as the model,
+  // since two equations over one arena share every node and differ only in
+  // which ids they call outputs.
+  [[nodiscard]] bool describes(const rt::Snapshot<double> &snap) const {
+    return snap.roots.size() == roots_.size() &&
+           std::ranges::equal(snap.roots, roots_) &&
+           rt::digest<double>(snap.symbols, snap.nodes, snap.model_nodes) ==
+               rt::digest<double>(arena_->symbols(), arena_->nodes(),
+                                  model_nodes_);
+  }
+
   [[nodiscard]] std::string to_dot(bool all) {
     return rt::Dot<double>{*lane(Want::Jacobian).graph,
                            all ? rt::Scope::All : rt::Scope::Live}
@@ -168,18 +257,46 @@ private:
     rt::GraphBuilder<double> gb{*arena_};
     gb.values_from(roots_);
     if (want != Want::Values) {
-      gb.build_jacobian();
+      gb.jacobian_from(derivative().partial);
     }
     if (want == Want::Hessian) {
-      gb.build_hessian();
+      gb.hessian_from(sweeps().front());
     }
     l.graph = std::make_shared<const rt::Graph<double>>(gb.build());
     if (options_.backend == jit::Backend::Interpret) {
       return;
     }
-    if (jit::Compiler *const c = compiler()) {
-      l.pending = c->compile_async(l.graph, effective_options());
+    jit::Compiler *const c = compiler();
+    if (c == nullptr) {
+      return;
     }
+    // A kernel this equation was saved with is a compile already done.  Only
+    // where the graph, the host and the codegen-deciding options all still
+    // agree: adopt() cannot see that an object came from another graph, and
+    // running one that did is silently wrong arithmetic.
+    const auto lane_id = static_cast<std::uint8_t>(want);
+    const auto digest = rt::digest(*l.graph);
+    const auto stored =
+        std::ranges::find_if(objects_, [&](const rt::Object &o) {
+          return o.want == lane_id && o.digest == digest &&
+                 o.host == c->host_identity() &&
+                 rt::same_codegen(o.options, effective_options()) &&
+                 !o.code.empty();
+        });
+    if (stored != objects_.end()) {
+      // Shapes from the graph just frozen, never from the file: a forged entry
+      // may supply code and a symbol but cannot claim an arity, which is what
+      // bounds what one can do.
+      const auto &layout = l.graph->layout();
+      if (auto adopted =
+              c->adopt(stored->code, stored->symbol, l.graph->symbols().size(),
+                       layout.values, layout.jacobian, layout.hessian)) {
+        l.kernel = std::move(*adopted);
+        return; // nothing left to compile
+      }
+      // A refused link is a miss, never a failure: the compile below stands.
+    }
+    l.pending = c->compile_async(l.graph, effective_options());
   }
 
   // Publish a compile that has landed.  A refused one leaves the kernel empty
@@ -406,6 +523,16 @@ private:
     return *sweeps_;
   }
 
+  // Held for the same reason the Hessians are: prepare() used to ask
+  // GraphBuilder to sweep, which swept once per lane and left a loaded
+  // equation recomputing exactly what its file had just handed it.
+  [[nodiscard]] const rt::Jacobian &derivative() {
+    if (!derivative_) {
+      derivative_ = rt::build_jacobian_impl(*arena_, roots_);
+    }
+    return *derivative_;
+  }
+
   // --- shapes --------------------------------------------------------------
 
   // The leading axis goes when there is one function and the trailing one when
@@ -428,8 +555,15 @@ private:
 
   std::shared_ptr<rt::Builder<double>> arena_;
   std::vector<rt::NodeId> roots_;
+  std::optional<rt::Jacobian> derivative_;
   std::optional<std::vector<rt::Hessian>> sweeps_;
   jit::Options options_{};
+  // Machine code a file handed over, consulted once per lane by prepare().
+  std::vector<rt::Object> objects_{};
+  // Where the model ends and the sweeps begin; 0 on an equation built here,
+  // which is set by make_equation once the roots are in.
+  std::uint32_t model_nodes_ = 0;
+  bool loaded_ = false;
   std::array<Lane, 3> lanes_;
 };
 

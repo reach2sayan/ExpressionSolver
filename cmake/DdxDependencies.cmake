@@ -61,8 +61,15 @@ FetchContent_Declare(googlebenchmark
 # --- Boost -------------------------------------------------------------------
 # Mp11 is the type-list vocabulary the symbol lists are built out of, Boost.Graph
 # supplies the colouring the runtime graph needs, and Boost.DynamicBitset the
-# coupling rows.  All header-only, so nothing links a compiled Boost library and
-# what a build needs of it is an include path.
+# coupling rows.  Describe, Endian and CRC are the saved graph's: the field lists
+# the one serialisation traversal walks, fixed-width little-endian integers, and
+# the checksum a loader clears before it trusts a byte.  All header-only, so
+# nothing links a compiled Boost library and what a build needs of it is an
+# include path.
+#
+# Boost.Serialization is deliberately not among them, and could not be: it is a
+# compiled library, and its only error channel is throwing, which this tree turns
+# into abort() (src/rt/boost_no_exceptions.cpp).
 #
 # Found, not fetched, and the same find ddx-config.cmake makes: ddx's public
 # headers include boost's, so whatever a build compiles against is what its
@@ -74,7 +81,11 @@ FetchContent_Declare(googlebenchmark
 # 3.30, which is what makes an unqualified find_package(Boost) warn under
 # CMP0167.
 #
-# No version floor: these three have been stable for a decade, so a release
+# The cache variable is renamed whenever this list grows: check_cxx_source_compiles
+# trusts a cached answer, so an existing build tree would otherwise never re-probe
+# for a header that was added to it.
+#
+# No version floor: all six have been stable for years, so a release
 # number would turn working Boosts away to answer a question the headers
 # themselves answer.  What does go wrong is a partial install -- vcpkg and the
 # distros that split Boost up can have Mp11 and not Graph -- and that is a
@@ -92,14 +103,18 @@ macro(ddx_use_boost)
                 #include <boost/mp11/list.hpp>
                 #include <boost/graph/compressed_sparse_row_graph.hpp>
                 #include <boost/dynamic_bitset.hpp>
+                #include <boost/describe.hpp>
+                #include <boost/endian/conversion.hpp>
+                #include <boost/crc.hpp>
                 int main() {}"
-                DDX_BOOST_HAS_WHAT_WE_NEED)
+                DDX_BOOST_HEADERS_PRESENT)
         unset(CMAKE_REQUIRED_LIBRARIES)
-        if (NOT DDX_BOOST_HAS_WHAT_WE_NEED)
+        if (NOT DDX_BOOST_HEADERS_PRESENT)
             message(FATAL_ERROR
                     "Boost ${Boost_VERSION} was found at ${Boost_INCLUDE_DIRS}, but it does not "
                     "have the headers ddx names: Mp11 (algorithm, list), Graph "
-                    "(compressed_sparse_row_graph) and DynamicBitset.  A modular install wants "
+                    "(compressed_sparse_row_graph), DynamicBitset, Describe, Endian and CRC.  "
+                    "A modular install wants "
                     "those libraries added; a distro one usually wants the whole headers package "
                     "(libboost-dev).")
         endif ()

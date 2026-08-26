@@ -4,6 +4,7 @@
 
 #include <format>
 #include <stdexcept>
+#include <type_traits>
 #include <string>
 #include <utility>
 
@@ -38,7 +39,12 @@ inline void unwrap(const result<void> &r) {
   }
 }
 
-template <typename T> [[nodiscard]] T unwrap(result<T> &&r) {
+// Constrained away from void: a result<void> prvalue would otherwise bind here
+// in preference to the overload above, and `return std::move(*r)` is not a
+// thing to do with one.
+template <typename T>
+  requires(!std::is_void_v<T>)
+[[nodiscard]] T unwrap(result<T> &&r) {
   if (!r) {
     throw PyError{r.error()};
   }

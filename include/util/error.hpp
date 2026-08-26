@@ -30,10 +30,19 @@ namespace ddx {
   X(sealed_arena,                                                              \
     "the arena already backs an equation, so its symbols are final")           \
   X(not_univariate, "needs exactly one symbol")                                \
+  /* Saved graphs.  A caller building a cache acts on these differently: an    \
+     absent file is the first run, a corrupt one is a rebuild.  */             \
+  X(archive_io, "the file could not be read or written")                       \
+  X(bad_archive,                                                               \
+    "not a ddx graph file, or a format this build does not read")              \
+  X(archive_corrupt, "the file's checksum or its structure does not hold")     \
+  X(archive_mismatch,                                                          \
+    "the file loads, but does not describe this equation")                     \
   /* The JIT.  Carried with a message by jit::error, which is not this type.   \
    */                                                                          \
   X(jit_target, "the JIT could not bring up a target for this host")           \
   X(jit_module, "the JIT could not take the emitted module")                   \
+  X(jit_object, "the JIT could not link an object compiled earlier")           \
   X(jit_verify, "the emitted module failed verification")                      \
   X(jit_lookup, "the compiled kernel has no such symbol")
 

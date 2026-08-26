@@ -14,6 +14,8 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace ddx::rt {
 // The JIT emits machine types, so only a graph over a machine scalar compiles.
@@ -59,12 +61,23 @@ inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 //   Compile     Equation::options() starts the compile there and then; calls
 //               before it lands are swept, and switch over when it arrives.
 //
+// Compile is a *ladder*, not a compile.  It asks for two kernels: one at
+// codegen 0, which is what answers first, and one at the stated codegen_level,
+// which replaces it when it lands.  At 128 variables the cheap rung compiles
+// 2.8x to 5.1x faster for a kernel 1.2x to 2.3x slower, so a caller stops
+// sweeping that much sooner and keeps the better kernel for the rest of the
+// run.  Both rungs go to the same background pool and neither is waited for.
+// The swap is invisible: every codegen level agrees to the bit, so a loop that
+// runs across one sees no movement.  Equation::kernel_level() is the only way
+// to see which rung is answering.
+//
 // It does not block, and the first call does not wait.  The compile starts at
 // the moment it is *asked for*, not at the first call, so it overlaps whatever
-// the caller does next; a caller who would rather have the kernel than an
-// answer now asks outright, with Equation::wait_for_kernel().  There is one
-// compiling backend rather than a blocking and a non-blocking one because
-// waiting is a question a caller asks per call, not a property of the build.
+// the caller does next; a caller who would rather have a kernel than an
+// answer now asks outright, with Equation::wait_for_kernel() -- which waits for
+// the first rung, not the best one.  There is one compiling backend rather than
+// a blocking and a non-blocking one because waiting is a question a caller asks
+// per call, not a property of the build.
 //
 // A result does not move when the kernel arrives.  The two paths contract the
 // same multiply-adds into the same fma, because the contraction is decided in
@@ -101,9 +114,11 @@ struct Options {
   unsigned lanes = 0;
   // LLVM's optimisation level for the IR pipeline, 0 to 3.
   unsigned opt_level = default_opt_level;
-  // LLVM's codegen level, 0 to 3.  Instruction selection and register
-  // allocation are ~95% of a compile, so this is the knob that trades kernel
-  // speed for compile time.
+  // LLVM's codegen level, 0 to 3 -- under Backend::Compile, the *top* rung of
+  // the ladder rather than the level: a compile at codegen 0 always runs
+  // underneath it, and 0 is therefore the one value that asks for a single
+  // rung.  Instruction selection and register allocation are ~95% of a
+  // compile, so this is the knob that trades kernel speed for compile time.
   //
   // 1 by default, not 2: measured over the four thermodynamic gradients at 16,
   // 32 and 64 variables, at both lane widths, it compiles 11-15% faster and
@@ -111,8 +126,10 @@ struct Options {
   // quicker.  3 is 2's compile time for 2's kernel.  All four agree to the bit:
   // 1, 2 and 3 share an instruction selector and a register allocator, and 0
   // forms no FMAs of its own but is handed llvm.fma outright.  0 is still the
-  // wide trade -- the linear-time allocator and FastISel, 8.9x off the compile
-  // and 1.6x onto the kernel.
+  // wide trade -- the linear-time allocator and FastISel.  Against 1, which is
+  // what the ladder puts it under, that is 1.8x to 2.7x off the compile at 16
+  // to 32 variables and 2.8x to 5.1x at 128, for 1.2x to 2.3x onto the kernel;
+  // the 8-9x figure is against 2 and is not the comparison the default makes.
   unsigned codegen_level = 1;
   // PipelineTuningOptions::SLPVectorization.  Packs independent
   // subexpressions *within* one point -- a different axis from `lanes`, which
@@ -134,6 +151,22 @@ struct Options {
   // default: it is a diagnostic for whoever is asking why a compile is slow,
   // and it prints where nothing else in the library does.
   bool time_passes = false;
+  // Keep the object file the backend produced, so Kernel::object() can hand it
+  // back for storing and adopt()ing later.  Off by default: it is machine code
+  // held for the life of the kernel, and a caller who is not going to save it
+  // should not carry it.
+  bool retain_object = false;
+  // Where compiled objects are kept between runs, or empty for nowhere, which
+  // is the default: writing to a caller's disk is not something a library does
+  // because it would be faster.  A directory named here is consulted before a
+  // compile and written after one, keyed by the graph, the options and the
+  // host -- so a second run of the same equation links an object instead of
+  // compiling it, skipping emission, the pass pipeline and codegen alike.
+  //
+  // Not part of what a kernel *is*: two compiles differing only in this
+  // produce the same code, which is why it is excluded from the key and why
+  // rt::Object does not carry it.
+  std::string cache_dir{};
 
   // What Equation::options() compares before discarding a compiled kernel.
   friend bool operator==(const Options &, const Options &) = default;
@@ -156,11 +189,15 @@ public:
   using function_type = void (*)(const double *const *, double *const *,
                                  double *const *, double *const *, std::size_t);
 
+  using object_type = std::shared_ptr<const std::vector<std::byte>>;
+  using symbol_type = std::shared_ptr<const std::string>;
+
   Kernel() = default;
   Kernel(function_type fn, std::size_t arity, std::size_t values,
-         std::size_t jacobian, std::size_t hessian,
-         std::shared_ptr<void> code) noexcept
-      : fn_(fn), code_(std::move(code)), arity_(arity), values_(values),
+         std::size_t jacobian, std::size_t hessian, std::shared_ptr<void> code,
+         symbol_type symbol = {}, object_type object = {}) noexcept
+      : fn_(fn), code_(std::move(code)), symbol_(std::move(symbol)),
+        object_(std::move(object)), arity_(arity), values_(values),
         jacobian_(jacobian), hessian_(hessian) {}
 
   // xs[j] is the column for symbol j, g[j] the partial in it, each of length n;
@@ -191,9 +228,32 @@ public:
     return values_ + jacobian_ + hessian_;
   }
 
+  // The object file this kernel's code was linked from, for a caller who
+  // intends to store it and hand it back to adopt() later.  An adopted kernel
+  // always has one; a compiled one has it only where the compile asked, because
+  // keeping a megabyte of machine code alive for every kernel that will never
+  // be saved is not a cost a compile should pay by default.
+  // Options::retain_object is what turns it on.
+  //
+  // Shared, so a copy stays one atomic increment: a Kernel is meant to be
+  // cheap to pass around and this must not change that.
+  [[nodiscard]] std::span<const std::byte> object() const noexcept {
+    return object_ ? std::span<const std::byte>{*object_}
+                   : std::span<const std::byte>{};
+  }
+
+  // The name the code is linked under, which is what adopt() has to be told to
+  // find it again.  A caller cannot derive it -- it is chosen by the compile --
+  // so whoever stores the object stores this beside it.
+  [[nodiscard]] std::string_view symbol() const noexcept {
+    return symbol_ ? std::string_view{*symbol_} : std::string_view{};
+  }
+
 private:
   function_type fn_ = nullptr;
   std::shared_ptr<void> code_; // Held, never read; operator() calls through fn_
+  symbol_type symbol_;         // The name `fn_` was looked up under
+  object_type object_;         // The bytes `code_` was linked from, or none
   std::size_t arity_ = 0;
   std::size_t values_ = 0;
   std::size_t jacobian_ = 0;
@@ -207,6 +267,16 @@ public:
   // A factory: bring-up fails for reasons that are not a caller's mistake,
   // and then the graph interprets.
   [[nodiscard]] static DDX_JIT_API result<Compiler> create();
+
+  // Everything an object file has to agree with before it may be run here:
+  // the triple, the CPU, the feature string and the LLVM that produced it, as
+  // one line -- `x86_64-pc-linux-gnu/znver3/+avx2,+fma/llvm-20.1`.
+  //
+  // A string rather than a folded integer because this is the field that
+  // answers *why* a stored kernel was passed over, and "the key differed" is
+  // not an answer anyone can act on.  Compared once when an object is adopted,
+  // never in a loop.
+  [[nodiscard]] DDX_JIT_API std::string_view host_identity() const noexcept;
 
   DDX_JIT_API ~Compiler();
   DDX_JIT_API Compiler(Compiler &&) noexcept;
@@ -224,6 +294,28 @@ public:
   // not wait for it.
   [[nodiscard]] DDX_JIT_API std::shared_future<result<Kernel>>
   compile_async(std::shared_ptr<const rt::Graph<double>> g, Options opt = {});
+
+  // Link an object file compiled earlier -- by this process or a previous one
+  // -- and hand back the kernel in it, skipping emission, the pass pipeline and
+  // codegen alike.  This is the whole of what a compile is worth: at 128
+  // variables the top rung costs seconds and does not repay its own CPU until
+  // millions of points, so not doing it twice is worth more than any lever
+  // inside it.
+  //
+  // Nothing is verified beyond the link: an object built for another target, or
+  // from another graph, is a caller's mistake and this cannot see it.  Whoever
+  // stored the bytes stores what they have to agree with -- rt::Object carries
+  // the triple, the CPU, the features, the Options and the graph digest for
+  // exactly that reason -- and a mismatch is answered by compiling, never by
+  // running the wrong code.  The column counts are stated because the object no
+  // longer has a graph to read them off.
+  //
+  // Errors rather than aborts on a truncated or corrupt object: a cache entry
+  // that will not link is a miss.
+  [[nodiscard]] DDX_JIT_API result<Kernel>
+  adopt(std::span<const std::byte> object, std::string_view symbol,
+        std::size_t arity, std::size_t values, std::size_t jacobian,
+        std::size_t hessian);
 
 private:
   struct Impl;

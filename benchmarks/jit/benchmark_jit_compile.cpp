@@ -7,18 +7,29 @@
 //
 // Sizes ascend and a model stops after the first cell over the budget, since a
 // compile in progress cannot be abandoned and the next size is only larger.
+//
+// `--ladder` asks the other question instead: not what a compile costs, but
+// whether it was worth starting.  It compiles each cell at codegen 0 and at the
+// stated level, measures both kernels and the block sweep they replace, and
+// prints how many points each has to be spread over before it has paid for
+// itself.  That is the table Backend::Compile's ladder is argued from.
 
 #include "jit/kernel.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
 #include "rt/graph.hpp"
+#include "rt/interpret.hpp"
 #include "util/ranges.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
+#include <memory>
 #include <ranges>
 #include <span>
 #include <string>
@@ -149,21 +160,31 @@ struct Cell {
   return static_cast<double>(d.count()) / 1e6;
 }
 
+// A frozen graph and the arena it was frozen from.  The arena is kept because
+// the sweep still reads it -- a frozen graph carries the schedule, the nodes
+// stay where they were built -- and the ladder table compares the two.
+struct Frozen {
+  std::unique_ptr<Builder<>> arena;
+  ddx::rt::Graph<double> graph;
+};
+
 // The gradient of one model at n variables, frozen with its value and every
 // partial, which is what a caller compiles.
-ddx::rt::Graph<double> gradient_graph(const Model &m, std::size_t n) {
-  Builder<> b;
+Frozen gradient_graph(const Model &m, std::size_t n) {
+  auto arena = std::make_unique<Builder<>>();
   std::vector<RE> v;
   v.reserve(n);
   for (std::size_t i = 0; i < n; ++i) {
-    v.push_back(ddx::rt::var(b, "x" + std::to_string(i)));
+    v.push_back(ddx::rt::var(*arena, "x" + std::to_string(i)));
   }
-  const ddx::rt::NodeId root = m.build(std::span<const RE>{v}).id(b);
-  const auto row = ddx::rt::build_jacobian_impl<ddx::impl::DiffMode::Reverse>(b, root);
-  return ddx::rt::GraphBuilder{b}
-      .values_from(std::span<const ddx::rt::NodeId>{&root, 1})
-      .jacobian_from(row.partial)
-      .build();
+  const ddx::rt::NodeId root = m.build(std::span<const RE>{v}).id(*arena);
+  const auto row =
+      ddx::rt::build_jacobian_impl<ddx::impl::DiffMode::Reverse>(*arena, root);
+  auto graph = ddx::rt::GraphBuilder{*arena}
+                   .values_from(std::span<const ddx::rt::NodeId>{&root, 1})
+                   .jacobian_from(row.partial)
+                   .build();
+  return {.arena = std::move(arena), .graph = std::move(graph)};
 }
 
 
@@ -205,16 +226,161 @@ ddx::rt::Graph<double> gradient_graph(const Model &m, std::size_t n) {
   return best;
 }
 
+// --- what the sweep it replaces is worth --------------------------------------
+// The other end of the trade: a compile only repays itself against what the
+// interpreter would have cost, so the crossover has to be measured rather than
+// assumed.  This is Equation::interpret's block sweep, at the same width, so
+// the number is what a caller under Backend::Interpret actually gets.
+constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
+
+[[nodiscard]] double interp_ns_per_point(const Frozen &fr, std::size_t n,
+                                         std::size_t count, bool contract) {
+  const auto blocks = fr.graph.output_blocks();
+  const auto order =
+      contract ? fr.graph.contracted_order() : fr.graph.live_order();
+
+  std::vector<std::vector<double>> in(n, std::vector<double>(count));
+  for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t p = 0; p < count; ++p) {
+      in[i][p] = 0.05 + 0.9 * static_cast<double>((i * 37 + p * 11) % 97) / 97.0;
+    }
+  }
+  std::vector<double> value(count);
+  std::vector<std::vector<double>> partial(n, std::vector<double>(count));
+
+  std::vector<double> lanes(fr.graph.symbols().size() * kSweepLanes);
+  std::vector<double> tape(fr.arena->size() * kSweepLanes);
+
+  double best = 1e300;
+  for (int rep = 0; rep < 3; ++rep) {
+    const auto start = std::chrono::steady_clock::now();
+    for (std::size_t base = 0; base < count; base += kSweepLanes) {
+      const std::size_t width = std::min(kSweepLanes, count - base);
+      for (std::size_t j = 0; j < n; ++j) {
+        double *const dst = lanes.data() + j * kSweepLanes;
+        double *const tail =
+            std::ranges::copy_n(in[j].data() + base, width, dst).out;
+        std::ranges::fill(tail, dst + kSweepLanes, in[j][base + width - 1]);
+      }
+      ddx::rt::evaluate_block<kSweepLanes>(*fr.arena,
+                                           std::span<const double>{lanes},
+                                           order, std::span<double>{tape},
+                                           contract);
+      std::ranges::copy_n(tape.data() + std::size_t{blocks.values[0]} * kSweepLanes,
+                          width, value.data() + base);
+      for (const auto [column, o] : std::views::zip(partial, blocks.jacobian)) {
+        std::ranges::copy_n(tape.data() + std::size_t{o} * kSweepLanes, width,
+                            column.data() + base);
+      }
+    }
+    const double ns =
+        static_cast<double>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start)
+                .count()) /
+        static_cast<double>(count);
+    best = ns < best ? ns : best;
+  }
+  return best;
+}
+
+// How many points a compile has to be spread over before it has paid for
+// itself against what it replaced.  Infinite where the thing compiled is not
+// actually faster, which is a real outcome and prints as such.
+[[nodiscard]] double break_even(double compile_ms, double replaced_ns,
+                                double with_ns) {
+  const double saved = replaced_ns - with_ns;
+  return saved <= 0.0 ? std::numeric_limits<double>::infinity()
+                      : compile_ms * 1e6 / saved;
+}
+
 // log-log slope against the row above: 1.0 is linear in node count, 2.0
 // quadratic.  The exponent is the whole point of the table.
 [[nodiscard]] double slope(double t1, double t0, double n1, double n0) {
   return (t0 <= 0.0 || n0 <= 0.0) ? 0.0 : std::log(t1 / t0) / std::log(n1 / n0);
 }
 
+// --- the ladder ---------------------------------------------------------------
+// What Backend::Compile would look like with a cheap rung under it.  Every
+// number in one row comes from one session against one graph, because this
+// machine moves an unchanged binary by up to 70% between runs and only a
+// within-row reading means anything.
+//
+//   t0/t1     compile ms at codegen 0 and at the stated level
+//   k0/k1     what each kernel is worth, ns per point
+//   sweep     what the interpreter costs for the same point
+//   be0/be1   points before each rung has paid for its own compile, from
+//             scratch, against the sweep
+//   climb     the marginal question the ladder actually asks: given rung 0 is
+//             already running, how many points before rung 1 repays *its*
+//             compile out of the difference between the two kernels
+[[nodiscard]] int run_ladder(ddx::jit::Compiler &compiler,
+                             ddx::jit::Options options,
+                             std::span<const std::size_t> sizes,
+                             double budget_s) {
+  const unsigned top = options.codegen_level;
+  std::printf("tier ladder, codegen 0 under codegen %u, budget %.0fs per cell, "
+              "lanes %u (0 = host), opt %u\n\n",
+              top, budget_s, options.lanes, options.opt_level);
+  if (top == 0) {
+    std::printf("codegen 0 is the top rung: there is no ladder to measure.\n");
+    return 0;
+  }
+  std::printf("%-8s %5s %9s %9s %9s %6s %10s %10s %10s %10s %10s %10s\n",
+              "model", "n", "nodes", "t0 ms", "t1 ms", "t1/t0", "sweep ns",
+              "k0 ns", "k1 ns", "be0", "be1", "climb");
+
+  ddx::jit::Options low = options;
+  low.codegen_level = 0;
+
+  for (const auto &m : kModels) {
+    for (const std::size_t n : sizes) {
+      const auto frozen = gradient_graph(m, n);
+
+      ddx::jit::CompileReport r0;
+      const auto s0 = std::chrono::steady_clock::now();
+      auto k0 = compiler.compile(frozen.graph, low, &r0);
+      const double t0 = ms(std::chrono::steady_clock::now() - s0);
+
+      ddx::jit::CompileReport r1;
+      const auto s1 = std::chrono::steady_clock::now();
+      auto k1 = compiler.compile(frozen.graph, options, &r1);
+      const double t1 = ms(std::chrono::steady_clock::now() - s1);
+
+      if (!k0 || !k1) {
+        std::fprintf(stderr, "%s n=%zu failed: %s\n", m.name.data(), n,
+                     (!k0 ? k0 : k1).error().detail.c_str());
+        break;
+      }
+
+      const double sweep =
+          interp_ns_per_point(frozen, n, 256, options.contract);
+      const double n0 = kernel_ns_per_point(*k0, n, 4096);
+      const double n1 = kernel_ns_per_point(*k1, n, 4096);
+
+      std::printf("%-8s %5zu %9zu %9.1f %9.1f %6.2f %10.1f %10.1f %10.1f "
+                  "%10.0f %10.0f %10.0f\n",
+                  m.name.data(), n, r1.nodes, t0, t1, t0 > 0.0 ? t1 / t0 : 0.0,
+                  sweep, n0, n1, break_even(t0, sweep, n0),
+                  break_even(t1, sweep, n1), break_even(t1, n0, n1));
+      std::fflush(stdout);
+
+      if (t1 / 1000.0 > budget_s) {
+        std::printf("%-8s stopping: %.1fs is over the %.0fs budget\n",
+                    m.name.data(), t1 / 1000.0, budget_s);
+        break;
+      }
+    }
+    std::printf("\n");
+  }
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   double budget_s = 120.0;
+  bool ladder = false;
   ddx::jit::Options options;
   std::vector<std::size_t> sizes{16, 32, 64, 128, 256, 512};
 
@@ -232,6 +398,10 @@ int main(int argc, char **argv) {
       options.loop_vectorize = true;
     } else if (arg == "--time-passes") {
       options.time_passes = true;
+    } else if (arg == "--ladder") {
+      ladder = true;
+    } else if (arg.starts_with("--cache=")) {
+      options.cache_dir = std::string{arg.substr(8)};
     } else if (arg.starts_with("--budget=")) {
       budget_s = std::strtod(arg.data() + 9, nullptr);
     } else if (arg.starts_with("--sizes=")) {
@@ -258,6 +428,10 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  if (ladder) {
+    return run_ladder(*compiler, options, sizes, budget_s);
+  }
+
   std::printf("compile cost against graph size, budget %.0fs per cell, "
               "lanes %u (0 = host), opt %u, codegen %u\n\n",
               budget_s, options.lanes, options.opt_level,
@@ -269,11 +443,11 @@ int main(int argc, char **argv) {
   for (const auto &m : kModels) {
     std::vector<Cell> cells;
     for (const std::size_t n : sizes) {
-      const auto graph = gradient_graph(m, n);
+      const auto frozen = gradient_graph(m, n);
 
       Cell cell{.n = n, .total_ms = 0.0, .report = {}};
       const auto start = std::chrono::steady_clock::now();
-      auto kernel = compiler->compile(graph, options, &cell.report);
+      auto kernel = compiler->compile(frozen.graph, options, &cell.report);
       cell.total_ms = ms(std::chrono::steady_clock::now() - start);
       if (!kernel) {
         std::fprintf(stderr, "%s n=%zu failed: %s\n", m.name.data(), n,

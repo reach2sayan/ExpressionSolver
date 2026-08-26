@@ -1,12 +1,20 @@
 #include "ddx.hpp"
 #include "jit/kernel.hpp"
+#include "rt/archive.hpp"
 #include "rt/bridge.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <bit>
+#include <format>
+#include <latch>
+#include <random>
+#include <filesystem>
+#include <fstream>
+#include <thread>
 #include <cstdint>
 #include <numeric>
 #include <tuple>
@@ -33,6 +41,19 @@ ddx::jit::Kernel must_compile(auto &&...args) {
   auto k = compiler().compile(static_cast<decltype(args) &&>(args)...);
   EXPECT_TRUE(k.has_value()) << (k ? std::string{} : k.error().detail);
   return k ? std::move(*k) : ddx::jit::Kernel{};
+}
+
+// A cache directory of this process's own.  A fixed name under
+// temp_directory_path() is shared mutable state between processes however
+// private it looks, and it stays hidden precisely because ctest runs different
+// binaries in parallel and never the same one twice -- so two copies of this
+// binary, which is what a stress run is, would delete each other's entries
+// through remove_all() and fail for reasons that look like the library.
+[[nodiscard]] std::filesystem::path cache_dir(std::string_view what) {
+  static const auto token = std::random_device{}();
+  static std::atomic<unsigned> seq{0};
+  return std::filesystem::temp_directory_path() /
+         std::format("ddx_jit_{}_{:08x}_{}", what, token, seq.fetch_add(1));
 }
 
 // Compile `build` and compare a batch against the interpreter.
@@ -466,6 +487,451 @@ TEST(JitValue, ConstantFoldsToAStore) {
   kernel(xs, value_columns, {}, {}, got.size());
   EXPECT_DOUBLE_EQ(got[0], 7.0);
   EXPECT_DOUBLE_EQ(got[1], 7.0);
+}
+
+// The object a compile produced links back into the same JIT and answers the
+// same bits.  This is the whole of what makes a compile storable: the bytes are
+// the kernel, and adopting them skips emission, the pass pipeline and codegen
+// alike.
+TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto root = (x * log(x) + exp(x * y) + sqrt(y)).id(b);
+  const auto graph = ddx::rt::GraphBuilder<double>{b}
+                         .values_from(std::array{root})
+                         .jacobian_from(
+                             ddx::rt::build_jacobian_impl<
+                                 ddx::impl::DiffMode::Reverse>(b, root).partial)
+                         .build();
+
+  const auto compiled = must_compile(graph, ddx::jit::Options{.retain_object = true});
+  ASSERT_TRUE(compiled);
+  ASSERT_FALSE(compiled.object().empty()) << "retain_object kept nothing";
+
+  // The name the compile used is not something a caller can guess, which is why
+  // the kernel carries it: whoever stores the bytes stores the symbol beside
+  // them.
+  ASSERT_FALSE(compiled.symbol().empty());
+  const auto adopted = compiler().adopt(
+      compiled.object(), compiled.symbol(), compiled.arity(), compiled.values(),
+      compiled.jacobian_columns(), compiled.hessian_columns());
+  ASSERT_TRUE(adopted.has_value()) << adopted.error().detail;
+
+  const std::array cx{0.4, 0.9}, cy{1.3, 0.7};
+  const std::array<const double *, 2> xs{cx.data(), cy.data()};
+  std::array<double, 2> f1{}, dx1{}, dy1{}, f2{}, dx2{}, dy2{};
+  double *const v1[]{f1.data()};
+  double *const g1[]{dx1.data(), dy1.data()};
+  double *const v2[]{f2.data()};
+  double *const g2[]{dx2.data(), dy2.data()};
+  compiled(xs, v1, g1, {}, 2);
+  (*adopted)(xs, v2, g2, {}, 2);
+
+  EXPECT_EQ(f1, f2) << "the adopted kernel moved a value";
+  EXPECT_EQ(dx1, dx2) << "the adopted kernel moved d/dx";
+  EXPECT_EQ(dy1, dy2) << "the adopted kernel moved d/dy";
+
+  // And it carries its own bytes, so a kernel that came off disk can go back.
+  EXPECT_EQ(adopted->object().size(), compiled.object().size());
+}
+
+// The point of the cache: the second compile of the same graph does no codegen
+// at all, and answers the same bits.  Timing is not the assertion -- the report
+// is, because a cache hit does not run the phases rather than running them
+// quickly.
+TEST(JitValue, ACachedObjectSkipsTheWholeCompile) {
+  const auto dir = cache_dir("skips");
+  std::filesystem::remove_all(dir);
+
+  const auto build = [] {
+    Builder<> b;
+    const auto x = var(b, "x");
+    const auto y = var(b, "y");
+    const auto root = (x * log(x) + exp(x * y) + sqrt(y)).id(b);
+    return std::pair{
+        std::move(b),
+        root}; // the arena has to outlive the freeze that reads it
+  };
+
+  ddx::jit::Options opt;
+  opt.cache_dir = dir.string();
+
+  ddx::jit::CompileReport cold, warm;
+  double cold_f = 0, warm_f = 0;
+  const std::array c{0.7};
+  const std::array<const double *, 2> xs{c.data(), c.data()};
+
+  for (const auto &[report, out] :
+       {std::pair{&cold, &cold_f}, std::pair{&warm, &warm_f}}) {
+    auto [b, root] = build();
+    const auto graph = Graph<>::freeze(b, std::array{root});
+    auto k = compiler().compile(graph, opt, report);
+    ASSERT_TRUE(k.has_value()) << k.error().detail;
+    double *const values[]{out};
+    (*k)(xs, values, {}, {}, 1);
+  }
+
+  EXPECT_GT(cold.codegen.count(), 0) << "the cold compile did no codegen";
+  EXPECT_EQ(warm.codegen.count(), 0) << "the warm compile ran the backend";
+  EXPECT_EQ(warm.emit.count(), 0) << "the warm compile emitted IR";
+  EXPECT_EQ(warm.optimize.count(), 0) << "the warm compile ran the passes";
+  EXPECT_EQ(cold_f, warm_f) << "the cached kernel moved a bit";
+
+  std::filesystem::remove_all(dir);
+}
+
+// A cache entry with a byte flipped in it must not be run.  The checksum is
+// what stands between a corrupt file and machine code being jumped into.
+TEST(JitValue, ACorruptCacheEntryIsAMissNotACrash) {
+  const auto dir = cache_dir("corrupt");
+  std::filesystem::remove_all(dir);
+
+  ddx::jit::Options opt;
+  opt.cache_dir = dir.string();
+
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto graph = Graph<>::freeze(b, std::array{(x * x + log(x)).id(b)});
+  ASSERT_TRUE(compiler().compile(graph, opt).has_value());
+
+  // Every entry the cold compile wrote, damaged in the payload.
+  std::size_t damaged = 0;
+  for (const auto &e : std::filesystem::directory_iterator{dir}) {
+    std::fstream f{e.path(), std::ios::in | std::ios::out | std::ios::binary};
+    ASSERT_TRUE(f.is_open());
+    f.seekp(static_cast<std::streamoff>(ddx::rt::header_bytes + 8));
+    f.put('\xff');
+    ++damaged;
+  }
+  ASSERT_GT(damaged, 0u) << "the cold compile cached nothing";
+
+  ddx::jit::CompileReport after;
+  const auto k = compiler().compile(graph, opt, &after);
+  ASSERT_TRUE(k.has_value()) << "a corrupt entry failed the compile";
+  EXPECT_GT(after.codegen.count(), 0) << "a corrupt entry was adopted";
+
+  double got = 0;
+  const std::array c{0.7};
+  const std::array<const double *, 1> xs{c.data()};
+  double *const values[]{&got};
+  (*k)(xs, values, {}, {}, 1);
+  EXPECT_NEAR(got, 0.7 * 0.7 + std::log(0.7), 1e-15);
+
+  std::filesystem::remove_all(dir);
+}
+
+// A cache entry is parsed bytes, and it carries a length read out of its own
+// payload -- the shape where a hand-picked corrupt case proves nothing.  Every
+// byte of the prologue and a stride through the payload, each flipped, and every
+// truncation: the assertion is only that a compile still *returns a correct
+// kernel*, because every one of these must degrade to a miss.
+TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
+  const auto dir =
+      cache_dir("fuzz");
+  std::filesystem::remove_all(dir);
+
+  ddx::jit::Options opt;
+  opt.cache_dir = dir.string();
+
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto graph = Graph<>::freeze(b, std::array{(x * x + log(x)).id(b)});
+  ASSERT_TRUE(compiler().compile(graph, opt).has_value());
+
+  std::filesystem::path entry;
+  for (const auto &e : std::filesystem::directory_iterator{dir}) {
+    entry = e.path();
+  }
+  ASSERT_FALSE(entry.empty()) << "the cold compile cached nothing";
+  const auto pristine = *ddx::rt::read_file(entry);
+  ASSERT_GT(pristine.size(), ddx::rt::header_bytes);
+
+  const std::array c{0.7};
+  const std::array<const double *, 1> xs{c.data()};
+  const double want = 0.7 * 0.7 + std::log(0.7);
+
+  // Two assertions, and the second is the one with teeth.  "Still returns a
+  // correct kernel" is satisfied by an entry that was adopted *and happened to
+  // be harmless*; "the backend ran" says the entry was refused outright, which
+  // is the property that has to hold for every damaged byte.  Reporting only
+  // the first would be a test that passes while corrupt entries are executed.
+  const auto rejected = [&](const char *what, std::size_t at) {
+    ddx::jit::CompileReport rep;
+    const auto k = compiler().compile(graph, opt, &rep);
+    ASSERT_TRUE(k.has_value()) << what << " at " << at << " failed the compile";
+    EXPECT_GT(rep.codegen.count(), 0)
+        << what << " at " << at << " was adopted rather than refused";
+    double got = 0;
+    double *const values[]{&got};
+    (*k)(xs, values, {}, {}, 1);
+    EXPECT_NEAR(got, want, 1e-15) << what << " at " << at << " ran wrong code";
+  };
+
+  // Every prologue byte under three masks, then a stride through the payload.
+  // The prologue gets no stride because it is the one region no checksum can
+  // cover.  A sweep rather than a spot check on the bytes that matter today,
+  // because what it is really for is the *next* header field somebody adds and
+  // forgets to verify -- both halves of this format have gained fields recently.
+  //
+  // Three masks and not one because one only detects a field that is *entirely*
+  // unverified: relax `scalar_size` to a range check and `~8 = 247` is still
+  // refused while `8 -> 9` is adopted, so `~b` alone would call that field
+  // verified.  Whole-byte, low-bit, high-bit.
+  //
+  // Three and not all 255, which is the honest trade rather than a claim that
+  // three suffices.  Exhaustive was run once -- **0 of 14280 accepted** -- and
+  // costs 98 s against an 18 s suite, because every rejection here provokes a
+  // real recompile where the archive's equivalent sweep only reparses a file.
+  // What makes three adequate *today* is that every field is checked with `!=`
+  // against a value derived elsewhere, and an exact check catches any change at
+  // all.  That is a property of the current fields, not of the sampling: **a
+  // field added with a range check needs this exhaustive again**, and the
+  // scalar_size demonstration above is exactly what that looks like.
+  const std::size_t stride = std::max<std::size_t>(1, pristine.size() / 64);
+  for (std::size_t i = 0; i < ddx::rt::header_bytes; ++i) {
+    for (const std::byte mask :
+         {std::byte{0xff}, std::byte{0x01}, std::byte{0x80}}) {
+      auto damaged = pristine;
+      damaged[i] ^= mask;
+      if (damaged[i] == pristine[i]) {
+        continue;
+      }
+      ASSERT_TRUE(ddx::rt::write_file(entry, damaged).has_value());
+      rejected("a flipped prologue byte", i);
+    }
+  }
+  for (std::size_t i = ddx::rt::header_bytes; i < pristine.size(); i += stride) {
+    auto damaged = pristine;
+    damaged[i] = ~damaged[i];
+    ASSERT_TRUE(ddx::rt::write_file(entry, damaged).has_value());
+    rejected("a flipped payload byte", i);
+  }
+
+  for (std::size_t n = 0; n < pristine.size(); n += stride) {
+    ASSERT_TRUE(ddx::rt::write_file(
+                    entry, std::span<const std::byte>{pristine}.first(n))
+                    .has_value());
+    rejected("a truncation to", n);
+  }
+
+  // The case the sweep above cannot reach: a symbol length near 2^32, where
+  // `4 + length` in 32-bit arithmetic wraps past the bounds check it is meant
+  // to fail.  Damaging the file cannot get there -- the checksum fails first,
+  // every time -- so the entry is *rebuilt* with the wrapping length and a CRC
+  // that agrees with it, which is what makes this test not vacuous.  CRC32
+  // detects accidents; it does not sign anything.
+  {
+    const auto head = ddx::rt::get_header(pristine, "ddxjitob");
+    ASSERT_TRUE(head.has_value());
+    std::vector<std::byte> payload(
+        pristine.begin() + ddx::rt::header_bytes, pristine.end());
+    ASSERT_GT(payload.size(), 4u);
+    std::ranges::fill_n(payload.begin(), 4, std::byte{0xff}); // 0xffffffff
+
+    std::vector<std::byte> forged(ddx::rt::header_bytes + payload.size());
+    ddx::rt::put_header({.magic = "ddxjitob",
+                         .format = head->format,
+                         .schema = head->schema,
+                         .scalar_size = head->scalar_size,
+                         .scalar_kind = head->scalar_kind,
+                         .model_digest = head->model_digest,
+                         .payload_bytes = payload.size(),
+                         .payload_crc = ddx::rt::checksum(payload)},
+                        forged);
+    std::ranges::copy(payload, forged.begin() + ddx::rt::header_bytes);
+    ASSERT_TRUE(ddx::rt::write_file(entry, forged).has_value());
+    rejected("a wrapping symbol length whose CRC agrees", 0);
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
+// The cache is the multi-writer case: a parallel build, or two workers warming
+// the same key, all miss together, all compile, and all write one path at once.
+// Every one of them must get a correct kernel, exactly one whole entry must be
+// left, and nothing may be left staged.
+//
+// This is *not* a regression test for rt::write_file's per-writer staging name,
+// and the reason is worth stating because two plausible ones are wrong.
+//
+// Measured against the shared ".tmp" it replaced: this test passes 0/10, while
+// **120 of 160 cache writes fail**.  So the writers do collide, constantly --
+// spacing is not what hides it, and neither is payload size (checked to 40
+// variables).  What hides it is that a losing writer's rename finds nothing to
+// move and `write_entry` discards that error by design: a cache that cannot be
+// written is a cache that misses, which is exactly the degradation this test
+// asserts is survivable.  One writer always wins, so one whole entry always
+// lands, and every assertion below holds either way.
+//
+// There is also no torn file to find, at any size: rename is atomic, so the
+// content race resolves before anything a reader could see, and RtArchive's
+// concurrent-writer test measured zero torn files from 1 KiB to 1 MiB over forty
+// rounds with the bug fully present.  Neither suite has a tearing test because
+// on this platform there is nothing there to test.
+//
+// What this covers is the end of the pipe: whatever the writers did, one whole
+// entry loads afterwards.
+TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
+  const auto dir =
+      cache_dir("writers");
+  std::filesystem::remove_all(dir);
+
+  ddx::jit::Options opt;
+  opt.cache_dir = dir.string();
+
+  constexpr std::size_t writers = 8;
+  const double want = 0.7 * 0.7 + std::log(0.7);
+  std::array<double, writers> got{};
+  std::array<bool, writers> ok{};
+  std::array<bool, writers> compiled{};
+
+  // The graphs are built *before* the rendezvous and the compiles start after
+  // it, so every writer reads the cache before any of them has written.  That
+  // makes "all eight miss" structural rather than lucky -- without it, a
+  // straggler thread on a loaded box starts after the first writer has landed
+  // its entry, hits, and the overlap assertion below becomes the same
+  // scheduling-dependent coin flip that the ladder turned
+  // DroppingAMidFlightCompileDoesNotBlock into.
+  std::latch start{writers};
+
+  {
+    std::vector<std::thread> threads;
+    for (std::size_t t = 0; t < writers; ++t) {
+      threads.emplace_back([&, t] {
+        // Its own arena: one Builder is not shared between threads.  Two
+        // independently built graphs hashing alike is also the cache's premise,
+        // so this tests that too.
+        Builder<> b;
+        const auto x = var(b, "x");
+        const auto graph =
+            Graph<>::freeze(b, std::array{(x * x + log(x)).id(b)});
+        start.arrive_and_wait();
+        ddx::jit::CompileReport rep;
+        const auto k = compiler().compile(graph, opt, &rep);
+        if (!k) {
+          return;
+        }
+        compiled[t] = rep.codegen.count() > 0;
+        const std::array c{0.7};
+        const std::array<const double *, 1> xs{c.data()};
+        double *const values[]{&got[t]};
+        (*k)(xs, values, {}, {}, 1);
+        ok[t] = true;
+      });
+    }
+    for (auto &th : threads) {
+      th.join();
+    }
+  }
+
+  // Without this the test can quietly stop being about concurrency: if the
+  // writers ever serialise into one compile and seven cache hits, every
+  // assertion below still passes and nothing races at all.  It is an assertion
+  // about *work done*, not about timing, and the latch above is what keeps it
+  // that way -- assert overlap without one and this is a flake, not a guard.
+  EXPECT_EQ(std::ranges::count(compiled, true), writers)
+      << "a writer hit the cache, so the writers did not all overlap";
+
+  for (std::size_t t = 0; t < writers; ++t) {
+    EXPECT_TRUE(ok[t]) << "writer " << t << " got no kernel";
+    EXPECT_NEAR(got[t], want, 1e-15) << "writer " << t << " ran wrong code";
+  }
+
+  // One key, so one entry -- and no staging file left behind by a writer that
+  // lost the rename.
+  std::size_t entries = 0;
+  for (const auto &e : std::filesystem::directory_iterator{dir}) {
+    EXPECT_EQ(e.path().extension(), ".ddxjit")
+        << "left staged: " << e.path().filename();
+    ++entries;
+  }
+  EXPECT_EQ(entries, 1u) << "one graph and one option set should be one entry";
+
+  // And what landed is a whole entry, not a mixture of eight.
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto graph = Graph<>::freeze(b, std::array{(x * x + log(x)).id(b)});
+  ddx::jit::CompileReport warm;
+  const auto k = compiler().compile(graph, opt, &warm);
+  ASSERT_TRUE(k.has_value()) << k.error().detail;
+  EXPECT_EQ(warm.codegen.count(), 0) << "what the writers left did not load";
+
+  std::filesystem::remove_all(dir);
+}
+
+// No directory named, nothing written: a library does not put files on a
+// caller's disk because it would be faster.
+TEST(JitValue, NoCacheDirectoryWritesNothing) {
+  const auto dir =
+      cache_dir("absent");
+  std::filesystem::remove_all(dir);
+
+  Builder<> b;
+  const auto x = var(b, "x");
+  ASSERT_TRUE(
+      compiler().compile(Graph<>::freeze(b, std::array{(x * x).id(b)}))
+          .has_value());
+  EXPECT_FALSE(std::filesystem::exists(dir));
+}
+
+// Nothing is kept unless it was asked for: machine code held for the life of
+// every kernel is not a default anyone should pay.
+TEST(JitValue, AnObjectIsNotKeptUnlessAsked) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto k = must_compile(Graph<>::freeze(b, std::array{(x * x).id(b)}));
+  EXPECT_TRUE(k.object().empty());
+}
+
+// The symbol is the one thing adopt() takes from the caller and cannot check
+// against the object, so what stops a forged one is that the lookup is scoped to
+// the dylib the object went into.  Resolved through the link order instead, a
+// forged name would find some *other* function and `toPtr<function_type>()`
+// would hand it back to be called under the five-pointer kernel ABI -- which on
+// SysV neither crashes nor writes anything, so the caller gets untouched output
+// buffers and no diagnostic.  Silent wrong answers, which is worse than a fault.
+//
+// The scoping already closes it.  This test exists because widening that lookup
+// would look like a simplification -- and it does bite: swapping
+// `lookup(*jd, symbol)` for `lookup(symbol)` fails this test on `memcpy`, which
+// the process generator resolves.  `memcpy` is the case doing the work: measured
+// under that widened lookup, the libm names do *not* resolve by bare name and
+// would not have caught it.  They stay as cheap coverage of the intent, not
+// because they carry the test.
+TEST(JitValue, AForgedSymbolCannotReachThroughTheLinkOrder) {
+  Builder<> b;
+  const auto x = var(b, "x");
+  const auto graph = Graph<>::freeze(b, std::array{(x * x + exp(x)).id(b)});
+  const auto compiled =
+      must_compile(graph, ddx::jit::Options{.retain_object = true});
+  ASSERT_TRUE(compiled);
+  ASSERT_FALSE(compiled.object().empty());
+
+  // Its own symbol links, so the negatives below are not vacuous.
+  EXPECT_TRUE(compiler()
+                  .adopt(compiled.object(), compiled.symbol(), 1, 1, 0, 0)
+                  .has_value());
+
+  // Every one of these resolves in the main dylib -- libm through define_libm,
+  // memcpy through the process generator -- and the object itself defines none
+  // of them.
+  for (const std::string_view forged :
+       {"sin", "exp", "log", "memcpy", "ddx_kernel_999"}) {
+    EXPECT_FALSE(
+        compiler().adopt(compiled.object(), forged, 1, 1, 0, 0).has_value())
+        << forged << " resolved through the link order";
+  }
+}
+
+// A cache entry that will not link is a miss, not a crash and not an abort.
+TEST(JitValue, AdoptingRubbishIsAnErrorNotACrash) {
+  const std::array<std::byte, 8> rubbish{std::byte{0x7f}, std::byte{'E'},
+                                         std::byte{'L'},  std::byte{'F'},
+                                         std::byte{0},    std::byte{0},
+                                         std::byte{0},    std::byte{0}};
+  const auto k = compiler().adopt(rubbish, "ddx_kernel_0", 1, 1, 0, 0);
+  EXPECT_FALSE(k.has_value()) << "a truncated object linked";
 }
 
 TEST(JitValue, SeparateCompilesCoexist) {

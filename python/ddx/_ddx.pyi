@@ -3,12 +3,14 @@ ddx's runtime expression graph and LLVM JIT
 """
 from __future__ import annotations
 import enum
+import os
 import typing
 __all__: list[str] = ['Backend', 'Equation', 'Error', 'Expression',
                       'VecLib', 'abs', 'acos', 'acosh', 'add', 'asin',
                       'asinh', 'atan', 'atan2', 'atanh', 'cbrt', 'cos',
                       'cosh', 'div', 'equation', 'erf', 'errc', 'exp',
-                      'has_jit', 'hypot', 'log', 'log10', 'max', 'min',
+                      'has_jit', 'hypot', 'load', 'log', 'log10', 'max',
+                      'min',
                       'mul', 'neg', 'pow', 'sign', 'sin', 'sinh',
                       'sqrt', 'tan', 'tanh', 'var']
 class Backend(enum.IntEnum):
@@ -28,12 +30,16 @@ class Equation:
     def evaluate(self, x: typing.Any) -> typing.Any: pass
     def hessian(self, x: typing.Any) -> tuple: pass
     def jacobian(self, x: typing.Any) -> tuple: pass
+    def save(self, path: str | os.PathLike) -> None: pass
     def to_dot(self, *, all: bool = False) -> str: pass
+    def verify(self, path: str | os.PathLike) -> None: pass
     def wait_for_kernel(self) -> bool: pass
     @property
     def arity(self) -> int: pass
     @property
     def hessian_colors(self) -> int: pass
+    @property
+    def loaded(self) -> bool: pass
     @property
     def outputs(self) -> int: pass
     @property
@@ -102,8 +108,10 @@ class VecLib(enum.IntEnum):
 class _Options:
     __hash__: typing.ClassVar[None] = None
     backend: Backend
+    cache_dir: str
     contract: bool
     loop_vectorize: bool
+    retain_object: bool
     slp: bool
     time_passes: bool
     veclib: VecLib
@@ -130,11 +138,16 @@ class errc(enum.IntEnum):
     """
     Why ddx refused; Error.code carries one.
     """
+    archive_corrupt: typing.ClassVar[errc]  # value = <errc.archive_corrupt: 11>
+    archive_io: typing.ClassVar[errc]  # value = <errc.archive_io: 9>
+    archive_mismatch: typing.ClassVar[errc]  # value = <errc.archive_mismatch: 12>
+    bad_archive: typing.ClassVar[errc]  # value = <errc.bad_archive: 10>
     index_out_of_range: typing.ClassVar[errc]  # value = <errc.index_out_of_range: 3>
-    jit_lookup: typing.ClassVar[errc]  # value = <errc.jit_lookup: 12>
-    jit_module: typing.ClassVar[errc]  # value = <errc.jit_module: 10>
-    jit_target: typing.ClassVar[errc]  # value = <errc.jit_target: 9>
-    jit_verify: typing.ClassVar[errc]  # value = <errc.jit_verify: 11>
+    jit_lookup: typing.ClassVar[errc]  # value = <errc.jit_lookup: 17>
+    jit_module: typing.ClassVar[errc]  # value = <errc.jit_module: 14>
+    jit_object: typing.ClassVar[errc]  # value = <errc.jit_object: 15>
+    jit_target: typing.ClassVar[errc]  # value = <errc.jit_target: 13>
+    jit_verify: typing.ClassVar[errc]  # value = <errc.jit_verify: 16>
     no_arena: typing.ClassVar[errc]  # value = <errc.no_arena: 5>
     no_graph: typing.ClassVar[errc]  # value = <errc.no_graph: 6>
     not_univariate: typing.ClassVar[errc]  # value = <errc.not_univariate: 8>

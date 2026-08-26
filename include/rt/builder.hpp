@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ddx::impl {
@@ -53,6 +54,11 @@ struct Contraction {
 };
 
 namespace detail {
+
+// Befriended by Builder: installing a saved node stream verbatim is the
+// loader's alone, since every other way in interns and folds.  Defined in
+// rt/archive.hpp, which is the only thing that needs it.
+struct Restore;
 
 // Ids are topological, so one descending pass settles it.  Not a filtered view:
 // the body marks entries the pass has not reached, which a lazy filter would
@@ -166,6 +172,32 @@ private:
   // symbols already here stays open.
   template <typename... Ts> friend class impl::Equation;
   constexpr void seal() noexcept { sealed_ = true; }
+
+  // An arena as it was, not as make() would form it again.  A saved node
+  // stream cannot be replayed through make(): it folds, and it swaps a
+  // commutative pair, so the ids would come back different -- and here an id
+  // *is* the identity of a subexpression, which the saved sweeps name by
+  // number.  Sealed on arrival, because a loaded arena's numbering is the one
+  // its Jacobian and its colouring were already built against.
+  //
+  // The one caller is the loader, which has checked the invariants this cannot
+  // -- ids topological, slots in range, one Var per symbol.
+  friend struct detail::Restore;
+  constexpr void restore(std::vector<Node<T>> nodes,
+                         std::vector<std::string> symbols) {
+    nodes_ = std::move(nodes);
+    symbols_ = std::move(symbols);
+    // Slot-addressed, as variable() keeps it; interning leaves exactly one Var
+    // node per symbol, so this walk fills every entry.
+    vars_.assign(symbols_.size(), no_node);
+    for (const auto [id, n] : std::views::enumerate(nodes_)) {
+      if (n.op == OpCode::Var) {
+        vars_[n.slot] = static_cast<NodeId>(id);
+      }
+    }
+    rehash();
+    sealed_ = true;
+  }
 
   // Open addressing in a plain vector rather than a hash map
   static constexpr std::uint64_t payload_of(const Node<T> &n) {

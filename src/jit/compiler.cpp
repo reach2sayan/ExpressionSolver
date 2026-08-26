@@ -1,12 +1,16 @@
 #include "codegen.hpp"
 
+#include "rt/archive.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
 #include "util/scope_guard.hpp"
 
+#include <llvm/Config/llvm-config.h>
+
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/CodeGen/ReplaceWithVeclib.h>
+#include <llvm/ExecutionEngine/ObjectCache.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
@@ -20,20 +24,29 @@
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/PassTimingInfo.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/ThreadPool.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 
+#include <array>
 #include <atomic>
+#include <cstdio>
 #include <chrono>
 #include <cmath>
 #include <concepts>
+#include <cstring>
+#include <filesystem>
 #include <future>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 #include <utility>
 
 namespace ddx::jit {
@@ -108,6 +121,15 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
 // compile that asked and not of the JIT, which is what lets one JIT serve
 // compiles at different levels.
 constexpr const char *kCodegenFlag = "ddx.codegen";
+// Likewise for whether the object is worth keeping: the compile that asked is
+// what knows, and it rides on the module for the same reason the level does.
+constexpr const char *kRetainFlag = "ddx.retain_object";
+
+[[nodiscard]] bool retains_object(const llvm::Module &m) {
+  const auto *const flag = llvm::mdconst::extract_or_null<llvm::ConstantInt>(
+      m.getModuleFlag(kRetainFlag));
+  return flag != nullptr && flag->getZExtValue() != 0;
+}
 
 llvm::CodeGenOptLevel codegen_level_of(const llvm::Module &m) {
   const auto *const flag = llvm::mdconst::extract_or_null<llvm::ConstantInt>(
@@ -129,22 +151,104 @@ llvm::CodeGenOptLevel codegen_level_of(const llvm::Module &m) {
 // SimpleCompiler shares one whose subtarget cache is unsynchronised.
 class LevelledCompiler final : public llvm::orc::IRCompileLayer::IRCompiler {
 public:
-  explicit LevelledCompiler(llvm::orc::JITTargetMachineBuilder machine)
+  LevelledCompiler(llvm::orc::JITTargetMachineBuilder machine,
+                   llvm::ObjectCache *objects)
       : IRCompiler(llvm::orc::irManglingOptionsFromTargetOptions(
             machine.getOptions())),
-        machine_(std::move(machine)) {}
+        machine_(std::move(machine)), objects_(objects) {}
 
   llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
   operator()(llvm::Module &m) override {
     auto machine = machine_;
     machine.setCodeGenOptLevel(codegen_level_of(m));
     auto tm = machine.createTargetMachine();
-    return (!tm) ? tm.takeError() : llvm::orc::SimpleCompiler(**tm)(m);
+    // The cache is handed over only where the compile asked to keep its object,
+    // so a compile that will never save one does not pay to copy it.
+    return (!tm) ? tm.takeError()
+                 : llvm::orc::SimpleCompiler{
+                       **tm, retains_object(m) ? objects_ : nullptr}(m);
   }
 
 private:
   llvm::orc::JITTargetMachineBuilder machine_;
+  llvm::ObjectCache *objects_;
 };
+
+// Where the backend's output is caught on its way past.  llvm::ObjectCache is
+// the seam LLVM provides for exactly this: SimpleCompiler calls
+// notifyObjectCompiled() with the buffer it is about to hand to the linker, so
+// nothing has to be re-serialised or compiled twice to obtain it.
+//
+// Keyed by module identifier because that is all the callback is given, and it
+// is unique per compile.  An entry is taken out once, by the compile that put
+// it in -- this is a hand-off, not a cache, until getObject() learns to read
+// from disk.
+class Objects final : public llvm::ObjectCache {
+public:
+  void notifyObjectCompiled(const llvm::Module *m,
+                            llvm::MemoryBufferRef obj) override {
+    const llvm::StringRef bytes = obj.getBuffer();
+    const auto *const first = reinterpret_cast<const std::byte *>(bytes.data());
+    auto kept = std::make_shared<const std::vector<std::byte>>(
+        first, first + bytes.size());
+    const std::lock_guard lock{mutex_};
+    kept_.insert_or_assign(m->getModuleIdentifier(), std::move(kept));
+  }
+
+  // Nothing served yet.  The disk half of the cache is what fills this in, and
+  // returning nothing means "compile it", which is the correct answer for every
+  // miss including a corrupt entry.
+  std::unique_ptr<llvm::MemoryBuffer> getObject(const llvm::Module *) override {
+    return nullptr;
+  }
+
+  // Hand the bytes to the kernel and forget them: holding on would keep every
+  // object ever compiled alive for the life of the JIT.
+  [[nodiscard]] Kernel::object_type take(const std::string &id) {
+    const std::lock_guard lock{mutex_};
+    const auto it = kept_.find(id);
+    if (it == kept_.end()) {
+      return {};
+    }
+    auto out = std::move(it->second);
+    kept_.erase(it);
+    return out;
+  }
+
+private:
+  std::mutex mutex_;
+  std::map<std::string, Kernel::object_type, std::less<>> kept_;
+};
+
+// Everything an object file must agree with, as one line.
+//
+// The feature string is folded rather than spelled: detectHost() returns every
+// feature the CPU has and every one it has not, which here is 1.5 KB of
+// `+avx2,-avx512f,...`.  Storing that beside every cached object, and diffing
+// two of them to explain a miss, are both worse than useless -- what a reader
+// can act on is *that* the features differ, and the CPU name beside it already
+// says roughly how.  A collision would have to be a deliberate one.
+[[nodiscard]] std::string
+host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
+  const std::string features = machine.getFeatures().getString();
+  std::uint64_t h = 14695981039346656037ULL;
+  for (const char c : features) {
+    h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
+  }
+  const llvm::StringRef cpu = machine.getCPU();
+  std::string out = machine.getTargetTriple().str();
+  out += '/';
+  out += cpu.empty() ? llvm::StringRef{"generic"} : cpu;
+  out += "/feat-";
+  {
+    std::array<char, 17> hex{};
+    std::snprintf(hex.data(), hex.size(), "%016llx",
+                  static_cast<unsigned long long>(h));
+    out += hex.data();
+  }
+  out += "/llvm-" LLVM_VERSION_STRING;
+  return out;
+}
 
 // The widest fixed vector the host holds, in doubles.  Asked of the target's
 // own cost model rather than read off a feature list, so prefer-256-bit parts
@@ -249,6 +353,7 @@ struct Host {
   std::string triple;
   bool libmvec;
   unsigned lanes; // What Options::lanes == 0 means here
+  Objects &objects;
   std::shared_ptr<void> code;
 };
 
@@ -286,7 +391,14 @@ private:
     }
     m->setDataLayout(host_.jit.getDataLayout());
     m->setTargetTriple(host_.triple);
+    // The emitter names every module alike, which is fine until something has
+    // to tell two apart: the object cache is handed nothing but the module to
+    // key on, and LLVM prints this identifier in its own diagnostics.  The
+    // kernel's name is already unique per compile, so use it for both.
+    m->setModuleIdentifier(name_);
     m->addModuleFlag(llvm::Module::Error, kCodegenFlag, opt_.codegen_level);
+    m->addModuleFlag(llvm::Module::Error, kRetainFlag,
+                     static_cast<unsigned>(opt_.retain_object));
     rep_.nodes = g_.live_count();
     rep_.instructions = m->getInstructionCount();
     return llvm::orc::ThreadSafeModule{
@@ -337,7 +449,9 @@ private:
                   layout.values,
                   layout.jacobian,
                   layout.hessian,
-                  std::move(host_.code)};
+                  std::move(host_.code),
+                  std::make_shared<const std::string>(name_),
+                  host_.objects.take(name_)};
   }
 
   Host host_;
@@ -346,6 +460,156 @@ private:
   std::string name_;
   CompileReport &rep_;
 };
+
+// --- objects kept between runs -----------------------------------------------
+//
+// A compile is the expensive thing in this library by three orders of
+// magnitude -- seconds against the microseconds a graph costs to build -- and
+// the top rung of the ladder does not repay its own CPU until millions of
+// points.  So the one optimisation that dominates every other is not compiling
+// the same graph twice, and that is all this is.
+//
+// The lookup deliberately does *not* go through llvm::ObjectCache.  That hook
+// fires inside the compile layer, which is after emission and after the pass
+// pipeline have already run, so serving from it would skip codegen alone.
+// Keyed on the graph instead, the whole compile is skipped, and ObjectCache is
+// left doing the one thing it is the right seam for: catching the bytes on
+// their way out.
+//
+// Content-addressed, so a stale entry is a miss rather than a wrong answer:
+// everything that could change the machine code is in the key, and a key that
+// does not match is simply not found.  Nothing here fails a compile -- an
+// unreadable directory, a truncated entry, a full disk are all "compile it",
+// which is the answer that is always correct.
+constexpr std::string_view kCacheMagic = "ddxjitob";
+constexpr std::uint32_t kCacheFormat = 1;
+
+// Bumped by hand when anything upstream of the object changes without changing
+// the graph or the options -- the emitter, the pass pipeline, the ABI.  The
+// graph digest cannot see those, and an entry compiled by an older ddx would
+// otherwise be adopted by a newer one.
+constexpr std::uint32_t kCacheSchema = 1;
+
+[[nodiscard]] std::uint64_t fold(std::uint64_t h, std::uint64_t v) {
+  for (int i = 0; i < 8; ++i) {
+    h = (h ^ ((v >> (i * 8)) & 0xff)) * 1099511628211ULL;
+  }
+  return h;
+}
+
+// Everything that changes the machine code, and nothing that does not.
+// `backend` and `points` are Equation's business, `time_passes` prints,
+// `retain_object` and `cache_dir` are policy: none of the five reaches codegen,
+// so none of them may split the cache.
+[[nodiscard]] std::uint64_t cache_key(std::uint64_t graph, std::string_view host,
+                                      const Options &opt, unsigned lanes) {
+  std::uint64_t h = 14695981039346656037ULL;
+  for (const char c : host) {
+    h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
+  }
+  h = fold(h, graph);
+  h = fold(h, kCacheSchema);
+  // The width that was *emitted*, not the one that was asked for: `lanes == 0`
+  // means the host's, so keying the raw request would give one graph two keys
+  // and neither would ever hit the other.
+  h = fold(h, lanes);
+  h = fold(h, opt.opt_level);
+  h = fold(h, opt.codegen_level);
+  h = fold(h, static_cast<std::uint64_t>(opt.veclib));
+  h = fold(h, static_cast<std::uint64_t>(opt.slp));
+  h = fold(h, static_cast<std::uint64_t>(opt.loop_vectorize));
+  return fold(h, static_cast<std::uint64_t>(opt.contract));
+}
+
+[[nodiscard]] std::filesystem::path entry_path(std::string_view dir,
+                                               std::uint64_t key) {
+  std::array<char, 24> name{};
+  std::snprintf(name.data(), name.size(), "%016llx.ddxjit",
+                static_cast<unsigned long long>(key));
+  return std::filesystem::path{dir} / name.data();
+}
+
+// The symbol travels with the bytes because nothing can reconstruct it: it is
+// chosen by the compile that produced them.
+struct Entry {
+  std::string symbol;
+  std::vector<std::byte> code;
+};
+
+[[nodiscard]] std::optional<Entry> read_entry(std::string_view dir,
+                                              std::uint64_t key) {
+  auto bytes = rt::read_file(entry_path(dir, key));
+  if (!bytes) {
+    return std::nullopt; // absent, unreadable: both are a miss
+  }
+  // Every field written is checked, and nothing is written that is not checked.
+  // The header is the one part no checksum can cover -- the checksum lives in
+  // it -- so a byte flipped here is a byte the CRC will never see.  None of
+  // these currently changes what the payload *means*, which is what would make
+  // an unchecked one dangerous rather than merely unchecked; the rule is kept
+  // anyway, because "written but not read" is one edit away from "read, and
+  // trusted, and never verified".  `opcodes` and `model_nodes` belong to the
+  // graph half of the format and are written as zero here.
+  const auto head = rt::get_header(*bytes, kCacheMagic);
+  if (!head || head->format != kCacheFormat || head->schema != kCacheSchema ||
+      head->scalar_size != sizeof(double) || head->scalar_kind != 1 ||
+      head->opcodes != 0 || head->model_nodes != 0 ||
+      head->model_digest != key) {
+    return std::nullopt;
+  }
+  const std::span<const std::byte> payload{
+      bytes->data() + rt::header_bytes, static_cast<std::size_t>(head->payload_bytes)};
+  if (rt::checksum(payload) != head->payload_crc || payload.size() < 4) {
+    return std::nullopt;
+  }
+  std::uint32_t symbol_bytes = 0;
+  std::memcpy(&symbol_bytes, payload.data(), 4);
+  // Widened before it is added to: `4 + symbol_bytes` in uint32 arithmetic
+  // wraps to zero at 0xfffffffc, which passes the bounds check and then walks
+  // off the end.  Not reachable by a *damaged* file -- the checksum fails
+  // first, every time -- so this guards a payload whose CRC agrees with it, and
+  // CRC32 detects accidents rather than signing anything.  Without the widening
+  // the test that forges exactly that does not fail, it segfaults.
+  const std::size_t prefix = std::size_t{4} + symbol_bytes;
+  if (symbol_bytes == 0 || payload.size() < prefix) {
+    return std::nullopt;
+  }
+  Entry out;
+  out.symbol.assign(reinterpret_cast<const char *>(payload.data()) + 4,
+                    symbol_bytes);
+  out.code.assign(payload.begin() + static_cast<std::ptrdiff_t>(prefix),
+                  payload.end());
+  return out.code.empty() ? std::nullopt : std::optional{std::move(out)};
+}
+
+void write_entry(std::string_view dir, std::uint64_t key,
+                 std::string_view symbol, std::span<const std::byte> code) {
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec) {
+    return; // A cache that cannot be written is a cache that always misses.
+  }
+  const auto symbol_bytes = static_cast<std::uint32_t>(symbol.size());
+  std::vector<std::byte> payload(4 + symbol.size() + code.size());
+  std::memcpy(payload.data(), &symbol_bytes, 4);
+  std::memcpy(payload.data() + 4, symbol.data(), symbol.size());
+  std::ranges::copy(code, payload.begin() + 4 + symbol.size());
+
+  std::vector<std::byte> file(rt::header_bytes + payload.size());
+  rt::put_header({.magic = kCacheMagic,
+                  .format = kCacheFormat,
+                  .schema = kCacheSchema,
+                  .scalar_size = sizeof(double),
+                  .scalar_kind = 1,
+                  .model_digest = key,
+                  .payload_bytes = payload.size(),
+                  .payload_crc = rt::checksum(payload)},
+                 file);
+  std::ranges::copy(payload, file.begin() + rt::header_bytes);
+  // Staged inside the cache directory, not the system temp dir: a rename is
+  // only atomic within one filesystem.
+  (void)rt::write_file(entry_path(dir, key), file);
+}
 
 // Where a background compile runs.
 //
@@ -418,11 +682,19 @@ private:
 } // namespace
 
 struct Compiler::Impl {
+  // Before `jit`, and it has to stay there: the compile layer holds a pointer
+  // to this, and members are destroyed in reverse declaration order, so
+  // anything declared after the JIT would be gone while the JIT still had it.
+  Objects objects;
   std::unique_ptr<llvm::orc::LLJIT> jit;
   // Copied before the builder is handed to LLJIT: every compile stamps out its
   // own machine from it.
   std::optional<llvm::orc::JITTargetMachineBuilder> machine;
   std::string triple;
+  // Everything an object must agree with, folded once at bring-up.  Built here
+  // rather than derived on demand because the JITTargetMachineBuilder it comes
+  // from is handed to LLJIT and no longer answers for the host afterwards.
+  std::string host;
   // The only shared mutable state: LLJIT is internally synchronised, but two
   // threads naming a module alike would hand it a duplicate symbol.
   std::atomic<unsigned> counter{0};
@@ -443,14 +715,16 @@ struct Compiler::Impl {
     impl->machine = *jtmb;
     impl->triple = jtmb->getTargetTriple().str();
     impl->lanes = host_lanes(*jtmb);
+    impl->host = host_identity_of(*jtmb);
 
     // Named outright rather than reached through setNumCompileThreads, so the
     // backend runs on the thread that asked for the kernel and no idle pool is
     // spawned.
-    auto compiler_factory = [](llvm::orc::JITTargetMachineBuilder machine)
+    auto compiler_factory =
+        [objects = &impl->objects](llvm::orc::JITTargetMachineBuilder machine)
         -> llvm::Expected<
             std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
-      return std::make_unique<LevelledCompiler>(std::move(machine));
+      return std::make_unique<LevelledCompiler>(std::move(machine), objects);
     };
     if (auto jit = llvm::orc::LLJITBuilder()
                        .setJITTargetMachineBuilder(std::move(*jtmb))
@@ -497,22 +771,116 @@ struct Compiler::Impl {
     return impl;
   }
 
+  // A dylib of its own for every adopted object.  The symbol is baked into the
+  // bytes, so two objects compiled from the same graph carry the same name and
+  // the main dylib would refuse the second; a fresh one cannot collide with
+  // anything.  The link order is what keeps libm and the vector-math
+  // generators reachable from inside it -- an adopted kernel calls the same
+  // `exp` a compiled one does.
+  [[nodiscard]] static result<Kernel>
+  link(const std::shared_ptr<Impl> &self, std::span<const std::byte> object,
+       std::string_view symbol, std::size_t arity, std::size_t values,
+       std::size_t jacobian, std::size_t hessian) {
+    auto &jit = *self->jit;
+    auto jd =
+        jit.createJITDylib("ddx_adopted_" + std::to_string(self->counter++));
+    if (!jd) {
+      return std::unexpected{
+          as_error(errc::jit_module, "creating a dylib", jd.takeError())};
+    }
+    jd->addToLinkOrder(jit.getMainJITDylib());
+
+    // Copied, not borrowed: the linker keeps the buffer for as long as the code
+    // lives, and a caller's span is theirs.  Kept as well as copied, so an
+    // adopted kernel can be saved again like any other -- object() means the
+    // same thing whichever way the kernel arrived.
+    const auto *const first =
+        reinterpret_cast<const std::byte *>(object.data());
+    auto kept = std::make_shared<const std::vector<std::byte>>(
+        first, first + object.size());
+    if (auto e = jit.addObjectFile(
+            *jd, llvm::MemoryBuffer::getMemBufferCopy(llvm::StringRef{
+                     reinterpret_cast<const char *>(object.data()),
+                     object.size()}))) {
+      return std::unexpected{
+          as_error(errc::jit_object, "adding the object", std::move(e))};
+    }
+
+    // Where a malformed object is found: addObjectFile only queues it, and the
+    // link runs on the lookup.
+    auto sym = jit.lookup(*jd, symbol);
+    if (!sym) {
+      return std::unexpected{as_error(errc::jit_lookup,
+                                      "looking up " + std::string{symbol},
+                                      sym.takeError())};
+    }
+    return Kernel{sym->toPtr<Kernel::function_type>(),
+                  arity,
+                  values,
+                  jacobian,
+                  hessian,
+                  self,
+                  std::make_shared<const std::string>(symbol),
+                  std::move(kept)};
+  }
+
   // Named on Impl rather than on Compiler so a queued compile needs only a
   // share of this, not a Compiler that may have been moved from or gone.
   [[nodiscard]] static result<Kernel> run(const std::shared_ptr<Impl> &self,
                                           const rt::Graph<double> &g,
                                           const Options &opt,
                                           CompileReport &rep) {
+    const bool caching = !opt.cache_dir.empty();
+    const std::uint64_t key =
+        caching ? cache_key(rt::digest(g), self->host, opt,
+                            opt.lanes != 0 ? opt.lanes : self->lanes)
+                : 0;
+    if (caching) {
+      if (const auto entry = read_entry(opt.cache_dir, key)) {
+        // The shapes come from the live graph, never from the file.  A forged
+        // entry can supply code and a symbol; it cannot claim a column count,
+        // which is the one number that would make Kernel::operator() index past
+        // the caller's spans.  The bytes are trusted only to be *code*, and only
+        // after a key derived from this very graph has already matched.
+        const auto &layout = g.layout();
+        auto adopted = link(self, entry->code, entry->symbol,
+                            g.symbols().size(), layout.values, layout.jacobian,
+                            layout.hessian);
+        if (adopted) {
+          // Nothing was emitted, optimised or selected, and the report says so:
+          // the phases are zero because they did not happen.
+          rep.nodes = g.live_count();
+          return adopted;
+        }
+        // An entry that will not link is a miss like any other.  Left on disk
+        // rather than deleted: another process may be mid-write, and a stale
+        // entry costs one failed link where a delete race costs correctness.
+      }
+    }
+
+    Options effective = opt;
+    // A compile whose object is going to be stored has to keep it, whatever the
+    // caller asked -- and a caller who asked for a cache has asked for this.
+    effective.retain_object = effective.retain_object || caching;
+
     Compilation work{Host{*self->jit, *self->machine, self->triple,
-                          self->libmvec, self->lanes, self},
-                     g, opt, "ddx_kernel_" + std::to_string(self->counter++),
-                     rep};
-    return work();
+                          self->libmvec, self->lanes, self->objects, self},
+                     g, effective,
+                     "ddx_kernel_" + std::to_string(self->counter++), rep};
+    auto kernel = work();
+    if (caching && kernel && !kernel->object().empty()) {
+      write_entry(opt.cache_dir, key, kernel->symbol(), kernel->object());
+    }
+    return kernel;
   }
 };
 
 Compiler::Compiler(std::shared_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
+
+std::string_view Compiler::host_identity() const noexcept {
+  return impl_->host;
+}
 
 result<Compiler> Compiler::create() {
   return Impl::bring_up().transform(
@@ -549,11 +917,18 @@ Compiler::compile_async(std::shared_ptr<const rt::Graph<double>> g,
   return landing;
 }
 
+result<Kernel> Compiler::adopt(std::span<const std::byte> object,
+                               std::string_view symbol, std::size_t arity,
+                               std::size_t values, std::size_t jacobian,
+                               std::size_t hessian) {
+  return Impl::link(impl_, object, symbol, arity, values, jacobian, hessian);
+}
+
 result<std::string> Compiler::render_ir(const rt::Graph<double> &g,
                                         const Options &opt) const {
   CompileReport discard;
   Compilation run{Host{*impl_->jit, *impl_->machine, impl_->triple,
-                       impl_->libmvec, impl_->lanes, impl_},
+                       impl_->libmvec, impl_->lanes, impl_->objects, impl_},
                   g, opt, "ddx_kernel_dump", discard};
   return run.prepared().transform([](llvm::orc::ThreadSafeModule m) {
     std::string out;

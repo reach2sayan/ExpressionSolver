@@ -5,6 +5,7 @@
 // supplies.
 #include "dual/taylor_dual.hpp"
 #include "md/md.hpp"
+#include "rt/archive.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
@@ -25,6 +26,7 @@
 #include <future>
 #endif
 
+#include <filesystem>
 #include <mutex> // unique_lock, which <shared_mutex> does not carry
 #include <shared_mutex>
 
@@ -114,6 +116,37 @@ public:
     }
     first.builder()->seal();
     return Equation{std::move(owned), first, rest...};
+  }
+
+  // Build the model, then take the sweeps off disk if the file still describes
+  // it.  Best effort by design: an absent file is the first run and a stale one
+  // is a rebuild, so neither refuses -- loaded() is how a caller tells.
+  [[nodiscard]] static Equation cached(const std::filesystem::path &path,
+                                       std::unique_ptr<rt::Builder<T>> owned,
+                                       rt::RTExpression<T> first, Rest... rest)
+    requires std::floating_point<T>
+  {
+    if (const auto why = why_not(first, rest...)) {
+      return Equation{*why};
+    }
+    // The model as built, before anything has swept it: the arena is complete
+    // and the file has to agree with it exactly.
+    std::vector<rt::NodeId> roots;
+    roots.reserve(output_dim);
+    roots.push_back(first.id(*owned));
+    (roots.push_back(rest.id(*owned)), ...);
+
+    if (auto snap = rt::load_snapshot<T>(path);
+        snap && snap->roots.size() == output_dim &&
+        std::ranges::equal(snap->roots, roots) &&
+        rt::digest<T>(snap->symbols, snap->nodes, snap->model_nodes) ==
+            rt::digest<T>(owned->symbols(), owned->nodes(), owned->size())) {
+      return Equation{std::move(*snap)};
+    }
+    Equation eq = create(std::move(owned), first, rest...);
+    // A cache that cannot be written is still a working equation.
+    (void)eq.save(path);
+    return eq;
   }
 
   // Why the equation could not be built, or nullopt.  poisoned() is the same
@@ -271,9 +304,29 @@ public:
   }
 
 #ifdef DDX_HAS_JIT
-  // Block until a compile in flight has landed, and answer uses_kernel().
-  // Nothing else waits: this is for a caller who would rather have the kernel
-  // than the sweep, and for a test that needs the answer to be settled.
+  // Which rung of the ladder is answering, as the codegen level it was compiled
+  // at; nothing where the sweep is.  The ladder is otherwise invisible -- every
+  // rung gives the same bits, which is the point -- so this is the only way to
+  // see that it climbed, and the only way a caller who cares whether they are
+  // still on the cheap kernel can find out.  It does not wait.
+  [[nodiscard]] std::optional<unsigned> kernel_level() const {
+    if (poisoned()) {
+      return std::nullopt;
+    }
+    const auto snap = snapshot(Want::Jacobian);
+    return snap->kernel ? std::optional{snap->level} : std::nullopt;
+  }
+
+  // Block until the first rung of the ladder has landed, and answer
+  // uses_kernel().  Nothing else waits: this is for a caller who would rather
+  // have a kernel than the sweep, and for a test that needs the answer to be
+  // settled.
+  //
+  // The *first* rung, not the best one -- rungs[0] is the cheap compile, so
+  // this returns as soon as there is machine code to run, and the better
+  // kernel replaces it later without anyone waiting for it.  A caller who
+  // wanted the top rung specifically would be asking for the slowest thing the
+  // ladder exists to avoid.
   [[nodiscard]] bool wait_for_kernel() const {
     if (poisoned()) {
       return false;
@@ -281,8 +334,8 @@ public:
     (void)snapshot(Want::Jacobian); // launches it, if nothing has yet
     {
       const std::shared_lock read{cache_->plain.mutex};
-      if (cache_->plain.pending.valid()) {
-        cache_->plain.pending.wait();
+      if (const auto &first = cache_->plain.rungs.front(); first.pending.valid()) {
+        first.pending.wait();
       }
     }
     return static_cast<bool>(snapshot(Want::Jacobian)->kernel);
@@ -373,11 +426,153 @@ public:
                       : std::optional{hessians_.front().compressed.size()};
   }
 
+  // --- the equation on disk --------------------------------------------------
+  //
+  // What is written is the arena and the sweeps: the reverse-mode Jacobian and,
+  // per root, the Hessian with its colouring.  Those are what the constructor
+  // spends its time on -- one sweep is microseconds, but coupling_pattern is
+  // quadratic in the symbols and the colouring runs Boost.Graph over the
+  // conflicts.  A lane's Graph is not written, because freezing one is a single
+  // linear pass over an arena the file already carries.
+
+  [[nodiscard]] result<void> save(const std::filesystem::path &path) const
+    requires std::floating_point<T>
+  {
+    return poisoned() ? std::unexpected{*bad_} : rt::save(snapshot(), path);
+  }
+
+  // Whether `path` holds *this* equation -- the same symbols, the same roots
+  // and the same model.  rt::verify() answers the other question, whether a
+  // file is readable by this build at all.
+  [[nodiscard]] result<void> verify(const std::filesystem::path &path) const
+    requires std::floating_point<T>
+  {
+    if (poisoned()) {
+      return std::unexpected{*bad_};
+    }
+    const auto snap = rt::load_snapshot<T>(path);
+    if (!snap) {
+      return std::unexpected{snap.error()};
+    }
+    return describes(*snap) ? result<void>{} : fail(errc::archive_mismatch);
+  }
+
+  // An equation from a file alone: nothing is built and nothing is swept, and
+  // the model it came from need not exist in this program.  The output count is
+  // in the type, so a file holding some other number of functions is refused
+  // rather than reinterpreted.
+  [[nodiscard]] static result<Equation> load(const std::filesystem::path &path)
+    requires std::floating_point<T>
+  {
+    auto snap = rt::load_snapshot<T>(path);
+    if (!snap) {
+      return std::unexpected{snap.error()};
+    }
+    if (snap->roots.size() != output_dim) {
+      return fail(errc::archive_mismatch);
+    }
+    return Equation{std::move(*snap)};
+  }
+
+  // Whether this equation was read from a file rather than swept.  A cache is
+  // best effort -- an absent file is the first run and a stale one is a
+  // rebuild, neither of which is a caller's error -- so this is the only way to
+  // tell which path rt::equation(path, model) took.
+  [[nodiscard]] constexpr bool loaded() const noexcept { return loaded_; }
+
 private:
   // Past the poison guard, so the arena is known good; arity() is the checked
   // spelling.
   [[nodiscard]] constexpr std::size_t symbol_count() const {
     return arena_->symbols().size();
+  }
+
+  // Everything this equation is that a file keeps.  PyEquation fills the same
+  // struct from its own members, which is what keeps one serialiser for two
+  // equations.
+  [[nodiscard]] rt::Snapshot<T> snapshot() const {
+    rt::Snapshot<T> snap;
+    snap.symbols = arena_->symbols();
+    snap.nodes.assign(arena_->nodes().begin(), arena_->nodes().end());
+    snap.roots = roots_;
+    snap.jacobian = derivative_;
+    snap.hessians = hessians_;
+    snap.model_nodes = model_nodes_;
+#ifdef DDX_HAS_JIT
+    snap.options = options_;
+    snap.objects = objects();
+#endif
+    return snap;
+  }
+
+#ifdef DDX_HAS_JIT
+  // The machine code the lanes are holding, for the file to carry.  Only lanes
+  // that have one, and only kernels that kept their bytes -- a compile keeps
+  // them where jit::Options::retain_object asked and not otherwise, since a
+  // megabyte held for the life of every kernel that will never be saved is not
+  // a cost a compile should pay by default.  So an equation compiled without it
+  // saves its graph and no code, which is a shortfall in what the file is worth
+  // rather than an error.
+  [[nodiscard]] std::vector<rt::Object> objects() const {
+    if (poisoned()) {
+      return {};
+    }
+    auto *const c = compiler();
+    if (c == nullptr) {
+      return {};
+    }
+    std::vector<rt::Object> out;
+    for (const Want want :
+         {Want::Values, Want::Jacobian, Want::Hessian}) {
+      Lane &lane = lane_for(want);
+      const std::shared_lock read{lane.mutex};
+      if (!lane.ready || !lane.ready->kernel ||
+          lane.ready->kernel.object().empty()) {
+        continue;
+      }
+      const auto code = lane.ready->kernel.object();
+      out.push_back({.want = static_cast<std::uint8_t>(want),
+                     .symbol = std::string{lane.ready->kernel.symbol()},
+                     .host = std::string{c->host_identity()},
+                     .digest = rt::digest(*lane.ready->graph),
+                     // What the compile was actually given, not what the
+                     // caller stated: effective_options() settles the lane
+                     // width, and a kernel is that width.
+                     .options = effective_options(),
+                     .code = {code.begin(), code.end()}});
+    }
+    return out;
+  }
+
+  // A stored kernel for this lane, or none.  Every field has to agree: the
+  // graph it was emitted from, the host it was emitted for, and the options
+  // that decided what was emitted.  A mismatch compiles instead -- adopt()
+  // cannot see that an object came from another graph, so nothing may reach it
+  // that has not been checked here.
+  [[nodiscard]] const rt::Object *stored(Want want,
+                                         const rt::Graph<T> &g) const {
+    auto *const c = compiler();
+    if (c == nullptr || objects_.empty()) {
+      return nullptr;
+    }
+    const auto digest = rt::digest(g);
+    const auto it = std::ranges::find_if(objects_, [&](const rt::Object &o) {
+      return o.want == static_cast<std::uint8_t>(want) && o.digest == digest &&
+             o.host == c->host_identity() &&
+             rt::same_codegen(o.options, effective_options()) &&
+             !o.code.empty();
+    });
+    return it == objects_.end() ? nullptr : &*it;
+  }
+#endif
+
+  // The roots as well as the digest: two equations over one arena share every
+  // node and differ only in which ids they call outputs.
+  [[nodiscard]] bool describes(const rt::Snapshot<T> &snap) const {
+    return snap.roots.size() == output_dim &&
+           std::ranges::equal(snap.roots, roots_) &&
+           rt::digest<T>(snap.symbols, snap.nodes, snap.model_nodes) ==
+               rt::digest<T>(arena_->symbols(), arena_->nodes(), model_nodes_);
   }
 
   // Both take a graph as a precondition, which create() establishes.  The third
@@ -394,6 +589,9 @@ private:
     roots_.reserve(output_dim);
     roots_.push_back(first.id(*arena_));
     (roots_.push_back(rest.id(*arena_)), ...);
+    // Before the sweeps, which append: this is where the model ends and the
+    // derivatives begin, and it is what a saved file is keyed on.
+    model_nodes_ = static_cast<std::uint32_t>(arena_->size());
     derivative_ = rt::build_jacobian_impl(*arena_, roots_);
     // The colouring rt::build_hessian_impl needs runs through Boost.Graph, and
     // a Cache holds a mutex; neither is available while constant-evaluating,
@@ -411,6 +609,22 @@ private:
            Rest... rest)
       : Equation(first, rest...) {
     arena_ = ArenaPtr{owned.release(), reclaim};
+  }
+
+  // The fourth construction: a file.  The arena is the snapshot's own node
+  // array installed verbatim -- not replayed, since make() folds and would
+  // renumber the very ids the saved sweeps name.  Nothing is swept here, which
+  // is the entire point of the file.
+  explicit Equation(rt::Snapshot<T> &&snap)
+      : arena_(rt::rebuild(snap).release(), reclaim),
+        roots_(std::move(snap.roots)), model_nodes_(snap.model_nodes),
+        derivative_(std::move(snap.jacobian)),
+        hessians_(std::move(snap.hessians)), loaded_(true) {
+#ifdef DDX_HAS_JIT
+    options_ = snap.options;
+    objects_ = std::move(snap.objects);
+#endif
+    cache_ = std::make_unique<Cache>();
   }
 
   // The graph an expression names, or why it names none.  Poison first, and by
@@ -504,18 +718,36 @@ private:
     // outlives an Equation that went away mid-compile.
     std::shared_ptr<const rt::Graph<T>> graph;
 #ifdef DDX_HAS_JIT
-    // Empty where T is not the JIT's scalar, and under Compile until the
-    // compile lands.
+    // Empty where T is not the JIT's scalar, and under Compile until the first
+    // rung lands.
     jit::Kernel kernel{};
+    // The codegen level `kernel` was compiled at, and nothing without one.
+    // What it is for is refusing a rung that landed late: the pool is shared,
+    // so a cheap compile can queue behind an expensive one belonging to another
+    // equation and the rungs need not land in the order they were asked for.
+    unsigned level = 0;
 #endif
   };
+
+#ifdef DDX_HAS_JIT
+  // One step of the ladder.  `level` is the codegen level asked for, which is
+  // also the rank: a higher one is a better kernel and may replace a lower one,
+  // never the other way about.
+  struct Rung {
+    std::shared_future<jit::result<jit::Kernel>> pending; // set once, then read
+    unsigned level = 0;
+  };
+#endif
 
   // One shape of graph, filled once and never invalidated
   struct Lane {
     mutable std::shared_mutex mutex;
     std::shared_ptr<const Compiled> ready;
 #ifdef DDX_HAS_JIT
-    std::shared_future<jit::result<jit::Kernel>> pending; // set once, then read
+    // In the order they were submitted, so rungs[0] is the one that answers
+    // soonest and the one wait_for_kernel() waits for.  Two, because the ladder
+    // is two: the stated level, and the cheap one underneath it.
+    std::array<Rung, 2> rungs;
 #endif
   };
 
@@ -565,26 +797,47 @@ private:
   // nothing waits for one that has not landed.
   [[nodiscard]] bool settling(const Lane &lane) const { return arrived(lane); }
 
-  // Republish rather than write into what a reader may be holding.
+  // Republish rather than write into what a reader may be holding.  Every rung
+  // that has landed is collected and cleared, and the best of them is published
+  // if it beats what is already there -- a rung that lost the race is dropped
+  // rather than allowed to demote a kernel a reader is already using.
   void adopt([[maybe_unused]] Lane &lane) const {
 #ifdef DDX_HAS_JIT
-    // A refused compile leaves the kernel empty, and the sweep stays.
-    const auto &landed = lane.pending.get();
-    lane.ready = std::make_shared<const Compiled>(
-        Compiled{.graph = lane.ready->graph,
-                 .kernel = landed ? *landed : jit::Kernel {}});
-    lane.pending = {};
+    jit::Kernel best;
+    unsigned level = 0;
+    for (Rung &rung : lane.rungs) {
+      if (!ready(rung)) {
+        continue;
+      }
+      // A refused compile leaves the kernel empty, and the sweep stays.
+      const auto &landed = rung.pending.get();
+      if (landed && (!best || rung.level > level)) {
+        best = *landed;
+        level = rung.level;
+      }
+      rung.pending = {};
+    }
+    if (best && (!lane.ready->kernel || level > lane.ready->level)) {
+      lane.ready = std::make_shared<const Compiled>(Compiled{
+          .graph = lane.ready->graph, .kernel = std::move(best), .level = level});
+    }
 #endif
   }
 
-  // Whether a background compile has finished but not yet been published.
-  // Polling a shared_future from many threads is well-defined, and `pending` is
+#ifdef DDX_HAS_JIT
+  // Polling a shared_future from many threads is well-defined, and a rung is
   // written once under the write lock and never reassigned.
+  [[nodiscard]] static bool ready(const Rung &rung) {
+    using namespace std::chrono_literals;
+    return rung.pending.valid() &&
+           rung.pending.wait_for(0s) == std::future_status::ready;
+  }
+#endif
+
+  // Whether any rung has finished but not yet been collected.
   [[nodiscard]] static bool arrived([[maybe_unused]] const Lane &lane) {
 #ifdef DDX_HAS_JIT
-    using namespace std::chrono_literals;
-    return lane.pending.valid() &&
-           lane.pending.wait_for(0s) == std::future_status::ready;
+    return std::ranges::any_of(lane.rungs, ready);
 #else
     return false;
 #endif
@@ -630,14 +883,76 @@ private:
       // caller handles -- run() falls back to interpret().
       auto *const c =
           options_.backend != jit::Backend::Interpret ? compiler() : nullptr;
-      if (c != nullptr) {
-        lane.pending = c->compile_async(lane.ready->graph, effective_options());
+      if (c == nullptr) {
+        return;
       }
+      // A kernel this equation was saved with is a rung that was already
+      // climbed: it is published outright, at the level it was compiled at, and
+      // then the ladder is launched as always.  Nothing special-cases it --
+      // adopt()'s rank comparison drops a rung that cannot beat it, and
+      // replaces it where the equation now asks for more than was stored.
+      if (const rt::Object *const have = stored(want, *lane.ready->graph)) {
+        // Every shape comes from the graph just frozen, never from the file.
+        // This is what bounds the damage a forged entry can do: it may supply
+        // code and a symbol, but it cannot claim an arity or a column count --
+        // which are the numbers that would make Kernel::operator() index past
+        // a caller's spans, and the one thing no checksum could catch.
+        //
+        // The symbol is the only field the file does supply.  A forged one that
+        // the object does not define is refused by the link rather than
+        // resolving through the dylib's link order to something with a
+        // different signature -- checked, not assumed.
+        const auto &layout = lane.ready->graph->layout();
+        if (auto adopted = c->adopt(have->code, have->symbol,
+                                    lane.ready->graph->symbols().size(),
+                                    layout.values, layout.jacobian,
+                                    layout.hessian)) {
+          const unsigned level = have->options.codegen_level;
+          lane.ready = std::make_shared<const Compiled>(
+              Compiled{.graph = lane.ready->graph,
+                       .kernel = std::move(*adopted),
+                       .level = level});
+          // Nothing left to climb to, so nothing is launched.  This is the
+          // whole point of the file: at 128 variables the top rung costs
+          // seconds and does not repay its own CPU for millions of points, so
+          // having it already is having the expensive thing.
+          if (level >= effective_options().codegen_level) {
+            return;
+          }
+        }
+        // A refused link is a miss, never a failure: the compile below stands.
+      }
+      launch(lane, *c);
     }
 #endif
   }
 
 #ifdef DDX_HAS_JIT
+  // Put the ladder in flight, cheapest rung first so it is also first in the
+  // pool's queue.
+  //
+  // Compiling twice is the trade the ladder makes: codegen 0 is FastISel and
+  // the linear-time register allocator, which at 128 variables compiles 2.8x
+  // to 5.1x faster than the stated level for a kernel 1.2x to 2.3x slower, so
+  // a caller stops sweeping that much sooner and pays the cheap rung's compile
+  // -- a fifth to a third of the other's -- on a background thread for it.
+  // The two agree to the bit, all four codegen levels do, so a loop running
+  // across either swap sees the same answers throughout.
+  //
+  // At codegen 0 there is nothing cheaper to put underneath, so there is one
+  // rung and this is exactly what it was before the ladder.
+  void launch(Lane &lane, jit::Compiler &c) const {
+    const jit::Options top = effective_options();
+    std::size_t next = 0;
+    if (top.codegen_level > 0) {
+      jit::Options low = top;
+      low.codegen_level = 0;
+      lane.rungs[next++] = {c.compile_async(lane.ready->graph, low), 0};
+    }
+    lane.rungs[next] = {c.compile_async(lane.ready->graph, top),
+                        top.codegen_level};
+  }
+
   // How wide to emit, from the batch the caller said they have.  A kernel `w`
   // lanes wide computes `w` points and stores the ones asked for, so on a batch
   // of one it does a register's worth of work to answer for a single point --
@@ -783,9 +1098,16 @@ private:
 
   ArenaPtr arena_{nullptr, borrow};
   std::vector<rt::NodeId> roots_;
+  // Where the model ends and the sweeps begin.  A file is keyed on the arena up
+  // to here, so rebuilding the model reproduces the key and the sweeps above it
+  // are what the file saves.
+  std::uint32_t model_nodes_ = 0;
 
 #ifdef DDX_HAS_JIT
   jit::Options options_{};
+  // Machine code a file handed over, consulted once per lane by prepare().
+  // Bytes only, so holding them costs nothing like holding the graph twice.
+  std::vector<rt::Object> objects_{};
 #endif
   // Eager: one reverse sweep is microseconds, and it keeps every per-point
   // accessor const and constexpr.
@@ -801,6 +1123,7 @@ private:
   std::unique_ptr<Cache> cache_;
   // Set exactly when why_not() refused, so poisoned() <=> arena_ == nullptr.
   std::optional<error> bad_{};
+  bool loaded_ = false;
 };
 
 } // namespace ddx::impl
@@ -847,6 +1170,67 @@ template <impl::Numeric T = double>
     return impl::index_apply<outputs - 1>([&]<std::size_t... Rest>() {
       return impl::Equation<RTExpression<T>, detail::Repeat<Rest, T>...>::
           create(std::move(arena), built[0], built[Rest + 1]...);
+    });
+  }
+}
+
+// An equation from a file and nothing else.  The model that built it need not
+// exist in this program: the symbols, the arena, the Jacobian and the Hessian
+// colouring all come off disk, and no sweep runs.
+//
+//   const auto eq = ddx::rt::load("f.ddx");        // one function
+//   const auto eq = ddx::rt::load<double, 3>("f.ddx");
+//
+// The output count is a template parameter because it is part of the type --
+// hessian() is only offered for one function, and the column accessors are
+// sized from it.  A file holding some other number is refused, not adapted to.
+template <impl::Numeric T = double, std::size_t Outputs = 1>
+  requires std::floating_point<T>
+[[nodiscard]] auto load(const std::filesystem::path &path) {
+  static_assert(Outputs > 0, "load: a system needs at least one function");
+  return impl::index_apply<Outputs - 1>([&]<std::size_t... Rest>() {
+    return impl::Equation<RTExpression<T>, detail::Repeat<Rest, T>...>::load(
+        path);
+  });
+}
+
+// The same model, with a file to keep the work in:
+//
+//   const auto eq = ddx::rt::equation("f.ddx", [] {
+//     const auto x = var("x");
+//     return exp(x) * x;
+//   });
+//
+// The lambda is the model as it would be written anyway; the path is only where
+// the result is kept.  The first run builds, sweeps, and writes the file; a
+// later one rebuilds the arena -- interning, which is cheap -- finds the file
+// still describes it, and takes the sweeps and the colouring from disk instead
+// of recomputing them.  Editing the model changes the key, so the file is
+// rebuilt and overwritten rather than trusted.
+//
+// It never refuses: an absent file is the first run and a stale one is a
+// rebuild, and neither is a caller's error.  eq.loaded() says which happened.
+template <impl::Numeric T = double>
+  requires std::floating_point<T>
+[[nodiscard]] auto equation(const std::filesystem::path &path,
+                            std::invocable auto &&assemble) {
+  auto arena = std::make_unique<Builder<T>>();
+  auto built = [&] {
+    const auto scope = detail::scoped_arena(*arena);
+    return std::invoke(std::forward<decltype(assemble)>(assemble));
+  }();
+
+  using Built = std::remove_cvref_t<decltype(built)>;
+  if constexpr (std::same_as<Built, RTExpression<T>>) {
+    return impl::Equation<RTExpression<T>>::cached(path, std::move(arena),
+                                                   built);
+  } else {
+    constexpr std::size_t outputs = std::tuple_size_v<Built>;
+    static_assert(outputs > 0,
+                  "equation: a system needs at least one function");
+    return impl::index_apply<outputs - 1>([&]<std::size_t... Rest>() {
+      return impl::Equation<RTExpression<T>, detail::Repeat<Rest, T>...>::
+          cached(path, std::move(arena), built[0], built[Rest + 1]...);
     });
   }
 }

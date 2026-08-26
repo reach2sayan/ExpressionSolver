@@ -47,7 +47,9 @@ def test_every_exported_unary_is_covered() -> None:
         if callable(getattr(ddx, name)) and not isinstance(getattr(ddx, name), type)
     }
     binary = {"add", "mul", "div", "pow", "atan2", "hypot", "max", "min"}
-    assert functions - binary - {"equation", "var"} == set(UNARY)
+    # Not operations at all: these build or read an equation.
+    not_an_op = {"equation", "load", "var"}
+    assert functions - binary - not_an_op == set(UNARY)
 
 
 @pytest.mark.parametrize("name", sorted(UNARY))

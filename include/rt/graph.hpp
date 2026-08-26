@@ -25,6 +25,13 @@ namespace ddx::impl {
 template <typename... Ts> class Equation;
 } // namespace ddx::impl
 
+namespace ddx::py {
+// The Python equation, which sweeps once and freezes three lanes off the one
+// result exactly as the facade does -- so it hands over a Hessian for the same
+// reason and is befriended for it.
+class PyEquation;
+} // namespace ddx::py
+
 namespace ddx::rt {
 
 // Befriended by Graph: the CSR itself is the writer's business.
@@ -292,6 +299,7 @@ private:
   // rt::build_hessian_impl appends to the builder, and freeze() must not.  Only
   // an Equation has one to hand over; everyone else asks for `build_hessian()`.
   template <typename... Ts> friend class impl::Equation;
+  friend class py::PyEquation;
   constexpr GraphBuilder &hessian_from(const Hessian &h) {
     outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
     layout_.hessian = h.compressed.size();

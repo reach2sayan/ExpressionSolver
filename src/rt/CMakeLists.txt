@@ -6,11 +6,13 @@
 #   coupling.cpp  the Hessian column colouring -- Boost.Graph's conflict graph,
 #                 smallest-last ordering and sequential colouring
 #   dot.cpp       the graphviz writer, which drags in the DOT reader with it
+#   archive.cpp   the saved graph's prologue, checksum, file and opcode table
 #
-# Both would otherwise be emitted once per scalar type the graph is instantiated
-# at, for byte-identical code, and would put Boost.Graph's algorithms on the
-# include path of every translation unit that only wants to evaluate.
-add_library(ddx_rt ${DDX_LIBRARY_TYPE} coupling.cpp dot.cpp)
+# All of them would otherwise be emitted once per scalar type the graph is
+# instantiated at, for byte-identical code, and the first two would put
+# Boost.Graph's algorithms on the include path of every translation unit that
+# only wants to evaluate.
+add_library(ddx_rt ${DDX_LIBRARY_TYPE} coupling.cpp dot.cpp archive.cpp)
 add_library(ddx::rt ALIAS ddx_rt)
 
 # OUTPUT_NAME ddx: one binary artifact, libddx, whatever is compiled into it.

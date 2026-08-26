@@ -513,6 +513,89 @@ it lands. Codegen — instruction selection and register allocation — is 68–
 it, which is why `codegen_level` and not `opt_level` is the knob that moves a
 compile time.
 
+## Saving a built equation
+
+Building an equation sweeps it: one reverse pass per function for the Jacobian,
+and for the Hessian a coupling pattern that is quadratic in the symbols followed
+by a colouring. `save` writes that work to a file, and `load` reads it back
+without a model:
+
+```cpp
+const auto eq = rt::equation([] { return exp(rt::var("x")) * rt::var("y"); });
+eq.save("f.ddx");
+
+const auto same = *rt::load("f.ddx");            // no model, nothing swept
+const auto sys  = *rt::load<double, 3>("s.ddx"); // three functions
+```
+
+The output count is a template parameter because it is part of the type, and a
+file holding some other number is refused rather than adapted to.
+
+Pair a model with a file and it becomes a cache — the lambda is the model as it
+would be written anyway, and the path is only where the result is kept:
+
+```cpp
+const auto eq = rt::equation("f.ddx", [] {
+  const auto x = rt::var("x");
+  return exp(x) * x;
+});
+```
+
+The first run builds, sweeps and writes the file. A later one rebuilds the arena
+— interning, which is cheap — finds the file still describes it, and takes the
+sweeps off disk. Editing the model changes the key, so the file is rebuilt and
+overwritten rather than trusted. It never refuses: an absent file is the first
+run and a stale one is a rebuild, and `loaded()` says which happened.
+
+Two questions about a file, and they are different:
+
+```cpp
+rt::verify("f.ddx");     // result<void> — can this build read it at all?
+eq.verify("f.ddx");      // result<void> — ...and is it *this* equation?
+```
+
+A file is binary, little-endian, and carries a checksum plus the schema of every
+struct in it, so one written by a different version of ddx is refused rather than
+misread. Nothing in it is trusted before the checksum and the structural
+invariants have passed. What travels is the arena and the sweeps; a lane's
+frozen graph does not, because freezing one is a single linear pass over an
+arena the file already has.
+
+Loading instead of sweeping is about 1.7×. Under `Interpret` — the default —
+that is 1.7× off the whole cost of having an equation. Under a compiling
+backend the sweeps are a few milliseconds against a compile of hundreds or
+thousands — so there the saving worth having is the machine code, which the
+file also carries:
+
+```cpp
+eq.options({.backend = rt::Backend::Compile, .retain_object = true});
+eq.wait_for_kernel();
+eq.save("f.ddx");                 // the kernel travels with the graph
+
+const auto warm = *rt::load("f.ddx");
+warm.uses_kernel();               // true, with nothing having compiled
+```
+
+Measured at 64, 128 and 256 variables: 38/79/179 ms to build and compile, against
+0.40/0.63/1.12 ms to load — 96× to 160×, with emission, the pass pipeline and
+codegen not run at all. `retain_object` is off by default, since a kernel does
+not keep a megabyte of machine code alive on the chance that someone saves it;
+an equation compiled without it saves its graph and no code.
+
+A stored kernel is run only where the graph, the host and the options it was
+emitted under all still agree. Anything else compiles instead — a mismatch is
+answered by compiling, never by running the wrong code.
+
+| Member | Answers |
+|---|---|
+| `save(path)` | `result<void>` — write this equation |
+| `verify(path)` | `result<void>` — does `path` hold *this* equation? |
+| `Equation::load(path)` | `result<Equation>` — read one, sweeping nothing |
+| `loaded()` | whether this equation came off disk rather than being swept |
+| `rt::verify<T>(path)` | `result<void>` — is `path` readable by this build? |
+
+---
+
 ## Reference
 
 `ddx::rt::equation(callback)` → `Equation`. All of it is `const` and
@@ -536,6 +619,8 @@ thread-safe except `options()`.
 | `options(opts)`, `options()` | set or read the JIT options; setting returns `*this` |
 | `uses_kernel()` | whether a batch call goes through compiled code |
 | `wait_for_kernel()` | block until a compile in flight has landed |
+| `save(path)`, `verify(path)` | write this equation; ask whether a file holds it |
+| `load(path)`, `loaded()` | read one, sweeping nothing; whether this one was read |
 
 ---
 
@@ -642,6 +727,26 @@ f.options = ddx.Options(backend=ddx.Backend.INTERPRET)   # discards the kernel
 set first. Assigning `options` does not: calls interpret until the kernel lands
 and switch over when it does, as in C++.
 
+Equations save and load here too, over the same file format and the same
+serialiser — a file written by C++ loads in Python and the other way round:
+
+```python
+eq.save("f.ddx")
+same = ddx.load("f.ddx")          # no model runs, nothing is swept
+
+@ddx.equation                      # or pair a model with a file, as a cache
+def model() -> ddx.Expression:
+    x, y = ddx.var("x"), ddx.var("y")
+    return ddx.exp(x) * y
+
+cached = ddx.equation(model, cache="f.ddx")
+cached.loaded                      # False the first run, True after
+```
+
+`save`, `load` and `verify` raise `ddx.Error` rather than answering `False`:
+unreadable, unloadable and "a different equation" are three different `errc`
+values, and only the code says which.
+
 ### Reference
 
 | Member | Is |
@@ -655,6 +760,11 @@ and switch over when it does, as in C++.
 | `uses_kernel`, `wait_for_kernel()` | whether a call goes through compiled code, and blocking for it |
 | `hessian_colors` | colours in the Hessian's compression |
 | `to_dot(*, all=False)` | the graph in Graphviz form; `all=True` draws the pruned nodes too |
+| `save(path)`, `verify(path)` | write this equation; raise unless `path` holds it |
+| `loaded` | property — whether this equation was read rather than built |
+
+`ddx.load(path)` reads one, and `ddx.equation(model, cache=path)` builds or reads
+as the file allows.
 
 ---
 

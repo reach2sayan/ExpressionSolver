@@ -30,7 +30,10 @@ from ._options import Options
 
 if TYPE_CHECKING:
 	from collections.abc import Callable
+	from os import PathLike
 	import ddx._ddx as _extension
+	
+	StrPath = str | PathLike[str]
 	
 	# What the runtime adds and a generated stub cannot see: the code the
 	# exception translator attaches, the pydantic-facing members installed at
@@ -50,11 +53,14 @@ if TYPE_CHECKING:
 	
 	Model = Callable[[], Expression | tuple[Expression, ...]]
 	
-	def equation(model: Model) -> Equation:
-		"""Build an equation from a model, as a call or a decorator."""
+	def equation(model: Model, *, cache: StrPath | None = None) -> Equation:
+		"""Build an equation from a model; ``cache`` is a file to keep it in."""
+
+	def load(path: StrPath) -> Equation:
+		"""Read an equation from a file, running no model and sweeping nothing."""
 
 else:
-	from ._ddx import Equation, Error, equation
+	from ._ddx import Equation, Error, equation, load
 
 try: __version__ = version("ddx")
 except PackageNotFoundError:  # an in-tree build that was never installed
@@ -83,5 +89,5 @@ __all__ = ["Backend", "Equation", "Error", "Expression", "Options",
            "VecLib", "__version__",	"abs", "acos", "acosh",	"add",
            "asin", "asinh",	"atan", "atan2", "atanh", "cbrt", "cos",
            "cosh", "div", "equation", "erf", "errc", "exp", "has_jit",
-           "hypot", "log", "log10", "max", "min", "mul", "neg", "pow",
+           "hypot", "load", "log", "log10", "max", "min", "mul", "neg", "pow",
            "sign", "sin", "sinh", "sqrt", "tan", "tanh", "var",]

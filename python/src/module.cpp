@@ -12,6 +12,7 @@
 
 #include <pybind11/native_enum.h>
 #include <pybind11/numpy.h>
+#include <pybind11/stl/filesystem.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -75,10 +76,44 @@ pyb::handle error_class;
          impl::to<std::vector<rt::NodeId>>();
 }
 
+// The model as built, or what a cache file holds if it still describes it.
+// Best effort throughout: an absent file is the first run and a stale one is a
+// rebuild, so neither raises -- Equation.loaded is how a caller tells.
+[[nodiscard]] pyb::object
+built_or_loaded(const std::optional<std::filesystem::path> &cache,
+                std::shared_ptr<rt::Builder<double>> arena,
+                std::vector<rt::NodeId> roots) {
+  if (cache) {
+    if (auto snap = rt::load_snapshot<double>(*cache);
+        snap && snap->roots.size() == roots.size() &&
+        std::ranges::equal(snap->roots, roots) &&
+        rt::digest<double>(snap->symbols, snap->nodes, snap->model_nodes) ==
+            rt::digest<double>(arena->symbols(), arena->nodes(),
+                               arena->size())) {
+      return pyb::cast(PyEquation{std::move(*snap)});
+    }
+  }
+  pyb::object eq =
+      pyb::cast(PyEquation{std::move(arena), std::move(roots)});
+  if (cache) {
+    // A cache that cannot be written is still a working equation.
+    (void)rt::save(eq.cast<PyEquation &>().snapshot(), *cache);
+  }
+  return eq;
+}
+
+// An equation from a file and nothing else: no model runs and nothing is
+// swept.  The output count is a number here, so unlike the C++ side there is
+// nothing to state and nothing to refuse.
+[[nodiscard]] pyb::object load_equation(const std::filesystem::path &path) {
+  return pyb::cast(PyEquation{unwrap(rt::load_snapshot<double>(path))});
+}
+
 // The whole of ddx.equation: install an arena, run the model in it, take what
 // comes back -- rt::equation(assemble)'s three steps, with the output count a
 // number rather than a template parameter.
-[[nodiscard]] pyb::object make_equation(const pyb::object &model) {
+[[nodiscard]] pyb::object make_equation(const pyb::object &model,
+                                        const std::optional<std::filesystem::path> &cache) {
   auto arena = std::make_shared<rt::Builder<double>>();
   pyb::object built;
   {
@@ -90,7 +125,7 @@ pyb::handle error_class;
   }
 
   auto roots = roots_of(built, *arena);
-  pyb::object eq = pyb::cast(PyEquation{std::move(arena), std::move(roots)});
+  pyb::object eq = built_or_loaded(cache, std::move(arena), std::move(roots));
 
   // What functools.wraps would do, without a Python wrapper to do it: the
   // equation answers help() and repr() with the model's own name and docstring.
@@ -196,7 +231,9 @@ PYBIND11_MODULE(_ddx, m) {
   // After the class, not before: a signature naming a type pybind11 has not
   // been told about yet renders as the raw C++ spelling, which is what reaches
   // the generated stubs.
-  m.def("equation", &ddx::py::make_equation, pyb::arg("model"));
+  m.def("equation", &ddx::py::make_equation, pyb::arg("model"),
+        pyb::kw_only(), pyb::arg("cache") = pyb::none());
+  m.def("load", &ddx::py::load_equation, pyb::arg("path"));
   m.def("var", &ddx::py::make_var, pyb::arg("name"));
 
 #define DDX_PY_DEF_UN(fn, Op, label, ...)                                      \
@@ -245,6 +282,10 @@ PYBIND11_MODULE(_ddx, m) {
       .def_readwrite("veclib", &jit::Options::veclib)
       .def_readwrite("contract", &jit::Options::contract)
       .def_readwrite("time_passes", &jit::Options::time_passes)
+      // Policy rather than identity: neither changes what a compile emits, so
+      // neither belongs in a key that decides whether stored code may be run.
+      .def_readwrite("retain_object", &jit::Options::retain_object)
+      .def_readwrite("cache_dir", &jit::Options::cache_dir)
       .def(pyb::self == pyb::self);
 
   pyb::class_<PyEquation>(m, "Equation", pyb::dynamic_attr())
@@ -255,6 +296,9 @@ PYBIND11_MODULE(_ddx, m) {
       .def("hessian", &PyEquation::hessian, pyb::arg("x"))
       .def("to_dot", &PyEquation::to_dot, pyb::kw_only(),
            pyb::arg("all") = false)
+      .def("save", &PyEquation::save, pyb::arg("path"))
+      .def("verify", &PyEquation::verify, pyb::arg("path"))
+      .def_property_readonly("loaded", &PyEquation::loaded)
       .def_property_readonly("symbols", &PyEquation::symbols)
       .def_property_readonly("arity", &PyEquation::arity)
       .def_property_readonly("outputs", &PyEquation::outputs)

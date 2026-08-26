@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <iterator>
 #include <numbers>
 #include <ranges>
@@ -939,11 +940,21 @@ TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
     f = f + v[i] * log(v[i]) + exp(v[i - 1] * v[i]);
   }
 
+  // Both arms pin codegen 0, so the ladder is one rung and the two measurements
+  // are the same shape: one whole compile waited for, against being dropped
+  // during one whole compile.  Under the default two rungs, wait_for_kernel()
+  // returns at the *cheap* one -- by design -- so `blocking` would no longer be
+  // a compile's worth of time and the margin below would be a coin flip on a
+  // loaded machine.  Abandoning both rungs at once is what jit.exit_stress
+  // covers.
+  const ddx::jit::Options one_rung{.backend = ddx::rt::Backend::Compile,
+                                   .codegen_level = 0};
+
   // Calibrated against this machine rather than a constant: a fixed threshold
   // above the compile would pass whether or not the future joined.
   const auto blocking = [&] {
     auto eq = ddx::rt::equation(f);
-    eq.options({.backend = ddx::rt::Backend::Compile});
+    eq.options(one_rung);
     const auto start = std::chrono::steady_clock::now();
     EXPECT_TRUE(eq.wait_for_kernel());
     return std::chrono::steady_clock::now() - start;
@@ -951,7 +962,7 @@ TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
 
   const auto teardown = [&] {
     auto eq = ddx::rt::equation(f);
-    eq.options({.backend = ddx::rt::Backend::Compile});
+    eq.options(one_rung);
     (void)eq.uses_kernel(); // launches the compile, adopts nothing yet
 
     const auto start = std::chrono::steady_clock::now();
@@ -1167,5 +1178,159 @@ TEST(RtEquation, InterpretNeverCompilesBehindTheCaller) {
   eq.options({.backend = ddx::rt::Backend::Interpret});
   EXPECT_FALSE(eq.wait_for_kernel());
   EXPECT_FALSE(eq.uses_kernel());
+}
+
+namespace {
+
+// A graph with enough of the emitter's op set in it that the two codegen levels
+// have somewhere to disagree, and enough nodes that the top rung does not land
+// before the cheap one has been observed.
+auto ladder_model() {
+  return ddx::rt::equation([] {
+    std::vector<ddx::rt::RTExpression<double>> v;
+    for (std::size_t i = 0; i < 24; ++i) {
+      v.push_back(ddx::rt::var("x" + std::to_string(i)));
+    }
+    auto f = v[0] * log(v[0]);
+    for (std::size_t i = 1; i < v.size(); ++i) {
+      f = f + v[i] * log(v[i]) + exp(v[i - 1] * v[i]) + sqrt(v[i]) * v[i - 1];
+    }
+    return f;
+  });
+}
+
+// One gradient at a fixed point, as the bits.
+std::vector<double> ladder_gradient(const auto &eq, std::size_t n) {
+  std::vector<double> at(n), value(1), partial(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    at[i] = 0.35 + 0.01 * static_cast<double>(i);
+  }
+  std::vector<const double *> xs(n);
+  std::vector<double *> gs(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    xs[i] = at.data() + i;
+    gs[i] = partial.data() + i;
+  }
+  double *const values[]{value.data()};
+  EXPECT_TRUE(eq.jacobian(xs, values, gs, 1).has_value());
+  partial.push_back(value[0]);
+  return partial;
+}
+
+} // namespace
+
+// Every rung answers the same bits.  This is what makes the swap invisible and
+// therefore safe: a loop running across it sees no movement at all, which is
+// also why nothing else in this file can tell the ladder is there.
+TEST(RtEquation, EveryRungOfTheLadderAgreesToTheBit) {
+  constexpr std::size_t n = 24;
+
+  auto swept = ladder_model();
+  swept.options({.backend = ddx::rt::Backend::Interpret});
+
+  auto cheap = ladder_model();
+  cheap.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 0});
+  ASSERT_TRUE(cheap.wait_for_kernel());
+
+  auto top = ladder_model();
+  top.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 1});
+  ASSERT_TRUE(top.wait_for_kernel());
+
+  const auto expected = ladder_gradient(swept, n);
+  EXPECT_EQ(ladder_gradient(cheap, n), expected) << "the cheap rung moved a bit";
+  EXPECT_EQ(ladder_gradient(top, n), expected) << "the top rung moved a bit";
+}
+
+// The ladder climbs, and never falls back.  Both rungs go to one shared pool,
+// so nothing orders them: a cheap compile can queue behind an expensive one
+// belonging to some other equation and land second.  The rule is the rank, not
+// the arrival, and the answers do not move across either swap.
+TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
+  constexpr std::size_t n = 24;
+
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 1});
+
+  // wait_for_kernel() waits for the *first* rung, so the cheap one is what is
+  // in hand here -- the whole reason the ladder exists.
+  ASSERT_TRUE(eq.wait_for_kernel());
+  ASSERT_TRUE(eq.kernel_level().has_value());
+  EXPECT_EQ(*eq.kernel_level(), 0u)
+      << "wait_for_kernel() waited for the top rung, not the first";
+
+  const auto expected = ladder_gradient(eq, n);
+
+  // Then climb, sampling as it goes.  Bounded rather than unbounded: a failure
+  // to climb must fail the test, not hang it.
+  using namespace std::chrono_literals;
+  const auto deadline = std::chrono::steady_clock::now() + 30s;
+  unsigned seen = 0;
+  bool climbed = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto level = eq.kernel_level();
+    ASSERT_TRUE(level.has_value()) << "the ladder gave the kernel back";
+    EXPECT_GE(*level, seen) << "a rung that landed late demoted a better one";
+    seen = *level;
+    EXPECT_EQ(ladder_gradient(eq, n), expected) << "an answer moved at rung " << seen;
+    if (seen == 1) {
+      climbed = true;
+      break;
+    }
+    std::this_thread::sleep_for(1ms);
+  }
+  EXPECT_TRUE(climbed) << "the top rung never replaced the cheap one";
+}
+
+// At codegen 0 there is nothing cheaper to put underneath, so the ladder is one
+// rung and the level in hand is the one that was asked for.
+TEST(RtEquation, CodegenZeroIsASingleRung) {
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 0});
+  ASSERT_TRUE(eq.wait_for_kernel());
+  ASSERT_TRUE(eq.kernel_level().has_value());
+  EXPECT_EQ(*eq.kernel_level(), 0u);
+}
+
+// The two halves together: with a warm cache both rungs link instead of
+// compiling, so the ladder arrives at its top rung about as fast as it used to
+// reach its first.  Each rung keys separately -- they are different codegen
+// levels and therefore different machine code -- which is why a warm run gets
+// the good kernel rather than the cheap one.
+TEST(RtEquation, AWarmCacheServesBothRungs) {
+  const auto dir =
+      std::filesystem::temp_directory_path() / "ddx_rt_ladder_cache";
+  std::filesystem::remove_all(dir);
+
+  const auto climb = [&dir] {
+    auto eq = ladder_model();
+    eq.options({.backend = ddx::rt::Backend::Compile,
+                .codegen_level = 1,
+                .cache_dir = dir.string()});
+    EXPECT_TRUE(eq.wait_for_kernel());
+    using namespace std::chrono_literals;
+    const auto deadline = std::chrono::steady_clock::now() + 30s;
+    while (eq.kernel_level() != 1 &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(1ms);
+    }
+    return ladder_gradient(eq, 24);
+  };
+
+  const auto cold = climb();
+  ASSERT_TRUE(std::filesystem::exists(dir)) << "the cache wrote nothing";
+  const auto entries = static_cast<std::size_t>(std::distance(
+      std::filesystem::directory_iterator{dir},
+      std::filesystem::directory_iterator{}));
+  EXPECT_EQ(entries, 2u) << "both rungs should key separately";
+
+  EXPECT_EQ(climb(), cold) << "a cached rung moved a bit";
+  std::filesystem::remove_all(dir);
+}
+
+// The sweep is not a rung: with no backend there is no level to report.
+TEST(RtEquation, InterpretHasNoRung) {
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Interpret});
+  EXPECT_FALSE(eq.kernel_level().has_value());
 }
 #endif
