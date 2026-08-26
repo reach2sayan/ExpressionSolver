@@ -10,10 +10,6 @@ namespace ddx::rt {
 
 namespace detail {
 
-// A switch instantiates every case, so support is probed per operation.  It
-// probes the free function, not the functor: a matrix satisfies pow_impl's
-// `Numeric auto` and hard-errors in the body, where `pow(a, b)` simply does not
-// resolve.  Arithmetic short-circuits: ADL has no namespace to search.
 template <typename Fn> inline constexpr bool is_field_op_v = false;
 template <> inline constexpr bool is_field_op_v<std::plus<>> = true;
 template <> inline constexpr bool is_field_op_v<std::multiplies<>> = true;

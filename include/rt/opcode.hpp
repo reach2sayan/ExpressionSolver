@@ -83,7 +83,7 @@ inline constexpr std::array op_info = [] {
   return t;
 }();
 
-// A duplicate would make code_of_label() ambiguous, and the compile-time ops
+// A duplicate would make opcode_of_label() ambiguous, and the compile-time ops
 // pick their enumerator by label.
 static_assert([] {
   auto labels = op_info;
@@ -100,12 +100,8 @@ static_assert([] {
   return i < op_count ? detail::op_info[i].label : "?";
 }
 
-// The compile-time operations carry the same labels their enumerators do, so
-// lowering a tree is this lookup rather than a second table.  consteval: a
-// linear scan of 31 rows is the price of not keeping a second table, and
-// lowering is the only caller.
 [[nodiscard]] consteval std::optional<OpCode>
-code_of_label(std::string_view label) noexcept {
+opcode_of_label(std::string_view label) noexcept {
   const auto row =
       std::ranges::find(detail::op_info, label, &detail::OpInfo::label);
   return row == detail::op_info.end() ? std::nullopt

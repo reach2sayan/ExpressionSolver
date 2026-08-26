@@ -400,7 +400,8 @@ private:
       e += pow(x, y) + atan2(x, y) + hypot(x, y);
       e += abs(x) + max(x, y) + min(x, y) + sign(x) + (-x);
       // Jacobian too: reverse mode emits ops the value alone never reaches.
-      const auto row = rt::build_jacobian_impl<impl::DiffMode::Reverse>(b, e.id(b));
+      const auto row =
+          rt::build_jacobian_impl<impl::DiffMode::Reverse>(b, e.id(b));
       const auto g = rt::GraphBuilder<double>{b}
                          .value(e)
                          .jacobian_from(row.partial)

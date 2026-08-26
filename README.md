@@ -1,5 +1,6 @@
 [![CMake](https://github.com/reach2sayan/ddx/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/reach2sayan/ddx/actions/workflows/cmake-multi-platform.yml)
 [![C++](https://img.shields.io/badge/C++-%2300599C.svg?logo=c%2B%2B&logoColor=white)](#)
+[![Python](https://img.shields.io/badge/Python-3776AB.svg?logo=python&logoColor=white)](#python)
 
 # ddx
 
@@ -7,7 +8,8 @@ A C++23 library for differentiating expressions. Build a function over named
 symbols while the program runs — terms looped over a data file, a model read
 from configuration — and ask it for values, gradients, Jacobians and Hessians.
 One point at a time, or a batch of thousands in a single call, interpreted or
-compiled to machine code through LLVM.
+compiled to machine code through LLVM. There are [Python bindings](#python)
+over the same runtime.
 
 ```cpp
 #include "ddx.hpp"
@@ -40,8 +42,8 @@ const auto eq = rt::equation([&] {
 [Points](#points) · [Values and derivatives](#values-and-derivatives) ·
 [Batches](#batches) · [Errors](#errors) ·
 [Ownership and threads](#ownership-and-threads) · [The JIT](#the-jit) ·
-[Reference](#reference) · [Compile-time expressions](#compile-time-expressions) ·
-[Printing](#printing)
+[Reference](#reference) · [Python](#python) ·
+[Compile-time expressions](#compile-time-expressions) · [Printing](#printing)
 
 ---
 
@@ -58,6 +60,8 @@ const auto eq = rt::equation([&] {
   configure that builds the tests or the benchmarks wants a network.
 - `-DDDX_BUILD_JIT=ON` additionally needs an LLVM 20 installation, pointed at
   with `LLVM_DIR`.
+- `-DDDX_BUILD_PYTHON=ON` additionally needs **Python 3.11+** and pybind11;
+  the module itself imports NumPy 1.23+ and pydantic 2.7+.
 
 ## Using it
 
@@ -115,6 +119,9 @@ Or through the presets:
 | `release` | Release | — |
 | `debug_jit` | Debug | yes |
 | `release_jit` | Release | yes |
+| `debug_jit_tsan` | Debug | yes — under ThreadSanitizer |
+| `python` | Release | yes — and the extension module |
+| `python_no_jit` | Release | — the extension module alone |
 
 ```sh
 cmake --preset release_jit
@@ -135,7 +142,9 @@ cmake --preset release_jit -DLLVM_DIR=/opt/llvm-20/lib/cmake/llvm
 |---|---|---|
 | `DDX_BUILD_JIT` | `OFF` | compile the LLVM backend into the library |
 | `DDX_SHARED_LIBS` | `ON` | build the library shared rather than static |
+| `DDX_BUILD_PYTHON` | `OFF` | build the pybind11 extension module |
 | `DDX_BUILD_BENCHMARKS` | `ON` | build the benchmark targets |
+| `DDX_SANITIZE` | `off` | `thread`, `address` or `undefined` — instrument the build |
 | `DDX_INSTALL` | on if top-level | generate the install and `find_package` rules |
 | `ENABLE_NATIVE_ARCH` | `ON` | `-march=native`, falling back to `x86-64-v3` |
 | `DDX_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
@@ -527,6 +536,125 @@ thread-safe except `options()`.
 | `options(opts)`, `options()` | set or read the JIT options; setting returns `*this` |
 | `uses_kernel()` | whether a batch call goes through compiled code |
 | `wait_for_kernel()` | block until a compile in flight has landed |
+
+---
+
+## Python
+
+The same runtime, as an extension module. Build it with a preset, or install the
+package — scikit-build-core drives CMake, so `pip install .` configures and
+builds a wheel in one step:
+
+```sh
+pip install .                       # wheel; turns the JIT on, so LLVM 20 is needed
+cmake --preset python               # in-tree, JIT
+cmake --preset python_no_jit        # in-tree, no LLVM
+```
+
+`ddx.has_jit` says whether the copy you have was built with the LLVM backend.
+Everything below works either way; without it, calls interpret.
+
+`equation` takes a model — a callable of no arguments returning one expression,
+or a tuple of them for a system — as a call or a decorator:
+
+```python
+import ddx
+
+@ddx.equation
+def f():
+    x = ddx.var("x")
+    y = ddx.var("y")
+    return ddx.exp(x) * ddx.sin(y)
+```
+
+Symbols are named inside the model with `ddx.var(name)`, and they order
+alphabetically as they do in C++. `f.symbols` lists them, `f.arity` counts
+them, `f.outputs` counts the model's outputs. Arithmetic operators work on
+`Expression`, and a bare number mixes in; the free functions are the same set
+the C++ side has.
+
+### Points
+
+A point is a sequence, or a dict keyed by symbol name. A 2-D array is a
+**batch** — shape `(symbols, points)`, one row per symbol:
+
+```python
+f.jacobian([2.0, 3.0])                      # positional, alphabetical
+f.jacobian({"x": 2.0, "y": 3.0})            # by name
+f.jacobian(np.array([[2.0], [3.0]]))        # a batch of one
+f.jacobian(np.array([[2.0, 2.5], [3.0, 3.5]]))   # a batch of two
+```
+
+### Values and derivatives
+
+Each call returns everything up to and including what it names, so a gradient
+never costs a second evaluation:
+
+| Call | Returns |
+|---|---|
+| `evaluate(x)` | `f` |
+| `jacobian(x)` | `(f, J)` |
+| `hessian(x)` | `(f, J, H)` |
+
+```python
+value, gradient = f.jacobian([2.0, 3.0])
+value, gradient, hessian = f.hessian([2.0, 3.0])
+hessian.shape                               # (2, 2)
+```
+
+Shapes follow the point: a single point gives a scalar `f`, an `(n,)` gradient
+and an `(n, n)` Hessian; a batch of `p` appends that axis, giving `(p,)`,
+`(n, p)` and `(n, n, p)`. A system prepends its output axis. Unlike the C++
+batch calls, the Hessian arrives **dense** — the colour compression is undone
+on the way out, so nothing here needs `hessian_columns`.
+
+### Errors
+
+Python raises where C++ returns `result<T>`. `ddx.Error` is a `RuntimeError`
+carrying the same code:
+
+```python
+try:
+    f.jacobian({"z": 1.0})
+except ddx.Error as e:
+    print(e)                                # "no symbol of that name"
+    e.code is ddx.errc.unknown_symbol       # True
+```
+
+`errc` is an `IntEnum`, so it compares and formats as its number — `e.code.name`
+is the spelling. The codes are the ones in the [table above](#errors); the
+exception's own message is the text.
+
+### The JIT
+
+`Options` is a frozen pydantic model of the same fields as `jit::Options`,
+validated on the way in. `eq.options` reads and assigns it; `eq.compile()` sets
+`backend=COMPILE`, waits for the kernel, and returns the equation, so a
+configure-and-use reads in one line:
+
+```python
+f.compile(points=batch.shape[1]).jacobian(batch)
+f.uses_kernel                               # True, once it has landed
+f.options = ddx.Options(backend=ddx.Backend.INTERPRET)   # discards the kernel
+```
+
+`compile()` blocks by construction — it is `wait_for_kernel()` with the options
+set first. Assigning `options` does not: calls interpret until the kernel lands
+and switch over when it does, as in C++.
+
+### Reference
+
+| Member | Is |
+|---|---|
+| `arity`, `outputs`, `symbols` | properties — symbol count, output count, canonical names |
+| `evaluate(x)`, `__call__(x)` | `f` at the point or batch |
+| `jacobian(x)` | `(f, J)` |
+| `hessian(x)` | `(f, J, H)`, dense |
+| `options` | property — read or assign an `Options` |
+| `compile(**fields)` | set `Options`, block for the kernel, return self |
+| `uses_kernel`, `wait_for_kernel()` | whether a call goes through compiled code, and blocking for it |
+| `hessian_colors` | colours in the Hessian's compression |
+| `to_dot(*, all=False)` | the graph in Graphviz form; `all=True` draws the pruned nodes too |
 
 ---
 

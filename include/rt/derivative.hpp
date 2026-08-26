@@ -47,9 +47,9 @@ contribution(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &u,
     return impl::detail::Desc<T>::adjoints(adj, u)[0];
     DDX_RT_UNARY_TABLE(DDX_RT_CONTRIB)
 #undef DDX_RT_CONTRIB
-  // The eighteen keep `adj * f'(u)`, already the association
-  // DDX_UNARY_MATH_OP's generated adjoints() uses, and `rule` still prefers
-  // the deriv_from_value spelling where one exists.
+    // The eighteen keep `adj * f'(u)`, already the association
+    // DDX_UNARY_MATH_OP's generated adjoints() uses, and `rule` still prefers
+    // the deriv_from_value spelling where one exists.
 #define DDX_RT_CONTRIB(fn, Op, label)                                          \
   case OpCode::Op:                                                             \
     return adj * rule<impl::detail::Op##Fn<T>>(u, f);
@@ -268,7 +268,8 @@ struct Hessian {
   // structural zero the colouring already promised it was.
   [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
     const std::size_t c = coloring.color[j];
-    return coloring.target(c, i) == j ? compressed[coloring.column(c, i)] : zero;
+    return coloring.target(c, i) == j ? compressed[coloring.column(c, i)]
+                                      : zero;
   }
   [[nodiscard]] constexpr std::size_t colors() const { return coloring.count; }
 };
@@ -291,15 +292,19 @@ template <impl::Numeric T>
   for (const std::size_t c : std::views::iota(0uz, h.coloring.count)) {
     // Summing a colour's partials before the sweep is what makes one sweep do
     // the work of |colour| of them.
+    auto match_coloring = [&](std::size_t j) {
+      return h.coloring.color[j] == c;
+    };
+    auto make_partial_expression = [&](std::size_t j) {
+      return RTExpression<T>{b, h.partial[j]};
+    };
     const auto seed = std::ranges::fold_left(
-        std::views::iota(0uz, n) | std::views::filter([&](std::size_t j) {
-          return h.coloring.color[j] == c;
-        }) | std::views::transform([&](std::size_t j) {
-          return RTExpression<T>{b, h.partial[j]};
-        }),
+        std::views::iota(0uz, n) |
+            std::views::filter(std::move(match_coloring)) |
+            std::views::transform(std::move(make_partial_expression)),
         RTExpression<T>{0}, std::plus<>{});
     const auto row = build_reverse_jacobian(b, seed.id(b));
-    for (const auto [i, p] : std::views::enumerate(row.partial)) {
+    for (const auto [i, p] : row.partial | std::views::enumerate) {
       const auto k = h.coloring.column(c, static_cast<std::size_t>(i));
       if (k != no_column) {
         h.compressed[k] = p;

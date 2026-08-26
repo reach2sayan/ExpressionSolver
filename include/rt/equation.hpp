@@ -213,8 +213,7 @@ public:
         // colour is structurally zero, which is what the colouring guarantees.
         for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
           const std::size_t col = c.color[j];
-          dense[0uz, i, j] =
-              c.target(col, i) == j ? h[c.column(col, i)] : T{0};
+          dense[0uz, i, j] = c.target(col, i) == j ? h[c.column(col, i)] : T{0};
         }
       } else {
         // Hessian::at answers out of the compressed cells and `zero`, so
@@ -396,9 +395,9 @@ private:
     roots_.push_back(first.id(*arena_));
     (roots_.push_back(rest.id(*arena_)), ...);
     derivative_ = rt::build_jacobian_impl(*arena_, roots_);
-    // The colouring rt::build_hessian_impl needs runs through Boost.Graph, and a
-    // Cache holds a mutex; neither is available while constant-evaluating, and
-    // a constant-evaluated equation reaches neither.
+    // The colouring rt::build_hessian_impl needs runs through Boost.Graph, and
+    // a Cache holds a mutex; neither is available while constant-evaluating,
+    // and a constant-evaluated equation reaches neither.
     if !consteval {
       hessians_ = roots_ | std::views::transform([&](rt::NodeId r) {
                     return rt::build_hessian_impl(*arena_, r);
@@ -571,8 +570,9 @@ private:
 #ifdef DDX_HAS_JIT
     // A refused compile leaves the kernel empty, and the sweep stays.
     const auto &landed = lane.pending.get();
-    lane.ready = std::make_shared<const Compiled>(Compiled{
-        .graph = lane.ready->graph, .kernel = landed ? *landed : jit::Kernel{}});
+    lane.ready = std::make_shared<const Compiled>(
+        Compiled{.graph = lane.ready->graph,
+                 .kernel = landed ? *landed : jit::Kernel {}});
     lane.pending = {};
 #endif
   }
@@ -792,8 +792,8 @@ private:
   rt::Jacobian derivative_;
   // Swept once in the constructor and never touched again, which is the whole
   // of what makes the const members safe to call concurrently:
-  // rt::build_hessian_impl *appends to the arena*, and an arena a caller lent us may
-  // be lent to another Equation as well.
+  // rt::build_hessian_impl *appends to the arena*, and an arena a caller lent
+  // us may be lent to another Equation as well.
   std::vector<rt::Hessian> hessians_;
   // Owned outright -- nothing outside an Equation holds it -- which is also
   // what keeps a constant-evaluated Equation destructible: unique_ptr's
