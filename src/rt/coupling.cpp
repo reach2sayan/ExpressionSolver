@@ -28,8 +28,11 @@ using ConflictGraph =
 
 Coloring color_columns(const CouplingRows &rows) {
   const std::size_t n = rows.size();
-  Coloring out{
-      .color = std::vector<std::size_t>(n, 0), .count = 0, .scatter = {}};
+  Coloring out{.color = std::vector<std::size_t>(n, 0),
+               .count = 0,
+               .scatter = {},
+               .cell = {},
+               .cells = 0};
   if (n == 0) {
     return out;
   }
