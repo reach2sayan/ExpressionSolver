@@ -7,6 +7,7 @@
 #include "rt/graph.hpp"
 #include "rt/opcode.hpp"
 #include "util/error.hpp"
+#include "util/fnv.hpp"
 #include "util/export.hpp"
 
 #include <boost/describe.hpp>
@@ -585,35 +586,25 @@ template <impl::Numeric T>
 
 // --- digests ----------------------------------------------------------------
 
-inline constexpr std::uint64_t fnv64_seed = 1469598103934665603ull;
-
-constexpr void fold64(std::uint64_t &h, std::uint64_t w) noexcept {
-  for (int i = 0; i < 8; ++i) {
-    h = (h ^ ((w >> (i * 8)) & 0xFF)) * 1099511628211ull;
-  }
-}
-
 // The model as the file keys on it: symbols, then the arena up to `upto`.
 // Field by field, never a memcpy -- Node<double> has interior padding.
 template <impl::Numeric T>
 [[nodiscard]] std::uint64_t digest(std::span<const std::string> symbols,
                                    std::span<const Node<T>> nodes,
                                    std::size_t upto) {
-  std::uint64_t h = fnv64_seed;
-  fold64(h, symbols.size());
+  std::uint64_t h = impl::fnv64_basis;
+  impl::fold64(h, symbols.size());
   for (const auto &s : symbols) {
-    fold64(h, s.size());
-    for (const char c : s) {
-      fold64(h, static_cast<unsigned char>(c));
-    }
+    impl::fold64(h, s.size());
+    impl::fold_bytes(h, s);
   }
-  fold64(h, upto);
+  impl::fold64(h, upto);
   for (const auto &n : nodes.first(std::min(upto, nodes.size()))) {
-    fold64(h, static_cast<std::uint64_t>(n.op));
-    fold64(h, n.a);
-    fold64(h, n.b);
-    fold64(h, detail::to_bits(n.value));
-    fold64(h, n.slot);
+    impl::fold64(h, static_cast<std::uint64_t>(n.op));
+    impl::fold64(h, n.a);
+    impl::fold64(h, n.b);
+    impl::fold64(h, detail::to_bits(n.value));
+    impl::fold64(h, n.slot);
   }
   return h;
 }
@@ -623,26 +614,26 @@ template <impl::Numeric T>
 // within-one-binary key, so a stale one must be a miss.
 template <impl::Numeric T>
 [[nodiscard]] std::uint64_t digest(const Graph<T> &g) {
-  std::uint64_t h = fnv64_seed;
+  std::uint64_t h = impl::fnv64_basis;
   const auto &layout = g.layout();
-  fold64(h, g.symbols().size());
-  fold64(h, layout.values);
-  fold64(h, layout.jacobian);
-  fold64(h, layout.hessian);
+  impl::fold64(h, g.symbols().size());
+  impl::fold64(h, layout.values);
+  impl::fold64(h, layout.jacobian);
+  impl::fold64(h, layout.hessian);
   const auto order = g.contracted_order();
-  fold64(h, order.size());
+  impl::fold64(h, order.size());
   for (const NodeId v : order) {
     const auto &p = g[v];
     const auto [a, b] = g.operands(v);
-    fold64(h, v);
-    fold64(h, static_cast<std::uint64_t>(p.op));
-    fold64(h, p.slot);
-    fold64(h, detail::to_bits(p.value));
-    fold64(h, a);
-    fold64(h, b);
+    impl::fold64(h, v);
+    impl::fold64(h, static_cast<std::uint64_t>(p.op));
+    impl::fold64(h, p.slot);
+    impl::fold64(h, detail::to_bits(p.value));
+    impl::fold64(h, a);
+    impl::fold64(h, b);
   }
   for (const NodeId o : g.outputs()) {
-    fold64(h, o);
+    impl::fold64(h, o);
   }
   return h;
 }

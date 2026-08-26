@@ -3,6 +3,10 @@
 
 #include "tests_common.hpp"
 
+#include "util/fnv.hpp"
+
+#include <bit>
+
 // Bit-exactness gate: fold the raw IEEE bits of every driver result over a
 // sweep into one FNV hash.  Checked only under -DDDX_PIN_BIT_HASH=<value>; the
 // hash is per-toolchain (FMA formation moves the last bit).  Recompute the
@@ -10,14 +14,9 @@
 
 namespace {
 struct BitHash {
-  std::uint64_t h = 1469598103934665603ull;
+  std::uint64_t h = ddx::impl::fnv64_basis;
   void operator()(double d) noexcept {
-    std::uint64_t b;
-    std::memcpy(&b, &d, sizeof b);
-    for (int i = 0; i < 8; ++i) {
-      h ^= (b >> (i * 8)) & 0xff;
-      h *= 1099511628211ull;
-    }
+    ddx::impl::fold64(h, std::bit_cast<std::uint64_t>(d));
   }
 };
 } // namespace

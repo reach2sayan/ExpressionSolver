@@ -3,6 +3,7 @@
 #include "rt/archive.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
+#include "util/fnv.hpp"
 #include "util/scope_guard.hpp"
 
 #include <llvm/Config/llvm-config.h>
@@ -209,10 +210,8 @@ private:
 [[nodiscard]] std::string
 host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
   const std::string features = machine.getFeatures().getString();
-  std::uint64_t h = 14695981039346656037ULL;
-  for (const char c : features) {
-    h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
-  }
+  std::uint64_t h = impl::fnv64_basis;
+  impl::fold_bytes(h, features);
   const llvm::StringRef cpu = machine.getCPU();
   std::string out = machine.getTargetTriple().str();
   out += '/';
@@ -443,32 +442,24 @@ constexpr std::uint32_t kCacheFormat = 1;
 // pipeline, the ABI.
 constexpr std::uint32_t kCacheSchema = 1;
 
-[[nodiscard]] std::uint64_t fold(std::uint64_t h, std::uint64_t v) {
-  for (int i = 0; i < 8; ++i) {
-    h = (h ^ ((v >> (i * 8)) & 0xff)) * 1099511628211ULL;
-  }
-  return h;
-}
-
 // What changes the machine code, and nothing else: `backend`, `points`,
 // `time_passes`, `retain_object` and `cache_dir` never reach codegen.
 [[nodiscard]] std::uint64_t cache_key(std::uint64_t graph, std::string_view host,
                                       const Options &opt, unsigned lanes) {
-  std::uint64_t h = 14695981039346656037ULL;
-  for (const char c : host) {
-    h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
-  }
-  h = fold(h, graph);
-  h = fold(h, kCacheSchema);
+  std::uint64_t h = impl::fnv64_basis;
+  impl::fold_bytes(h, host);
+  impl::fold64(h, graph);
+  impl::fold64(h, kCacheSchema);
   // The width *emitted*: `lanes == 0` means the host's, so the raw request
   // would give one graph two keys that never hit each other.
-  h = fold(h, lanes);
-  h = fold(h, opt.opt_level);
-  h = fold(h, opt.codegen_level);
-  h = fold(h, static_cast<std::uint64_t>(opt.veclib));
-  h = fold(h, static_cast<std::uint64_t>(opt.slp));
-  h = fold(h, static_cast<std::uint64_t>(opt.loop_vectorize));
-  return fold(h, static_cast<std::uint64_t>(opt.contract));
+  impl::fold64(h, lanes);
+  impl::fold64(h, opt.opt_level);
+  impl::fold64(h, opt.codegen_level);
+  impl::fold64(h, static_cast<std::uint64_t>(opt.veclib));
+  impl::fold64(h, static_cast<std::uint64_t>(opt.slp));
+  impl::fold64(h, static_cast<std::uint64_t>(opt.loop_vectorize));
+  impl::fold64(h, static_cast<std::uint64_t>(opt.contract));
+  return h;
 }
 
 [[nodiscard]] std::filesystem::path entry_path(std::string_view dir,
@@ -761,10 +752,10 @@ struct Compiler::Impl {
         // Shapes come from the live graph, never the file: a forged entry
         // supplies code and a symbol, never a column count.
         const auto &layout = g.layout();
-        auto adopted = link(self, entry->code, entry->symbol,
-                            g.symbols().size(), layout.values, layout.jacobian,
-                            layout.hessian);
-        if (adopted) {
+        if (auto adopted =
+                link(self, entry->code, entry->symbol, g.symbols().size(),
+                     layout.values, layout.jacobian, layout.hessian);
+            adopted) {
           // The phases are zero because they did not happen.
           rep.nodes = g.live_count();
           return adopted;
