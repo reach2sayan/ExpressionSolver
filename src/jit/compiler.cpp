@@ -350,7 +350,7 @@ private:
     const impl::scope_exit clock{
         [this, start = Clock::now()] { rep_.emit = Clock::now() - start; }};
     auto ctx = std::make_unique<llvm::LLVMContext>();
-    auto m = detail::emit_module(*ctx, g_, opt_, name_,
+    auto m = detail::emit_module(*ctx, g_, name_,
                                  opt_.lanes != 0 ? opt_.lanes : host_.lanes,
                                  host_.jit.getDataLayout(), host_.triple);
     if (!m) {

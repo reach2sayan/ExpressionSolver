@@ -251,15 +251,14 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
 // adds carry their product and the multiplies they swallowed are never reached.
 [[nodiscard]] std::vector<llvm::Value *>
 emit_nodes(const Emitter &emit, const rt::Graph<double> &g, const Columns &cols,
-           llvm::Value *index, llvm::Value *mask, bool contract) {
+           llvm::Value *index, llvm::Value *mask) {
   std::vector<llvm::Value *> value(g.size(), nullptr);
-  for (const rt::NodeId v : contract ? g.contracted_order() : g.live_order()) {
+  for (const auto [v, c] :
+       std::views::zip(g.contracted_order(), g.contractions())) {
     const auto &p = g[v];
-    if (contract) {
-      if (const rt::Contraction c = rt::contraction_at(g, v)) {
-        value[v] = emit.fma(c, value[c.x], value[c.y], value[c.z]);
-        continue;
-      }
+    if (c) {
+      value[v] = emit.fma(c, value[c.x], value[c.y], value[c.z]);
+      continue;
     }
     const auto operands = g.operands(v);
     switch (rt::arity_of(p.op)) {
@@ -298,7 +297,7 @@ void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
 
 std::unique_ptr<llvm::Module>
 emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
-            const Options &opt, llvm::StringRef name, const unsigned width,
+            llvm::StringRef name, const unsigned width,
             const llvm::DataLayout &layout, llvm::StringRef triple) {
   auto m = std::make_unique<llvm::Module>("ddx.jit", ctx);
   // Before the first instruction: IRBuilder reads the layout for every
@@ -348,7 +347,7 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
 
   const Emitter emit(*m, b, lanes);
   const std::vector<llvm::Value *> value =
-      emit_nodes(emit, g, cols, index, mask, opt.contract);
+      emit_nodes(emit, g, cols, index, mask);
   emit_stores(emit, g, cols, value, index, mask);
 
   // nuw/nsw: n counts doubles the caller has allocated, so n + W is nowhere

@@ -116,29 +116,31 @@ constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
 // lane loop is contiguous in both.  Same constraints on `order` as
 // evaluate_into; a batch's tail repeats a point, and those lanes are not read.
 //
-// `contract` takes a multiply feeding an add as one rounding -- the arithmetic
-// the kernel emits, and so the default.  Graph::contracted_order() is the order
-// that goes with it; live_order() is also correct and computes one or two
+// `contractions` is contraction_table() over the same `order`, one entry per
+// node and in step with it -- a multiply feeding an add taken as one rounding,
+// which is the arithmetic the kernel emits.  It is resolved at freeze rather
+// than here because it cannot change between points; a table of falsy entries
+// contracts nothing.  Graph::contracted_order() is the order that goes with a
+// contracting table; live_order() is also correct and computes one or two
 // multiplies for nobody.
 template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
            std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
 constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
-                              Order order, std::span<U> tape,
-                              bool contract = true) {
+                              Order order,
+                              std::span<const Contraction> contractions,
+                              std::span<U> tape) {
   const auto at = std::ranges::begin(point_lanes);
   const auto lane = [&tape](NodeId v) {
     return tape.data() + std::size_t{v} * W;
   };
-  for (const NodeId i : order) {
+  for (const auto [i, c] : std::views::zip(order, contractions)) {
     const Node<T> &n = b[i];
     U *const out = lane(i);
-    if (contract) {
-      if (const Contraction c = contraction_at(b, i)) {
-        detail::lanes_fma<W>(c.negated, lane(c.x), lane(c.y), lane(c.z), out);
-        continue;
-      }
+    if (c) {
+      detail::lanes_fma<W>(c.negated, lane(c.x), lane(c.y), lane(c.z), out);
+      continue;
     }
     switch (arity_of(n.op)) {
     case 0:
@@ -180,8 +182,9 @@ template <impl::Numeric T, std::ranges::random_access_range R,
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
            std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
 constexpr void evaluate_into(const Builder<T> &b, const R &point, Order order,
-                             std::span<U> v, bool contract = true) {
-  evaluate_block<1>(b, point, order, v, contract);
+                             std::span<const Contraction> contractions,
+                             std::span<U> v) {
+  evaluate_block<1>(b, point, order, contractions, v);
 }
 
 // evaluate_all narrowed to what `roots` reach.  Still id-indexed and
@@ -203,10 +206,11 @@ template <impl::Numeric T, std::ranges::random_access_range R>
         }
       });
   std::vector<U> v(b.size());
-  evaluate_into(b, point,
-                std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())) |
-                    std::views::filter([&live](NodeId i) { return live[i]; }),
-                std::span<U>{v});
+  // Not const: filter_view caches its begin, so it is not a const range.
+  auto order = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())) |
+               std::views::filter([&live](NodeId i) { return live[i]; });
+  const auto contractions = contraction_table(b, order);
+  evaluate_into(b, point, order, contractions, std::span<U>{v});
   return v;
 }
 
@@ -218,9 +222,9 @@ template <impl::Numeric T, std::ranges::random_access_range R>
 [[nodiscard]] constexpr auto evaluate_all(const Builder<T> &b, const R &point) {
   using U = std::ranges::range_value_t<R>;
   std::vector<U> v(b.size());
-  evaluate_into(b, point,
-                std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())),
-                std::span<U>{v});
+  const auto order = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size()));
+  const auto contractions = contraction_table(b, order);
+  evaluate_into(b, point, order, contractions, std::span<U>{v});
   return v;
 }
 

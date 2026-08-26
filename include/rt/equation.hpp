@@ -9,6 +9,7 @@
 #include "rt/expressions.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
+#include "rt/rebalance.hpp"
 #include "symbolic/equation.hpp"
 #include "util/ranges.hpp" // to<C>() and append(), ours
 
@@ -545,6 +546,15 @@ private:
     // Boost.Graph colouring and a Cache's mutex: neither is available while
     // constant-evaluating, and neither is reached there.
     if !consteval {
+#ifdef DDX_HAS_JIT
+      // The kernel's own roots: blocked spines, differentiated after the
+      // rewrite so the gradient inherits the shape.  Built here rather than at
+      // the freeze because appending to a borrowed arena is the constructor's
+      // privilege alone -- prepare() runs under a lane lock, and the arena may
+      // be lent to another Equation.
+      compile_roots_ = rt::rebalance(*arena_, roots_);
+      compile_derivative_ = rt::build_jacobian_impl(*arena_, compile_roots_);
+#endif
       hessians_ = roots_ | std::views::transform([&](rt::NodeId r) {
                     return rt::build_hessian_impl(*arena_, r);
                   }) |
@@ -650,6 +660,11 @@ private:
     // Shared, so the graph outlives an Equation that went away mid-compile.
     std::shared_ptr<const rt::Graph<T>> graph;
 #ifdef DDX_HAS_JIT
+    // What the kernel is compiled from, which is not what the sweep walks: the
+    // reduction spines are blocked for the kernel, where a dependent chain is
+    // latency nothing can hide, and left alone for the sweep, where the same
+    // rewrite costs tape locality.  Aliases `graph` where they agree.
+    std::shared_ptr<const rt::Graph<T>> compile_graph;
     jit::Kernel kernel{};
     // Rungs share one pool and need not land in the order they were asked for,
     // so this is what refuses a late one.
@@ -868,8 +883,27 @@ private:
     if (want == Want::Hessian) {
       gb.hessian_from(hessians_.front());
     }
+    auto swept = std::make_shared<const rt::Graph<T>>(gb.build(contracts()));
+#ifdef DDX_HAS_JIT
+    // The kernel gets the blocked spines; the sweep keeps the plain ones.  The
+    // Hessian lane shares one graph -- blocking it would mean a second colouring
+    // and a second reverse-over-reverse for a lane the ladder never climbs.
+    auto compiled = swept;
+    if constexpr (std::same_as<T, double>) {
+      if (want != Want::Hessian && !compile_roots_.empty()) {
+        rt::GraphBuilder<T> cb{*arena_};
+        cb.values_from(compile_roots_);
+        if (want != Want::Values) {
+          cb.jacobian_from(compile_derivative_.partial);
+        }
+        compiled = std::make_shared<const rt::Graph<T>>(cb.build(contracts()));
+      }
+    }
     lane.ready = std::make_shared<const Compiled>(
-        Compiled{.graph = std::make_shared<const rt::Graph<T>>(gb.build())});
+        Compiled{.graph = swept, .compile_graph = compiled});
+#else
+    lane.ready = std::make_shared<const Compiled>(Compiled{.graph = swept});
+#endif
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
       // A compiler this host cannot give is not an error a caller handles --
@@ -881,17 +915,18 @@ private:
       }
       // A rung already climbed: published at its own level, with the ladder
       // launched as always and adopt()'s rank dropping what cannot beat it.
-      if (const rt::Object *const have = stored(want, *lane.ready->graph)) {
+      if (const rt::Object *const have = stored(want, *lane.ready->compile_graph)) {
         // Shapes come from the graph just frozen, never the file: a forged
         // entry supplies code and a symbol, never a column count.
-        const auto &layout = lane.ready->graph->layout();
+        const auto &layout = lane.ready->compile_graph->layout();
         if (auto adopted = c->adopt(have->code, have->symbol,
-                                    lane.ready->graph->symbols().size(),
+                                    lane.ready->compile_graph->symbols().size(),
                                     layout.values, layout.jacobian,
                                     layout.hessian)) {
           const unsigned level = have->options.codegen_level;
           lane.ready = std::make_shared<const Compiled>(
               Compiled{.graph = lane.ready->graph,
+                       .compile_graph = lane.ready->compile_graph,
                        .kernel = std::move(*adopted),
                        .level = level});
           // Nothing left to climb to, so nothing is launched and, under Adapt,
@@ -924,9 +959,9 @@ private:
     if (top.codegen_level > 0) {
       jit::Options low = top;
       low.codegen_level = 0;
-      lane.rungs[next++] = {c.compile_async(lane.ready->graph, low), 0};
+      lane.rungs[next++] = {c.compile_async(lane.ready->compile_graph, low), 0};
     }
-    lane.rungs[next] = {c.compile_async(lane.ready->graph, top),
+    lane.rungs[next] = {c.compile_async(lane.ready->compile_graph, top),
                         top.codegen_level};
   }
 
@@ -964,9 +999,10 @@ private:
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
     const auto blocks = c.graph->output_blocks();
-    const bool contract = contracts();
-    const auto order =
-        contract ? c.graph->contracted_order() : c.graph->live_order();
+    // The freeze settled both: a non-contracting graph's order is its live one
+    // and its table contracts nothing, so there is no choice left to make here.
+    const auto order = c.graph->contracted_order();
+    const auto contractions = c.graph->contractions();
     const std::size_t symbols = symbol_count();
 
     // Tapes are sized by the arena rather than the graph: a borrowed builder
@@ -980,7 +1016,7 @@ private:
       for (const std::size_t i : std::views::iota(0uz, n)) {
         std::ranges::transform(xs, at.begin(),
                                [i](const T *column) { return column[i]; });
-        rt::evaluate_into(*arena_, at, order, std::span<T>{tape}, contract);
+        rt::evaluate_into(*arena_, at, order, contractions, std::span<T>{tape});
         for (const auto [columns, block] : std::views::zip(
                  std::array{f, g, h},
                  std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
@@ -1006,7 +1042,7 @@ private:
         std::ranges::fill(tail, dst + kLanes, column[base + width - 1]);
       }
       rt::evaluate_block<kLanes>(*arena_, std::span<const T>{lanes}, order,
-                                 std::span<T>{tape}, contract);
+                                 contractions, std::span<T>{tape});
 
       for (const auto [columns, block] : std::views::zip(
                std::array{f, g, h},
@@ -1078,6 +1114,11 @@ private:
   // const members safe to call concurrently: rt::build_hessian_impl *appends to
   // the arena*, and a borrowed arena may be lent to another Equation too.
   std::vector<rt::Hessian> hessians_;
+#ifdef DDX_HAS_JIT
+  // The same model with its reduction spines blocked, for the kernel only.
+  std::vector<rt::NodeId> compile_roots_;
+  rt::Jacobian compile_derivative_;
+#endif
   // unique_ptr, not shared: its destructor is constexpr, which is what keeps a
   // constant-evaluated Equation destructible.  Null only there.
   std::unique_ptr<Cache> cache_;

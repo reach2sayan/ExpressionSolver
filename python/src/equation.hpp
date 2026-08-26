@@ -252,7 +252,7 @@ private:
     if (want == Want::Hessian) {
       gb.hessian_from(sweeps().front());
     }
-    l.graph = std::make_shared<const rt::Graph<double>>(gb.build());
+    l.graph = std::make_shared<const rt::Graph<double>>(gb.build(contracts()));
     if (options_.backend == jit::Backend::Interpret) {
       l.settled = true;
       return;
@@ -389,8 +389,9 @@ private:
                  std::span<double *const> g, std::span<double *const> h,
                  std::size_t n) const {
     const auto blocks = graph.output_blocks();
-    const bool contract = contracts();
-    const auto order = contract ? graph.contracted_order() : graph.live_order();
+    // The freeze settled both; there is no choice left to make here.
+    const auto order = graph.contracted_order();
+    const auto contractions = graph.contractions();
     const std::size_t symbols = arity();
     const auto scatter = [&](const auto &tape, std::size_t i,
                              std::size_t stride, std::size_t width) {
@@ -413,8 +414,8 @@ private:
       for (const std::size_t i : std::views::iota(0uz, n)) {
         std::ranges::transform(xs, at.begin(),
                                [i](const double *column) { return column[i]; });
-        rt::evaluate_into(*arena_, at, order, std::span<double>{tape},
-                          contract);
+        rt::evaluate_into(*arena_, at, order, contractions,
+                          std::span<double>{tape});
         scatter(tape, i, 1, 1);
       }
       return;
@@ -436,7 +437,7 @@ private:
         std::ranges::fill(tail.out, dst.end(), column[base + width - 1]);
       }
       rt::evaluate_block<kLanes>(*arena_, std::span<const double>{lanes}, order,
-                                 std::span<double>{tape}, contract);
+                                 contractions, std::span<double>{tape});
       scatter(tape, base, kLanes, width);
     }
   }

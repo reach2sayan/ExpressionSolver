@@ -17,7 +17,7 @@ namespace ddx::jit::detail {
 // IRBuilder reads the layout for every implicit alignment it fills in.
 [[nodiscard]] std::unique_ptr<llvm::Module>
 emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
-            const Options &opt, llvm::StringRef name, unsigned lanes,
+            llvm::StringRef name, unsigned lanes,
             const llvm::DataLayout &layout, llvm::StringRef triple);
 
 } // namespace ddx::jit::detail

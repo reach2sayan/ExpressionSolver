@@ -164,7 +164,7 @@ struct Frozen {
 
 // The gradient of one model at n variables, frozen with its value and every
 // partial, which is what a caller compiles.
-Frozen gradient_graph(const Model &m, std::size_t n) {
+Frozen gradient_graph(const Model &m, std::size_t n, bool contract = true) {
   auto arena = std::make_unique<Builder<>>();
   std::vector<RE> v;
   v.reserve(n);
@@ -177,7 +177,7 @@ Frozen gradient_graph(const Model &m, std::size_t n) {
   auto graph = ddx::rt::GraphBuilder{*arena}
                    .values_from(std::span<const ddx::rt::NodeId>{&root, 1})
                    .jacobian_from(row.partial)
-                   .build();
+                   .build(contract);
   return {.arena = std::move(arena), .graph = std::move(graph)};
 }
 
@@ -226,10 +226,10 @@ Frozen gradient_graph(const Model &m, std::size_t n) {
 constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
 
 [[nodiscard]] double interp_ns_per_point(const Frozen &fr, std::size_t n,
-                                         std::size_t count, bool contract) {
+                                         std::size_t count) {
   const auto blocks = fr.graph.output_blocks();
-  const auto order =
-      contract ? fr.graph.contracted_order() : fr.graph.live_order();
+  const auto order = fr.graph.contracted_order();
+  const auto contractions = fr.graph.contractions();
 
   std::vector<std::vector<double>> in(n, std::vector<double>(count));
   for (std::size_t i = 0; i < n; ++i) {
@@ -256,8 +256,8 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
       }
       ddx::rt::evaluate_block<kSweepLanes>(*fr.arena,
                                            std::span<const double>{lanes},
-                                           order, std::span<double>{tape},
-                                           contract);
+                                           order, contractions,
+                                           std::span<double>{tape});
       std::ranges::copy_n(tape.data() + std::size_t{blocks.values[0]} * kSweepLanes,
                           width, value.data() + base);
       for (const auto [column, o] : std::views::zip(partial, blocks.jacobian)) {
@@ -326,7 +326,7 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
 
   for (const auto &m : kModels) {
     for (const std::size_t n : sizes) {
-      const auto frozen = gradient_graph(m, n);
+      const auto frozen = gradient_graph(m, n, options.contract);
 
       ddx::jit::CompileReport r0;
       const auto s0 = std::chrono::steady_clock::now();
@@ -345,7 +345,7 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
       }
 
       const double sweep =
-          interp_ns_per_point(frozen, n, 256, options.contract);
+          interp_ns_per_point(frozen, n, 256);
       const double n0 = kernel_ns_per_point(*k0, n, 4096);
       const double n1 = kernel_ns_per_point(*k1, n, 4096);
 
@@ -434,7 +434,7 @@ int main(int argc, char **argv) {
   for (const auto &m : kModels) {
     std::vector<Cell> cells;
     for (const std::size_t n : sizes) {
-      const auto frozen = gradient_graph(m, n);
+      const auto frozen = gradient_graph(m, n, options.contract);
 
       Cell cell{.n = n, .total_ms = 0.0, .report = {}};
       const auto start = std::chrono::steady_clock::now();

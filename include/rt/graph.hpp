@@ -62,10 +62,13 @@ public:
     std::uint32_t slot = 0;
   };
 
+  // `contract` is settled here rather than per sweep: it decides the
+  // arithmetic, and a graph whose readers disagreed about it would not agree to
+  // the bit.  Changing it afterwards means freezing again.
   [[nodiscard]] static Graph freeze(const Builder<T> &b,
                                     std::span<const NodeId> outputs,
-                                    Layout layout = {},
-                                    Coloring coloring = {}) {
+                                    Layout layout = {}, Coloring coloring = {},
+                                    bool contract = true) {
     Graph g;
     // A default layout means every output is a value; a stated one has to
     // account for every output, or codegen and the caller disagree on a
@@ -102,7 +105,7 @@ public:
         adjacency_type(boost::edges_are_unsorted_multi_pass, edges.begin(),
                        edges.end(), slots.begin(), b.size());
     g.mark_live();
-    g.contract();
+    g.contract(contract);
     return g;
   }
 
@@ -131,6 +134,13 @@ public:
   // arithmetic, off the nodes; this only says what is left to compute.
   [[nodiscard]] std::span<const NodeId> contracted_order() const {
     return contracted_order_;
+  }
+
+  // The fma at each node of contracted_order(), in step with it.  The freeze
+  // already asks contraction_at() once per node to decide the order; keeping
+  // the answer is what stops every sweep re-deriving it per point.
+  [[nodiscard]] std::span<const Contraction> contractions() const {
+    return contractions_;
   }
 
   // Derived once, for codegen, the interpreter and the ABI size checks.
@@ -192,7 +202,19 @@ private:
   // Liveness under contraction, which is all this freeze settles -- an add
   // reaches the multiply's operands rather than the multiply, so a multiply
   // nothing else reads drops out with the Neg of a subtraction behind it.
-  void contract() {
+  //
+  // Ascending id, deliberately.  A depth-first order that finishes one fma
+  // spine before starting the next was built and measured: it takes run density
+  // to 1.00 and live accumulators from 64 to 1, and is 0.86-1.03x -- slower.
+  // Ids are construction order, so ascending ids walk the id-indexed tape as a
+  // contiguous sliding window whose misses the prefetcher covers, and scattering
+  // that to concentrate the accumulator costs more than it saves.
+  void contract(bool on) {
+    if (!on) {
+      contracted_order_ = live_order_;
+      contractions_ = contraction_table(*this, contracted_order_, false);
+      return;
+    }
     const std::vector<bool> live = detail::reachable(
         properties_.size(), outputs_, [this](NodeId v, auto &&mark) {
           if (const Contraction c = contraction_at(*this, v)) {
@@ -209,6 +231,7 @@ private:
         live_order_ |
         std::views::filter([&live](NodeId v) { return live[v]; }) |
         impl::to<std::vector<NodeId>>();
+    contractions_ = contraction_table(*this, contracted_order_);
   }
 
   std::vector<Property> properties_;
@@ -220,6 +243,7 @@ private:
   std::vector<bool> live_;
   std::vector<NodeId> live_order_;
   std::vector<NodeId> contracted_order_;
+  std::vector<Contraction> contractions_;
 };
 
 // Each step names one block of output columns; `build` is the only thing that
@@ -282,8 +306,8 @@ public:
     return *this;
   }
 
-  [[nodiscard]] Graph<T> build() const {
-    return Graph<T>::freeze(*builder_, outputs_, layout_, coloring_);
+  [[nodiscard]] Graph<T> build(bool contract = true) const {
+    return Graph<T>::freeze(*builder_, outputs_, layout_, coloring_, contract);
   }
 
 private:

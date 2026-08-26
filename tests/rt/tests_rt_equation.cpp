@@ -1186,9 +1186,22 @@ TEST(RtEquation, EveryRungOfTheLadderAgreesToTheBit) {
   top.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 1});
   ASSERT_TRUE(top.wait_for_kernel());
 
+  // Rung against rung, still to the bit: both rungs compile the same graph, and
+  // a rung landing mid-loop must not move an answer.
+  const auto low = ladder_gradient(cheap, n);
+  EXPECT_EQ(ladder_gradient(top, n), low) << "the top rung moved a bit";
+
+  // Sweep against kernel, to a tolerance rather than to the bit.  The kernel is
+  // compiled from a graph whose reduction spines are blocked and the sweep is
+  // not -- see Compiled::compile_graph -- because a dependent chain is latency
+  // the kernel cannot hide and the same rewrite costs the sweep tape locality.
+  // Blocking reassociates, so the two disagree in the last places.
   const auto expected = ladder_gradient(swept, n);
-  EXPECT_EQ(ladder_gradient(cheap, n), expected) << "the cheap rung moved a bit";
-  EXPECT_EQ(ladder_gradient(top, n), expected) << "the top rung moved a bit";
+  ASSERT_EQ(low.size(), expected.size());
+  for (const auto [got, want] : std::views::zip(low, expected)) {
+    EXPECT_NEAR(got, want, 1e-12 * (1.0 + std::fabs(want)))
+        << "the kernel is a reassociation of the sweep, not a different answer";
+  }
 }
 
 // The ladder climbs and never falls back.  One shared pool orders nothing, so a

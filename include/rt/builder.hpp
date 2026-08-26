@@ -3,6 +3,7 @@
 #include "ops/algebra.hpp"
 #include "rt/apply.hpp"
 #include "rt/opcode.hpp"
+#include "util/ranges.hpp"
 
 #include <algorithm>
 #include <array>
@@ -450,6 +451,24 @@ contraction_at(const CNodeSource auto &nodes, NodeId v) {
             .negated = negated};
   }
   return {};
+}
+
+// The contraction at every node of `order`, resolved once and in that order.
+// Asking contraction_at() inside a sweep re-derives, per point, structure that
+// is a property of the nodes and cannot change between points -- and pays two
+// dependent loads into the node array to do it.  Every consumer takes this
+// table instead, so all of them still form exactly the same fmas.  `on` false
+// contracts nothing, which is what Options::contract off means.
+template <std::ranges::input_range Order>
+  requires std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
+[[nodiscard]] constexpr std::vector<Contraction>
+contraction_table(const CNodeSource auto &nodes, Order &&order,
+                  bool on = true) {
+  return std::forward<Order>(order) |
+         std::views::transform([&nodes, on](NodeId v) {
+           return on ? contraction_at(nodes, v) : Contraction{};
+         }) |
+         impl::to<std::vector<Contraction>>();
 }
 
 } // namespace ddx::rt
