@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <concepts>
+#include <iterator>
 #include <ranges>
 #include <utility>
 
@@ -19,6 +22,15 @@ template <typename C> struct to_closure {
 
 template <typename C> [[nodiscard]] constexpr to_closure<C> to() noexcept {
   return {};
+}
+
+// `c.append_range(r)`: libstdc++ grew the containers' range members in 15 and
+// the project still builds against 14, so the append is spelled out.
+template <typename C, std::ranges::input_range R>
+  requires std::convertible_to<std::ranges::range_reference_t<R>,
+                               typename C::value_type>
+constexpr void append(C &c, R &&r) {
+  std::ranges::copy(std::forward<R>(r), std::back_inserter(c));
 }
 
 } // namespace ddx::impl

@@ -366,10 +366,11 @@ private:
     // blocks below read, and nothing of the arena beyond it.
     auto wanted = blocks | std::views::transform(&rt::Hessian::compressed) |
                   std::views::join | impl::to<std::vector<rt::NodeId>>();
-    wanted.append_range(blocks | std::views::transform(&rt::Hessian::partial) |
-                        std::views::join);
-    wanted.append_range(blocks | std::views::transform(&rt::Hessian::zero));
-    wanted.append_range(roots_);
+    impl::append(wanted, blocks |
+                             std::views::transform(&rt::Hessian::partial) |
+                             std::views::join);
+    impl::append(wanted, blocks | std::views::transform(&rt::Hessian::zero));
+    impl::append(wanted, roots_);
     const auto values = rt::evaluate_reachable(*arena_, wanted, point);
 
     Block f{outputs(), at.size()};

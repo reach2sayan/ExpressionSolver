@@ -11,7 +11,7 @@
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
 #include "symbolic/equation.hpp"
-#include "util/ranges.hpp" // to<C>(), piped by us -- see the header for why
+#include "util/ranges.hpp" // to<C>() and append(), ours -- see the header for why
 
 // The scalar accessors build one column pointer per output, at one point; a
 // handful of pointers is not worth a heap block.
@@ -222,8 +222,8 @@ public:
         auto wanted = hessians_ |
                       std::views::transform(&rt::Hessian::compressed) |
                       std::views::join | impl::to<std::vector<rt::NodeId>>();
-        wanted.append_range(hessians_ |
-                            std::views::transform(&rt::Hessian::zero));
+        impl::append(wanted,
+                     hessians_ | std::views::transform(&rt::Hessian::zero));
         const auto values = rt::evaluate_reachable(*arena_, wanted, at);
         for (const auto [k, block] : hessians_ | std::views::enumerate) {
           for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
@@ -487,7 +487,7 @@ private:
       return;
     }
     auto wanted = roots_;
-    wanted.append_range(derivative_.partial);
+    impl::append(wanted, derivative_.partial);
     const auto values = rt::evaluate_reachable(*arena_, wanted, at);
     const auto pick = [&values](std::span<T> out, const auto &nodes) {
       std::ranges::transform(nodes | std::views::take(out.size()), out.begin(),
