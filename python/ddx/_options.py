@@ -27,7 +27,8 @@ class Options(BaseModel):
 
     backend: Backend = _DEFAULTS.backend
     """``COMPILE`` starts the compile there and then; calls before it lands are
-    swept and switch over when it arrives."""
+    swept and switch over when it arrives. ``ADAPT`` waits until a lane has been
+    asked for ``warm_points`` before compiling it at all."""
 
     points: int = Field(_DEFAULTS.points, ge=1)
     """The batch a caller intends to hand to one call. Decides the lane width
@@ -42,6 +43,15 @@ class Options(BaseModel):
     codegen_level: int = Field(_DEFAULTS.codegen_level, ge=0, le=3)
     """LLVM's codegen level, which is ~95% of a compile and so the knob that
     trades kernel speed for compile time."""
+
+    warm_points: int = Field(_DEFAULTS.warm_points, ge=0)
+    """Under ``ADAPT``, the batch points a lane must be asked for before it is
+    compiled. 0 compiles on the first call."""
+
+    hot_points: int = Field(_DEFAULTS.hot_points, ge=0)
+    """Under ``ADAPT``, the further points the cheap kernel must run before the
+    top one is compiled. A Python lane has one rung, so this is read only by
+    equations compiled through the C++ facade."""
 
     slp: bool = _DEFAULTS.slp
     loop_vectorize: bool = _DEFAULTS.loop_vectorize

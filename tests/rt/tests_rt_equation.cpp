@@ -1276,4 +1276,117 @@ TEST(RtEquation, InterpretHasNoRung) {
   eq.options({.backend = ddx::rt::Backend::Interpret});
   EXPECT_FALSE(eq.kernel_level().has_value());
 }
+
+// --- Backend::Adapt ----------------------------------------------------------
+//
+// The same ladder, climbed on the counter rather than on sight of the backend.
+// Every threshold here is stated, because a test that waited for the shipping
+// default would be waiting on 65536 points.
+
+// A lane nobody uses costs nothing: the whole point of counting is not paying
+// for a compile that will never be amortised.
+TEST(RtEquation, AdaptCompilesNothingUntilTheBatchPaysForIt) {
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Adapt,
+              .codegen_level = 1,
+              .warm_points = 1000});
+
+  for (int i = 0; i < 3; ++i) {
+    (void)ladder_gradient(eq, 24); // one point apiece
+  }
+  EXPECT_FALSE(eq.uses_kernel()) << "a cold lane compiled anyway";
+  EXPECT_FALSE(eq.kernel_level().has_value());
+
+  // And it says so, which is what separates counting from a refused compile.
+  const auto warm = eq.warming();
+  ASSERT_TRUE(warm.has_value());
+  EXPECT_EQ(warm->points, 3u);
+  EXPECT_EQ(warm->threshold, 1000u);
+}
+
+// Under Adapt, waiting is for a rung already bought.  Overriding the counter
+// here would make every measurement of the policy a lie.
+TEST(RtEquation, AdaptDoesNotLetAWaitBuyARung) {
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Adapt, .warm_points = 1000});
+  EXPECT_FALSE(eq.wait_for_kernel());
+  EXPECT_FALSE(eq.uses_kernel());
+  ASSERT_TRUE(eq.warming().has_value());
+  EXPECT_EQ(eq.warming()->points, 0u) << "an observer charged the lane";
+}
+
+// Cheap rung first, then the top one, each on its own threshold -- and the
+// answers do not move across either, as on the eager ladder.
+TEST(RtEquation, AdaptBuysTheCheapRungThenTheTop) {
+  constexpr std::size_t n = 24;
+
+  auto swept = ladder_model();
+  swept.options({.backend = ddx::rt::Backend::Interpret});
+  const auto expected = ladder_gradient(swept, n);
+
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Adapt,
+              .codegen_level = 1,
+              .warm_points = 1,
+              .hot_points = 1});
+
+  // One point buys the cheap rung and nothing more.
+  EXPECT_EQ(ladder_gradient(eq, n), expected);
+  ASSERT_TRUE(eq.wait_for_kernel()) << "the first point bought no rung";
+  ASSERT_TRUE(eq.kernel_level().has_value());
+  EXPECT_EQ(*eq.kernel_level(), 0u) << "the top rung was bought too early";
+
+  // The next buys the top one.  Bounded: a failure to climb must fail the test
+  // rather than hang it.
+  using namespace std::chrono_literals;
+  const auto deadline = std::chrono::steady_clock::now() + 30s;
+  bool climbed = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    EXPECT_EQ(ladder_gradient(eq, n), expected) << "an answer moved as it climbed";
+    if (eq.kernel_level() == 1u) {
+      climbed = true;
+      break;
+    }
+    std::this_thread::sleep_for(1ms);
+  }
+  EXPECT_TRUE(climbed) << "the top rung was never bought";
+
+  // Nothing left to buy, so nothing left to count.
+  EXPECT_FALSE(eq.warming().has_value());
+}
+
+// At codegen 0 there is nothing cheaper underneath, so one threshold buys the
+// only rung there is and the counter is done.
+TEST(RtEquation, AdaptAtCodegenZeroBuysOneRung) {
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Adapt,
+              .codegen_level = 0,
+              .warm_points = 1});
+  (void)ladder_gradient(eq, 24);
+  ASSERT_TRUE(eq.wait_for_kernel());
+  ASSERT_TRUE(eq.kernel_level().has_value());
+  EXPECT_EQ(*eq.kernel_level(), 0u);
+  EXPECT_FALSE(eq.warming().has_value()) << "still counting toward a second rung";
+}
+
+// A threshold of nothing is the eager ladder, which is what makes the policy
+// testable at all.
+TEST(RtEquation, AdaptWithNoThresholdBuysOnTheFirstCall) {
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Adapt,
+              .codegen_level = 1,
+              .warm_points = 0,
+              .hot_points = 0});
+  (void)ladder_gradient(eq, 24);
+  EXPECT_TRUE(eq.wait_for_kernel());
+}
+
+// Under Interpret the counter is never touched, however hot the lane gets.
+TEST(RtEquation, InterpretIsNotWarming) {
+  auto eq = ladder_model();
+  eq.options({.backend = ddx::rt::Backend::Interpret});
+  (void)ladder_gradient(eq, 24);
+  EXPECT_FALSE(eq.warming().has_value());
+  EXPECT_FALSE(eq.uses_kernel());
+}
 #endif

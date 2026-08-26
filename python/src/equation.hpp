@@ -221,6 +221,11 @@ private:
     std::shared_ptr<const rt::Graph<double>> graph;
     jit::Kernel kernel{};
     std::shared_future<jit::result<jit::Kernel>> pending;
+    // Adapt's counter.  Plain, not atomic: the GIL is held for every call that
+    // touches a lane.  `settled` is set once nothing is left to buy, so a lane
+    // that will never compile again stops counting.
+    std::size_t points = 0;
+    bool settled = false;
   };
 
   // Points per block sweep, as in the facade: two AVX2 registers of doubles.
@@ -249,10 +254,12 @@ private:
     }
     l.graph = std::make_shared<const rt::Graph<double>>(gb.build());
     if (options_.backend == jit::Backend::Interpret) {
+      l.settled = true;
       return;
     }
     jit::Compiler *const c = compiler();
     if (c == nullptr) {
+      l.settled = true;
       return;
     }
     // A compile already done, adopted only where graph, host and codegen
@@ -275,11 +282,33 @@ private:
               c->adopt(stored->code, stored->symbol, l.graph->symbols().size(),
                        layout.values, layout.jacobian, layout.hessian)) {
         l.kernel = std::move(*adopted);
+        l.settled = true;
         return; // nothing left to compile
       }
       // A refused link is a miss, never a failure: the compile below stands.
     }
-    l.pending = c->compile_async(l.graph, effective_options());
+    // Adapt earns its compile in charge(); Compile asks for it outright.  There
+    // is one rung here rather than the facade's ladder, so warm_points is the
+    // only threshold this lane has and hot_points says nothing.
+    if (options_.backend == jit::Backend::Compile) {
+      l.pending = c->compile_async(l.graph, effective_options());
+      l.settled = true;
+    }
+  }
+
+  // Charge the lane for a batch and launch the compile the points have bought.
+  void charge(Lane &l, std::size_t n) {
+    if (l.settled || n == 0 || options_.backend != jit::Backend::Adapt) {
+      return;
+    }
+    l.points += n;
+    if (l.points < options_.warm_points) {
+      return;
+    }
+    if (jit::Compiler *const c = compiler(); c != nullptr) {
+      l.pending = c->compile_async(l.graph, effective_options());
+    }
+    l.settled = true;
   }
 
   // A refused compile leaves the kernel empty and the sweep stays: the JIT is
@@ -341,6 +370,9 @@ private:
         h.size() != blocks.hessian.size()) {
       fail_with(errc::wrong_column_count);
     }
+    // Before the GIL goes, and after the shape check: a call that will not run
+    // has bought nothing.
+    charge(l, at.size());
     // Past here nothing touches Python, so the GIL goes -- which is what lets
     // another thread call in while a long batch runs.
     const pyb::gil_scoped_release unlocked;

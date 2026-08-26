@@ -98,7 +98,7 @@ jobs:
       - name: Install Boost (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: vcpkg install boost-mp11 boost-graph boost-dynamic-bitset --triplet x64-windows
+        run: vcpkg install boost-mp11 boost-graph boost-dynamic-bitset boost-describe boost-endian boost-crc --triplet x64-windows
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'

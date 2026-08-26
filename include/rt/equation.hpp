@@ -27,7 +27,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <concepts>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -278,6 +280,10 @@ public:
 
   // Block until the *first* rung lands -- rungs[0], the cheap compile -- and
   // answer uses_kernel().  Nothing else waits.
+  //
+  // Under Adapt it waits for a rung already bought and buys none: a call that
+  // quietly overrode the counter would make every measurement of the policy a
+  // lie.  A caller who wants a kernel now asks for Backend::Compile.
   [[nodiscard]] bool wait_for_kernel() const {
     if (poisoned()) {
       return false;
@@ -290,6 +296,26 @@ public:
       }
     }
     return static_cast<bool>(snapshot(Want::Jacobian)->kernel);
+  }
+
+  // How far the Jacobian lane is toward its next rung, and nothing under any
+  // other backend or once there is none left.  Without it a lane that is still
+  // counting and one whose compile was refused both read as no kernel.
+  struct Warmup {
+    std::size_t points;    // batch points this lane has been asked for
+    std::size_t threshold; // where the next rung is bought
+  };
+  [[nodiscard]] std::optional<Warmup> warming() const {
+    if (poisoned() || options_.backend != jit::Backend::Adapt) {
+      return std::nullopt;
+    }
+    const Lane &lane = cache_->plain;
+    const unsigned asked = lane.asked.load(std::memory_order_relaxed);
+    return asked >= 2
+               ? std::nullopt
+               : std::optional{Warmup{
+                     lane.points.load(std::memory_order_relaxed),
+                     rung_at(asked)}};
   }
 #endif
 
@@ -334,16 +360,16 @@ public:
   [[nodiscard]] result<void>
   evaluate(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f, std::size_t n) const {
-    return dispatch(*snapshot(Want::Values), as_columns(xs), as_columns(f), {},
-                    {}, n);
+    return dispatch(*snapshot(Want::Values, n), as_columns(xs), as_columns(f),
+                    {}, {}, n);
   }
 
   [[nodiscard]] result<void>
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f,
            const rt_detail::CColumns<T *> auto &g, std::size_t n) const {
-    return dispatch(*snapshot(Want::Jacobian), as_columns(xs), as_columns(f),
-                    as_columns(g), {}, n);
+    return dispatch(*snapshot(Want::Jacobian, n), as_columns(xs),
+                    as_columns(f), as_columns(g), {}, n);
   }
 
   [[nodiscard]] result<void>
@@ -353,7 +379,7 @@ public:
           const rt_detail::CColumns<T *> auto &h, std::size_t n) const
     requires(output_dim == 1)
   {
-    return dispatch(*snapshot(Want::Hessian), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(Want::Hessian, n), as_columns(xs), as_columns(f),
                     as_columns(g), as_columns(h), n);
   }
 
@@ -604,7 +630,7 @@ private:
       const auto fs = single_columns(f);
       const auto gs = single_columns(g);
       const auto hs = single_columns(h);
-      (void)dispatch(*snapshot(want), as_columns(xs), as_columns(fs),
+      (void)dispatch(*snapshot(want, 1), as_columns(xs), as_columns(fs),
                      as_columns(gs), as_columns(hs), 1);
       return;
     }
@@ -647,6 +673,13 @@ private:
 #ifdef DDX_HAS_JIT
     // Submission order, so rungs[0] answers soonest.
     std::array<Rung, 2> rungs;
+    // Adapt's counter, and how many rungs it has already bought.  Outside the
+    // mutex because every batch call touches it and only a crossing needs the
+    // write lock; relaxed because the count orders nothing -- climb() re-reads
+    // both under the lock, which is what makes the launch happen once.  At 2
+    // there is nothing left to earn and count() stops touching the line.
+    mutable std::atomic<std::size_t> points{0};
+    mutable std::atomic<unsigned> asked{0};
 #endif
   };
 
@@ -669,11 +702,17 @@ private:
 
   // Ownership, not a reference: a reader holds its share for the whole call, so
   // publishing cannot pull the graph out from under a dispatch() in flight.
-  [[nodiscard]] std::shared_ptr<const Compiled> snapshot(Want want) const {
+  //
+  // `n` is the batch about to be run and is what Adapt counts; an observer asks
+  // for the lane without buying anything, hence the default.
+  [[nodiscard]] std::shared_ptr<const Compiled> snapshot(Want want,
+                                                         std::size_t n = 0)
+      const {
     Lane &lane = lane_for(want);
+    const bool earned = count(lane, n);
     {
       const std::shared_lock read{lane.mutex};
-      if (lane.ready && !settling(lane)) {
+      if (lane.ready && !earned && !settling(lane)) {
         return lane.ready;
       }
     }
@@ -686,7 +725,79 @@ private:
     if (arrived(lane)) {
       adopt(lane);
     }
+    climb(lane);
     return lane.ready;
+  }
+
+  // Charge the lane for the batch and say whether that bought a rung.  False
+  // for everything but Adapt, and false once both rungs are spoken for, so a
+  // settled lane never writes to the counter at all.
+  [[nodiscard]] bool count([[maybe_unused]] const Lane &lane,
+                           [[maybe_unused]] std::size_t n) const {
+#ifdef DDX_HAS_JIT
+    if constexpr (std::same_as<T, double>) {
+      if (n == 0 || bad_ || options_.backend != jit::Backend::Adapt) {
+        return false;
+      }
+      const unsigned asked = lane.asked.load(std::memory_order_relaxed);
+      if (asked >= 2) {
+        return false;
+      }
+      return lane.points.fetch_add(n, std::memory_order_relaxed) + n >=
+             rung_at(asked);
+    }
+#endif
+    return false;
+  }
+
+#ifdef DDX_HAS_JIT
+  // Where the next rung is bought, counting from nothing: hot_points is the
+  // batch the *cheap* rung has to earn, so it is added to what came before.
+  // Saturating, because a caller spells "never" as a huge threshold.
+  [[nodiscard]] std::size_t rung_at(unsigned asked) const noexcept {
+    constexpr auto ceiling = std::numeric_limits<std::size_t>::max();
+    const std::size_t warm = options_.warm_points;
+    const std::size_t hot = options_.hot_points;
+    return asked == 0 ? warm : (warm > ceiling - hot ? ceiling : warm + hot);
+  }
+#endif
+
+  // Ask for the rung the counter has bought.  Under the write lock and
+  // idempotent: two threads may both arrive owing one, and the second re-reads
+  // an `asked` the first has already moved.
+  void climb([[maybe_unused]] Lane &lane) const {
+#ifdef DDX_HAS_JIT
+    if constexpr (std::same_as<T, double>) {
+      if (bad_ || options_.backend != jit::Backend::Adapt) {
+        return;
+      }
+      const unsigned asked = lane.asked.load(std::memory_order_relaxed);
+      if (asked >= 2 ||
+          lane.points.load(std::memory_order_relaxed) < rung_at(asked)) {
+        return;
+      }
+      auto *const c = compiler();
+      if (c == nullptr) {
+        // No ladder on this host, and the sweep answers everything: stop
+        // counting rather than take the write lock on every call from here on.
+        lane.asked.store(2, std::memory_order_relaxed);
+        return;
+      }
+      const jit::Options top = effective_options();
+      if (asked == 0 && top.codegen_level > 0) {
+        jit::Options low = top;
+        low.codegen_level = 0;
+        lane.rungs[0] = {c->compile_async(lane.ready->graph, low), 0};
+        lane.asked.store(1, std::memory_order_relaxed);
+        return;
+      }
+      // Either the top rung over a cheap one, or -- at codegen 0 -- the only
+      // rung there is.
+      lane.rungs[asked == 0 ? 0 : 1] = {
+          c->compile_async(lane.ready->graph, top), top.codegen_level};
+      lane.asked.store(2, std::memory_order_relaxed);
+    }
+#endif
   }
 
   // Whether the lane owes the reader anything: only ever a kernel to publish.
@@ -783,14 +894,22 @@ private:
               Compiled{.graph = lane.ready->graph,
                        .kernel = std::move(*adopted),
                        .level = level});
-          // Nothing left to climb to, so nothing is launched.
+          // Nothing left to climb to, so nothing is launched and, under Adapt,
+          // nothing more is counted.
           if (level >= effective_options().codegen_level) {
+            lane.asked.store(2, std::memory_order_relaxed);
             return;
           }
+          // A cheap rung came off the file for nothing, so Adapt has only the
+          // top one left to earn.
+          lane.asked.store(1, std::memory_order_relaxed);
         }
         // A refused link is a miss, never a failure: the compile below stands.
       }
-      launch(lane, *c);
+      // Adapt buys its rungs in climb(); Compile asks for both outright.
+      if (options_.backend == jit::Backend::Compile) {
+        launch(lane, *c);
+      }
     }
 #endif
   }

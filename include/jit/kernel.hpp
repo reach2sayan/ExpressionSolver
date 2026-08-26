@@ -53,12 +53,15 @@ inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 //               sweep runs within ~1.4x of a kernel.
 //   Compile     Equation::options() starts the compile there and then; calls
 //               before it lands are swept, and switch over when it arrives.
+//   Adapt       the same, for a caller who cannot say up front which of their
+//               equations are hot: a rung is asked for once the batch has paid
+//               for it.
 //
-// Compile is a *ladder*: a codegen-0 kernel answers first and one at the stated
+// Either is a *ladder*: a codegen-0 kernel answers first and one at the stated
 // codegen_level replaces it.  Nothing blocks -- wait_for_kernel() is how a
 // caller asks to -- and every level agrees to the bit, so the swap is
 // invisible; kernel_level() says which rung is answering.
-enum class Backend : std::uint8_t { Interpret, Compile };
+enum class Backend : std::uint8_t { Interpret, Compile, Adapt };
 
 struct Options {
   // Read by Equation, never by Compiler::compile(), which is asked outright.
@@ -83,6 +86,12 @@ struct Options {
   // Off: the loop is already emitted `lanes` wide, and past ~19 columns the
   // alias check it needs between every pair exceeds its own budget.
   bool loop_vectorize = false;
+  // What Adapt buys a rung with: the points that buy the cheap one, then the
+  // further points that buy the top.  Points rather than points x nodes because
+  // a compile costs about what a node costs and a swept point saves about what
+  // a node saves, so the size cancels out of the break-even.
+  std::size_t warm_points = 1uz << 16;
+  std::size_t hot_points = 1uz << 20;
   VecLib veclib = VecLib::None;
   bool contract = default_contract; // Follows DDX_FP_FLAGS
   // Per-pass timing to stderr.  Off: it prints where nothing else here does.

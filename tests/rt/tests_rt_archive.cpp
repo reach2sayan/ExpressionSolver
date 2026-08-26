@@ -613,6 +613,33 @@ TEST(RtArchive, CarriesTheCompiledKernel) {
   EXPECT_EQ(*loaded->hessian(kPoint), *want.hessian(kPoint));
 }
 
+// `backend` says whether to compile, never what is emitted, so it is the one
+// described option same_codegen() skips: an Adapt lane links the kernel a
+// Compile run stored rather than counting its way to identical machine code.
+TEST(RtArchive, AdaptLinksAKernelStoredUnderCompile) {
+  const Scratch file{"adapt_kernel"};
+  {
+    auto built = coupled();
+    built.options({.backend = ddx::jit::Backend::Compile,
+                   .retain_object = true});
+    ASSERT_TRUE(built.wait_for_kernel());
+    ASSERT_TRUE(built.save(file).has_value());
+  }
+
+  auto loaded = ddx::rt::load(file.path());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error().code;
+  // A threshold no test could reach, so a kernel here came off the file.
+  loaded->options({.backend = ddx::jit::Backend::Adapt,
+                   .warm_points = 1uz << 40,
+                   .retain_object = true});
+  EXPECT_TRUE(loaded->uses_kernel()) << "a stored kernel was made to wait";
+  EXPECT_FALSE(loaded->warming().has_value())
+      << "still counting toward a rung it already has";
+
+  const auto want = coupled();
+  EXPECT_EQ(*loaded->jacobian(kPoint), *want.jacobian(kPoint));
+}
+
 TEST(RtArchive, SavesNoKernelWithoutRetainObject) {
   const Scratch file{"no_retain"};
   auto built = coupled();

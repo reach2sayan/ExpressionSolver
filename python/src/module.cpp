@@ -256,6 +256,7 @@ PYBIND11_MODULE(_ddx, m) {
                                  "Whether an equation compiles its graph.")
       .value("INTERPRET", jit::Backend::Interpret)
       .value("COMPILE", jit::Backend::Compile)
+      .value("ADAPT", jit::Backend::Adapt)
       .finalize();
 
   pyb::native_enum<jit::VecLib>(m, "VecLib", "enum.IntEnum",
@@ -275,6 +276,8 @@ PYBIND11_MODULE(_ddx, m) {
       .def_readwrite("lanes", &jit::Options::lanes)
       .def_readwrite("opt_level", &jit::Options::opt_level)
       .def_readwrite("codegen_level", &jit::Options::codegen_level)
+      .def_readwrite("warm_points", &jit::Options::warm_points)
+      .def_readwrite("hot_points", &jit::Options::hot_points)
       .def_readwrite("slp", &jit::Options::slp)
       .def_readwrite("loop_vectorize", &jit::Options::loop_vectorize)
       .def_readwrite("veclib", &jit::Options::veclib)

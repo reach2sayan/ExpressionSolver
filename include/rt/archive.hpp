@@ -104,13 +104,20 @@ BOOST_DESCRIBE_STRUCT(Object, (),
                       (want, symbol, host, digest, options, code))
 
 // The described fields only: jit::Options::operator== compares the policy ones
-// too, and a stored kernel must not be refused for those.
+// too, and a stored kernel must not be refused for those.  `backend` is
+// described because a saved equation restores it, but it says whether to
+// compile and never what is emitted, so it is skipped here: a kernel stored
+// under Compile is the same machine code Adapt would have climbed to.
 [[nodiscard]] inline bool same_codegen(const jit::Options &a,
                                        const jit::Options &b) {
   bool same = true;
   boost::mp11::mp_for_each<boost::describe::describe_members<
-      jit::Options, boost::describe::mod_public>>(
-      [&](auto D) { same = same && a.*D.pointer == b.*D.pointer; });
+      jit::Options, boost::describe::mod_public>>([&](auto D) {
+    if constexpr (!std::same_as<std::remove_cvref_t<decltype(a.*D.pointer)>,
+                                jit::Backend>) {
+      same = same && a.*D.pointer == b.*D.pointer;
+    }
+  });
   return same;
 }
 

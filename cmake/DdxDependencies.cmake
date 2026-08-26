@@ -51,34 +51,63 @@ FetchContent_Declare(googlebenchmark
 # installed ddx could name it.  Config mode is the only one CMake 4 has left.
 #
 # No version floor -- a partial install is what goes wrong, and that is a missing
-# header, which is what the probe asks about.  Rename the cache variable whenever
-# this list grows: check_cxx_source_compiles trusts a cached answer.
+# header, which is what the probe asks about.  Only a yes is remembered, and it
+# answers for the list as it stood: rename the cache variable when this one grows.
+set(DDX_BOOST_HEADERS
+        boost/mp11/algorithm.hpp
+        boost/mp11/list.hpp
+        boost/graph/compressed_sparse_row_graph.hpp
+        boost/dynamic_bitset.hpp
+        boost/describe.hpp
+        boost/endian/conversion.hpp
+        boost/crc.hpp)
+
 macro(ddx_use_boost)
     if (NOT TARGET Boost::headers)
         find_package(Boost REQUIRED CONFIG)
         # The target, not its scraped include dirs, so the probe compiles
         # against exactly what the rest of the build does.
         set(CMAKE_REQUIRED_LIBRARIES Boost::headers)
-        check_cxx_source_compiles("
-                #include <boost/mp11/algorithm.hpp>
-                #include <boost/mp11/list.hpp>
-                #include <boost/graph/compressed_sparse_row_graph.hpp>
-                #include <boost/dynamic_bitset.hpp>
-                #include <boost/describe.hpp>
-                #include <boost/endian/conversion.hpp>
-                #include <boost/crc.hpp>
-                int main() {}"
+        set(_ddx_boost_source "")
+        foreach (_ddx_boost_header IN LISTS DDX_BOOST_HEADERS)
+            string(APPEND _ddx_boost_source "#include <${_ddx_boost_header}>\n")
+        endforeach ()
+        check_cxx_source_compiles("${_ddx_boost_source}int main() {}"
                 DDX_BOOST_HEADERS_PRESENT)
-        unset(CMAKE_REQUIRED_LIBRARIES)
+
+        # One probe per header, and only on the way to aborting: the combined
+        # answer says something is wrong, never which.  None of it is cached --
+        # a remembered "no" would outlive the install that fixes it.
         if (NOT DDX_BOOST_HEADERS_PRESENT)
+            unset(DDX_BOOST_HEADERS_PRESENT CACHE)
+            set(_ddx_boost_bad "")
+            foreach (_ddx_boost_header IN LISTS DDX_BOOST_HEADERS)
+                string(MAKE_C_IDENTIFIER "DDX_BOOST_HAS_${_ddx_boost_header}" _ddx_boost_var)
+                check_cxx_source_compiles("#include <${_ddx_boost_header}>\nint main() {}"
+                        ${_ddx_boost_var})
+                if (NOT ${_ddx_boost_var})
+                    list(APPEND _ddx_boost_bad "${_ddx_boost_header}")
+                endif ()
+                unset(${_ddx_boost_var} CACHE)
+            endforeach ()
+            string(REPLACE ";" ", " _ddx_boost_bad "${_ddx_boost_bad}")
+            if (_ddx_boost_bad)
+                message(FATAL_ERROR
+                        "Boost ${Boost_VERSION} was found at ${Boost_INCLUDE_DIRS}, but these "
+                        "headers ddx names do not compile: ${_ddx_boost_bad}.  A modular install "
+                        "(vcpkg, Conan) wants the libraries owning them added; a distro one "
+                        "usually wants the whole headers package (libboost-dev).  If they are on "
+                        "disk, the compiler's own diagnostic is in the CMakeConfigureLog.")
+            endif ()
+            # Each alone is fine, so the include order or the toolchain is at fault.
             message(FATAL_ERROR
-                    "Boost ${Boost_VERSION} was found at ${Boost_INCLUDE_DIRS}, but it does not "
-                    "have the headers ddx names: Mp11 (algorithm, list), Graph "
-                    "(compressed_sparse_row_graph), DynamicBitset, Describe, Endian and CRC.  "
-                    "A modular install wants "
-                    "those libraries added; a distro one usually wants the whole headers package "
-                    "(libboost-dev).")
+                    "Boost ${Boost_VERSION} at ${Boost_INCLUDE_DIRS} has every header ddx names, "
+                    "but they do not compile together.  The CMakeConfigureLog holds the "
+                    "compiler's diagnostic, under the check that includes all of them.")
         endif ()
+        unset(CMAKE_REQUIRED_LIBRARIES)
+        unset(_ddx_boost_source)
+        unset(_ddx_boost_header)
     endif ()
 endmacro()
 
