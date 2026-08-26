@@ -41,6 +41,7 @@ template <CExpression E> consteval bool lit_equals(int n) {
 }
 template <CExpression E> inline constexpr bool is_zero_v = lit_equals<E>(0);
 template <CExpression E> inline constexpr bool is_one_v = lit_equals<E>(1);
+template <CExpression E> inline constexpr bool is_two_v = lit_equals<E>(2);
 
 // Lit<T, 0> / Lit<T, 1> are the canonical zero and one for every Numeric T.
 // Which RuleOp an operation is, or none for one carrying no identities.
@@ -76,6 +77,8 @@ template <COperation Op, CExpression A, CExpression B>
     return is_one_v<B>;
   case algebra::Pred::Same:
     return std::same_as<A, B>;
+  case algebra::Pred::TwoB:
+    return is_two_v<B>;
   case algebra::Pred::AOverB:
     return is_over_v<A, B>;
   case algebra::Pred::BOverA:
@@ -122,6 +125,8 @@ template <COperation Op, CExpression A, CExpression B>
     return b;
   } else if constexpr (matched->then == algebra::Take::NumeratorOfA) {
     return std::get<0>(a.expressions());
+  } else if constexpr (matched->then == algebra::Take::SquareOfA) {
+    return a * a;
   } else {
     static_assert(matched->then == algebra::Take::NumeratorOfB);
     return std::get<0>(b.expressions());

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ops/adjoints.hpp"
 #include "ops/numeric.hpp"
 #include "ops/unary_math.hpp"
 #include "util/fixed_string.hpp"
@@ -78,8 +79,9 @@ struct SumOp
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &) noexcept {
-    return {adj, adj};
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    return detail::SumOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
   }
 };
 
@@ -93,14 +95,11 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"},
     auto rmul = lhs * rhs.derivative();
     return std::move(lmul) + std::move(rmul);
   }
-  // For c = a*b the differential is da*b + a*db, so the adjoint reaching `a`
-  // multiplies on the LEFT of b and the one reaching `b` on the RIGHT of a.
-  // Sided, not complete: a non-commutative scalar would also need a transpose.
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
     constexpr std::size_t cb[]{CB...};
-    return {adj * cache[cb[1]], cache[cb[0]] * adj};
+    return detail::MultiplyOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
   }
 };
 
@@ -116,8 +115,9 @@ struct NegateOp
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &) noexcept {
-    return {-adj};
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    return detail::NegateOpFn<T>::adjoints(adj, cache[cb[0]]);
   }
 };
 
@@ -155,13 +155,7 @@ struct DivideOp
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
     constexpr std::size_t cb[]{CB...};
-    const T b = cache[cb[1]];
-    const T a = cache[cb[0]];
-    if constexpr (CCommutativeMultiply<T>) {
-      return {adj / b, -adj * a / (b * b)};
-    } else {
-      return {adj / b, -((a / b) * adj) / b};
-    }
+    return detail::DivideOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
   }
 };
 
@@ -185,12 +179,10 @@ struct abs_impl {
     return abs(a);
   }
 };
-// sign(0) is 0: the abs/max/min subgradient convention every engine shares.
-// a - a reaches only ±0 and NaN, so a NaN operand poisons the derivative
-// rather than picking a side.
+// The value form of the same rule adjoints.hpp differentiates through.
 struct sign_impl {
   template <Numeric T> constexpr auto operator()(const T &a) const noexcept {
-    return a > T{} ? T{1} : a < T{} ? T{-1} : T{a - a};
+    return sign(a);
   }
 };
 // `using std::` plus an unqualified call: ADL finds Dual's / TaylorDual's own
@@ -295,8 +287,9 @@ struct SignOp : UnaryOp<T, detail::sign_impl, FixedString{"sign"}> {
   }
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T, const auto &) noexcept {
-    return {T{}};
+  adjoints(T adj, const auto &cache) noexcept {
+    constexpr std::size_t cb[]{CB...};
+    return detail::SignOpFn<T>::adjoints(adj, cache[cb[0]]);
   }
 };
 
@@ -314,7 +307,7 @@ struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
     constexpr std::size_t cb[]{CB...};
-    return {adj * detail::sign_impl{}(cache[cb[0]])};
+    return detail::AbsOpFn<T>::adjoints(adj, cache[cb[0]]);
   }
 };
 
@@ -328,11 +321,7 @@ struct PowOp
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
     constexpr std::size_t cb[]{CB...};
-    using std::pow, std::log;
-    const T a = cache[cb[0]];
-    const T b = cache[cb[1]];
-    const T p = pow(a, b);
-    return {adj * b * pow(a, b - T{1}), adj * p * log(a)};
+    return detail::PowOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
   }
 };
 
@@ -346,12 +335,7 @@ struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"},
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
     constexpr std::size_t cb[]{CB...};
-    using std::hypot;
-    const T y = cache[cb[0]];
-    const T x = cache[cb[1]];
-    // Scaled by hypot: x² + y² overflows past 1e154.
-    const T h = hypot(x, y);
-    return {adj * (x / h) / h, -adj * (y / h) / h};
+    return detail::Atan2OpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
   }
 };
 
@@ -365,12 +349,7 @@ struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"},
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
     constexpr std::size_t cb[]{CB...};
-    using std::hypot;
-    const T x = cache[cb[0]];
-    const T y = cache[cb[1]];
-    const T h = hypot(x, y);
-    // x / h first: the quotient is in [-1, 1] where x * adj can overflow.
-    return {adj * (x / h), adj * (y / h)};
+    return detail::HypotOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
   }
 };
 
@@ -399,6 +378,9 @@ struct ExtremumOp : BinaryOp<T, func, symbol, Notation::Function> {
     }
   }
 
+  // The one op that does not forward to adjoints.hpp: a compare is cheaper
+  // than ExtremumOpFn's sign expansion, and it can give a tie half to each
+  // side.  The graph has no comparisons and so must use the expansion.
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {

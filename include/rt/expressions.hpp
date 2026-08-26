@@ -231,3 +231,15 @@ template <impl::Numeric T>
 }
 
 } // namespace ddx::rt
+
+namespace ddx::impl {
+// A node stands for a value in S, so its product commutes exactly when S's
+// does -- and Builder::make already canonicalises Mul operands by asking the
+// same question of the scalar.  Load-bearing rather than decorative:
+// DivideOpFn asks it to pick between the two spellings of the quotient rule,
+// and without this an RTExpression<double> graph would answer as though its
+// scalar did not commute.
+template <Numeric S>
+inline constexpr bool is_commutative_multiply_v<rt::RTExpression<S>> =
+    is_commutative_multiply_v<S>;
+} // namespace ddx::impl

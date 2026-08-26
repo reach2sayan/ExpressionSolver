@@ -299,6 +299,8 @@ private:
       return holds(b, 1);
     case Pred::Same:
       return a == b;
+    case Pred::TwoB:
+      return holds(b, 2);
     case Pred::AOverB:
       return cancel_quotient(a, b).has_value();
     case Pred::BOverA:
@@ -327,6 +329,9 @@ private:
       return cancel_quotient(b, a);
     case Take::OperandOfA:
       return nodes_[a].a;
+    case Take::SquareOfA:
+      // No recursion back into this rule: Mul carries no Same identity.
+      return make(OpCode::Mul, a, a);
     }
     return std::nullopt;
   }

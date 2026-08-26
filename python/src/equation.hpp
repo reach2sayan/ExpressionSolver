@@ -362,7 +362,15 @@ private:
     std::vector<double> point(n);
     std::ranges::transform(at.columns(), point.begin(),
                            [](const double *c) { return *c; });
-    const auto values = rt::evaluate_all(*arena_, point);
+    // Values, partials and Hessian::at's compressed cells -- what the three
+    // blocks below read, and nothing of the arena beyond it.
+    auto wanted = blocks | std::views::transform(&rt::Hessian::compressed) |
+                  std::views::join | impl::to<std::vector<rt::NodeId>>();
+    wanted.append_range(blocks | std::views::transform(&rt::Hessian::partial) |
+                        std::views::join);
+    wanted.append_range(blocks | std::views::transform(&rt::Hessian::zero));
+    wanted.append_range(roots_);
+    const auto values = rt::evaluate_reachable(*arena_, wanted, point);
 
     Block f{outputs(), at.size()};
     Block g{outputs() * n, at.size()};

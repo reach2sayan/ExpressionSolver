@@ -28,42 +28,70 @@ template <typename Fn, impl::Numeric T>
 }
 
 // The rule bodies are written against Numeric, so at T = RTExpression the same
-// descriptors build nodes instead of computing.
+// descriptors build nodes instead of computing.  They return the adjoint
+// contribution rather than the bare partial: on the compile-time side the
+// association of `adj * dU` is what the BitExactness hash records, so the
+// multiply has to live inside the shared rule, not at the call site.
+//
+// Nothing here passes `f` to a binary rule.  The descriptors recompute it --
+// pow(l, r), hypot(l, r), l / r -- which is free on a graph, because
+// Builder::make interns the recomputed node straight back onto the primal.
 template <impl::Numeric S>
 [[nodiscard]] constexpr RTExpression<S>
-partial(OpCode op, const RTExpression<S> &u, const RTExpression<S> &f) {
+contribution(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &u,
+             const RTExpression<S> &f) {
   using T = RTExpression<S>;
   switch (op) {
-#define DDX_RT_PARTIAL(fn, Op, label, functor, dU)                             \
+#define DDX_RT_CONTRIB(fn, Op, label, functor, Desc)                           \
   case OpCode::Op:                                                             \
-    return dU;
-    DDX_RT_UNARY_TABLE(DDX_RT_PARTIAL)
-#undef DDX_RT_PARTIAL
-#define DDX_RT_PARTIAL(fn, Op, label)                                          \
+    return impl::detail::Desc<T>::adjoints(adj, u)[0];
+    DDX_RT_UNARY_TABLE(DDX_RT_CONTRIB)
+#undef DDX_RT_CONTRIB
+  // The eighteen keep `adj * f'(u)`, already the association
+  // DDX_UNARY_MATH_OP's generated adjoints() uses, and `rule` still prefers
+  // the deriv_from_value spelling where one exists.
+#define DDX_RT_CONTRIB(fn, Op, label)                                          \
   case OpCode::Op:                                                             \
-    return rule<impl::detail::Op##Fn<RTExpression<S>>>(u, f);
-    DDX_UNARY_MATH_TABLE(DDX_RT_PARTIAL)
-#undef DDX_RT_PARTIAL
+    return adj * rule<impl::detail::Op##Fn<T>>(u, f);
+    DDX_UNARY_MATH_TABLE(DDX_RT_CONTRIB)
+#undef DDX_RT_CONTRIB
   default:
-    return RTExpression<S>{0};
+    return T{0};
   }
 }
 
-// (d/dl, d/dr) of a two-argument op, given the node for the result.
+// The pair reaching a two-argument op's operands.
 template <impl::Numeric S>
 [[nodiscard]] constexpr std::pair<RTExpression<S>, RTExpression<S>>
-partials(OpCode op, const RTExpression<S> &l, const RTExpression<S> &r,
-         const RTExpression<S> &f) {
+contributions(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &l,
+              const RTExpression<S> &r) {
   using T = RTExpression<S>;
   switch (op) {
-#define DDX_RT_PARTIALS(fn, Op, label, functor, dL, dR)                        \
-  case OpCode::Op:                                                             \
-    return {dL, dR};
-    DDX_RT_BINARY_TABLE(DDX_RT_PARTIALS)
-#undef DDX_RT_PARTIALS
-  default:
-    return {RTExpression<S>{0}, RTExpression<S>{0}};
+#define DDX_RT_CONTRIB(fn, Op, label, functor, Desc)                           \
+  case OpCode::Op: {                                                           \
+    const auto c = impl::detail::Desc<T>::adjoints(adj, l, r);                 \
+    return {c[0], c[1]};                                                       \
   }
+    DDX_RT_BINARY_TABLE(DDX_RT_CONTRIB)
+#undef DDX_RT_CONTRIB
+  default:
+    return {T{0}, T{0}};
+  }
+}
+
+// The bare partial is the same rule seeded with a unit adjoint: Builder::make
+// fires the x*1 rule before a node exists, so this is the partial itself and
+// not a multiply by one.
+template <impl::Numeric S>
+[[nodiscard]] constexpr RTExpression<S>
+partial(OpCode op, const RTExpression<S> &u, const RTExpression<S> &f) {
+  return contribution(op, RTExpression<S>{1}, u, f);
+}
+
+template <impl::Numeric S>
+[[nodiscard]] constexpr std::pair<RTExpression<S>, RTExpression<S>>
+partials(OpCode op, const RTExpression<S> &l, const RTExpression<S> &r) {
+  return contributions(op, RTExpression<S>{1}, l, r);
 }
 
 } // namespace detail
@@ -87,6 +115,12 @@ template <impl::Numeric T>
 
   const auto add_to = [&](NodeId child, const RTExpression<T> &contribution) {
     const NodeId c = contribution.id(b);
+    // What sign() -- and so abs() -- hands back.  Storing it would mark the
+    // child live and carry a zero adjoint down its whole cone, where every
+    // rule folds it away again; the traversal and the interning are the cost.
+    if (b.is_constant(c, T{0})) {
+      return;
+    }
     adj[child] = adj[child] == no_node
                      ? c
                      : (RTExpression{b, adj[child]} + RTExpression{b, c}).id(b);
@@ -95,7 +129,10 @@ template <impl::Numeric T>
   // Not a filtered view: the body writes adjoints into entries this traversal
   // has not reached.
   for (NodeId v = n; v-- > 0;) {
-    if (adj[v] == no_node) {
+    // no_node is "nothing reached it"; a folded Const 0 is "what reached it
+    // cancelled".  Neither contributes below, and ids are topological, so by
+    // the time the descending pass arrives every parent has had its say.
+    if (adj[v] == no_node || b.is_constant(adj[v], T{0})) {
       continue;
     }
     const auto node = b[v]; // by value: building below may reallocate
@@ -103,16 +140,16 @@ template <impl::Numeric T>
       continue;
     }
     const RTExpression<T> a{b, adj[v]};
-    const RTExpression<T> self{b, v};
     if (arity_of(node.op) == 1) {
       const RTExpression<T> u{b, node.a};
-      add_to(node.a, a * detail::partial(node.op, u, self));
+      const RTExpression<T> self{b, v};
+      add_to(node.a, detail::contribution(node.op, a, u, self));
     } else {
       const RTExpression<T> l{b, node.a};
       const RTExpression<T> r{b, node.b};
-      const auto [dl, dr] = detail::partials(node.op, l, r, self);
-      add_to(node.a, a * dl);
-      add_to(node.b, a * dr);
+      const auto [cl, cr] = detail::contributions(node.op, a, l, r);
+      add_to(node.a, cl);
+      add_to(node.b, cr);
     }
   }
 
@@ -151,16 +188,16 @@ template <impl::Numeric T>
                                                         : b.constant(T{0});
         continue;
       }
-      const RTExpression<T> self{b, v};
       if (arity_of(node.op) == 1) {
         const RTExpression<T> u{b, node.a};
+        const RTExpression<T> self{b, v};
         d[v] =
             (detail::partial(node.op, u, self) * RTExpression<T>{b, d[node.a]})
                 .id(b);
       } else {
         const RTExpression<T> l{b, node.a};
         const RTExpression<T> r{b, node.b};
-        const auto [dl, dr] = detail::partials(node.op, l, r, self);
+        const auto [dl, dr] = detail::partials(node.op, l, r);
         d[v] = (dl * RTExpression<T>{b, d[node.a]} +
                 dr * RTExpression<T>{b, d[node.b]})
                    .id(b);
@@ -226,12 +263,12 @@ struct Hessian {
   Coloring coloring;
   NodeId zero = no_node;
 
-  // Scattered on read, so a caller never sees the compressed form.
+  // Scattered on read, so a caller never sees the compressed form.  Total over
+  // every (i, j): a cell no column owns has no storage at all, and answers the
+  // structural zero the colouring already promised it was.
   [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
     const std::size_t c = coloring.color[j];
-    return coloring.target(c, i) == j ? by_color(compressed, coloring.count,
-                                                 coloring.color.size())[c, i]
-                                      : zero;
+    return coloring.target(c, i) == j ? compressed[coloring.column(c, i)] : zero;
   }
   [[nodiscard]] constexpr std::size_t colors() const { return coloring.count; }
 };
@@ -247,7 +284,10 @@ template <impl::Numeric T>
             .zero = b.constant(T{0})};
 
   const std::size_t n = h.partial.size();
-  h.compressed.assign(h.coloring.count * n, h.zero);
+  // Only the cells a column owns.  The rest were swept and thrown away by
+  // Hessian::at, which cost an output column each and a whole cone of nodes
+  // behind it -- on an arrow-shaped Hessian that is most of the graph.
+  h.compressed.assign(h.coloring.cells, h.zero);
   for (const std::size_t c : std::views::iota(0uz, h.coloring.count)) {
     // Summing a colour's partials before the sweep is what makes one sweep do
     // the work of |colour| of them.
@@ -259,9 +299,11 @@ template <impl::Numeric T>
         }),
         RTExpression<T>{0}, std::plus<>{});
     const auto row = build_reverse_jacobian(b, seed.id(b));
-    const auto out = by_color(h.compressed, h.coloring.count, n);
     for (const auto [i, p] : std::views::enumerate(row.partial)) {
-      out[c, static_cast<std::size_t>(i)] = p;
+      const auto k = h.coloring.column(c, static_cast<std::size_t>(i));
+      if (k != no_column) {
+        h.compressed[k] = p;
+      }
     }
   }
   return h;

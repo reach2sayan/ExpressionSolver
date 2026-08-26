@@ -16,25 +16,24 @@ namespace ddx::rt {
   X(constant, Const, "const")                                                  \
   X(var, Var, "var")
 
+// The last cell is the ops/adjoints.hpp descriptor carrying the reverse-mode
+// rule, which the compile-time ops call too -- the rule is written once, there.
 // The eighteen transcendentals get the same treatment from
-// DDX_UNARY_MATH_TABLE, whose descriptors already carry their own derivatives;
+// DDX_UNARY_MATH_TABLE, whose descriptors are found by name rather than listed.
 #define DDX_RT_UNARY_TABLE(X)                                                  \
-  X(neg, Neg, "-", std::negate<>, T{-1})                                       \
-  X(abs, Abs, "abs", impl::detail::abs_impl, sign(u))                          \
-  X(sign, Sign, "sign", impl::detail::sign_impl, T{0})
+  X(neg, Neg, "-", std::negate<>, NegateOpFn)                                  \
+  X(abs, Abs, "abs", impl::detail::abs_impl, AbsOpFn)                          \
+  X(sign, Sign, "sign", impl::detail::sign_impl, SignOpFn)
 
 #define DDX_RT_BINARY_TABLE(X)                                                 \
-  X(add, Add, "+", std::plus<>, T{1}, T{1})                                    \
-  X(mul, Mul, "*", std::multiplies<>, r, l)                                    \
-  X(div, Div, "/", std::divides<>, T{1} / r, -f / r)                           \
-  X(pow, Pow, "pow", impl::detail::pow_impl, r *pow(l, r - T{1}), f *log(l))   \
-  X(atan2, Atan2, "atan2", impl::detail::atan2_impl,                           \
-    r / hypot(l, r) / hypot(l, r), -l / hypot(l, r) / hypot(l, r))             \
-  X(hypot, Hypot, "hypot", impl::detail::hypot_impl, l / f, r / f)             \
-  X(max, Max, "max", impl::detail::max_impl, (T{1} + sign(l - r)) / T{2},      \
-    (T{1} - sign(l - r)) / T{2})                                               \
-  X(min, Min, "min", impl::detail::min_impl, (T{1} - sign(l - r)) / T{2},      \
-    (T{1} + sign(l - r)) / T{2})
+  X(add, Add, "+", std::plus<>, SumOpFn)                                       \
+  X(mul, Mul, "*", std::multiplies<>, MultiplyOpFn)                            \
+  X(div, Div, "/", std::divides<>, DivideOpFn)                                 \
+  X(pow, Pow, "pow", impl::detail::pow_impl, PowOpFn)                          \
+  X(atan2, Atan2, "atan2", impl::detail::atan2_impl, Atan2OpFn)                \
+  X(hypot, Hypot, "hypot", impl::detail::hypot_impl, HypotOpFn)                \
+  X(max, Max, "max", impl::detail::max_impl, MaxOpFn)                          \
+  X(min, Min, "min", impl::detail::min_impl, MinOpFn)
 
 #define DDX_RT_OP_TABLE(X)                                                     \
   DDX_RT_LEAF_TABLE(X)                                                         \

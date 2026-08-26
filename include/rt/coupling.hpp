@@ -37,9 +37,18 @@ struct Coloring {
   std::vector<std::size_t> color; // per symbol
   std::size_t count = 0;
   std::vector<std::size_t> scatter; // count * n; column a (colour, row) owns
+  // count * n again, but the other question: *where* (colour, row) is stored,
+  // or no_column for a cell no column of that colour owns.  Those are the ones
+  // a sweep computes for nobody, so they get no storage and no output column.
+  std::vector<std::size_t> cell;
+  std::size_t cells = 0; // how many there are: the compressed block's width
   [[nodiscard]] constexpr std::size_t target(std::size_t c,
                                              std::size_t row) const {
     return by_color(scatter, count, color.size())[c, row];
+  }
+  [[nodiscard]] constexpr std::size_t column(std::size_t c,
+                                             std::size_t row) const {
+    return by_color(cell, count, color.size())[c, row];
   }
 };
 

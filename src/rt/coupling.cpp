@@ -68,6 +68,17 @@ Coloring color_columns(const CouplingRows &rows) {
     detail::for_each_set(row,
                          [&](std::size_t i) { scatter[out.color[j], i] = j; });
   }
+
+  // Number the owned cells in (colour, row) order, so the compressed block
+  // stays deterministic and a caller can index it the way it always could.
+  out.cell.assign(out.count * n, no_column);
+  const auto cell = by_color(out.cell, out.count, n);
+  for (const auto [c, i] : std::views::cartesian_product(
+           std::views::iota(0uz, out.count), std::views::iota(0uz, n))) {
+    if (scatter[c, i] != no_column) {
+      cell[c, i] = out.cells++;
+    }
+  }
   return out;
 }
 

@@ -183,6 +183,33 @@ constexpr void evaluate_into(const Builder<T> &b, const R &point, Order order,
   evaluate_block<1>(b, point, order, v, contract);
 }
 
+// evaluate_all narrowed to what `roots` reach.  The result is still id-indexed
+// and arena-sized, so a caller reads it by node id exactly as it reads
+// evaluate_all's -- entries the roots miss are left value-initialised and must
+// not be read.  Worth the extra pass because a derivative sweep leaves a whole
+// Hessian in the arena that one root's walk has no use for.
+template <impl::Numeric T, std::ranges::random_access_range R>
+  requires impl::Numeric<std::ranges::range_value_t<R>>
+[[nodiscard]] constexpr auto evaluate_reachable(const Builder<T> &b,
+                                                std::span<const NodeId> roots,
+                                                const R &point) {
+  using U = std::ranges::range_value_t<R>;
+  const auto live =
+      detail::reachable(b.size(), roots, [&b](NodeId v, auto &&mark) {
+        for (const NodeId u : b.operands(v)) {
+          if (u != no_node) {
+            mark(u);
+          }
+        }
+      });
+  std::vector<U> v(b.size());
+  evaluate_into(b, point,
+                std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())) |
+                    std::views::filter([&live](NodeId i) { return live[i]; }),
+                std::span<U>{v});
+  return v;
+}
+
 // Every node once, in id order: a child always precedes its parent.  The
 // reference the JIT is checked against.  The point's element type chooses the
 // arithmetic, as eval_seeded does, so Dual<double> carries derivatives through

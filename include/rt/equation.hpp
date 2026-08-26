@@ -211,13 +211,21 @@ public:
         gather(Want::Hessian, at, std::span<T>{f}, g, h);
         // The compressed column for (colour, row); every other column of that
         // colour is structurally zero, which is what the colouring guarantees.
-        const auto compressed = rt::by_color(h, c.count, n);
         for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
+          const std::size_t col = c.color[j];
           dense[0uz, i, j] =
-              c.target(c.color[j], i) == j ? compressed[c.color[j], i] : T{0};
+              c.target(col, i) == j ? h[c.column(col, i)] : T{0};
         }
       } else {
-        const auto values = rt::evaluate_all(*arena_, at);
+        // Hessian::at answers out of the compressed cells and `zero`, so
+        // those are the whole of what this walk has to reach -- a system has
+        // no frozen lane to borrow an order from.
+        auto wanted = hessians_ |
+                      std::views::transform(&rt::Hessian::compressed) |
+                      std::views::join | impl::to<std::vector<rt::NodeId>>();
+        wanted.append_range(hessians_ |
+                            std::views::transform(&rt::Hessian::zero));
+        const auto values = rt::evaluate_reachable(*arena_, wanted, at);
         for (const auto [k, block] : hessians_ | std::views::enumerate) {
           for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
             dense[static_cast<std::size_t>(k), i, j] = values[block.at(i, j)];
@@ -306,7 +314,10 @@ public:
     seed.c[1] = T{1};
 
     const std::array<Taylor, 1> at{seed};
-    const auto values = rt::evaluate_all(*arena_, at);
+    // One root out of an arena that also holds a gradient and a Hessian, and
+    // a Taylor node costs (Order + 1) coefficients to compute.
+    const auto values = rt::evaluate_reachable(
+        *arena_, std::span<const rt::NodeId>{roots_}.first(1), at);
     return values[roots_[0]].c[Order] *
            static_cast<T>(impl::detail::compile_time_factorial(Order));
   }
@@ -476,7 +487,9 @@ private:
                      as_columns(gs), as_columns(hs), 1);
       return;
     }
-    const auto values = rt::evaluate_all(*arena_, at);
+    auto wanted = roots_;
+    wanted.append_range(derivative_.partial);
+    const auto values = rt::evaluate_reachable(*arena_, wanted, at);
     const auto pick = [&values](std::span<T> out, const auto &nodes) {
       std::ranges::transform(nodes | std::views::take(out.size()), out.begin(),
                              [&](rt::NodeId v) { return values[v]; });

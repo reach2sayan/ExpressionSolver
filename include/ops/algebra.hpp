@@ -16,6 +16,7 @@ enum class Pred : std::uint8_t {
   OneA,    // a is the literal 1
   OneB,    // b is the literal 1
   Same,    // a and b are the same expression
+  TwoB,    // b is the literal 2
   AOverB,  // a is a quotient whose denominator is exactly b
   BOverA,  // b is a quotient whose denominator is exactly a
   NegatedA // a is itself a negation
@@ -29,7 +30,8 @@ enum class Take : std::uint8_t {
   OperandB,
   NumeratorOfA, // a is n/b; take n
   NumeratorOfB, // b is n/a; take n
-  OperandOfA    // a is -x; take x
+  OperandOfA,   // a is -x; take x
+  SquareOfA     // a * a
 };
 
 struct Rule {
@@ -61,6 +63,13 @@ inline constexpr std::array kRules{
 
     Rule{RuleOp::Pow, Pred::ZeroB,    Take::LitOne},
     Rule{RuleOp::Pow, Pred::OneB,     Take::OperandA},
+    // x^2 -> x*x is the one integer power that is exact: a square is a single
+    // correctly-rounded multiply, so it *is* pow's answer.  x^3 is not -- two
+    // roundings against one -- which is why nothing here generalises it, and
+    // why LLVM only contracts the square without fast-math.  Worth a rule
+    // because the interpreter otherwise calls libm, and because the reverse
+    // rules manufacture pow(u, r-1) for every integer power a model writes.
+    Rule{RuleOp::Pow, Pred::TwoB,     Take::SquareOfA},
 
     Rule{RuleOp::Neg, Pred::NegatedA, Take::OperandOfA},
     // clang-format on
