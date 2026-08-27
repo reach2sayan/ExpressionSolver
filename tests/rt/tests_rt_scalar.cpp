@@ -39,6 +39,11 @@ struct M2 {
   }
   friend constexpr bool operator==(M2 l, M2 r) = default;
 };
+// The one operator the library never reaches for: there is no Sub opcode, and a
+// difference is built as the sum of a negation.  CFieldLike asks for it all the
+// same, so it is here, and here is where it is checked to agree with the sum.
+static_assert(M2{3} - M2{1} == M2{3} + -M2{1});
+
 static_assert(ddx::impl::CFieldLike<M2>, "M2 is field-like");
 static_assert(ddx::impl::Numeric<M2>, "so Numeric admits it");
 static_assert(!ddx::impl::CCommutativeMultiply<M2>,

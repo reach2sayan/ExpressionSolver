@@ -183,7 +183,7 @@ TEST(RtJacobian, UnusedSymbolHasZeroPartial) {
 // written to divide by the hypotenuse first so they survive where x*x + y*y
 // overflows, and pow's left partial has to stay finite at a == 0.
 TEST(RtJacobian, SharedRulesAgreeAcrossTheScaleRange) {
-  for (const auto [a, b] : std::vector<std::pair<double, double>>{
+  for (const auto& [a, b] : std::vector<std::pair<double, double>>{
            {1.3, 2.1}, {1e200, 1e200}, {1e-200, 1e-200}, {3.0, 1e-8}}) {
     expect_agrees_with_ddx(hypot(x, y), std::array{a, b});
     expect_agrees_with_ddx(atan2(x, y), std::array{a, b});
