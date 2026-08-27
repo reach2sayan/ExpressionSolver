@@ -16,8 +16,8 @@ jobs:
         include:
           - os: ubuntu-latest
             build_type: Release
-            c_compiler: clang-19
-            cpp_compiler: clang++-19
+            c_compiler: clang-20
+            cpp_compiler: clang++-20
           - os: ubuntu-latest
             build_type: Release
             c_compiler: gcc-14
@@ -33,17 +33,16 @@ jobs:
       # Both jobs are the documented floor rather than a version above it, so
       # what README.md promises is what CI proves.  g++-14 for the libstdc++ 14
       # floor (std::ranges::to), which clang on Linux compiles against too, so
-      # this line feeds both jobs.  clang-19 on two counts: libstdc++ gates
-      # <expected> on __cpp_concepts, first defined in 19, and Clang does not
-      # define __cpp_explicit_this_parameter until 19 either -- it compiles an
-      # explicit object parameter from 18 but util/config.hpp gates on the
-      # macro.  libboost-dev because ddx finds Boost rather than fetching it --
-      # and so does tests/package, configuring on its own.
+      # this line feeds both jobs.  clang-20 because util/config.hpp gates on
+      # __cpp_explicit_this_parameter, which Clang does not define until 20 --
+      # 18 and 19 compile an explicit object parameter but do not advertise it.
+      # libboost-dev because ddx finds Boost rather than fetching it -- and so
+      # does tests/package, configuring on its own.
       - name: Install compilers and Boost (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang-19 gcc-14 g++-14 libboost-dev
+          sudo apt-get install -y clang-20 gcc-14 g++-14 libboost-dev
 
       # The core may depend on the standard library and Boost.Mp11 and nothing
       # else.  Standard headers carry no '/', so any other angle-include with a

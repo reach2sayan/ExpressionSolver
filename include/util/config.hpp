@@ -2,10 +2,10 @@
 #include <utility>
 
 // P0847 is a hard requirement: every accessor below is written once as an
-// explicit object parameter.  Clang compiles the syntax from 18 but only
-// defines the macro from 19, and 19 is the floor for <expected> anyway.
+// explicit object parameter.  The macro, not the syntax -- Clang 18 and 19
+// compile an explicit object parameter but do not advertise it until 20.
 #if !defined(__cpp_explicit_this_parameter)
-#error "ddx needs deducing this (P0847): GCC 14+, Clang 19+, MSVC 19.32+."
+#error "ddx needs deducing this (P0847): GCC 14+, Clang 20+, MSVC 19.32+."
 #endif
 
 #define DDX_SELF this auto &&self

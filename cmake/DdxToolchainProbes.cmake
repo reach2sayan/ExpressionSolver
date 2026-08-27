@@ -19,14 +19,14 @@ check_cxx_source_compiles(
 if (NOT MSVC AND NOT DDX_HAS_STD_EXPECTED)
     message(FATAL_ERROR
             "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} has no usable <expected>.  "
-            "Build with GCC 14+ or Clang 19+.")
+            "Build with GCC 14+ or Clang 20+.")
 endif ()
 
 # --- deducing this ----------------------------------------------------------
 # A hard requirement: include/util/config.hpp writes every accessor once as an
 # explicit object parameter, so there is no fallback spelling to select.  The
-# macro, not the syntax: Clang compiles an explicit object parameter from 18
-# but does not advertise it until 19, and config.hpp gates on the macro.
+# macro, not the syntax: Clang 18 and 19 compile an explicit object parameter
+# but do not advertise it until 20, and config.hpp gates on the macro.
 check_cxx_source_compiles(
         "struct S { int f(this S) { return 0; } };
          #ifndef __cpp_explicit_this_parameter
@@ -37,7 +37,7 @@ check_cxx_source_compiles(
 if (NOT MSVC AND NOT DDX_HAS_DEDUCING_THIS)
     message(FATAL_ERROR
             "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} does not implement "
-            "deducing this (P0847).  Build with GCC 14+, Clang 19+, or MSVC 19.32+.")
+            "deducing this (P0847).  Build with GCC 14+, Clang 20+, or MSVC 19.32+.")
 endif ()
 
 # --- which mdspan include/md/md.hpp binds to --------------------------------
