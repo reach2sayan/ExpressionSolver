@@ -2,7 +2,7 @@
 # Compiles nothing of ours; the top-level CMakeLists.txt consumes the results.
 #
 #   DDX_HAS_STD_EXPECTED       hard requirement, fatal if absent
-#   DDX_DEDUCING_THIS_VALUE    defined only when DDX_DEDUCING_THIS overrides
+#   DDX_HAS_DEDUCING_THIS      hard requirement, fatal if absent
 #   DDX_MDSPAN_VENDORED        set when md.hpp must bind to the vendored copy
 include_guard(GLOBAL)
 
@@ -11,6 +11,7 @@ set(CMAKE_REQUIRED_FLAGS "-std=c++23")
 
 # libstdc++ gates <expected> on __cpp_concepts 202002L, which Clang first
 # defines in 19.  MSVC is exempt: the probe's -std= is not its spelling.
+# libc++ is not a supported standard library -- it has no views::enumerate.
 check_cxx_source_compiles(
         "#include <expected>
          int main() { return std::expected<int, int>{0}.value(); }"
@@ -18,17 +19,14 @@ check_cxx_source_compiles(
 if (NOT MSVC AND NOT DDX_HAS_STD_EXPECTED)
     message(FATAL_ERROR
             "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} has no usable <expected>.  "
-            "Build with GCC 14+, Clang 19+ over libstdc++, or Clang 17+ with -stdlib=libc++.")
+            "Build with GCC 14+ or Clang 19+.")
 endif ()
 
-# --- accessor spelling ------------------------------------------------------
-# include/util/config.hpp owns the decision; this only overrides it.
-#   auto - the compiler's own answer (__cpp_explicit_this_parameter)
-#   on   - deducing this even where the macro is absent
-#   off  - the ref-qualified overload set
-set(DDX_DEDUCING_THIS "auto" CACHE STRING "Accessor spelling: auto|on|off")
-set_property(CACHE DDX_DEDUCING_THIS PROPERTY STRINGS auto on off)
-
+# --- deducing this ----------------------------------------------------------
+# A hard requirement: include/util/config.hpp writes every accessor once as an
+# explicit object parameter, so there is no fallback spelling to select.  The
+# macro, not the syntax: Clang compiles an explicit object parameter from 18
+# but does not advertise it until 19, and config.hpp gates on the macro.
 check_cxx_source_compiles(
         "struct S { int f(this S) { return 0; } };
          #ifndef __cpp_explicit_this_parameter
@@ -36,30 +34,11 @@ check_cxx_source_compiles(
          #endif
          int main() { return S{}.f(); }"
         DDX_HAS_DEDUCING_THIS)
-check_cxx_source_compiles(
-        "struct S { int f(this S) { return 0; } };
-         int main() { return S{}.f(); }"
-        DDX_DEDUCING_THIS_COMPILES)
-
-if (DDX_DEDUCING_THIS STREQUAL "on" AND NOT DDX_DEDUCING_THIS_COMPILES)
+if (NOT MSVC AND NOT DDX_HAS_DEDUCING_THIS)
     message(FATAL_ERROR
-            "DDX_DEDUCING_THIS=on but ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} "
-            "cannot compile an explicit object parameter.  Use auto or off.")
-elseif (DDX_DEDUCING_THIS STREQUAL "on")
-    set(DDX_DEDUCING_THIS_VALUE 1)
-    set(DDX_ACCESSORS "deducing this, forced on")
-elseif (DDX_DEDUCING_THIS STREQUAL "off")
-    set(DDX_DEDUCING_THIS_VALUE 0)
-    set(DDX_ACCESSORS "ref-qualified overload set, forced off")
-elseif (NOT DDX_DEDUCING_THIS STREQUAL "auto")
-    message(FATAL_ERROR "DDX_DEDUCING_THIS must be auto, on or off (got '${DDX_DEDUCING_THIS}').")
-elseif (DDX_HAS_DEDUCING_THIS)
-    # auto leaves the value undefined, so a consumer building without this file agrees.
-    set(DDX_ACCESSORS "deducing this")
-else ()
-    set(DDX_ACCESSORS "ref-qualified overload set")
+            "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} does not implement "
+            "deducing this (P0847).  Build with GCC 14+, Clang 19+, or MSVC 19.32+.")
 endif ()
-message(STATUS "accessors: ${DDX_ACCESSORS} (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
 
 # --- which mdspan include/md/md.hpp binds to --------------------------------
 #   auto     - standard <mdspan> when complete enough, vendored otherwise

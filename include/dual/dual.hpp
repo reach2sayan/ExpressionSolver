@@ -3,7 +3,7 @@
 #include "ops/scalar.hpp"
 #include "ops/unary_math.hpp"
 #include "symbolic/expressions.hpp" // Variable, for dual_var_of
-#include "util/config.hpp" // DDX_ALWAYS_INLINE, DDX_SELF, DDX_KEYED_GET
+#include "util/config.hpp"          // DDX_ALWAYS_INLINE, DDX_SLOT_ACCESSOR
 #include "util/fmt.hpp"
 #include <array>
 #include <cmath>
@@ -85,29 +85,8 @@ private:
   }
 
 public:
-  // P0847 writes each accessor once; DDX_DEDUCING_THIS=off is supported,
-  // hence the quartets below.
-#if DDX_DEDUCING_THIS
-  [[nodiscard]] constexpr decltype(auto) value(DDX_SELF) noexcept {
-    return slot<0>(DDX_FWD_SELF);
-  }
-  [[nodiscard]] constexpr decltype(auto) deriv(DDX_SELF) noexcept {
-    return slot<1>(DDX_FWD_SELF);
-  }
-#else
-  [[nodiscard]] constexpr const T &value() const & noexcept { return val_; }
-  [[nodiscard]] constexpr T &value() & noexcept { return val_; }
-  [[nodiscard]] constexpr const T &&value() const && noexcept {
-    return std::move(val_);
-  }
-  [[nodiscard]] constexpr T &&value() && noexcept { return std::move(val_); }
-  [[nodiscard]] constexpr const T &deriv() const & noexcept { return deriv_; }
-  [[nodiscard]] constexpr T &deriv() & noexcept { return deriv_; }
-  [[nodiscard]] constexpr const T &&deriv() const && noexcept {
-    return std::move(deriv_);
-  }
-  [[nodiscard]] constexpr T &&deriv() && noexcept { return std::move(deriv_); }
-#endif
+  DDX_SLOT_ACCESSOR(value, 0)
+  DDX_SLOT_ACCESSOR(deriv, 1)
 
   // get() on an rvalue yields an rvalue, as std::get does.  No subscript
   // spelling: a dual is a pair with names, not a map.

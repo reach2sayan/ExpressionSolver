@@ -50,8 +50,10 @@ const auto eq = rt::equation([&] {
 ## Requirements
 
 - A C++23 compiler and standard library: **GCC 14+**, **Clang 19+** over
-  libstdc++ 14+, **Clang 17+** over libc++ 17+, or MSVC (VS 2022,
-  `/std:c++latest`).
+  libstdc++ 14+, or MSVC (VS 2022, `/std:c++latest`).  Clang 19 is the floor on
+  two counts: libstdc++ gates `<expected>` on `__cpp_concepts`, and ddx writes
+  every accessor as an explicit object parameter (P0847), which Clang first
+  advertises in 19.  libc++ is not supported -- it has no `views::enumerate`.
 - **CMake 3.26+**.
 - **Boost's headers**, on the machine that builds ddx and on any machine that
   compiles against it — `libboost-dev`, `boost-devel`, `brew install boost`.

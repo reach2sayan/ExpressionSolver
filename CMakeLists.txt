@@ -57,9 +57,6 @@ target_include_directories(ddx_util INTERFACE
 if (DDX_MDSPAN_VENDORED)
     target_compile_definitions(ddx_util INTERFACE DDX_MDSPAN_FORCE_VENDORED)
 endif ()
-if (DEFINED DDX_DEDUCING_THIS_VALUE)
-    target_compile_definitions(ddx_util INTERFACE DDX_DEDUCING_THIS=${DDX_DEDUCING_THIS_VALUE})
-endif ()
 
 # No Boost, deliberately: the descriptors are written against ops/numeric.hpp
 # alone, so the runtime graph links ops without the compile-time tree.

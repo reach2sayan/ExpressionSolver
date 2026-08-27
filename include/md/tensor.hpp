@@ -154,29 +154,13 @@ public:
         *this, std::array<index_type, 1>{i});
   }
 
-  // P0847 writes it once; DDX_DEDUCING_THIS=off is supported, hence the pair
-  // below.
-#if DDX_DEDUCING_THIS
+  // Const-ness rides on self, so one body serves both.
   [[nodiscard]] constexpr decltype(auto)
   at_index(DDX_SELF, const std::array<index_type, Ext::rank()> &idx) noexcept {
     return index_apply<Ext::rank()>([&]<std::size_t... K>() -> decltype(auto) {
       return self.data_[static_cast<std::size_t>(kMapping(idx[K]...))];
     });
   }
-#else
-  [[nodiscard]] constexpr reference
-  at_index(const std::array<index_type, Ext::rank()> &idx) noexcept {
-    return index_apply<Ext::rank()>([&]<std::size_t... K>() -> reference {
-      return data_[static_cast<std::size_t>(kMapping(idx[K]...))];
-    });
-  }
-  [[nodiscard]] constexpr const_reference
-  at_index(const std::array<index_type, Ext::rank()> &idx) const noexcept {
-    return index_apply<Ext::rank()>([&]<std::size_t... K>() -> const_reference {
-      return data_[static_cast<std::size_t>(kMapping(idx[K]...))];
-    });
-  }
-#endif
 
   [[nodiscard]] friend constexpr bool operator==(const md_tensor &a,
                                                  const md_tensor &b) noexcept {

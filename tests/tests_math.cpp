@@ -165,8 +165,7 @@ TEST(ValueMapTest, SubscriptOwnershipMatchesGet) {
       "subscript on a temporary map must return by value");
   EXPECT_DOUBLE_EQ(values(named<"x">(2.0))["x"_s], 2.0);
 
-  // get<S>() reaches the same body on either side of the
-  // __cpp_explicit_this_parameter split.
+  // get<S>() reaches the same slot, and answers with the same ownership.
   static_assert(std::is_same_v<decltype(m.get<"x">()), const double &>);
   static_assert(std::is_same_v<decltype(mut.get<"x">()), double &>);
   static_assert(

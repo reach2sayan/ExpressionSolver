@@ -1,23 +1,15 @@
 #pragma once
 #include <utility>
 
-#if !defined(DDX_DEDUCING_THIS)
-#if defined(__cpp_explicit_this_parameter)
-#define DDX_DEDUCING_THIS 1
-#else
-#define DDX_DEDUCING_THIS 0
-#endif
-#endif
-
-#if DDX_DEDUCING_THIS && defined(__GNUC__) && !defined(__clang__) &&           \
-    !defined(__cpp_explicit_this_parameter)
-#error "DDX_DEDUCING_THIS=1, but this GCC does not implement P0847 (needs 14+)."
+// P0847 is a hard requirement: every accessor below is written once as an
+// explicit object parameter.  Clang compiles the syntax from 18 but only
+// defines the macro from 19, and 19 is the floor for <expected> anyway.
+#if !defined(__cpp_explicit_this_parameter)
+#error "ddx needs deducing this (P0847): GCC 14+, Clang 19+, MSVC 19.32+."
 #endif
 
-#if DDX_DEDUCING_THIS
 #define DDX_SELF this auto &&self
 #define DDX_FWD_SELF std::forward<decltype(self)>(self)
-#endif
 
 // The sweep helpers and dual kernels are factored-out code, not calls; GCC
 // stops inlining them once a TU exhausts its inlining budget.
@@ -38,9 +30,14 @@
 #define DDX_RESTRICT
 #endif
 
-// get<Key>() for a class with a private static slot(auto &&self).  TPARAMS is
-// the template-parameter list; ... is a trailing requires-clause.
-#if DDX_DEDUCING_THIS
+// Accessors for a class with a private static slot(auto &&self).  ... is a
+// trailing requires-clause.
+
+// One slot under a name of its own: no key parameter, the name is the key.
+#define DDX_SLOT_ACCESSOR(NAME, KEY)                                           \
+  [[nodiscard]] constexpr decltype(auto) NAME(DDX_SELF) noexcept {             \
+    return slot<KEY>(DDX_FWD_SELF);                                            \
+  }
 #define DDX_KEYED_GET(TPARAMS, KEY, ...)                                       \
   template <TPARAMS>                                                           \
   [[nodiscard]] constexpr decltype(auto) get(DDX_SELF) noexcept __VA_ARGS__ {  \
@@ -53,34 +50,6 @@
       DDX_SELF, SUB_PARAM) noexcept __VA_ARGS__ {                              \
     return slot<KEY>(DDX_FWD_SELF);                                            \
   }
-#else
-// One value category; each spelling is stamped out four times below.
-#define DDX_KEYED_GET_QUAL(TPARAMS, KEY, QUAL, SELF, ...)                      \
-  template <TPARAMS>                                                           \
-  [[nodiscard]] constexpr decltype(auto) get() QUAL noexcept __VA_ARGS__ {     \
-    return slot<KEY>(SELF);                                                    \
-  }
-#define DDX_KEYED_SUBSCRIPT_QUAL(TPARAMS, KEY, SUB_PARAM, QUAL, SELF, ...)     \
-  template <TPARAMS>                                                           \
-  [[nodiscard]] constexpr decltype(auto) operator[](SUB_PARAM)                 \
-      QUAL noexcept __VA_ARGS__ {                                              \
-    return slot<KEY>(SELF);                                                    \
-  }
-#define DDX_KEYED_GET(TPARAMS, KEY, ...)                                       \
-  DDX_KEYED_GET_QUAL(TPARAMS, KEY, &, *this, __VA_ARGS__)                      \
-  DDX_KEYED_GET_QUAL(TPARAMS, KEY, const &, *this, __VA_ARGS__)                \
-  DDX_KEYED_GET_QUAL(TPARAMS, KEY, &&, std::move(*this), __VA_ARGS__)          \
-  DDX_KEYED_GET_QUAL(TPARAMS, KEY, const &&, std::move(*this), __VA_ARGS__)
-#define DDX_KEYED_SUBSCRIPT(TPARAMS, KEY, SUB_PARAM, ...)                      \
-  DDX_KEYED_SUBSCRIPT_QUAL(TPARAMS, KEY, SUB_PARAM, &, *this, __VA_ARGS__)     \
-  DDX_KEYED_SUBSCRIPT_QUAL(TPARAMS, KEY, SUB_PARAM, const &, *this,            \
-                           __VA_ARGS__)                                        \
-  DDX_KEYED_SUBSCRIPT_QUAL(TPARAMS, KEY, SUB_PARAM, &&, std::move(*this),      \
-                           __VA_ARGS__)                                        \
-  DDX_KEYED_SUBSCRIPT_QUAL(TPARAMS, KEY, SUB_PARAM, const &&,                  \
-                           std::move(*this), __VA_ARGS__)
-#endif
-
 // Both spellings of one slot.  The two parameter lists differ because get<>
 // takes its key and operator[] deduces it from the tag.
 #define DDX_KEYED_ACCESSORS(GET_TPARAMS, SUB_TPARAMS, KEY, SUB_PARAM, ...)     \
