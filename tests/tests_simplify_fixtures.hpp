@@ -93,7 +93,7 @@ concept OpAccepts = requires { typename Op<T>; };
 
 // Closed under the five operators CFieldLike names, but with no way to spell 1.
 class NoIdentity {
-  double v{};
+  [[maybe_unused]] double v{};
 
 public:
   constexpr NoIdentity() = default;

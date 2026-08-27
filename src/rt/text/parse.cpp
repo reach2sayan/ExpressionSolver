@@ -144,21 +144,23 @@ constexpr auto signed_operand = [](auto &ctx) {
 // either one back for a misspelt call describes the wrong thing entirely.
 constexpr auto apply = [](auto &ctx) {
   Building &building = _globals(ctx);
-  const Call &call = _attr(ctx);
-  const auto op = opcode_of(call.name);
+  const Call &invocation = _attr(ctx);
+  const auto op = opcode_of(invocation.name);
   const auto refuse = [&](const errc why) {
     building.why = why;
     _pass(ctx) = false;
   };
   if (!op || is_leaf(*op)) {
     refuse(errc::unknown_function);
-  } else if (arity_of(*op) != call.args.size()) {
+  } else if (arity_of(*op) != invocation.args.size()) {
     refuse(errc::wrong_argument_count);
   } else {
-    _val(ctx) = append(building.ast,
-                       {.op = *op,
-                        .a = call.args.front(),
-                        .b = call.args.size() > 1 ? call.args[1] : no_term});
+    _val(ctx) =
+        append(building.ast,
+               {.op = *op,
+                .a = invocation.args.front(),
+                .b = invocation.args.size() > 1 ? invocation.args[1]
+                                                : no_term});
   }
 };
 
