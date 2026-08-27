@@ -116,13 +116,16 @@ private:
   bool batched_ = false;
 };
 
-// One block of output columns: (columns, n), flat because that is what the ABI
-// writes into, and reshaped on the way out.
+// One block of output columns.  The ABI writes (columns, n) row-major, which is
+// the same memory as the shape the caller wants -- so the array is built at that
+// shape once and never reshaped.  Reshaping cost a Python attribute lookup and
+// call per output, and PyObject_GetAttrString does not intern, so it built the
+// name string afresh on every call.
 class Block {
 public:
-  Block(std::size_t columns, std::size_t n)
-      : array_(std::vector<pyb::ssize_t>{ssize(columns), ssize(n)}),
-        rows_(columns, nullptr) {
+  Block(const std::vector<pyb::ssize_t> &shape, std::size_t columns,
+        std::size_t n)
+      : array_(shape), rows_(columns, nullptr) {
     std::ranges::transform(std::views::iota(0uz, columns), rows_.begin(),
                            [base = array_.mutable_data(), n](std::size_t j) {
                              return base + j * n;
@@ -136,12 +139,30 @@ private:
   [[nodiscard]] constexpr double *at(std::size_t column) {
     return rows_[column];
   }
-
-  [[nodiscard]] pyb::object reshaped(std::vector<pyb::ssize_t> shape) && {
-    return array_.attr("reshape")(pyb::cast(shape));
-  }
+  [[nodiscard]] pyb::object array() && { return std::move(array_); }
 
   Array array_;
+  std::vector<double *> rows_;
+};
+
+// Columns the caller never sees: the compressed Hessian on its way to a dense
+// one.  A plain buffer, since an ndarray for a value that is discarded is a
+// Python object and a second heap block bought for nothing.
+class Scratch {
+public:
+  Scratch(std::size_t columns, std::size_t n)
+      : data_(columns * n), rows_(columns, nullptr) {
+    std::ranges::transform(
+        std::views::iota(0uz, columns), rows_.begin(),
+        [base = data_.data(), n](std::size_t j) { return base + j * n; });
+  }
+
+private:
+  friend class PyEquation;
+
+  [[nodiscard]] constexpr std::span<double *const> rows() { return rows_; }
+
+  std::vector<double> data_;
   std::vector<double *> rows_;
 };
 

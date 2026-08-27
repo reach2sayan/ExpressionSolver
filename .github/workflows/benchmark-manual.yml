@@ -26,7 +26,7 @@ jobs:
             artifact_name: benchmark-results-windows
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # clang-20, not the image's default clang-18: libstdc++ gates <expected>
       # on __cpp_concepts >= 202002L, and Clang first defines that in 19.
@@ -81,7 +81,7 @@ jobs:
           Out-File -FilePath "${{ steps.strings.outputs.build-dir }}/benchmark-results/benchmarks.txt" -Encoding utf8
 
       - name: Upload benchmark artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}-${{ github.run_number }}
           path: ${{ steps.strings.outputs.build-dir }}/benchmark-results

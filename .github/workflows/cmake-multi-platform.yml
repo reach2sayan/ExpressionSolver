@@ -28,7 +28,7 @@ jobs:
             cpp_compiler: cl
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Both jobs are the documented floor rather than a version above it, so
       # what README.md promises is what CI proves.  g++-14 for the libstdc++ 14

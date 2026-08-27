@@ -86,20 +86,31 @@ public:
   [[nodiscard]] pyb::object evaluate(const pyb::handle &x) {
     const Point at{x, symbols()};
     Lane &l = lane(Want::Values);
-    Block f{count(l, &rt::Graph<double>::Blocks::values), at.size()};
+    if (scalar(at)) {
+      Cell f;
+      run(l, at, f.rows(), {}, {});
+      return pyb::float_(f.value);
+    }
+    Block f{shape_of({ssize(outputs())}, at),
+            count(l, &rt::Graph<double>::Blocks::values), at.size()};
     run(l, at, f.rows(), {}, {});
-    return finish(std::move(f), {ssize(outputs())}, at);
+    return std::move(f).array();
   }
 
   [[nodiscard]] pyb::tuple jacobian(const pyb::handle &x) {
     const Point at{x, symbols()};
     Lane &l = lane(Want::Jacobian);
-    Block f{count(l, &rt::Graph<double>::Blocks::values), at.size()};
-    Block g{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
+            count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    if (scalar(at)) {
+      Cell f;
+      run(l, at, f.rows(), g.rows(), {});
+      return pyb::make_tuple(pyb::float_(f.value), std::move(g).array());
+    }
+    Block f{shape_of({ssize(outputs())}, at),
+            count(l, &rt::Graph<double>::Blocks::values), at.size()};
     run(l, at, f.rows(), g.rows(), {});
-    return pyb::make_tuple(
-        finish(std::move(f), {ssize(outputs())}, at),
-        finish(std::move(g), {ssize(outputs()), ssize(arity())}, at));
+    return pyb::make_tuple(std::move(f).array(), std::move(g).array());
   }
 
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
@@ -409,9 +420,20 @@ private:
     // Tapes are sized by the arena rather than the graph: it may have grown
     // since the freeze, and live ids index below that.  A short batch sweeps one
     // point at a time rather than padding out to kLanes.
+    //
+    // Scratch, and thread_local rather than a member: run() drops the GIL, so
+    // two Python threads can be inside one Equation at once and a shared buffer
+    // would be a race.  Grown and never shrunk, so a loop allocates once.
+    //
+    // resize() rather than assign(): every id in `order` is written by
+    // evaluate_block before it is read, and the scatter reads only live output
+    // ids, which are in `order` -- so a stale value in an id this graph does not
+    // touch is never seen, and zeroing the whole arena per call is waste.
     if (n < kLanes) {
-      std::vector<double> at(symbols);
-      std::vector<double> tape(arena_->size());
+      static thread_local std::vector<double> at;
+      static thread_local std::vector<double> tape;
+      at.resize(symbols);
+      tape.resize(arena_->size());
       for (const std::size_t i : std::views::iota(0uz, n)) {
         std::ranges::transform(xs, at.begin(),
                                [i](const double *column) { return column[i]; });
@@ -425,8 +447,10 @@ private:
     // kLanes points per sweep: the switch is paid once per node per block, and
     // each operation becomes a lane loop wide enough to vectorise.  A short
     // final block repeats its last point, and those lanes are never read.
-    std::vector<double> lanes(symbols * kLanes);
-    std::vector<double> tape(arena_->size() * kLanes);
+    static thread_local std::vector<double> lanes;
+    static thread_local std::vector<double> tape;
+    lanes.resize(symbols * kLanes);
+    tape.resize(arena_->size() * kLanes);
 
     for (const std::size_t base :
          std::views::iota(0uz, n) | std::views::stride(kLanes)) {
@@ -450,14 +474,23 @@ private:
   [[nodiscard]] pyb::tuple hessian_from_lane(const Point &at) {
     Lane &l = lane(Want::Hessian);
     const std::size_t n = arity();
-    Block f{count(l, &rt::Graph<double>::Blocks::values), at.size()};
-    Block g{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
-    Block compressed{count(l, &rt::Graph<double>::Blocks::hessian), at.size()};
-    run(l, at, f.rows(), g.rows(), compressed.rows());
+    Block g{shape_of({ssize(outputs()), ssize(n)}, at),
+            count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Scratch compressed{count(l, &rt::Graph<double>::Blocks::hessian), at.size()};
+    // A float at one point, an array across a batch: only the first can skip
+    // the allocation, and this path serves both.
+    Cell cell;
+    std::optional<Block> f;
+    if (!scalar(at)) {
+      f.emplace(shape_of({ssize(outputs())}, at),
+                count(l, &rt::Graph<double>::Blocks::values), at.size());
+    }
+    run(l, at, f ? f->rows() : cell.rows(), g.rows(), compressed.rows());
 
     const rt::Coloring &c = l.graph->coloring();
     const auto column = rt::by_color(compressed.rows(), c.count, n);
-    Block dense{n * n, at.size()};
+    Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at), n * n,
+                at.size()};
     const auto dims = std::views::iota(0uz, n);
     for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
       double *const out = dense.at(i * n + j);
@@ -467,10 +500,9 @@ private:
         std::ranges::fill_n(out, static_cast<std::ptrdiff_t>(at.size()), 0.0);
       }
     }
-    return pyb::make_tuple(
-        finish(std::move(f), {ssize(outputs())}, at),
-        finish(std::move(g), {ssize(outputs()), ssize(n)}, at),
-        finish(std::move(dense), {ssize(outputs()), ssize(n), ssize(n)}, at));
+    return pyb::make_tuple(f ? std::move(*f).array()
+                             : pyb::object{pyb::float_(cell.value)},
+                           std::move(g).array(), std::move(dense).array());
   }
 
   // A system: one sweep per root, read off the arena.  A frozen graph carries a
@@ -497,9 +529,11 @@ private:
     impl::append(wanted, roots_);
     const auto values = rt::evaluate_reachable(*arena_, wanted, point);
 
-    Block f{outputs(), at.size()};
-    Block g{outputs() * n, at.size()};
-    Block dense{outputs() * n * n, at.size()};
+    Block f{shape_of({ssize(outputs())}, at), outputs(), at.size()};
+    Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
+            at.size()};
+    Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at),
+                outputs() * n * n, at.size()};
     const auto dims = std::views::iota(0uz, n);
     for (const auto [k, block] : std::views::enumerate(blocks)) {
       const auto root = static_cast<std::size_t>(k);
@@ -511,10 +545,8 @@ private:
         *dense.at((root * n + i) * n + j) = values[block.at(i, j)];
       }
     }
-    return pyb::make_tuple(
-        finish(std::move(f), {ssize(outputs())}, at),
-        finish(std::move(g), {ssize(outputs()), ssize(n)}, at),
-        finish(std::move(dense), {ssize(outputs()), ssize(n), ssize(n)}, at));
+    return pyb::make_tuple(std::move(f).array(), std::move(g).array(),
+                           std::move(dense).array());
   }
 
   // Swept once and kept.  Hash consing makes a repeat sweep add no nodes, so
@@ -542,20 +574,36 @@ private:
 
   // The leading axis goes at one function and the trailing one at one point, so
   // a scalar model at a point answers with a float, an (n,) gradient and an
-  // (n, n) Hessian rather than three arrays with 1s in them.
-  [[nodiscard]] pyb::object finish(Block &&b, std::vector<pyb::ssize_t> dims,
-                                   const Point &at) const {
-    if (outputs() == 1 && !dims.empty()) {
-      dims.erase(dims.begin());
+  // (n, n) Hessian rather than three arrays with 1s in them.  Computed before
+  // the array is built, so the array is built at this shape and never reshaped.
+  [[nodiscard]] std::vector<pyb::ssize_t>
+  shape_of(std::initializer_list<pyb::ssize_t> base, const Point &at) const {
+    const auto *first = base.begin();
+    if (outputs() == 1 && first != base.end()) {
+      ++first;
     }
+    std::vector<pyb::ssize_t> dims(first, base.end());
     if (at.batched()) {
       dims.push_back(ssize(at.size()));
     }
-    if (dims.empty()) {
-      return pyb::float_(*b.at(0));
-    }
-    return std::move(b).reshaped(std::move(dims));
+    return dims;
   }
+
+  // Exactly the case where the values block is one double and the answer is a
+  // Python float, so it needs no array at all.
+  [[nodiscard]] bool scalar(const Point &at) const {
+    return outputs() == 1 && !at.batched();
+  }
+
+  // One double on the stack for that case.  The ABI wants a row pointer, and
+  // this is the whole of what it writes.
+  struct Cell {
+    double value{};
+    double *row{&value};
+    [[nodiscard]] constexpr std::span<double *const> rows() {
+      return {&row, 1};
+    }
+  };
 
   std::shared_ptr<rt::Builder<double>> arena_;
   std::vector<rt::NodeId> roots_;

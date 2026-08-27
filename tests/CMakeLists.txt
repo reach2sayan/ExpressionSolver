@@ -115,11 +115,20 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
 
     # 2. An install prefix: the build tree's exported targets point into the
     #    source and build directories, an installed one's inside the prefix.
+    #    Emptied before it is filled: an install copies into a prefix and takes
+    #    nothing out of one, so a header that is renamed or split leaves its
+    #    former self behind -- and all_headers.cpp globs the prefix, so the
+    #    stale copy is compiled beside the new one and every definition in it
+    #    collides.  A prefix under the build tree is ours to delete.
     set(DDX_PACKAGE_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/package/prefix")
+    add_test(NAME package.install_clean
+            COMMAND ${CMAKE_COMMAND} -E rm -rf ${DDX_PACKAGE_PREFIX})
     add_test(NAME package.install
             COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR}
                     ${DDX_PACKAGE_INSTALL_CONFIG} --prefix ${DDX_PACKAGE_PREFIX})
-    set_tests_properties(package.install PROPERTIES FIXTURES_SETUP ddx_installed)
+    set_tests_properties(package.install_clean PROPERTIES FIXTURES_SETUP ddx_installed)
+    set_tests_properties(package.install PROPERTIES FIXTURES_SETUP ddx_installed
+            DEPENDS package.install_clean)
 
     add_test(NAME package.install_tree
             COMMAND ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG}
