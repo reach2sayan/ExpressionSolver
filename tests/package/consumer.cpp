@@ -61,7 +61,7 @@ int main() {
     return fail(compiler.error().detail.c_str());
   }
   auto kernel =
-      compiler->compile(rt::GraphBuilder{b}.value(root).build_jacobian().build());
+      compiler->compile(rt::GraphBuilder{b}.value(root).build_jacobian().finish());
   if (!kernel) {
     return fail(kernel.error().detail.c_str());
   }

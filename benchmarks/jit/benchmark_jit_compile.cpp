@@ -177,7 +177,7 @@ Frozen gradient_graph(const Model &m, std::size_t n, bool contract = true) {
   auto graph = ddx::rt::GraphBuilder{*arena}
                    .values_from(std::span<const ddx::rt::NodeId>{&root, 1})
                    .jacobian_from(row.partial)
-                   .build(contract);
+                   .finish(contract);
   return {.arena = std::move(arena), .graph = std::move(graph)};
 }
 

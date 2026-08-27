@@ -252,7 +252,7 @@ private:
     if (want == Want::Hessian) {
       gb.hessian_from(sweeps().front());
     }
-    l.graph = std::make_shared<const rt::Graph<double>>(gb.build(contracts()));
+    l.graph = std::make_shared<const rt::Graph<double>>(gb.finish(contracts()));
     if (options_.backend == jit::Backend::Interpret) {
       l.settled = true;
       return;

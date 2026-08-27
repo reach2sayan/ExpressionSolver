@@ -882,7 +882,7 @@ private:
     if (want == Want::Hessian) {
       gb.hessian_from(hessians_.front());
     }
-    auto swept = std::make_shared<const rt::Graph<T>>(gb.build(contracts()));
+    auto swept = std::make_shared<const rt::Graph<T>>(gb.finish(contracts()));
 #ifdef DDX_HAS_JIT
     // The Hessian lane shares one graph: blocking it would cost a second
     // colouring and reverse-over-reverse for a lane the ladder never climbs.
@@ -894,7 +894,7 @@ private:
         if (want != Want::Values) {
           cb.jacobian_from(compile_derivative_.partial);
         }
-        compiled = std::make_shared<const rt::Graph<T>>(cb.build(contracts()));
+        compiled = std::make_shared<const rt::Graph<T>>(cb.finish(contracts()));
       }
     }
     lane.ready = std::make_shared<const Compiled>(

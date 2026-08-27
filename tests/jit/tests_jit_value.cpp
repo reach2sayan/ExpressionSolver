@@ -222,7 +222,7 @@ TEST(JitValue, AValuesOnlyGraphCompilesAndStoresNoPartials) {
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto graph =
-      ddx::rt::GraphBuilder{b}.value(x * log(x) + exp(x * y)).build();
+      ddx::rt::GraphBuilder{b}.value(x * log(x) + exp(x * y)).finish();
   ASSERT_EQ(graph.layout().jacobian, 0u);
 
   constexpr std::size_t n = 5;
@@ -256,7 +256,7 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
 #undef DDX_TEST_OP
   f = f + pow(x, y) + atan2(x, y) + hypot(x, y) + abs(x - y) + max(x, y) +
       min(x, y) + sign(x - y);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
 
   constexpr std::size_t n = 13;
   std::vector<double> cx(n), cy(n);
@@ -305,7 +305,7 @@ TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
   const auto y = var(b, "y");
   // Multiply-add shapes throughout, so every level that forms an FMA does.
   const auto f = x * y + x * x - y + exp(x * y) * (y + 1.0) + log(x) * y;
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
 
   const std::array cx{0.25, 1.5, 2.75, 3.0};
   const std::array cy{1.25, 0.5, 2.0, 0.75};
@@ -347,7 +347,7 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto f = x * log(x) + y * exp(x * y) + sqrt(x + y) + x * y * (x + y);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
 
   constexpr std::size_t n = 9;
   std::vector<double> cx(n), cy(n);
@@ -494,7 +494,7 @@ TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
                          .jacobian_from(
                              ddx::rt::build_jacobian_impl<
                                  ddx::impl::DiffMode::Reverse>(b, root).partial)
-                         .build();
+                         .finish();
 
   const auto compiled = must_compile(graph, ddx::jit::Options{.retain_object = true});
   ASSERT_TRUE(compiled);

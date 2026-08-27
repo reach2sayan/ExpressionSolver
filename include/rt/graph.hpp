@@ -238,12 +238,12 @@ private:
   std::vector<Contraction> contractions_;
 };
 
-// Each step names one block of output columns; `build` is the only thing that
+// Each step names one block of output columns; `finish` is the only thing that
 // produces a Graph.
 //
-//   GraphBuilder{b}.value(f).build_jacobian().build()
-//   GraphBuilder{b}.values({f0, f1}).build_jacobian().build()
-//   GraphBuilder{b}.value(f).build_jacobian().build_hessian().build()
+//   GraphBuilder{b}.value(f).build_jacobian().finish()
+//   GraphBuilder{b}.values({f0, f1}).build_jacobian().finish()
+//   GraphBuilder{b}.value(f).build_jacobian().build_hessian().finish()
 //
 // The class template argument is deduced from the builder.
 template <impl::Numeric T = double> class GraphBuilder {
@@ -298,7 +298,7 @@ public:
     return *this;
   }
 
-  [[nodiscard]] Graph<T> build(bool contract = true) const {
+  [[nodiscard]] Graph<T> finish(bool contract = true) const {
     return Graph<T>::freeze(*builder_, outputs_, layout_, coloring_, contract);
   }
 

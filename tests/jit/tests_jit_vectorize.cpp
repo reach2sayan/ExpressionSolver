@@ -123,7 +123,7 @@ TEST(JitVectorize, JacobianLoopVectorises) {
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto graph =
-      ddx::rt::GraphBuilder{b}.value(x * y + x * x - y).build_jacobian().build();
+      ddx::rt::GraphBuilder{b}.value(x * y + x * x - y).build_jacobian().finish();
   const auto ir = std::format("{}", ddx::jit::Ir{compiler(), graph});
   EXPECT_TRUE(has_vector_doubles(ir)) << "the Jacobian loop stayed scalar";
 }
@@ -141,7 +141,7 @@ TEST(JitVectorize, WideTranscendentalJacobianIsVector) {
   for (std::size_t i = 1; i < v.size(); ++i) {
     f = f + v[i] * log(v[i]) + exp(v[i - 1] * v[i]);
   }
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build();
+  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
   ASSERT_EQ(graph.layout().values + graph.layout().jacobian, 17u);
   const auto ir = std::format("{}", ddx::jit::Ir{compiler(), graph});
   EXPECT_TRUE(has_vector_doubles(ir)) << "33 columns stayed scalar";

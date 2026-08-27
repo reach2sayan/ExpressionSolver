@@ -592,7 +592,7 @@ private:
       const auto g = rt::GraphBuilder<double>{b}
                          .value(e)
                          .jacobian_from(row.partial)
-                         .build();
+                         .finish();
       CompileReport discard;
       (void)I::run(impl, g, Options{}, discard);
     }
