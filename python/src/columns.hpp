@@ -21,6 +21,10 @@ namespace ddx::py {
 
 namespace pyb = pybind11;
 
+// The one reader of both classes below: what they hold is a call's scratch, so
+// the shapes stay private and PyEquation reaches them.
+class PyEquation;
+
 using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
 
 [[nodiscard]] constexpr pyb::ssize_t ssize(std::size_t n) noexcept {
@@ -42,6 +46,9 @@ public:
     }
   }
 
+private:
+  friend class PyEquation;
+
   [[nodiscard]] constexpr std::span<const double *const> columns() const {
     return columns_;
   }
@@ -50,7 +57,6 @@ public:
   // the answer carries one back.
   [[nodiscard]] constexpr bool batched() const noexcept { return batched_; }
 
-private:
   // The keyword spelling: named<"x">(v) carries the name as a template
   // parameter, which cannot cross; a dict carries it as data.
   void from_dict(const pyb::dict &d, std::span<const std::string> symbols) {
@@ -137,6 +143,9 @@ public:
                            });
   }
 
+private:
+  friend class PyEquation;
+
   [[nodiscard]] constexpr std::span<double *const> rows() { return rows_; }
   [[nodiscard]] constexpr double *at(std::size_t column) {
     return rows_[column];
@@ -146,7 +155,6 @@ public:
     return array_.attr("reshape")(pyb::cast(shape));
   }
 
-private:
   Array array_;
   std::vector<double *> rows_;
 };

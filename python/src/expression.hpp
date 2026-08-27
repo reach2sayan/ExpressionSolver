@@ -37,10 +37,6 @@ public:
   PyExpression(Base e, Arena a) noexcept
       : expression_(e), arena_(std::move(a)) {}
 
-  [[nodiscard]] constexpr const Base &base() const noexcept {
-    return expression_;
-  }
-
   [[nodiscard]] constexpr bool poisoned() const noexcept {
     return expression_.poisoned();
   }
@@ -74,7 +70,8 @@ public:
 
 private:
   // The arithmetic surface below is the only thing that puts an arena back on a
-  // new handle, so it reaches the member rather than a public getter.
+  // new handle, so the two halves of a handle are reachable there and nowhere
+  // else.
 #define DDX_PY_UNFRIEND(fn, Op, label, ...)                                    \
   friend PyExpression fn(const PyExpression &);
   DDX_UNARY_MATH_TABLE(DDX_PY_UNFRIEND)
@@ -84,6 +81,10 @@ private:
   friend PyExpression fn(const PyExpression &, const PyExpression &);
   DDX_RT_BINARY_TABLE(DDX_PY_BINFRIEND)
 #undef DDX_PY_BINFRIEND
+
+  [[nodiscard]] constexpr const Base &base() const noexcept {
+    return expression_;
+  }
 
   // Null exactly while this is a pending literal, which names no graph yet.
   [[nodiscard]] constexpr const Arena &arena() const noexcept { return arena_; }

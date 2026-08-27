@@ -115,9 +115,6 @@ private:
 public:
   constexpr md_tensor() noexcept = default;
 
-  [[nodiscard]] static constexpr mapping_type mapping() noexcept {
-    return kMapping;
-  }
   // Stored, which under a packed layout is fewer than addressable.
   [[nodiscard]] static constexpr std::size_t size() noexcept { return kSize; }
   [[nodiscard]] static constexpr index_type extent(std::size_t r) noexcept {

@@ -5,7 +5,7 @@ TEST(MdLayout, SimplexPackedIsABijectionOnSortedMultiIndices) {
                                  ddx::impl::layout_simplex_packed>;
   EXPECT_EQ(T::size(), 20u); // C(4 + 3 - 1, 3) = C(6, 3) = 20
 
-  const auto m = T::mapping();
+  constexpr T::mapping_type m{};
   std::set<std::size_t> slots;
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = i; j < 4; ++j) {

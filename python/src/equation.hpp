@@ -55,7 +55,8 @@ public:
         objects_(std::move(snap.objects)), model_nodes_(snap.model_nodes),
         loaded_(true) {}
 
-  // The same struct the C++ facade fills: one serialiser, two equations.
+  // The same struct the C++ facade fills: one serialiser, two equations.  Also
+  // what the cache path in module.cpp writes, which is why it is not private.
   [[nodiscard]] rt::Snapshot<double> snapshot() {
     rt::Snapshot<double> snap;
     // The sweeps first, the arena after: they *append*, so a node array taken
@@ -104,29 +105,6 @@ public:
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
     const Point at{x, symbols()};
     return outputs() == 1 ? hessian_from_lane(at) : hessian_from_arena(at);
-  }
-
-  // The machine code the lanes are holding, for the file to carry.  Only
-  // kernels that kept their bytes -- Options.retain_object, on by default.
-  [[nodiscard]] std::vector<rt::Object> objects() {
-    jit::Compiler *const c = compiler();
-    if (c == nullptr) {
-      return {};
-    }
-    std::vector<rt::Object> out;
-    for (const auto [i, l] : lanes_ | std::views::enumerate) {
-      if (!l.graph || !l.kernel || l.kernel.object().empty()) {
-        continue;
-      }
-      const auto code = l.kernel.object();
-      out.push_back({.want = static_cast<std::uint8_t>(i),
-                     .symbol = std::string{l.kernel.symbol()},
-                     .host = std::string{c->host_identity()},
-                     .digest = rt::digest(*l.graph),
-                     .options = effective_options(),
-                     .code = {code.begin(), code.end()}});
-    }
-    return out;
   }
 
   // --- the JIT -------------------------------------------------------------
@@ -215,6 +193,29 @@ public:
   }
 
 private:
+  // The machine code the lanes are holding, for the file to carry.  Only
+  // kernels that kept their bytes -- Options.retain_object, on by default.
+  [[nodiscard]] std::vector<rt::Object> objects() {
+    jit::Compiler *const c = compiler();
+    if (c == nullptr) {
+      return {};
+    }
+    std::vector<rt::Object> out;
+    for (const auto [i, l] : lanes_ | std::views::enumerate) {
+      if (!l.graph || !l.kernel || l.kernel.object().empty()) {
+        continue;
+      }
+      const auto code = l.kernel.object();
+      out.push_back({.want = static_cast<std::uint8_t>(i),
+                     .symbol = std::string{l.kernel.symbol()},
+                     .host = std::string{c->host_identity()},
+                     .digest = rt::digest(*l.graph),
+                     .options = effective_options(),
+                     .code = {code.begin(), code.end()}});
+    }
+    return out;
+  }
+
   // Filled once and never invalidated; a new backend throws the whole set away
   // rather than editing one.
   struct Lane {

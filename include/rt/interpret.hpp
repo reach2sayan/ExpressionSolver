@@ -120,7 +120,7 @@ constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
 // step with it: a multiply feeding an add taken as one rounding, resolved at the
 // freeze because it cannot change between points.  A falsy table contracts
 // nothing.  Graph::contracted_order() is the order that goes with a contracting
-// one; live_order() is also correct and computes a multiply for nobody.
+// one; the whole live order is also correct and computes a multiply for nobody.
 template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
@@ -173,8 +173,9 @@ template <impl::Numeric T, std::ranges::random_access_range R>
 
 // The nodes named by `order`, one point at a time, into caller-owned scratch
 // indexed by node id.  `order` must be topological and closed under operands;
-// plain id order and Graph::live_order() are both.  Entries outside it are left
-// alone.  The width-one block sweep, not a second implementation of it.
+// plain id order and Graph::contracted_order() are both.  Entries outside it
+// are left alone.  The width-one block sweep, not a second implementation of
+// it.
 template <impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&

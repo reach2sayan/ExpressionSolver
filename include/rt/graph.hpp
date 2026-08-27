@@ -120,17 +120,14 @@ public:
   }
   [[nodiscard]] bool live(NodeId v) const { return live_[v]; }
 
-  // The ids the freeze kept, in topological order so a consumer emits them in
-  // one pass.  The span must not outlive this graph.
-  [[nodiscard]] std::span<const NodeId> live_order() const {
-    return live_order_;
-  }
-
+  // How many ids the freeze kept, which is what a compile reports having
+  // emitted.
   [[nodiscard]] std::size_t live_count() const { return live_order_.size(); }
 
-  // live_order() for a consumer that contracts: a multiply every reader
-  // swallowed into an fma is computed by nobody.  contraction_at() decides the
-  // arithmetic, off the nodes; this only says what is left to compute.
+  // The ids left to compute, in topological order so a consumer emits them in
+  // one pass.  A multiply every reader swallowed into an fma is computed by
+  // nobody; contraction_at() decides that arithmetic, off the nodes.  The span
+  // must not outlive this graph.
   [[nodiscard]] std::span<const NodeId> contracted_order() const {
     return contracted_order_;
   }
