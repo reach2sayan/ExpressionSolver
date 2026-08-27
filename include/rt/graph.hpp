@@ -201,13 +201,6 @@ private:
   // Liveness under contraction, which is all this freeze settles -- an add
   // reaches the multiply's operands rather than the multiply, so a multiply
   // nothing else reads drops out with the Neg of a subtraction behind it.
-  //
-  // Ascending id, deliberately.  A depth-first order that finishes one fma
-  // spine before starting the next was built and measured: it takes run density
-  // to 1.00 and live accumulators from 64 to 1, and is 0.86-1.03x -- slower.
-  // Ids are construction order, so ascending ids walk the id-indexed tape as a
-  // contiguous sliding window whose misses the prefetcher covers, and scattering
-  // that to concentrate the accumulator costs more than it saves.
   void contract(bool on) {
     if (!on) {
       contracted_order_ = live_order_;

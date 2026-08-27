@@ -2,7 +2,7 @@
 
 #include "util/ranges.hpp"
 
-#include <llvm/ADT/Twine.h>
+#include <llvm/ADT/SmallString.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -17,6 +17,7 @@
 #include <ranges>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ddx::jit::detail {
@@ -25,19 +26,25 @@ namespace {
 // Which intrinsic covers an op; the rest go out as libm calls.  Derived from the
 // label except three: llvm.abs is the *integer* one, and maximum/minimum are the
 // NaN-propagating pair the interpreter matches where maxnum/minnum are not.
+//
+// One array indexed by the enumerator, filled once, the shape rt::op_info
+// already has: lookupIntrinsicID binary-searches a name table off a Twine that
+// has to be flattened into a heap string, and the emitter asks per node.
 llvm::Intrinsic::ID intrinsic_for(rt::OpCode op) {
-  switch (op) {
-  case rt::OpCode::Abs:
-    return llvm::Intrinsic::fabs;
-  case rt::OpCode::Max:
-    return llvm::Intrinsic::maximum;
-  case rt::OpCode::Min:
-    return llvm::Intrinsic::minimum;
-  default:
-    break;
-  }
-  return llvm::Intrinsic::lookupIntrinsicID(
-      llvm::Twine("llvm.").concat(rt::label_of(op)).str());
+  static const std::array<llvm::Intrinsic::ID, rt::op_count> table = [] {
+    std::array<llvm::Intrinsic::ID, rt::op_count> t{};
+    for (const auto i : std::views::iota(0uz, rt::op_count)) {
+      llvm::SmallString<32> name{"llvm."};
+      name += rt::label_of(static_cast<rt::OpCode>(i));
+      t[i] = llvm::Intrinsic::lookupIntrinsicID(name);
+    }
+    t[std::to_underlying(rt::OpCode::Abs)] = llvm::Intrinsic::fabs;
+    t[std::to_underlying(rt::OpCode::Max)] = llvm::Intrinsic::maximum;
+    t[std::to_underlying(rt::OpCode::Min)] = llvm::Intrinsic::minimum;
+    return t;
+  }();
+  const auto i = std::to_underlying(op);
+  return i < table.size() ? table[i] : llvm::Intrinsic::not_intrinsic;
 }
 
 // The IR spelling of -fno-math-errno: without it a call is assumed to write
@@ -282,7 +289,7 @@ void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
                  const Columns &cols, std::span<llvm::Value *const> value,
                  llvm::Value *index, llvm::Value *mask) {
   const auto blocks = g.output_blocks();
-  const auto store_block = [&](const std::vector<llvm::Value *> &columns,
+  const auto store_block = [&](std::span<llvm::Value *const> columns,
                                std::span<const rt::NodeId> block) {
     for (const auto [column, o] : std::views::zip(columns, block)) {
       emit.store(value[o], column, index, mask);

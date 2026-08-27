@@ -8,6 +8,8 @@
 
 #include <llvm/Config/llvm-config.h>
 
+#include <llvm/ADT/StringMap.h>
+
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/CodeGen/ReplaceWithVeclib.h>
@@ -33,15 +35,14 @@
 
 #include <array>
 #include <atomic>
-#include <cstdio>
 #include <chrono>
 #include <cmath>
 #include <concepts>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <future>
 #include <memory>
-#include <map>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -178,7 +179,7 @@ public:
     auto kept = std::make_shared<const std::vector<std::byte>>(
         first, first + bytes.size());
     const std::lock_guard lock{mutex_};
-    kept_.insert_or_assign(m->getModuleIdentifier(), std::move(kept));
+    kept_[m->getModuleIdentifier()] = std::move(kept);
   }
 
   // The disk half is consulted before the compile layer is reached at all, and
@@ -188,7 +189,7 @@ public:
   }
 
   // Forget them: holding on would keep every object ever compiled alive.
-  [[nodiscard]] Kernel::object_type take(const std::string &id) {
+  [[nodiscard]] Kernel::object_type take(llvm::StringRef id) {
     const std::lock_guard lock{mutex_};
     const auto it = kept_.find(id);
     if (it == kept_.end()) {
@@ -201,7 +202,10 @@ public:
 
 private:
   std::mutex mutex_;
-  std::map<std::string, Kernel::object_type, std::less<>> kept_;
+  // The key is a module identifier and this is LLVM's container for one: a
+  // single allocation per entry with the characters inside it, where a
+  // node-based map pays for a std::string of its own as well.
+  llvm::StringMap<Kernel::object_type> kept_;
 };
 
 // Everything an object file must agree with, as one line.  The feature string is
@@ -213,18 +217,11 @@ host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
   std::uint64_t h = impl::fnv64_basis;
   impl::fold_bytes(h, features);
   const llvm::StringRef cpu = machine.getCPU();
-  std::string out = machine.getTargetTriple().str();
-  out += '/';
-  out += cpu.empty() ? llvm::StringRef{"generic"} : cpu;
-  out += "/feat-";
-  {
-    std::array<char, 17> hex{};
-    std::snprintf(hex.data(), hex.size(), "%016llx",
-                  static_cast<unsigned long long>(h));
-    out += hex.data();
-  }
-  out += "/llvm-" LLVM_VERSION_STRING;
-  return out;
+  return std::format("{}/{}/feat-{:016x}/llvm-" LLVM_VERSION_STRING,
+                     machine.getTargetTriple().str(),
+                     cpu.empty() ? std::string_view{"generic"}
+                                 : std::string_view{cpu.data(), cpu.size()},
+                     h);
 }
 
 // Asked of the target's cost model rather than a feature list, so
@@ -464,10 +461,7 @@ constexpr std::uint32_t kCacheSchema = 1;
 
 [[nodiscard]] std::filesystem::path entry_path(std::string_view dir,
                                                std::uint64_t key) {
-  std::array<char, 24> name{};
-  std::snprintf(name.data(), name.size(), "%016llx.ddxjit",
-                static_cast<unsigned long long>(key));
-  return std::filesystem::path{dir} / name.data();
+  return std::filesystem::path{dir} / std::format("{:016x}.ddxjit", key);
 }
 
 // Chosen by the compile that produced the bytes, and underivable, so it travels
@@ -493,8 +487,11 @@ struct Entry {
       head->model_digest != key) {
     return std::nullopt;
   }
-  const std::span<const std::byte> payload{
-      bytes->data() + rt::header_bytes, static_cast<std::size_t>(head->payload_bytes)};
+  // subspan, not pointer arithmetic: get_header has already refused a
+  // payload_bytes longer than the file, and this is what says so in the code.
+  const std::span<const std::byte> payload =
+      std::span{std::as_const(*bytes)}.subspan(rt::header_bytes,
+                                               head->payload_bytes);
   if (rt::checksum(payload) != head->payload_crc || payload.size() < 4) {
     return std::nullopt;
   }
@@ -522,13 +519,17 @@ void write_entry(std::string_view dir, std::uint64_t key,
   if (ec) {
     return; // A cache that cannot be written is a cache that always misses.
   }
+  // One buffer, the payload written straight into its tail: the object file is
+  // the large part here and staging it separately copies it a second time.
   const auto symbol_bytes = static_cast<std::uint32_t>(symbol.size());
-  std::vector<std::byte> payload(4 + symbol.size() + code.size());
+  std::vector<std::byte> file(rt::header_bytes + 4 + symbol.size() +
+                              code.size());
+  const std::span<std::byte> payload =
+      std::span{file}.subspan(rt::header_bytes);
   std::memcpy(payload.data(), &symbol_bytes, 4);
-  std::memcpy(payload.data() + 4, symbol.data(), symbol.size());
+  std::ranges::copy(std::as_bytes(std::span{symbol}), payload.begin() + 4);
   std::ranges::copy(code, payload.begin() + 4 + symbol.size());
 
-  std::vector<std::byte> file(rt::header_bytes + payload.size());
   rt::put_header({.magic = kCacheMagic,
                   .format = kCacheFormat,
                   .schema = kCacheSchema,
@@ -538,7 +539,6 @@ void write_entry(std::string_view dir, std::uint64_t key,
                   .payload_bytes = payload.size(),
                   .payload_crc = rt::checksum(payload)},
                  file);
-  std::ranges::copy(payload, file.begin() + rt::header_bytes);
   // Staged inside the cache directory: a rename is only atomic within one
   // filesystem.
   (void)rt::write_file(entry_path(dir, key), file);
