@@ -1,10 +1,9 @@
 @PACKAGE_INIT@
 
-# This file serves an install prefix and a build tree alike, so it must resolve
-# nothing by path: @PACKAGE_INIT@'s PACKAGE_PREFIX_DIR is computed for the
-# install destination and is wrong in a build tree.  Anything that needs a
-# location belongs on the exported targets, which carry the right one for each
-# tree already through BUILD_INTERFACE/INSTALL_INTERFACE.
+# Generated once per tree -- DdxInstall configures this template twice -- so a
+# path substituted in is already the right one and nothing here probes for it.
+# What is shared between the two belongs on the exported targets, which carry
+# the right location for each through BUILD_INTERFACE/INSTALL_INTERFACE.
 include(CMakeFindDependencyMacro)
 
 # What the exported targets need found again on the consumer's machine.
@@ -17,23 +16,16 @@ set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
 # headers ride in the prefix, so there is no version to agree on and no
 # find_dependency(Boost) here at all.
 #
-# Which copy, without resolving a path in a tree it does not suit.  One test
-# answers both questions: headers under the prefix mean an installed ddx that
-# shipped them, and their absence means either a build tree or a build told to
-# use someone else's Boost -- both of which want the root this build used, and
-# neither of which wants a second copy of it.  PACKAGE_PREFIX_DIR is
-# meaningless in a build tree, so it is spent on the *test* rather than the
-# answer: it cannot name a boost/version.hpp there, and the fallback stands.
-set(_ddx_boost_root "@DDX_BOOST_ROOT@")
-if (EXISTS "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@/boost/version.hpp")
-    set(_ddx_boost_root "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@")
-endif ()
+# Which copy is settled when this file is generated, not here: DdxInstall writes
+# one of these per tree, each naming the Boost that tree actually holds.  An
+# install names its own prefix, a build tree names the Boost the build used, and
+# a build told to use someone else's Boost names theirs -- nothing was copied in
+# that case, so there is only ever one answer to state.
 if (NOT TARGET Boost::headers)
     add_library(Boost::headers INTERFACE IMPORTED)
     set_target_properties(Boost::headers PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "${_ddx_boost_root}")
+            INTERFACE_INCLUDE_DIRECTORIES "@DDX_BOOST_CONFIG_ROOT@")
 endif ()
-unset(_ddx_boost_root)
 
 # ddx_rt links Threads::Threads publicly: rt/equation.hpp compiles on another
 # thread, so the target has to resolve in a consumer's tree too.

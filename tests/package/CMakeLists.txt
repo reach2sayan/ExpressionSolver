@@ -39,5 +39,43 @@ if (ddx_jit_FOUND)
     target_link_libraries(consumer PRIVATE ddx::jit)
 endif ()
 
+# Every header the package ships, compiled against the Boost the package ships.
+# Complete only where no other Boost sits on the default include path: a machine
+# with /usr/include/boost fills any gap in the prefix silently, so this proves
+# the shipped subset is whole on CI, where no Boost is installed, and not on a
+# developer box that has a distro one.  scripts/boost_headers.py --check is the
+# guard that does not depend on the environment.
+# consumer.cpp reaches most of them through rt/equation.hpp, but not rt/text/,
+# rt/dot.hpp or dual/hessian.hpp -- so a Boost library named by one of those,
+# and missing from DdxBoostHeaders.cmake, would install short and go unnoticed.
+# Globbed from the include directory ddx reported rather than from a list here,
+# so this cannot fall behind what is installed.
+get_target_property(DDX_INCLUDE_DIRS ddx::util INTERFACE_INCLUDE_DIRECTORIES)
+list(GET DDX_INCLUDE_DIRS 0 DDX_INCLUDE_DIR)
+file(GLOB_RECURSE DDX_HEADERS RELATIVE "${DDX_INCLUDE_DIR}" "${DDX_INCLUDE_DIR}/*.hpp")
+# An install prefix keeps ddx's headers and the Boost it ships in the same
+# include directory, so the glob finds both.  Boost is what this is compiled
+# *against*, not part of what ddx ships.
+list(FILTER DDX_HEADERS EXCLUDE REGEX "^boost/")
+if (NOT DDX_HEADERS)
+    message(FATAL_ERROR "no ddx headers under ${DDX_INCLUDE_DIR}")
+endif ()
+list(SORT DDX_HEADERS)
+set(DDX_ALL_HEADERS_CPP "")
+foreach (header IN LISTS DDX_HEADERS)
+    string(APPEND DDX_ALL_HEADERS_CPP "#include \"${header}\"\n")
+endforeach ()
+string(APPEND DDX_ALL_HEADERS_CPP "int main() { return 0; }\n")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/all_headers.cpp"
+        CONTENT "${DDX_ALL_HEADERS_CPP}")
+
+add_executable(all_headers "${CMAKE_CURRENT_BINARY_DIR}/all_headers.cpp")
+target_link_libraries(all_headers PRIVATE ddx::ddx ddx::rt)
+target_compile_options(all_headers PRIVATE ${ddx_CODEGEN_FLAGS})
+if (ddx_jit_FOUND)
+    target_link_libraries(all_headers PRIVATE ddx::jit)
+endif ()
+
 enable_testing()
 add_test(NAME consumer_runs COMMAND consumer)
+add_test(NAME all_headers_runs COMMAND all_headers)
