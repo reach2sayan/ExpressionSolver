@@ -191,7 +191,7 @@ TEST(RtJacobian, SharedRulesAgreeAcrossTheScaleRange) {
     expect_agrees_with_ddx(x * y, std::array{a, b});
     expect_agrees_with_ddx(x + y, std::array{a, b});
   }
-  for (const auto [a, b] :
+  for (const auto& [a, b] :
        std::vector<std::pair<double, double>>{{1.7, 2.3}, {0.5, 3.0}}) {
     expect_agrees_with_ddx(pow(x, y), std::array{a, b});
   }
