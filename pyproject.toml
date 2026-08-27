@@ -27,6 +27,15 @@ dev = [
     "mypy>=1.11",
     "pybind11-stubgen>=2.5",
 ]
+# The Python half of compare/, wanted only when running the comparison.  scipy
+# is here for one function: the `ops` model takes an erf, numpy has none, and
+# autograd differentiates scipy's.
+compare = [
+    "casadi>=3.6",
+    "autograd>=1.7",
+    "numdifftools>=0.9",
+    "scipy>=1.11",
+]
 
 [tool.scikit-build]
 cmake.version = ">=3.26"

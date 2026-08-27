@@ -23,12 +23,15 @@ if (MSVC)
     set(DDX_WARNINGS /Wall /wd4061 /wd4623 /wd4625 /wd4626 /wd5026 /wd5027
                      /wd4710 /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514
                      /wd4324 /wd5266 /wd4866)
-    # Boost arrives on an IMPORTED target, so CMake already spells its include
-    # root /external:I and quiets it with /external:W0.  That much stops at a
-    # template: a warning inside one Boost defines is charged to the code that
-    # instantiates it, which is ours, and Boost.Parser is templates the whole
-    # way down.  /external:templates- charges it to the header instead.
-    list(APPEND DDX_WARNINGS /external:templates-)
+    # /Wall is for our code and no one else's.  Which code that is by the shape
+    # of the include rather than by CMake's SYSTEM include paths -- those are
+    # /external:I on a command line and something else again in a .vcxproj:
+    # here an angled include is a dependency and a quoted one is ours, and the
+    # CI header check keeps it that way.  templates- because a warning raised
+    # inside a template is otherwise charged to whoever instantiated it, which
+    # is us, and Boost.Parser is templates the whole way down.
+    list(APPEND DDX_WARNINGS /external:anglebrackets /external:W0
+                             /external:templates-)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
     # C4577 sits with the flag that causes it, not among the warnings: it
     # reports `noexcept` under /EHs-c- and fires at /W1, so a consumer applying
