@@ -1035,7 +1035,8 @@ private:
       const std::size_t width = std::min(kLanes, n - base);
       for (const auto [j, column] : std::views::enumerate(xs)) {
         T *const dst = lanes.data() + static_cast<std::size_t>(j) * kLanes;
-        T *const tail = std::ranges::copy_n(column + base, width, dst).out;
+        T *const tail =
+            std::ranges::copy(std::span{column + base, width}, dst).out;
         std::ranges::fill(tail, dst + kLanes, column[base + width - 1]);
       }
       rt::evaluate_block<kLanes>(*arena_, std::span<const T>{lanes}, order,
@@ -1045,8 +1046,9 @@ private:
                std::array{f, g, h},
                std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
         for (const auto [column, o] : std::views::zip(columns, block)) {
-          std::ranges::copy_n(tape.data() + std::size_t{o} * kLanes, width,
-                              column + base);
+          std::ranges::copy(
+              std::span{tape.data() + std::size_t{o} * kLanes, width},
+              column + base);
         }
       }
     }
