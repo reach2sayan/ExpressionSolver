@@ -77,6 +77,20 @@ public:
 
   [[nodiscard]] std::size_t arity() const { return arena_->symbols().size(); }
   [[nodiscard]] constexpr std::size_t outputs() const { return roots_.size(); }
+  // The symbols as interned Python strings, built once.  Lazy, and safe: every
+  // caller holds the GIL here -- run() does not drop it until after the Point
+  // is built.
+  [[nodiscard]] std::span<const pyb::object> names() {
+    if (names_.size() != symbols().size()) {
+      names_.clear();
+      names_.reserve(symbols().size());
+      for (const std::string &s : symbols()) {
+        names_.emplace_back(pyb::str(s));
+      }
+    }
+    return names_;
+  }
+
   [[nodiscard]] const std::vector<std::string> &symbols() const {
     return arena_->symbols();
   }
@@ -84,7 +98,7 @@ public:
   // --- the three lanes, as Python sees them --------------------------------
 
   [[nodiscard]] pyb::object evaluate(const pyb::handle &x) {
-    const Point at{x, symbols()};
+    const Point at{x, symbols(), names()};
     Lane &l = lane(Want::Values);
     if (scalar(at)) {
       Cell f;
@@ -98,7 +112,7 @@ public:
   }
 
   [[nodiscard]] pyb::tuple jacobian(const pyb::handle &x) {
-    const Point at{x, symbols()};
+    const Point at{x, symbols(), names()};
     Lane &l = lane(Want::Jacobian);
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
             count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
@@ -114,7 +128,7 @@ public:
   }
 
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
-    const Point at{x, symbols()};
+    const Point at{x, symbols(), names()};
     return outputs() == 1 ? hessian_from_lane(at) : hessian_from_arena(at);
   }
 
@@ -606,6 +620,7 @@ private:
   };
 
   std::shared_ptr<rt::Builder<double>> arena_;
+  std::vector<pyb::object> names_;
   std::vector<rt::NodeId> roots_;
   std::optional<rt::Jacobian> derivative_;
   std::optional<std::vector<rt::Hessian>> sweeps_;

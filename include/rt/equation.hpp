@@ -1033,7 +1033,7 @@ private:
 
     for (std::size_t base = 0; base < n; base += kLanes) {
       const std::size_t width = std::min(kLanes, n - base);
-      for (const auto [j, column] : std::views::enumerate(xs)) {
+      for (const auto [j, column] : xs | std::views::enumerate) {
         T *const dst = lanes.data() + static_cast<std::size_t>(j) * kLanes;
         T *const tail =
             std::ranges::copy(std::span{column + base, width}, dst).out;

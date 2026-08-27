@@ -29,12 +29,17 @@ using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
 
 class Point {
 public:
-  Point(const pyb::handle &x, std::span<const std::string> symbols)
+  // `names` is the symbol list as interned Python strings, held by the equation:
+  // a dict lookup needs a key object, and building one per symbol per call was
+  // most of what a dict point cost.
+  Point(const pyb::handle &x, std::span<const std::string> symbols,
+        std::span<const pyb::object> names)
       : columns_(symbols.size(), nullptr) {
-    held_.reserve(symbols.size());
-    filled_.reserve(symbols.size());
     if (pyb::isinstance<pyb::dict>(x)) {
-      from_dict(pyb::reinterpret_borrow<pyb::dict>(x), symbols);
+      const auto d = pyb::reinterpret_borrow<pyb::dict>(x);
+      if (!scalars_from_dict(d, names)) {
+        from_dict(d, symbols);
+      }
     } else {
       from_array(x, symbols.size());
     }
@@ -49,7 +54,38 @@ private:
   [[nodiscard]] constexpr std::size_t size() const noexcept { return n_; }
   [[nodiscard]] constexpr bool batched() const noexcept { return batched_; }
 
+  // The common case: a dict of plain floats at one point.  One lookup per
+  // symbol against an interned key, the value read as a double, and no numpy
+  // object anywhere -- where the general path below builds an Array per symbol
+  // and prescans every key against every symbol.
+  //
+  // False means "not this shape", not "bad input": anything that is not a float
+  // falls through to from_dict, which is what reports the errors.  A size
+  // mismatch is settled there too, so the two paths cannot disagree.
+  [[nodiscard]] bool scalars_from_dict(const pyb::dict &d,
+                                       std::span<const pyb::object> names) {
+    if (d.size() != names.size()) {
+      return false;
+    }
+    scalars_.resize(names.size());
+    for (const auto [i, name] : std::views::enumerate(names)) {
+      PyObject *const v = PyDict_GetItemWithError(d.ptr(), name.ptr());
+      if (v == nullptr || PyFloat_CheckExact(v) == 0) {
+        return PyErr_Occurred() != nullptr ? throw pyb::error_already_set()
+                                           : false;
+      }
+      scalars_[static_cast<std::size_t>(i)] = PyFloat_AS_DOUBLE(v);
+    }
+    std::ranges::transform(scalars_, columns_.begin(),
+                           [](const double &v) { return &v; });
+    n_ = 1;
+    batched_ = false;
+    return true;
+  }
+
   void from_dict(const pyb::dict &d, std::span<const std::string> symbols) {
+    held_.reserve(symbols.size());
+    filled_.reserve(symbols.size());
     const auto named = [symbols](const auto item) {
       return std::ranges::contains(symbols, pyb::cast<std::string>(item.first));
     };
@@ -110,6 +146,7 @@ private:
   }
 
   std::vector<const double *> columns_;
+  std::vector<double> scalars_;             // a dict of floats, read in place
   std::vector<pyb::object> held_;           // what columns_ points into
   std::vector<std::vector<double>> filled_; // a scalar spread over a batch
   std::size_t n_ = 1;
