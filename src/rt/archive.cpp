@@ -10,12 +10,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <fstream>
 #include <random>
 #include <ranges>
 #include <system_error>
+#include <thread>
 
 namespace ddx::rt {
 namespace {
@@ -46,6 +48,40 @@ void put(std::span<std::byte> into, std::size_t at, U v) {
   static const auto salt = std::random_device{}();
   static std::atomic<std::uint32_t> seq{0};
   return std::format(".{:08x}{:08x}.tmp", salt, seq.fetch_add(1));
+}
+
+// Windows will not replace a destination that another handle still has open,
+// and racing writers are exactly that: MoveFileEx opens the target for delete,
+// so the loser gets a sharing violation instead of losing an atomic
+// last-writer-wins.  Every hold is brief -- another rename in flight, or a
+// scanner on a freshly written file -- so a bounded retry restores the property
+// the staging name was chosen for.  POSIX rename never fails this way, and
+// there the loop never comes round.
+//
+// Retried whatever the error says, rather than on the sharing violation alone:
+// the staged file is written and closed and sits in the target's own directory,
+// so the remaining ways to fail here are exotic, and one that cannot recover
+// only spends the budget before failing exactly as it would have.
+[[nodiscard]] bool rename_over(const std::filesystem::path &from,
+                               const std::filesystem::path &to) {
+  using namespace std::chrono_literals;
+  auto backoff = 1ms;
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    std::error_code ec;
+    std::filesystem::rename(from, to, ec);
+    if (!ec) {
+      return true;
+    }
+    // Yielding first: the common contender is a rename mid-flight, and
+    // sleeping a whole tick for it would cost more than the write did.
+    if (attempt < 4) {
+      std::this_thread::yield();
+    } else {
+      std::this_thread::sleep_for(backoff);
+      backoff = std::min(backoff * 2, 32ms);
+    }
+  }
+  return false;
 }
 
 template <typename U>
@@ -163,8 +199,7 @@ result<void> write_file(const std::filesystem::path &path,
       return fail(errc::archive_io);
     }
   }
-  std::filesystem::rename(tmp, path, ec);
-  if (ec) {
+  if (!rename_over(tmp, path)) {
     std::filesystem::remove(tmp, ec);
     return fail(errc::archive_io);
   }

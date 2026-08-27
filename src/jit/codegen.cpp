@@ -123,9 +123,7 @@ public:
     return call(op, {u});
   }
 
-  // Not llvm.fmuladd, which is only *permission* to fuse and may be declined
-  // where the sweep has committed to one rounding.  With no host FMA this
-  // lowers to libm's fma(): slow, and the same bits.
+  // Not llvm.fmuladd, which is only *permission* to fuse
   llvm::Value *fma(const rt::Contraction &c, llvm::Value *x, llvm::Value *y,
                    llvm::Value *z) const {
     return b_.CreateIntrinsic(llvm::Intrinsic::fma, {lanes_.ty},

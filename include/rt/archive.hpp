@@ -34,12 +34,7 @@
 #include <vector>
 
 // A built equation on disk: the arena and the sweeps, not a frozen Graph, which
-// freeze() rebuilds in one pass.  The colouring is in the file because
-// coupling_pattern reads a Builder.
-//
-// Not Boost.Serialization: a compiled library whose only error channel is
-// throwing, which aborts here.  Nothing below hands a byte to a container
-// before the checksum and the invariants pass.
+// freeze() rebuilds in one pass.
 namespace ddx::rt {
 
 // One lane's machine code, and what must agree before it runs; a mismatch means
@@ -130,8 +125,6 @@ inline constexpr std::size_t header_bytes = 56;
 // size_t is the one host type it leans on.
 static_assert(sizeof(std::size_t) == 8);
 
-// Public because the JIT's object cache writes behind the same prologue, with
-// its own magic and `format`.
 struct FileHeader {
   std::string_view magic = graph_magic;
   std::uint32_t format = 0;
@@ -209,8 +202,6 @@ template <typename U>
     return static_cast<U>(w);
   }
 }
-
-// --- the two sinks ----------------------------------------------------------
 
 class Writer {
 public:

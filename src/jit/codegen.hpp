@@ -10,11 +10,7 @@ namespace ddx::jit::detail {
 
 // One graph as a single counted loop over n points, `lanes` points per
 // iteration: the body is emitted over <lanes x double>, or over double when
-// lanes is 1.  The caller names the function: every module lands in one
-// JITDylib, where a duplicate symbol is an error.
-//
-// The layout and triple are stamped before the first instruction, not after:
-// IRBuilder reads the layout for every implicit alignment it fills in.
+// lanes is 1.
 [[nodiscard]] std::unique_ptr<llvm::Module>
 emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
             llvm::StringRef name, unsigned lanes,
