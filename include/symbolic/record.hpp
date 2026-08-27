@@ -91,6 +91,7 @@ template <CEntry... Entries> struct Record : Entries... {
   template <FixedString Key>
   using value_type_of = typename entry_of<Key>::value_type;
 
+private:
   // An lvalue hands out a reference to its slot, a temporary a copy.
   template <FixedString Key>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
@@ -107,6 +108,7 @@ template <CEntry... Entries> struct Record : Entries... {
     }
   }
 
+public:
   DDX_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 
   [[nodiscard]] static constexpr std::array<std::string_view, size>

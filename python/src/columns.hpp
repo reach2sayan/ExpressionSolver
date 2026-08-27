@@ -15,14 +15,10 @@
 #include <vector>
 
 // NumPy and the kernel ABI already agree: a C-contiguous (symbols, points)
-// array holds each symbol's column contiguously, which is what `xs[j]` is.
-// Nothing copies unless the caller handed over something that was not doubles.
 namespace ddx::py {
 
 namespace pyb = pybind11;
 
-// The one reader of both classes below: what they hold is a call's scratch, so
-// the shapes stay private and PyEquation reaches them.
 class PyEquation;
 
 using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
@@ -31,8 +27,6 @@ using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
   return static_cast<pyb::ssize_t>(n);
 }
 
-// A point, or a batch of them: one column per symbol, each `n` long.  Holds
-// what it points into for as long as it lives, which is the whole of a call.
 class Point {
 public:
   Point(const pyb::handle &x, std::span<const std::string> symbols)
@@ -53,12 +47,8 @@ private:
     return columns_;
   }
   [[nodiscard]] constexpr std::size_t size() const noexcept { return n_; }
-  // Whether the caller supplied a points axis, which is what decides whether
-  // the answer carries one back.
   [[nodiscard]] constexpr bool batched() const noexcept { return batched_; }
 
-  // The keyword spelling: named<"x">(v) carries the name as a template
-  // parameter, which cannot cross; a dict carries it as data.
   void from_dict(const pyb::dict &d, std::span<const std::string> symbols) {
     const auto named = [symbols](const auto item) {
       return std::ranges::contains(symbols, pyb::cast<std::string>(item.first));
@@ -80,8 +70,6 @@ private:
                         }) |
                         impl::to<std::vector<Array>>();
 
-    // The batch length is whatever the 1-D values agree on; a scalar among
-    // them is held at every point of it.
     for (const Array &a : values | std::views::filter([](const Array &a) {
                             return a.ndim() == 1;
                           })) {
@@ -93,7 +81,6 @@ private:
       batched_ = true;
     }
 
-    // filled_ is reserved to the arity above, so what it hands out stays put.
     for (auto [column, a] : std::views::zip(columns_, values)) {
       if (a.ndim() == 1 || n_ == 1) {
         column = a.data();
@@ -104,8 +91,7 @@ private:
     }
   }
 
-  // Positional: (arity,) is one point, (arity, n) a batch of n.  Rows are in
-  // symbol order, which is what `symbols` reports.
+  // Rows are in symbol order
   void from_array(const pyb::handle &x, std::size_t arity) {
     auto a = pyb::cast<Array>(x);
     if (a.ndim() != 1 && a.ndim() != 2) {

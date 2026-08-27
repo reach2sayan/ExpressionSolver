@@ -12,10 +12,6 @@ template <typename T>
 concept CRestorable =
     std::move_constructible<T> && std::assignable_from<T &, T>;
 
-// Hold `slot` at `next` for the rest of the enclosing scope, then put back what
-// was there.  Saved, not recomputed: undoing a seed as `slot -= 1` is not the
-// identity in floating point.  Saving is also what makes the guards nest, and
-// what restores the slot when an exception escapes.
 template <CRestorable T> class scoped_value : private pinned {
   static constexpr bool kNothrow = std::is_nothrow_move_constructible_v<T> &&
                                    std::is_nothrow_move_assignable_v<T>;
@@ -23,7 +19,6 @@ template <CRestorable T> class scoped_value : private pinned {
 public:
   constexpr scoped_value(T &slot, T next) noexcept(kNothrow)
       : slot_(slot), saved_(std::exchange(slot, std::move(next))) {}
-
   constexpr ~scoped_value() { slot_ = std::move(saved_); }
 
 private:
@@ -31,10 +26,7 @@ private:
   T saved_;
 };
 
-// Run `at_exit` when the enclosing scope ends, however it ends -- the standard
-// spells this std::experimental::scope_exit, which libc++ does not ship, and
-// Boost only outside a macro from 1.85.  Pinned because it owns the work: a
-// moved-from copy would run it twice or not at all.
+// libc++ does not ship is not shipped by std::experimental::scope_exit
 template <std::invocable F> class scope_exit : private pinned {
 public:
   constexpr explicit scope_exit(F at_exit) noexcept(
@@ -46,8 +38,6 @@ private:
   F at_exit_;
 };
 
-// Seed `slot` with Seed for the rest of the enclosing scope:
-//   const auto guard = scoped_seed<1.0>(dof[ai].deriv().value);
 template <auto Seed, CRestorable T>
   requires std::convertible_to<decltype(Seed), T>
 [[nodiscard]] constexpr scoped_value<T> scoped_seed(T &slot) noexcept(

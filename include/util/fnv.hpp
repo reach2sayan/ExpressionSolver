@@ -5,11 +5,7 @@
 
 namespace ddx::impl {
 
-// FNV-1a, 64-bit.  Not a digest: a fold that gives one number to a byte stream
-// nothing reads back, so the only property asked of it is that two streams
-// which differ anywhere are unlikely to land on the same number.  Shared so
-// that the archive digest, the JIT cache key and the bit-exactness gate are
-// one hash rather than three that drift.
+// FNV-1a, 64-bit.
 inline constexpr std::uint64_t fnv64_basis = 14695981039346656037ULL;
 inline constexpr std::uint64_t fnv64_prime = 1099511628211ULL;
 

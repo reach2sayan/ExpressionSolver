@@ -5,7 +5,7 @@
 #include "symbolic/simplify.hpp"
 #include "symbolic/sweep.hpp"
 #include "symbolic/symbol.hpp"
-#include "util/config.hpp"
+#include "util/config.hpp" // DDX_KEYED_ACCESSORS
 #include "util/scope_guard.hpp"
 #include <algorithm>
 #include <array>

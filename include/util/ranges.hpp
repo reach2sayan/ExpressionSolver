@@ -23,8 +23,7 @@ template <typename C> [[nodiscard]] constexpr to_closure<C> to() noexcept {
   return {};
 }
 
-// `c.append_range(r)`: libstdc++ grew the range members in 15 and this builds
-// against 14.
+// missing c.append_range(r) in libstdc++ 14 (available on 15)
 template <typename C, std::ranges::input_range R>
   requires std::convertible_to<std::ranges::range_reference_t<R>,
                                typename C::value_type>

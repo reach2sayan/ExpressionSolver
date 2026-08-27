@@ -3,7 +3,7 @@
 #include "symbolic/entry.hpp"
 #include "symbolic/sweep.hpp"
 #include "symbolic/traits.hpp"
-#include "util/config.hpp"
+#include "util/config.hpp" // DDX_KEYED_ACCESSORS
 #include "util/error.hpp"
 #include "util/fixed_string.hpp"
 
@@ -27,6 +27,7 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
 
   std::array<Scalar, arity> slots{};
 
+private:
   template <FixedString S>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     constexpr auto idx = find_index_of_symbol<S, SymList>();
@@ -38,7 +39,8 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
     }
   }
 
-  // Subscript spelling: m["x"_s] = v.  See DDX_KEYED_ACCESSORS.
+public:
+  // get<"x">() and the subscript spelling m["x"_s] = v.
   DDX_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
   template <FixedString S> constexpr void set(const Scalar &v) noexcept {
     slot<S>(*this) = v;
@@ -142,11 +144,15 @@ template <CExpression Expr, CValueMap Map> struct Bound {
     map.template set<S>(v);
   }
 
+private:
+  // Forwarded, so the map hands out a reference or a copy on the same rule the
+  // Bound was reached by.
   template <FixedString S>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
-    return map_type::template slot<S>(std::forward<decltype(self)>(self).map);
+    return std::forward<decltype(self)>(self).map.template get<S>();
   }
 
+public:
   DDX_KEYED_ACCESSORS(FixedString S, CFixedString auto S, S, symbol_type<S>)
 };
 
