@@ -17,11 +17,7 @@ target_compile_definitions(ddx_text_objs PRIVATE DDX_BUILDING BOOST_PARSER_DISAB
 # ddx_rt's header dependencies, not ddx_rt: these link *into* it.
 target_link_libraries(ddx_text_objs PRIVATE ddx Boost::headers)
 
-# The flags ddx records, less -fno-exceptions -- filtered rather than respelled,
-# so -march and -ffp-contract reach this object as they reach every other, and a
-# flag added later reaches it too.  The same list python/CMakeLists.txt drops.
-set(DDX_TEXT_FLAGS ${DDX_CODEGEN_FLAGS})
-list(REMOVE_ITEM DDX_TEXT_FLAGS -fno-exceptions /EHs-c- /D_HAS_EXCEPTIONS=0)
-target_compile_options(ddx_text_objs PRIVATE ${DDX_TEXT_FLAGS} ${DDX_WARNINGS})
+# Boost.Parser's parse() is a try/catch, so this one object keeps exceptions.
+ddx_target_flags(ddx_text_objs EXCEPTIONS)
 
 target_sources(ddx_rt PRIVATE $<TARGET_OBJECTS:ddx_text_objs>)

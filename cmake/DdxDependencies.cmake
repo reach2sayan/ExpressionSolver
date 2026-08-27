@@ -16,8 +16,12 @@ include(FetchContent)
 
 # --- versions ---------------------------------------------------------------
 # LLVM is whatever the machine has; the rest are pinned here.
-set(DDX_GOOGLETEST_REF "5376968f6948923e2411081fd9372e71a59d8e77"
-        CACHE STRING "GoogleTest commit to fetch")
+# A release, and not below 1.17: everything earlier declares a
+# cmake_minimum_required from before 3.10, which CMake 4 reports as a
+# deprecation naming googletest's CMakeLists in the middle of ours.  Renamed
+# from DDX_GOOGLETEST_REF rather than retargeted -- a build tree configured
+# before this remembers the commit it cached, and would go on fetching it.
+set(DDX_GOOGLETEST_VERSION "1.18.0" CACHE STRING "GoogleTest release to fetch")
 set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release to fetch")
 
 # Exact, not a floor: the ORC C++ API is not stable across releases and both
@@ -29,7 +33,7 @@ set(DDX_LLVM_VERSION 20)
 # --- declarations -----------------------------------------------------------
 # SYSTEM throughout: a fetched dependency's warnings are not ours to fix.
 FetchContent_Declare(googletest
-        URL https://github.com/google/googletest/archive/${DDX_GOOGLETEST_REF}.zip
+        URL https://github.com/google/googletest/archive/refs/tags/v${DDX_GOOGLETEST_VERSION}.zip
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SYSTEM
 )
@@ -185,6 +189,7 @@ macro(ddx_use_googlebenchmark)
         _ddx_silence_dependency(benchmark benchmark_main)
     endif ()
 endmacro()
+
 
 # The other half of SYSTEM: the dependency compiling itself.  MSVC only -- the
 # fetched sources build clean under the GCC and Clang warning set.

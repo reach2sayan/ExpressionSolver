@@ -58,8 +58,28 @@ endif ()
 
 # Our own targets only -- never the INTERFACE library, which must not push flags
 # onto a consumer.
+#
+#   ddx_target_flags(<target> [EXCEPTIONS])
+#
+# EXCEPTIONS keeps exceptions on for one target, where the rest of the tree
+# compiles without them: pybind11 translates a throw into a Python exception,
+# and Boost.Parser's entry points do not compile without one.  Filtered from the
+# recorded list rather than respelled, so -march and -ffp-contract still reach
+# those targets as they reach every other -- those change arithmetic, and the
+# JIT emits code to match.
+#
+# Warnings are errors, through the property rather than a flag: it spells itself
+# on every compiler, it reaches only what this function is called on -- never a
+# fetched dependency -- and `cmake --compile-no-warning-as-error` is the way past
+# it when a newer compiler invents a warning nobody has fixed yet.
 function(ddx_target_flags target)
-    target_compile_options(${target} PRIVATE ${DDX_CODEGEN_FLAGS} ${DDX_WARNINGS})
+    cmake_parse_arguments(PARSE_ARGV 1 arg "EXCEPTIONS" "" "")
+    set(flags ${DDX_CODEGEN_FLAGS})
+    if (arg_EXCEPTIONS)
+        list(REMOVE_ITEM flags -fno-exceptions /EHs-c- /D_HAS_EXCEPTIONS=0)
+    endif ()
+    target_compile_options(${target} PRIVATE ${flags} ${DDX_WARNINGS})
+    set_property(TARGET ${target} PROPERTY COMPILE_WARNING_AS_ERROR ON)
 endfunction()
 
 # A shared libddx has to be findable at run time.  CMake's build RPATH covers

@@ -15,12 +15,8 @@ if (DDX_BUILD_JIT)
     target_link_libraries(ddx_python PRIVATE ddx::jit)
 endif ()
 
-# The flags ddx recorded, less -fno-exceptions: pybind11 translates C++
-# exceptions into Python ones.  -march, -ffp-contract and -fno-math-errno stay,
-# because those change arithmetic and the kernel is emitted to match.
-set(DDX_PYTHON_FLAGS ${DDX_CODEGEN_FLAGS})
-list(REMOVE_ITEM DDX_PYTHON_FLAGS -fno-exceptions /EHs-c- /D_HAS_EXCEPTIONS=0)
-target_compile_options(ddx_python PRIVATE ${DDX_PYTHON_FLAGS} ${DDX_WARNINGS})
+# pybind11 translates a C++ exception into a Python one, so this module keeps them.
+ddx_target_flags(ddx_python EXCEPTIONS)
 
 ddx_runtime_deps(ddx_python)
 
