@@ -27,11 +27,11 @@ if (MSVC)
     # of the include rather than by CMake's SYSTEM include paths -- those are
     # /external:I on a command line and something else again in a .vcxproj:
     # here an angled include is a dependency and a quoted one is ours, and the
-    # CI header check keeps it that way.  templates- because a warning raised
-    # inside a template is otherwise charged to whoever instantiated it, which
-    # is us, and Boost.Parser is templates the whole way down.
-    list(APPEND DDX_WARNINGS /external:anglebrackets /external:W0
-                             /external:templates-)
+    # CI header check keeps it that way.  Templates stay external too, which is
+    # the default and is what this tree needs -- a warning raised inside a
+    # Boost.Parser template is Boost's whether or not our grammar is what
+    # instantiated it.
+    list(APPEND DDX_WARNINGS /external:anglebrackets /external:W0)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
     # C4577 sits with the flag that causes it, not among the warnings: it
     # reports `noexcept` under /EHs-c- and fires at /W1, so a consumer applying

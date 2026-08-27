@@ -69,6 +69,11 @@ ignore = ["D203", "D213"]
 
 [tool.ruff.lint.per-file-ignores]
 "python/tests/*" = ["D100", "D103", "ANN201"]
+# The comparison models run over four unrelated scalar types -- float, CasADi SX,
+# an autograd box and a ddx Expression -- which share no supertype, so `Any` is
+# the honest annotation rather than a missing one.  D102 is the Protocol whose
+# fourteen method stubs the module docstring already describes.
+"compare/python/*" = ["ANN401", "D102"]
 
 [tool.mypy]
 files = ["python/ddx", "python/tests"]
