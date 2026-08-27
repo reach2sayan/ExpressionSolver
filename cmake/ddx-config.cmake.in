@@ -10,23 +10,34 @@ include(CMakeFindDependencyMacro)
 # What the exported targets need found again on the consumer's machine.
 set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
 
-# Boost::headers rather than any component: every Boost library ddx uses --
-# Mp11 for the symbol lists, Graph and DynamicBitset for the runtime graph -- is
-# header-only, so what a consumer needs is an include path.  The same find the
-# build itself made, in config mode for the same reason (CMP0167: the module is
-# deprecated since CMake 3.30 and removed in 4).  No version pinned: ddx checked
-# at configure time that the headers it names are there, and a consumer's Boost
-# has to answer for itself, so a release number here would only turn away Boosts
-# that work.  Reported when it differs, because if it ever does matter the two
-# versions are the first thing worth knowing.
-find_dependency(Boost CONFIG)
+# Boost::headers rather than any component: every Boost library ddx uses is
+# header-only, so what a consumer needs is an include path -- and ddx supplies
+# it rather than asking.  The build never consults the machine's Boost, and an
+# installed ddx does not make its consumer do what the build refused to: the
+# headers ride in the prefix, so there is no version to agree on and no
+# find_dependency(Boost) here at all.
+#
+# Which copy, without resolving a path in a tree it does not suit.  One test
+# answers both questions: headers under the prefix mean an installed ddx that
+# shipped them, and their absence means either a build tree or a build told to
+# use someone else's Boost -- both of which want the root this build used, and
+# neither of which wants a second copy of it.  PACKAGE_PREFIX_DIR is
+# meaningless in a build tree, so it is spent on the *test* rather than the
+# answer: it cannot name a boost/version.hpp there, and the fallback stands.
+set(_ddx_boost_root "@DDX_BOOST_ROOT@")
+if (EXISTS "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@/boost/version.hpp")
+    set(_ddx_boost_root "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@")
+endif ()
+if (NOT TARGET Boost::headers)
+    add_library(Boost::headers INTERFACE IMPORTED)
+    set_target_properties(Boost::headers PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${_ddx_boost_root}")
+endif ()
+unset(_ddx_boost_root)
+
 # ddx_rt links Threads::Threads publicly: rt/equation.hpp compiles on another
 # thread, so the target has to resolve in a consumer's tree too.
 find_dependency(Threads)
-if (NOT Boost_VERSION VERSION_EQUAL "@Boost_VERSION@")
-    message(STATUS
-            "ddx was built against Boost @Boost_VERSION@; this consumer resolved ${Boost_VERSION}.")
-endif ()
 
 if (DDX_BUILD_JIT)
     # Where this build found LLVM, so a machine with several does not need the
@@ -38,10 +49,8 @@ if (DDX_BUILD_JIT)
     # only with an exact version request, so find_dependency(LLVM 20) fails
     # against 20.1.2.
     find_dependency(LLVM CONFIG)
-    # An exact major, not the @DDX_LLVM_VERSION_MIN@-@DDX_LLVM_VERSION_MAX@
-    # range the sources build against: ddx::jit is a compiled artefact, and the
-    # ORC C++ API it is compiled against is not stable across releases.  The
-    # range is what ddx can be built with; this is what this one was.
+    # The major this build resolved, not the one the sources name: ddx::jit is
+    # a compiled artefact and the ORC C++ API is not stable across releases.
     if (NOT LLVM_VERSION_MAJOR EQUAL @LLVM_VERSION_MAJOR@)
         message(FATAL_ERROR
                 "ddx::jit was built against LLVM @LLVM_VERSION_MAJOR@; found ${LLVM_PACKAGE_VERSION}. "

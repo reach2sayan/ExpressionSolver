@@ -5,6 +5,8 @@
 
 #include "rt/builder.hpp"
 #include "rt/expressions.hpp"
+#include "rt/text/ast.hpp"
+#include "rt/text/lower.hpp"
 #include "util/ranges.hpp"
 #include "util/scope_guard.hpp"
 
@@ -21,6 +23,7 @@
 #include <exception>
 #include <memory>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -105,6 +108,28 @@ built_or_loaded(const std::optional<std::filesystem::path> &cache,
 // nothing to state and nothing to refuse.
 [[nodiscard]] pyb::object load_equation(const std::filesystem::path &path) {
   return pyb::cast(PyEquation{unwrap(rt::load_snapshot<double>(path))});
+}
+
+// ddx.equation over sources rather than a callback: the same three steps, with
+// the model read instead of run.  The roots go through roots_of, so a model
+// naming no symbol is refused exactly as `lambda: 2.0` is, and every source is
+// read before any of them is an equation -- a symbol the second function
+// introduces still wants a slot.
+[[nodiscard]] pyb::object
+text_equation(std::span<const std::string> sources,
+              const std::optional<std::filesystem::path> &cache) {
+  auto arena = std::make_shared<rt::Builder<double>>();
+  pyb::list built;
+  for (const std::string &source : sources) {
+    built.append(pyb::cast(PyExpression{
+        unwrap(rt::text::parse(source).and_then(
+            [&arena](const rt::text::Ast &ast) {
+              return rt::text::lower(*arena, ast);
+            })),
+        arena}));
+  }
+  auto roots = roots_of(built, *arena);
+  return built_or_loaded(cache, std::move(arena), std::move(roots));
 }
 
 // The whole of ddx.equation: install an arena, run the model in it, take what
@@ -229,6 +254,22 @@ PYBIND11_MODULE(_ddx, m) {
   // After the class, not before: a signature naming a type pybind11 has not
   // been told about yet renders as the raw C++ spelling, which is what reaches
   // the generated stubs.
+  // Text first, and typed: the model overload takes pyb::object, which a str
+  // matches too, and pybind11 tries these in the order they are registered.
+  m.def(
+      "equation",
+      [](const std::string &source,
+         const std::optional<std::filesystem::path> &cache) {
+        return ddx::py::text_equation(std::span{&source, 1}, cache);
+      },
+      pyb::arg("source"), pyb::kw_only(), pyb::arg("cache") = pyb::none());
+  m.def(
+      "equation",
+      [](const std::vector<std::string> &sources,
+         const std::optional<std::filesystem::path> &cache) {
+        return ddx::py::text_equation(sources, cache);
+      },
+      pyb::arg("source"), pyb::kw_only(), pyb::arg("cache") = pyb::none());
   m.def("equation", &ddx::py::make_equation, pyb::arg("model"),
         pyb::kw_only(), pyb::arg("cache") = pyb::none());
   m.def("load", &ddx::py::load_equation, pyb::arg("path"));

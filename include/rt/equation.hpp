@@ -3,7 +3,7 @@
 #include "ops/numeric.hpp" // compile_time_factorial
 #include "dual/taylor_dual.hpp" // the univariate sweep's scalar
 #include "md/md.hpp"
-#include "rt/archive.hpp"
+#include "rt/archive/archive.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
@@ -512,7 +512,7 @@ private:
     const auto it = std::ranges::find_if(objects_, [&](const rt::Object &o) {
       return o.want == static_cast<std::uint8_t>(want) && o.digest == digest &&
              o.host == c->host_identity() &&
-             rt::same_codegen(o.options, effective_options()) &&
+             jit::same_codegen(o.options, effective_options()) &&
              !o.code.empty();
     });
     return it == objects_.end() ? nullptr : &*it;

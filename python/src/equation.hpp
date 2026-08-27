@@ -4,7 +4,7 @@
 #include "error.hpp"
 #include "expression.hpp"
 
-#include "rt/archive.hpp"
+#include "rt/archive/archive.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/dot.hpp"
@@ -272,7 +272,7 @@ private:
         std::ranges::find_if(objects_, [&](const rt::Object &o) {
           return o.want == lane_id && o.digest == digest &&
                  o.host == c->host_identity() &&
-                 rt::same_codegen(o.options, effective_options()) &&
+                 jit::same_codegen(o.options, effective_options()) &&
                  !o.code.empty();
         });
     if (stored != objects_.end()) {

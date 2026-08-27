@@ -3,7 +3,10 @@
 
 #include "tests_common.hpp"
 
-#include "util/fnv.hpp"
+#include <boost/hash2/fnv1a.hpp>
+
+#include <boost/hash2/flavor.hpp>
+#include <boost/hash2/hash_append.hpp>
 
 #include <bit>
 
@@ -14,10 +17,15 @@
 
 namespace {
 struct BitHash {
-  std::uint64_t h = ddx::impl::fnv64_basis;
+  boost::hash2::fnv1a_64 h;
   void operator()(double d) noexcept {
-    ddx::impl::fold64(h, std::bit_cast<std::uint64_t>(d));
+    // The bits, not the double: hash2 appends a float as bit_cast(v + 0),
+    // which would fold -0.0 onto +0.0 and hide a sign flip in the last bit.
+    const auto bits = std::bit_cast<std::uint64_t>(d);
+    boost::hash2::hash_append(h, boost::hash2::little_endian_flavor{}, bits);
   }
+  // result() advances the state, so the gate reads it exactly once.
+  [[nodiscard]] std::uint64_t value() noexcept { return h.result(); }
 };
 } // namespace
 

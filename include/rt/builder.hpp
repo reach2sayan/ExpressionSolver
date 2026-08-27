@@ -57,7 +57,7 @@ namespace detail {
 
 // Befriended by Builder: installing a saved node stream verbatim is the
 // loader's alone, since every other way in interns and folds.  Defined in
-// rt/archive.hpp, which is the only thing that needs it.
+// rt/archive/snapshot.hpp, which is the only thing that needs it.
 struct Restore;
 
 // Ids are topological, so one descending pass settles it.  Not a filtered view:

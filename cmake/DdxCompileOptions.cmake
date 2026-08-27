@@ -65,8 +65,7 @@ endfunction()
 # A shared libddx has to be findable at run time.  CMake's build RPATH covers
 # the ELF build tree already; $ORIGIN is what survives the tree being moved, and
 # Windows has no RPATH at all, so there the DLL is copied next to the .exe.
-# Every executable linking ddx::rt needs this now that the runtime graph is
-# always built, where it used to be the JIT's problem alone.
+# Every executable linking ddx::rt needs it.
 function(ddx_runtime_deps target)
     if (NOT DDX_SHARED_LIBS)
         return ()

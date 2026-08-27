@@ -47,10 +47,10 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
     feed(Equation{u}.template univariate_derivative<4>(a));
   }
   // Always reported, so an A/B is a matter of reading two runs.
-  std::printf("[ BIT HASH ] %016llx\n",
-              static_cast<unsigned long long>(feed.h));
+  const std::uint64_t bits = feed.value();
+  std::printf("[ BIT HASH ] %016llx\n", static_cast<unsigned long long>(bits));
 #ifdef DDX_PIN_BIT_HASH
-  EXPECT_EQ(feed.h, static_cast<std::uint64_t>(DDX_PIN_BIT_HASH))
+  EXPECT_EQ(bits, static_cast<std::uint64_t>(DDX_PIN_BIT_HASH))
       << "a derivative moved in the last bit -- see the note above this test";
 #endif
 }

@@ -34,13 +34,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang-20 g++-14 libboost-dev linux-tools-common linux-tools-generic
+          sudo apt-get install -y clang-20 g++-14 linux-tools-common linux-tools-generic
 
-      # ddx finds Boost rather than fetching it, and the Windows image has none.
-      - name: Install Boost (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: vcpkg install boost-mp11 boost-graph boost-dynamic-bitset boost-describe boost-endian boost-crc --triplet x64-windows
 
       - name: Set build directory
         id: strings
@@ -66,7 +61,6 @@ jobs:
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DDDX_BUILD_BENCHMARKS=ON
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -S "${{ github.workspace }}"
 
       - name: Build benchmarks

@@ -19,7 +19,7 @@ set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # This file is the assembly order; the modules under cmake/ are the parts.
-#   DdxToolchainProbes  what the compiler can do   -> DDX_MDSPAN_VENDORED, ...
+#   DdxToolchainProbes  the floor a compiler must clear
 #   DdxCompileOptions   our own targets' flags     -> ddx_target_flags(), ...
 #   DdxDependencies     every third-party pin      -> ddx_use_boost(), ...
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
@@ -47,19 +47,18 @@ ddx_use_boost()
 # a consumer needs the threading library as much as ddx_rt does.
 find_package(Threads REQUIRED)
 
+# Boost is on the leaf, so every target below inherits it.  ddx fetches Boost
+# at a pinned hash and installs it into its own prefix, so it is as available as
+# the standard library is and there is nothing for a narrower declaration to
+# protect: a header uses the right library rather than the locally permitted one.
 add_library(ddx_util INTERFACE)
 add_library(ddx::util ALIAS ddx_util)
 set_target_properties(ddx_util PROPERTIES EXPORT_NAME util)
 target_include_directories(ddx_util INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(ddx_util INTERFACE Boost::headers)
 
-if (DDX_MDSPAN_VENDORED)
-    target_compile_definitions(ddx_util INTERFACE DDX_MDSPAN_FORCE_VENDORED)
-endif ()
-
-# No Boost, deliberately: the descriptors are written against ops/numeric.hpp
-# alone, so the runtime graph links ops without the compile-time tree.
 add_library(ddx_ops INTERFACE)
 add_library(ddx::ops ALIAS ddx_ops)
 set_target_properties(ddx_ops PROPERTIES EXPORT_NAME ops)
@@ -70,16 +69,12 @@ add_library(ddx::md ALIAS ddx_md)
 set_target_properties(ddx_md PROPERTIES EXPORT_NAME md)
 target_link_libraries(ddx_md INTERFACE ddx_util ddx_ops)
 
-# Boost.Mp11 reaches exactly one header, so it is declared exactly here.
-# Boost::headers is what a monolithic BoostConfig offers, and it is carried in
-# the export set like any other found package.
 add_library(ddx_symbolic INTERFACE)
 add_library(ddx::symbolic ALIAS ddx_symbolic)
 set_target_properties(ddx_symbolic PROPERTIES EXPORT_NAME symbolic)
-target_link_libraries(ddx_symbolic INTERFACE ddx_ops ddx_md Boost::headers)
+target_link_libraries(ddx_symbolic INTERFACE ddx_ops ddx_md)
 
-# Forward mode, which every build has: the second-derivative entry points are
-# not something a configuration takes away.
+# Forward mode
 add_library(ddx_dual INTERFACE)
 add_library(ddx::dual ALIAS ddx_dual)
 set_target_properties(ddx_dual PROPERTIES EXPORT_NAME dual)
@@ -94,15 +89,6 @@ target_link_libraries(ddx INTERFACE ddx_util ddx_ops ddx_md ddx_symbolic ddx_dua
 add_subdirectory(include)
 
 # --- libddx -----------------------------------------------------------------
-# The one binary the project produces: the runtime graph always, and the LLVM
-# backend compiled into it when asked for.  ddx::jit names the same file.
-if (DEFINED DDX_BUILD_RT AND NOT DDX_BUILD_RT)
-    message(WARNING "DDX_BUILD_RT is gone: the runtime graph is always built.")
-endif ()
-if (DEFINED DDX_JIT_STATIC)
-    message(WARNING "DDX_JIT_STATIC is gone: use -DDDX_SHARED_LIBS=OFF.")
-endif ()
-
 option(DDX_BUILD_JIT "Build the LLVM JIT backend into libddx" OFF)
 
 # One knob for the one library ddx produces.
@@ -147,7 +133,7 @@ endif ()
 
 # Everything below builds the executables, and only when this is the top-level
 # project.  A consumer that add_subdirectory()s us gets the library and nothing else.
-if (NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+if (NOT PROJECT_IS_TOP_LEVEL)
     return ()
 endif ()
 

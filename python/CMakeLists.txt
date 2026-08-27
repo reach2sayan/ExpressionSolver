@@ -1,6 +1,7 @@
 # The extension module: a consumer of libddx like compare/, living in this tree
-# so one `uv pip install .` builds the pair.  LLVM and Boost are the machine's;
-# nothing is vendored into the wheel.
+# so one `uv pip install .` builds the pair.  LLVM is the machine's and Boost is
+# fetched; the wheel carries neither, and DDX_INSTALL is off, so it ships the two
+# libraries below and no headers.
 #
 #   ddx/_ddx.cpython-*.so   these bindings
 #   ddx/libddx.so.1         the library they link

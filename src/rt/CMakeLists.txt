@@ -33,3 +33,6 @@ ddx_target_flags(ddx_rt)
 # Under -fno-exceptions Boost leaves boost::throw_exception for the program to
 # supply.  This tree always builds that way, so it is conditional on nothing.
 target_sources(ddx_rt PRIVATE boost_no_exceptions.cpp)
+
+# The grammar, which needs flags of its own -- see the CMakeLists there.
+add_subdirectory(text)

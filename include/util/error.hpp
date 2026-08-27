@@ -36,7 +36,12 @@ namespace ddx {
   X(jit_module, "the JIT could not take the emitted module")                               \
   X(jit_object, "the JIT could not link an object compiled earlier")                       \
   X(jit_verify, "the emitted module failed verification")                                  \
-  X(jit_lookup, "the compiled kernel has no such symbol")
+  X(jit_lookup, "the compiled kernel has no such symbol")                                  \
+                                                                                           \
+  /* The text surface. */                                                                  \
+  X(bad_syntax,       "not an expression this grammar accepts")                            \
+  X(unknown_function, "no function of that name")                                          \
+  X(wrong_argument_count, "the function takes a different number of arguments")
 // clang-format on
 
 enum class errc : std::uint8_t {

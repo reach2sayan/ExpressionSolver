@@ -1,37 +1,12 @@
 #pragma once
 
-// The one place the library says "mdspan": it picks between the vendored
-// reference implementation (third_party/mdspan.hpp, Apache-2.0 WITH
-// LLVM-exception) and the standard one.  Explicit `using` declarations, not a
-// namespace alias: `namespace md = std` would make ddx::impl::md::vector
-// compile.
+// The one place the library says "mdspan".  It binds to the vendored reference
+// implementation (third_party/mdspan.hpp, Apache-2.0 WITH LLVM-exception): no
+// standard library ddx builds against ships <mdspan>, and half of one is no
+// use anyway -- a std::mdspan without std::submdspan leaves slicing with no
+// spelling at all.  Explicit `using` declarations, not a namespace alias:
+// `namespace md = std` would make ddx::impl::md::vector compile.
 
-#include <version> // __cpp_lib_mdspan / __cpp_lib_submdspan
-
-// Set by the CMake option DDX_MDSPAN_MODE=vendored, so that path stays
-// continuously compiled even on a toolchain that could use the standard one.
-#if defined(DDX_MDSPAN_FORCE_VENDORED)
-#define DDX_MDSPAN_USE_STD 0
-#elif __has_include(<mdspan>) && defined(__cpp_lib_mdspan) &&                   \
-    __cpp_lib_mdspan >= 202207L && defined(__cpp_lib_submdspan) &&             \
-    __cpp_lib_submdspan >= 202306L
-// Both halves or neither: a std::mdspan without std::submdspan leaves slicing
-// with no spelling at all.
-#define DDX_MDSPAN_USE_STD 1
-#else
-#define DDX_MDSPAN_USE_STD 0
-#endif
-
-#if DDX_MDSPAN_USE_STD
-#include <mdspan>
-#define DDX_MDSPAN_NS std
-// P2642's padded layouts rode in with the C++26 mdspan revision.
-#if __cpp_lib_mdspan >= 202406L
-#define DDX_MDSPAN_HAS_PADDED 1
-#else
-#define DDX_MDSPAN_HAS_PADDED 0
-#endif
-#else
 // Before the include: otherwise the vendored header plants itself in ::std,
 // which is UB and collides with a real <mdspan> in the same TU.
 #ifndef MDSPAN_IMPL_STANDARD_NAMESPACE
@@ -39,8 +14,6 @@
 #endif
 #include "third_party/mdspan.hpp"
 #define DDX_MDSPAN_NS MDSPAN_IMPL_STANDARD_NAMESPACE
-#define DDX_MDSPAN_HAS_PADDED 1
-#endif
 
 #include <concepts>
 #include <cstddef>
@@ -66,10 +39,8 @@ using DDX_MDSPAN_NS::submdspan_extents;
 // submdspan_mapping is not re-exported: it is found by ADL on the mapping type,
 // so a custom layout supplies it as a hidden friend.
 
-#if DDX_MDSPAN_HAS_PADDED
 using DDX_MDSPAN_NS::layout_left_padded;
 using DDX_MDSPAN_NS::layout_right_padded;
-#endif
 
 namespace detail {
 template <typename T> inline constexpr bool is_extents_v = false;

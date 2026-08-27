@@ -1,6 +1,6 @@
 #include "ddx.hpp"
 #include "jit/kernel.hpp"
-#include "rt/archive.hpp"
+#include "rt/archive/archive.hpp"
 #include "rt/bridge.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
@@ -588,7 +588,7 @@ TEST(JitValue, ACorruptCacheEntryIsAMissNotACrash) {
   for (const auto &e : std::filesystem::directory_iterator{dir}) {
     std::fstream f{e.path(), std::ios::in | std::ios::out | std::ios::binary};
     ASSERT_TRUE(f.is_open());
-    f.seekp(static_cast<std::streamoff>(ddx::rt::header_bytes + 8));
+    f.seekp(static_cast<std::streamoff>(ddx::rt::detail::Container::header_bytes + 8));
     f.put('\xff');
     ++damaged;
   }
@@ -609,7 +609,7 @@ TEST(JitValue, ACorruptCacheEntryIsAMissNotACrash) {
   std::filesystem::remove_all(dir);
 }
 
-// A cache entry carries a length read out of its own payload -- the shape where
+// A cache entry carries lengths read out of its own payload -- the shape where
 // a hand-picked corrupt case proves nothing.  Every prologue byte, a stride
 // through the payload and every truncation: each must degrade to a miss.
 TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
@@ -630,8 +630,8 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
     entry = e.path();
   }
   ASSERT_FALSE(entry.empty()) << "the cold compile cached nothing";
-  const auto pristine = *ddx::rt::read_file(entry);
-  ASSERT_GT(pristine.size(), ddx::rt::header_bytes);
+  const auto pristine = *ddx::rt::detail::Container::read(entry);
+  ASSERT_GT(pristine.size(), ddx::rt::detail::Container::header_bytes);
 
   const std::array c{0.7};
   const std::array<const double *, 1> xs{c.data()};
@@ -664,7 +664,7 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
   // Three is adequate only because every field is checked by exact `!=`; a field
   // added with a range check needs the exhaustive sweep again.
   const std::size_t stride = std::max<std::size_t>(1, pristine.size() / 64);
-  for (std::size_t i = 0; i < ddx::rt::header_bytes; ++i) {
+  for (std::size_t i = 0; i < ddx::rt::detail::Container::header_bytes; ++i) {
     for (const std::byte mask :
          {std::byte{0xff}, std::byte{0x01}, std::byte{0x80}}) {
       auto damaged = pristine;
@@ -672,49 +672,40 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
       if (damaged[i] == pristine[i]) {
         continue;
       }
-      ASSERT_TRUE(ddx::rt::write_file(entry, damaged).has_value());
+      ASSERT_TRUE(ddx::rt::detail::Container::write(entry, damaged).has_value());
       rejected("a flipped prologue byte", i);
     }
   }
-  for (std::size_t i = ddx::rt::header_bytes; i < pristine.size(); i += stride) {
+  for (std::size_t i = ddx::rt::detail::Container::header_bytes; i < pristine.size(); i += stride) {
     auto damaged = pristine;
     damaged[i] = ~damaged[i];
-    ASSERT_TRUE(ddx::rt::write_file(entry, damaged).has_value());
+    ASSERT_TRUE(ddx::rt::detail::Container::write(entry, damaged).has_value());
     rejected("a flipped payload byte", i);
   }
 
   for (std::size_t n = 0; n < pristine.size(); n += stride) {
-    ASSERT_TRUE(ddx::rt::write_file(
+    ASSERT_TRUE(ddx::rt::detail::Container::write(
                     entry, std::span<const std::byte>{pristine}.first(n))
                     .has_value());
     rejected("a truncation to", n);
   }
 
-  // What the sweep cannot reach: a symbol length near 2^32, where `4 + length`
-  // in 32-bit wraps past the bounds check.  Damage fails the checksum first, so
-  // the entry is *rebuilt* with a CRC that agrees -- which is what makes this
-  // not vacuous.  CRC32 detects accidents, it does not sign anything.
+  // What the sweep cannot reach: an enormous symbol length, the case damage
+  // cannot produce because it fails the checksum first.  The entry is *rebuilt*
+  // with a CRC that agrees -- which is what makes this not vacuous.  CRC32
+  // detects accidents, it does not sign anything.
   {
-    const auto head = ddx::rt::get_header(pristine, "ddxjitob");
-    ASSERT_TRUE(head.has_value());
-    std::vector<std::byte> payload(
-        pristine.begin() + ddx::rt::header_bytes, pristine.end());
-    ASSERT_GT(payload.size(), 4u);
-    std::ranges::fill_n(payload.begin(), 4, std::byte{0xff}); // 0xffffffff
+    const auto opened = ddx::rt::detail::Container::unpack(pristine, "ddxjitob");
+    ASSERT_TRUE(opened.has_value());
+    const auto &[head, was] = *opened;
+    std::vector<std::byte> payload(was.begin(), was.end());
+    ASSERT_GT(payload.size(), 8u);
+    std::ranges::fill_n(payload.begin(), 8, std::byte{0xff}); // the length
 
-    std::vector<std::byte> forged(ddx::rt::header_bytes + payload.size());
-    ddx::rt::put_header({.magic = "ddxjitob",
-                         .format = head->format,
-                         .schema = head->schema,
-                         .scalar_size = head->scalar_size,
-                         .scalar_kind = head->scalar_kind,
-                         .model_digest = head->model_digest,
-                         .payload_bytes = payload.size(),
-                         .payload_crc = ddx::rt::checksum(payload)},
-                        forged);
-    std::ranges::copy(payload, forged.begin() + ddx::rt::header_bytes);
-    ASSERT_TRUE(ddx::rt::write_file(entry, forged).has_value());
-    rejected("a wrapping symbol length whose CRC agrees", 0);
+    ASSERT_TRUE(ddx::rt::detail::Container::write(
+                    entry, ddx::rt::detail::Container::pack("ddxjitob", head, payload))
+                    .has_value());
+    rejected("an impossible symbol length whose CRC agrees", 0);
   }
 
   std::filesystem::remove_all(dir);
@@ -724,7 +715,7 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
 // missing together and writing one path at once.  Each must get a correct
 // kernel, one whole entry must be left, and nothing may be left staged.
 //
-// It is *not* a regression test for rt::write_file's per-writer staging name.
+// It is *not* a regression test for Container::write's per-writer staging name.
 // Measured against the shared ".tmp" it replaced, this passes 0/10 while 120 of
 // 160 cache writes fail -- so the writers collide constantly, and what hides it
 // is that `write_entry` discards a losing rename's error by design: a cache

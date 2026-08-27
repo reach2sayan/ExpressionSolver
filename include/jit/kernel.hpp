@@ -5,8 +5,12 @@
 #include "util/export.hpp"
 #include "util/pinned.hpp"
 
+#include <boost/describe.hpp>
+#include <boost/mp11/algorithm.hpp>
+
 #include <cassert>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -109,6 +113,31 @@ struct Options {
   // What Equation::options() compares before discarding a compiled kernel.
   friend bool operator==(const Options &, const Options &) = default;
 };
+
+// Identity, not policy: two compiles differing only in `retain_object` or
+// `cache_dir` emit the same machine code.  Also the field list the archive
+// serialises Options by, so an unlisted one refuses old files.
+BOOST_DESCRIBE_STRUCT(Options, (),
+                      (backend, points, lanes, opt_level, codegen_level, slp,
+                       loop_vectorize, veclib, contract, time_passes))
+
+// The described fields only: Options::operator== compares the policy ones too,
+// and a stored kernel must not be refused for those.  `backend` is described
+// because a saved equation restores it, but it says whether to compile and
+// never what is emitted, so it is skipped here: a kernel stored under Compile
+// is the same machine code Adapt would have climbed to.
+[[nodiscard]] inline bool same_codegen(const Options &a, const Options &b) {
+  bool same = true;
+  boost::mp11::mp_for_each<
+      boost::describe::describe_members<Options, boost::describe::mod_public>>(
+      [&](auto D) {
+        if constexpr (!std::same_as<std::remove_cvref_t<decltype(a.*D.pointer)>,
+                                    Backend>) {
+          same = same && a.*D.pointer == b.*D.pointer;
+        }
+      });
+  return same;
+}
 
 // `codegen` brackets the symbol lookup: LLJIT compiles lazily, so the lookup is
 // what forces the backend to run.

@@ -1,10 +1,13 @@
 #include "codegen.hpp"
 
-#include "rt/archive.hpp"
+#include "rt/archive/archive.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
-#include "util/fnv.hpp"
 #include "util/scope_guard.hpp"
+
+#include <boost/hash2/fnv1a.hpp>
+#include <boost/hash2/hash_append.hpp>
+#include <boost/scope/scope_exit.hpp>
 
 #include <llvm/Config/llvm-config.h>
 
@@ -214,14 +217,14 @@ private:
 [[nodiscard]] std::string
 host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
   const std::string features = machine.getFeatures().getString();
-  std::uint64_t h = impl::fnv64_basis;
-  impl::fold_bytes(h, features);
+  boost::hash2::fnv1a_64 h;
+  h.update(features.data(), features.size());
   const llvm::StringRef cpu = machine.getCPU();
   return std::format("{}/{}/feat-{:016x}/llvm-" LLVM_VERSION_STRING,
                      machine.getTargetTriple().str(),
                      cpu.empty() ? std::string_view{"generic"}
                                  : std::string_view{cpu.data(), cpu.size()},
-                     h);
+                     h.result());
 }
 
 // Asked of the target's cost model rather than a feature list, so
@@ -344,7 +347,7 @@ public:
 
 private:
   [[nodiscard]] result<llvm::orc::ThreadSafeModule> emitted() {
-    const impl::scope_exit clock{
+    const boost::scope::scope_exit clock{
         [this, start = Clock::now()] { rep_.emit = Clock::now() - start; }};
     auto ctx = std::make_unique<llvm::LLVMContext>();
     auto m = detail::emit_module(*ctx, g_, name_,
@@ -369,7 +372,7 @@ private:
 
   [[nodiscard]] result<llvm::orc::ThreadSafeModule>
   optimized(llvm::orc::ThreadSafeModule m) {
-    const impl::scope_exit clock{
+    const boost::scope::scope_exit clock{
         [&, start = Clock::now()] { rep_.optimize = Clock::now() - start; }};
     // One machine per compile -- see Host.
     auto tm = host_.machine.createTargetMachine();
@@ -394,7 +397,7 @@ private:
   // The backend runs on materialisation, so the lookup is inside this phase or
   // its number is wrong.
   [[nodiscard]] result<Kernel> materialised(llvm::orc::ThreadSafeModule m) {
-    const impl::scope_exit clock{
+    const boost::scope::scope_exit clock{
         [this, start = Clock::now()] { rep_.codegen = Clock::now() - start; }};
     if (auto e = host_.jit.addIRModule(std::move(m))) {
       return std::unexpected{
@@ -433,30 +436,31 @@ private:
 // graph, the whole compile is skipped.  Content-addressed, so a stale entry is
 // a miss, and nothing here fails a compile -- every failure is "compile it".
 constexpr std::string_view kCacheMagic = "ddxjitob";
-constexpr std::uint32_t kCacheFormat = 1;
+constexpr std::uint32_t kCacheFormat = 2;
 
-// Bumped by hand for what the digest cannot see: the emitter, the pass
-// pipeline, the ABI.
-constexpr std::uint32_t kCacheSchema = 1;
+// Bumped by hand for what neither the digest nor the entry's shape can see: the
+// emitter, the pass pipeline, the ABI.  Folded into the key, so a bump misses
+// rather than refuses.
+constexpr std::uint32_t kCacheEpoch = 1;
 
 // What changes the machine code, and nothing else: `backend`, `points`,
 // `time_passes`, `retain_object` and `cache_dir` never reach codegen.
 [[nodiscard]] std::uint64_t cache_key(std::uint64_t graph, std::string_view host,
                                       const Options &opt, unsigned lanes) {
-  std::uint64_t h = impl::fnv64_basis;
-  impl::fold_bytes(h, host);
-  impl::fold64(h, graph);
-  impl::fold64(h, kCacheSchema);
+  boost::hash2::fnv1a_64 h;
+  boost::hash2::hash_append(h, rt::detail::wire_flavor{}, host);
+  rt::detail::fold(h, graph);
+  rt::detail::fold(h, kCacheEpoch);
   // The width *emitted*: `lanes == 0` means the host's, so the raw request
   // would give one graph two keys that never hit each other.
-  impl::fold64(h, lanes);
-  impl::fold64(h, opt.opt_level);
-  impl::fold64(h, opt.codegen_level);
-  impl::fold64(h, static_cast<std::uint64_t>(opt.veclib));
-  impl::fold64(h, static_cast<std::uint64_t>(opt.slp));
-  impl::fold64(h, static_cast<std::uint64_t>(opt.loop_vectorize));
-  impl::fold64(h, static_cast<std::uint64_t>(opt.contract));
-  return h;
+  rt::detail::fold(h, lanes);
+  rt::detail::fold(h, opt.opt_level);
+  rt::detail::fold(h, opt.codegen_level);
+  rt::detail::fold(h, opt.veclib);
+  rt::detail::fold(h, opt.slp);
+  rt::detail::fold(h, opt.loop_vectorize);
+  rt::detail::fold(h, opt.contract);
+  return h.result();
 }
 
 [[nodiscard]] std::filesystem::path entry_path(std::string_view dir,
@@ -465,51 +469,46 @@ constexpr std::uint32_t kCacheSchema = 1;
 }
 
 // Chosen by the compile that produced the bytes, and underivable, so it travels
-// with them.
+// with them.  Described, so the same codec that writes a graph writes this: the
+// length prefix and its bounds are the archive's, not a second hand-rolled pair.
 struct Entry {
   std::string symbol;
   std::vector<std::byte> code;
 };
+BOOST_DESCRIBE_STRUCT(Entry, (), (symbol, code))
+
+// The prologue's shape and the entry's, so a field added to either refuses the
+// old entries by itself.
+constexpr std::uint32_t kCacheSchema = rt::detail::Container::stamp<Entry>();
 
 [[nodiscard]] std::optional<Entry> read_entry(std::string_view dir,
                                               std::uint64_t key) {
-  auto bytes = rt::read_file(entry_path(dir, key));
+  auto bytes = rt::detail::Container::read(entry_path(dir, key));
   if (!bytes) {
     return std::nullopt; // absent, unreadable: both are a miss
   }
-  // Every field written is checked and none is written that is not: the header
-  // is the one part no checksum covers.  `opcodes` and `model_nodes` belong to
-  // the graph half of the format and are written as zero.
-  const auto head = rt::get_header(*bytes, kCacheMagic);
-  if (!head || head->format != kCacheFormat || head->schema != kCacheSchema ||
-      head->scalar_size != sizeof(double) || head->scalar_kind != 1 ||
-      head->opcodes != 0 || head->model_nodes != 0 ||
-      head->model_digest != key) {
+  // unpack has cleared the checksum before this sees a payload byte.  Every
+  // prologue field written is checked and none is written that is not: the
+  // prologue is the one part no checksum covers.  `model_nodes` belongs to the
+  // graph half of the format and is written as zero.
+  const auto opened = rt::detail::Container::unpack(*bytes, kCacheMagic);
+  if (!opened) {
     return std::nullopt;
   }
-  // subspan, not pointer arithmetic: get_header has already refused a
-  // payload_bytes longer than the file, and this is what says so in the code.
-  const std::span<const std::byte> payload =
-      std::span{std::as_const(*bytes)}.subspan(rt::header_bytes,
-                                               head->payload_bytes);
-  if (rt::checksum(payload) != head->payload_crc || payload.size() < 4) {
+  const auto &[head, payload] = *opened;
+  if (head.format != kCacheFormat || head.schema != kCacheSchema ||
+      head.scalar_size != sizeof(double) || head.scalar_kind != 1 ||
+      head.model_nodes != 0 || head.model_digest != key) {
     return std::nullopt;
   }
-  std::uint32_t symbol_bytes = 0;
-  std::memcpy(&symbol_bytes, payload.data(), 4);
-  // Widened before it is added to: `4 + symbol_bytes` in uint32 wraps at
-  // 0xfffffffc, passing the bounds check and then walking off the end.  Only a
-  // *forged* payload reaches it, damage failing the CRC first.
-  const std::size_t prefix = std::size_t{4} + symbol_bytes;
-  if (symbol_bytes == 0 || payload.size() < prefix) {
+  // A forged length is the codec's problem now: it bounds every one against the
+  // bytes actually left, so the 4 + symbol_bytes wrap this used to widen for
+  // cannot be spelled.
+  auto entry = rt::detail::Container::decode<Entry>(payload);
+  if (!entry || entry->symbol.empty() || entry->code.empty()) {
     return std::nullopt;
   }
-  Entry out;
-  out.symbol.assign(reinterpret_cast<const char *>(payload.data()) + 4,
-                    symbol_bytes);
-  out.code.assign(payload.begin() + static_cast<std::ptrdiff_t>(prefix),
-                  payload.end());
-  return out.code.empty() ? std::nullopt : std::optional{std::move(out)};
+  return std::move(*entry);
 }
 
 void write_entry(std::string_view dir, std::uint64_t key,
@@ -519,29 +518,19 @@ void write_entry(std::string_view dir, std::uint64_t key,
   if (ec) {
     return; // A cache that cannot be written is a cache that always misses.
   }
-  // One buffer, the payload written straight into its tail: the object file is
-  // the large part here and staging it separately copies it a second time.
-  const auto symbol_bytes = static_cast<std::uint32_t>(symbol.size());
-  std::vector<std::byte> file(rt::header_bytes + 4 + symbol.size() +
-                              code.size());
-  const std::span<std::byte> payload =
-      std::span{file}.subspan(rt::header_bytes);
-  std::memcpy(payload.data(), &symbol_bytes, 4);
-  std::ranges::copy(std::as_bytes(std::span{symbol}), payload.begin() + 4);
-  std::ranges::copy(code, payload.begin() + 4 + symbol.size());
-
-  rt::put_header({.magic = kCacheMagic,
-                  .format = kCacheFormat,
-                  .schema = kCacheSchema,
-                  .scalar_size = sizeof(double),
-                  .scalar_kind = 1,
-                  .model_digest = key,
-                  .payload_bytes = payload.size(),
-                  .payload_crc = rt::checksum(payload)},
-                 file);
+  const Entry entry{.symbol = std::string{symbol},
+                    .code = {code.begin(), code.end()}};
+  const rt::detail::FileHeader h{.magic = kCacheMagic,
+                         .format = kCacheFormat,
+                         .schema = kCacheSchema,
+                         .scalar_size = sizeof(double),
+                         .scalar_kind = 1,
+                         .model_digest = key};
   // Staged inside the cache directory: a rename is only atomic within one
   // filesystem.
-  (void)rt::write_file(entry_path(dir, key), file);
+  (void)rt::detail::Container::write(
+      entry_path(dir, key),
+      rt::detail::Container::pack(kCacheMagic, h, rt::detail::Container::encode(entry)));
 }
 
 // Where a background compile runs.  Not a member of Impl: a Kernel holds a share

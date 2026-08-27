@@ -3,6 +3,8 @@
 #include "md/md.hpp"
 #include "ops/scalar.hpp"
 
+#include <boost/container/small_vector.hpp>
+
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
@@ -91,55 +93,32 @@ template <std::size_t N>
 // Caller-owned scratch for a sweep's seeded variables, reused across a loop
 // over many points.
 
-namespace detail {
-// An array member costs a stack-protector canary in every function holding the
-// workspace, so a D too wide to fit a point gets no block at all.
-template <Numeric D, std::size_t Bytes> struct inline_block {
-  alignas(D) std::byte storage[Bytes];
-};
-struct no_inline_block {};
-} // namespace detail
-
 template <Numeric D> struct SweepWorkspace {
-  static_assert(std::is_trivially_destructible_v<D>,
-                "the inline block is reused and abandoned without destruction");
-
   // A byte budget, not an element count: D may be much wider than dual2nd.
+  // Below the floor the inline buffer is dropped rather than shrunk -- an array
+  // member costs a stack-protector canary in every function holding one, and a
+  // small_vector<D, 0> has no array member to pay for.
   static constexpr std::size_t inline_bytes = 512;
   static constexpr std::size_t inline_floor = 8;
   static constexpr std::size_t inline_capacity =
       (inline_bytes / sizeof(D) >= inline_floor) ? inline_bytes / sizeof(D) : 0;
 
-  [[no_unique_address]] std::conditional_t<
-      (inline_capacity > 0), detail::inline_block<D, inline_bytes>,
-      detail::no_inline_block> block;
-  std::vector<D> heap;
+  boost::container::small_vector<D, inline_capacity> dof;
 
   [[nodiscard]] D *seed(const std::span<const double> x) {
     return seed_with(x, [](const double v) { return D{v}; });
   }
 
 private:
-  // Where the block or the vector is chosen.  Storage valid until the next
-  // seed on this workspace.
+  // Storage valid until the next seed on this workspace.
   template <std::regular_invocable<double> Make>
     requires std::convertible_to<std::invoke_result_t<Make &, double>, D>
   [[nodiscard]] D *seed_with(const std::span<const double> x, Make make) {
-    if constexpr (inline_capacity > 0) {
-      if (x.size() <= inline_capacity) {
-        // Raw storage: each seed constructs rather than assigns.
-        D *const dof = reinterpret_cast<D *>(block.storage);
-        std::ranges::uninitialized_copy(x | std::views::transform(make),
-                                        std::span{dof, x.size()});
-        return dof;
-      }
-    }
-    // resize(), not reserve(): size is what a later .data() read may touch.
-    if (heap.size() < x.size()) {
-      heap.resize(x.size());
-    }
-    std::ranges::transform(x, heap.begin(), make);
-    return heap.data();
+    // assign(), not resize() then transform: the second writes every element
+    // twice, once value-initialised and once with the seed.
+    const auto seeded = x | std::views::transform(make);
+    dof.assign(std::ranges::begin(seeded), std::ranges::end(seeded));
+    return dof.data();
   }
 };
 

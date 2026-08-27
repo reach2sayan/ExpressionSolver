@@ -6,6 +6,8 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <vector>
+#include <string>
 #include <string_view>
 
 // The runtime mirror of the compile-time operation set.  Rows are (factory
@@ -107,6 +109,27 @@ opcode_of_label(std::string_view label) noexcept {
   return row == detail::op_info.end() ? std::nullopt
                                       : std::optional{static_cast<OpCode>(
                                             row - detail::op_info.begin())};
+}
+
+// The same lookup at run time, which is what a loader has: byte values are
+// table-order, so appending a transcendental shifts every enumerator above it,
+// and a file names its opcodes by label and remaps them on load.
+[[nodiscard]] inline std::optional<OpCode>
+opcode_of(std::string_view label) noexcept {
+  const auto row =
+      std::ranges::find(detail::op_info, label, &detail::OpInfo::label);
+  return row == detail::op_info.end() ? std::nullopt
+                                      : std::optional{static_cast<OpCode>(
+                                            row - detail::op_info.begin())};
+}
+
+[[nodiscard]] inline std::vector<std::string> opcode_labels() {
+  std::vector<std::string> out;
+  out.reserve(op_count);
+  for (const auto &i : detail::op_info) {
+    out.emplace_back(i.label);
+  }
+  return out;
 }
 
 [[nodiscard]] constexpr std::uint8_t arity_of(OpCode op) noexcept {

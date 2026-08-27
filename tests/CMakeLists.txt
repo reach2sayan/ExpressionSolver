@@ -79,13 +79,14 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
     # testfile literally and is a list again by the time the cache sees it.
     string(JOIN "$<SEMICOLON>" DDX_PACKAGE_COMPONENTS_ARG ${DDX_PACKAGE_COMPONENTS})
 
-    # ddx-config.cmake re-finds Boost on the consumer's behalf, and the nested
-    # project has no toolchain file and no cache to do it with.  install_tree
-    # cannot fall back on an inherited CMAKE_PREFIX_PATH either: it sets its own.
+    # No Boost is handed down: ddx-config carries its own include path now, so
+    # a consumer needs nothing found.  What the nested project cannot work out
+    # for itself is the compiler and the configuration, having no toolchain file
+    # and no cache -- and install_tree cannot fall back on an inherited
+    # CMAKE_PREFIX_PATH either, since it sets its own.
     set(DDX_PACKAGE_COMMON_OPTIONS
             -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-            -DBoost_DIR=${Boost_DIR}
             -DDDX_CONSUMER_COMPONENTS=${DDX_PACKAGE_COMPONENTS_ARG})
     if (DDX_BUILD_JIT)
         list(APPEND DDX_PACKAGE_COMMON_OPTIONS -DLLVM_DIR=${LLVM_DIR})

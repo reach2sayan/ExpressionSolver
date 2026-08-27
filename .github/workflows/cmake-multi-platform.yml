@@ -36,27 +36,29 @@ jobs:
       # this line feeds both jobs.  clang-20 because util/config.hpp gates on
       # __cpp_explicit_this_parameter, which Clang does not define until 20 --
       # 18 and 19 compile an explicit object parameter but do not advertise it.
-      # libboost-dev because ddx finds Boost rather than fetching it -- and so
-      # does tests/package, configuring on its own.
-      - name: Install compilers and Boost (Ubuntu)
+      # Compilers only: Boost is fetched at a pinned hash and never found, and
+      # an installed ddx carries the headers in its own prefix, so tests/package
+      # needs none either.
+      - name: Install compilers (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang-20 gcc-14 g++-14 libboost-dev
+          sudo apt-get install -y clang-20 gcc-14 g++-14
 
-      # The core may depend on the standard library and Boost.Mp11 and nothing
-      # else.  Standard headers carry no '/', so any other angle-include with a
-      # path is a third-party leak; the vendored mdspan is the one exception.
+      # include/ may name the standard library and Boost, and nothing else.
+      # Boost is not a third party here: it is fetched at a pinned hash and
+      # installed into ddx's own prefix, so it is as present as <vector> and a
+      # header should reach for the right library rather than the allowed one.
+      # The vendored mdspan is the one genuine exception.
       #
-      # include/rt/ gets its own rule: a separate opt-in target that may reach
-      # for boost, and which the core must not depend on in either direction.
+      # What still holds: a quoted include resolves inside include/, and the
+      # core must not depend on rt/ in either direction.
       - name: Header dependencies stay declared
         if: runner.os == 'Linux'
         shell: bash
         run: |
           angled=$(grep -rnE '#[[:space:]]*include[[:space:]]*<[^>]*/' include --include='*.hpp' \
-                   | grep -v third_party | grep -v '^include/rt/' \
-                   | grep -v '<boost/mp11/' || true)
+                   | grep -v third_party | grep -v '<boost/' || true)
           # A quoted include is one of ours and must resolve inside include/;
           # one that does not is a bundled dependency under another spelling.
           quoted=$( { grep -rnE '#[[:space:]]*include[[:space:]]*"' include --include='*.hpp' \
@@ -65,22 +67,17 @@ jobs:
                        h=${rest#*\"}; h=${h%%\"*}
                        [ -e "$(dirname "$f")/$h" ] || [ -e "include/$h" ] || echo "$f:$n: $h"
                      done)
-          # ddx::rt's declared dependencies are Boost.Graph and Boost.DynamicBitset;
-          # anything else is a leak.
-          rt=$(grep -rnE '#[[:space:]]*include[[:space:]]*<[^>]*/' include/rt --include='*.hpp' \
-               | grep -vE '<boost/' || true)
           # The core must never reach into rt/.
           core=$(grep -rnE '#[[:space:]]*include[[:space:]]*"rt/' include --include='*.hpp' \
                  | grep -v '^include/rt/' || true)
-          if [ -n "$angled$quoted$rt$core" ]; then
+          if [ -n "$angled$quoted$core" ]; then
             echo "a third-party header leaked into include/:"
             [ -n "$angled" ] && echo "$angled"
             [ -n "$quoted" ] && echo "$quoted"
-            [ -n "$rt" ] && echo "include/rt/ may depend on boost only:" && echo "$rt"
             [ -n "$core" ] && echo "the core must not depend on rt/:" && echo "$core"
             exit 1
           fi
-          echo "include/ depends on the standard library and Boost.Mp11 only (rt/: plus boost)"
+          echo "include/ depends on the standard library and Boost only"
 
       - name: Set build directory
         id: strings
@@ -96,13 +93,6 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -S ${{ github.workspace }}
 
-      # The runner's preinstalled vcpkg: ddx finds Boost and the Windows image
-      # ships none.  Headers only -- every Boost library ddx names is such.
-      - name: Install Boost (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: vcpkg install boost-mp11 boost-graph boost-dynamic-bitset boost-describe boost-endian boost-crc --triplet x64-windows
-
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -111,7 +101,6 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -S "${{ github.workspace }}"
 
       - name: Build

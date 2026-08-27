@@ -1,8 +1,8 @@
-# Every third-party dependency, in one place.  Anything reaching ddx's headers or
-# binaries is *found*, so an installed ddx can name it again elsewhere; the build
-# tools are fetched, and declaring one downloads nothing until its macro asks.
+# Every third-party dependency, in one place.  LLVM and pybind11 are *found*,
+# being compiled things the machine owns; the rest are fetched against a pinned
+# hash, and declaring one downloads nothing until its macro asks.
 #
-#   ddx_use_boost()            Boost, header-only, found           always
+#   ddx_use_boost()            Boost, header-only, fetched         always
 #   ddx_use_llvm()             LLVM 20, found                      DDX_BUILD_JIT
 #   ddx_use_googletest()       GoogleTest, fetched                 top-level only
 #   ddx_use_googlebenchmark()  Google Benchmark, fetched           DDX_BUILD_BENCHMARKS
@@ -12,21 +12,19 @@
 # defines variables the caller's scope is expected to see.
 include_guard(GLOBAL)
 
-include(CheckCXXSourceCompiles)
 include(FetchContent)
 
 # --- versions ---------------------------------------------------------------
-# The fetched two only; Boost and LLVM are whatever the machine has.
+# LLVM is whatever the machine has; the rest are pinned here.
 set(DDX_GOOGLETEST_REF "5376968f6948923e2411081fd9372e71a59d8e77"
         CACHE STRING "GoogleTest commit to fetch")
 set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release to fetch")
 
-# A range, not a floor: the ORC C++ API is not stable across releases, and both
-# ends are hard.  Below 20, Intrinsic::getOrInsertDeclaration and
-# lookupIntrinsicID do not exist and getHostCPUFeatures() has another signature;
-# above it, 21 replaces the `nocapture` attribute codegen.cpp sets.
-set(DDX_LLVM_VERSION_MIN 20)
-set(DDX_LLVM_VERSION_MAX 20)
+# Exact, not a floor: the ORC C++ API is not stable across releases and both
+# ends bite.  Below 20, Intrinsic::getOrInsertDeclaration and lookupIntrinsicID
+# do not exist and getHostCPUFeatures() has another signature; above it, 21
+# replaces the `nocapture` attribute codegen.cpp sets.
+set(DDX_LLVM_VERSION 20)
 
 # --- declarations -----------------------------------------------------------
 # SYSTEM throughout: a fetched dependency's warnings are not ours to fix.
@@ -43,72 +41,81 @@ FetchContent_Declare(googlebenchmark
 
 # --- Boost -------------------------------------------------------------------
 # Mp11 for the symbol lists, Graph for the colouring, DynamicBitset for the
-# coupling rows; Describe, Endian and CRC for the saved graph.  All header-only.
+# coupling rows; Describe, Endian and CRC for the saved graph; Parser for the
+# text surface.  All header-only.
 # Boost.Serialization is deliberately absent -- see boost_no_exceptions.cpp.
 #
-# Found, not fetched, and the same find ddx-config.cmake makes: ddx's public
-# headers include boost's.  A fetched Boost belongs to no export set, so no
-# installed ddx could name it.  Config mode is the only one CMake 4 has left.
+# Fetched and pinned, and never found: the machine's Boost is not consulted at
+# all, because a distribution's is a lottery this build loses.  BOOST_ROOT and
+# Boost_DIR are ignored along with the rest.  Nothing here is compiled -- the
+# headers are used where they land -- so SOURCE_SUBDIR names a directory the
+# archive does not have and MakeAvailable stops once it has unpacked.
 #
-# No version floor -- a partial install is what goes wrong, and that is a missing
-# header, which is what the probe asks about.  Only a yes is remembered, and it
-# answers for the list as it stood: rename the cache variable when this one grows.
-set(DDX_BOOST_HEADERS
-        boost/mp11/algorithm.hpp
-        boost/mp11/list.hpp
-        boost/graph/compressed_sparse_row_graph.hpp
-        boost/dynamic_bitset.hpp
-        boost/describe.hpp
-        boost/endian/conversion.hpp
-        boost/crc.hpp)
+# DDX_BOOST_INCLUDEDIR is the one way past that, and it is all or nothing: name
+# a directory holding boost/, and that tree is used with no fetch and no
+# fallback.  A tree without boost/version.hpp is a hard error rather than a
+# quiet download, so a typo in the override cannot be mistaken for the pin.
+#
+# Unpacked beside the source rather than under a build tree: eight presets share
+# this checkout, and each would otherwise keep its own copy of all of Boost.
+set(DDX_BOOST_INCLUDEDIR "" CACHE PATH
+        "A Boost include root to use instead of the pinned fetch; must hold boost/version.hpp")
+set(DDX_BOOST_VERSION "1.92.0" CACHE STRING "Boost release to fetch")
+set(DDX_BOOST_SHA256 "ea7b982002cc9dfbe59b0b217b206f470dc75f3de0bb2973d844118934d82411"
+        CACHE STRING "SHA256 of the archive DDX_BOOST_VERSION names")
+cmake_path(SET _ddx_deps_default NORMALIZE "${CMAKE_CURRENT_LIST_DIR}/../.deps")
+set(DDX_DEPS_DIR "${_ddx_deps_default}"
+        CACHE PATH "Where fetched Boost is unpacked; shared by every build tree")
+unset(_ddx_deps_default)
+
+FetchContent_Declare(boost
+        URL https://github.com/boostorg/boost/releases/download/boost-${DDX_BOOST_VERSION}/boost-${DDX_BOOST_VERSION}-b2-nodocs.tar.xz
+        URL_HASH SHA256=${DDX_BOOST_SHA256}
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        SOURCE_SUBDIR ddx-does-not-build-boost
+        SOURCE_DIR "${DDX_DEPS_DIR}/boost-${DDX_BOOST_VERSION}"
+        SUBBUILD_DIR "${DDX_DEPS_DIR}/boost-${DDX_BOOST_VERSION}-subbuild"
+        BINARY_DIR "${DDX_DEPS_DIR}/boost-${DDX_BOOST_VERSION}-build"
+)
 
 macro(ddx_use_boost)
     if (NOT TARGET Boost::headers)
-        find_package(Boost REQUIRED CONFIG)
-        # The target, not its scraped include dirs, so the probe compiles
-        # against exactly what the rest of the build does.
-        set(CMAKE_REQUIRED_LIBRARIES Boost::headers)
-        set(_ddx_boost_source "")
-        foreach (_ddx_boost_header IN LISTS DDX_BOOST_HEADERS)
-            string(APPEND _ddx_boost_source "#include <${_ddx_boost_header}>\n")
-        endforeach ()
-        check_cxx_source_compiles("${_ddx_boost_source}int main() {}"
-                DDX_BOOST_HEADERS_PRESENT)
-
-        # One probe per header, and only on the way to aborting: the combined
-        # answer says something is wrong, never which.  None of it is cached --
-        # a remembered "no" would outlive the install that fixes it.
-        if (NOT DDX_BOOST_HEADERS_PRESENT)
-            unset(DDX_BOOST_HEADERS_PRESENT CACHE)
-            set(_ddx_boost_bad "")
-            foreach (_ddx_boost_header IN LISTS DDX_BOOST_HEADERS)
-                string(MAKE_C_IDENTIFIER "DDX_BOOST_HAS_${_ddx_boost_header}" _ddx_boost_var)
-                check_cxx_source_compiles("#include <${_ddx_boost_header}>\nint main() {}"
-                        ${_ddx_boost_var})
-                if (NOT ${_ddx_boost_var})
-                    list(APPEND _ddx_boost_bad "${_ddx_boost_header}")
-                endif ()
-                unset(${_ddx_boost_var} CACHE)
-            endforeach ()
-            string(REPLACE ";" ", " _ddx_boost_bad "${_ddx_boost_bad}")
-            if (_ddx_boost_bad)
-                message(FATAL_ERROR
-                        "Boost ${Boost_VERSION} was found at ${Boost_INCLUDE_DIRS}, but these "
-                        "headers ddx names do not compile: ${_ddx_boost_bad}.  A modular install "
-                        "(vcpkg, Conan) wants the libraries owning them added; a distro one "
-                        "usually wants the whole headers package (libboost-dev).  If they are on "
-                        "disk, the compiler's own diagnostic is in the CMakeConfigureLog.")
-            endif ()
-            # Each alone is fine, so the include order or the toolchain is at fault.
-            message(FATAL_ERROR
-                    "Boost ${Boost_VERSION} at ${Boost_INCLUDE_DIRS} has every header ddx names, "
-                    "but they do not compile together.  The CMakeConfigureLog holds the "
-                    "compiler's diagnostic, under the check that includes all of them.")
+        if (DDX_BOOST_INCLUDEDIR)
+            _ddx_adopt_boost("${DDX_BOOST_INCLUDEDIR}")
+        else ()
+            FetchContent_MakeAvailable(boost)
+            _ddx_adopt_boost("${boost_SOURCE_DIR}")
         endif ()
-        unset(CMAKE_REQUIRED_LIBRARIES)
-        unset(_ddx_boost_source)
-        unset(_ddx_boost_header)
     endif ()
+endmacro()
+
+# The include root becomes Boost::headers, whichever of the two supplied it.
+# IMPORTED, which is what find_package(Boost CONFIG) would have left: the name
+# every target already links, carrying an include path and belonging to no
+# export set.  DdxInstall copies the libraries ddx names out of this root into
+# ddx's own prefix, so a consumer needs no Boost of their own -- which is the
+# same rule as the build, where the machine's Boost is never consulted.
+macro(_ddx_adopt_boost root)
+    if (NOT EXISTS "${root}/boost/version.hpp")
+        message(FATAL_ERROR
+                "No Boost at ${root}: it has no boost/version.hpp.  "
+                "DDX_BOOST_INCLUDEDIR must name the directory *containing* boost/, "
+                "and setting it turns the pinned fetch off entirely.  Unset it to "
+                "build against the fetched Boost ${DDX_BOOST_VERSION} instead.")
+    endif ()
+    add_library(Boost::headers INTERFACE IMPORTED GLOBAL)
+    set_target_properties(Boost::headers PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${root}")
+    # What ddx-config.cmake reports back when a consumer's Boost differs, read
+    # from the tree rather than assumed: an override is any version at all.
+    file(STRINGS "${root}/boost/version.hpp" _ddx_boost_version_line
+            REGEX "^#define BOOST_LIB_VERSION ")
+    string(REGEX REPLACE ".*\"([0-9_]+)\".*" "\\1" Boost_VERSION "${_ddx_boost_version_line}")
+    string(REPLACE "_" "." Boost_VERSION "${Boost_VERSION}")
+    unset(_ddx_boost_version_line)
+    # Where DdxInstall reads the headers it ships.
+    set(DDX_BOOST_ROOT "${root}")
+    message(STATUS "Boost ${Boost_VERSION} (${root})")
 endmacro()
 
 # --- LLVM -------------------------------------------------------------------
@@ -118,12 +125,11 @@ macro(ddx_use_llvm)
         # LLVMConfig matches only an exact version request, so a find_package
         # range never does; check the major here.
         find_package(LLVM REQUIRED CONFIG)
-        if (LLVM_VERSION_MAJOR LESS DDX_LLVM_VERSION_MIN
-                OR LLVM_VERSION_MAJOR GREATER DDX_LLVM_VERSION_MAX)
+        if (NOT LLVM_VERSION_MAJOR EQUAL DDX_LLVM_VERSION)
             message(FATAL_ERROR
-                    "ddx::jit has been built against LLVM ${DDX_LLVM_VERSION_MIN}-${DDX_LLVM_VERSION_MAX}; "
-                    "found ${LLVM_PACKAGE_VERSION}.  Point CMake at a supported one with "
-                    "-DLLVM_DIR=/usr/lib/llvm-${DDX_LLVM_VERSION_MAX}/lib/cmake/llvm.")
+                    "ddx::jit is built against LLVM ${DDX_LLVM_VERSION}; found "
+                    "${LLVM_PACKAGE_VERSION}.  Point CMake at it with "
+                    "-DLLVM_DIR=/usr/lib/llvm-${DDX_LLVM_VERSION}/lib/cmake/llvm.")
         endif ()
         message(STATUS "LLVM ${LLVM_PACKAGE_VERSION} (${LLVM_INCLUDE_DIRS})")
         separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")

@@ -1,4 +1,4 @@
-#include "rt/archive.hpp"
+#include "rt/archive/archive.hpp"
 #include "rt/equation.hpp"
 #include "rt/expressions.hpp"
 
@@ -44,12 +44,12 @@ public:
   [[nodiscard]] std::vector<std::byte> bytes() const {
     // Checked, not dereferenced: `*` on a failed result is undefined, so a
     // vanished file would surface as a segfault rather than as a failure.
-    auto read = ddx::rt::read_file(path_);
+    auto read = ddx::rt::detail::Container::read(path_);
     EXPECT_TRUE(read.has_value()) << "scratch file went missing";
     return read ? std::move(*read) : std::vector<std::byte>{};
   }
   void write(std::span<const std::byte> b) const {
-    ASSERT_TRUE(ddx::rt::write_file(path_, b).has_value());
+    ASSERT_TRUE(ddx::rt::detail::Container::write(path_, b).has_value());
   }
 
 private:
@@ -139,7 +139,7 @@ TEST(RtArchive, VerifyAnswersBothQuestions) {
   ASSERT_TRUE(built.save(file).has_value());
 
   // Readable by this build...
-  EXPECT_TRUE(ddx::rt::verify(file.path()).has_value());
+  EXPECT_TRUE(ddx::rt::verify<>(file.path()).has_value());
   // ...and it is this equation.
   EXPECT_TRUE(built.verify(file.path()).has_value());
 
@@ -150,7 +150,7 @@ TEST(RtArchive, VerifyAnswersBothQuestions) {
     const auto z = ddx::rt::var("z");
     return x + y + z;
   });
-  EXPECT_TRUE(ddx::rt::verify(file.path()).has_value());
+  EXPECT_TRUE(ddx::rt::verify<>(file.path()).has_value());
   const auto mismatch = other.verify(file.path());
   ASSERT_FALSE(mismatch.has_value());
   EXPECT_EQ(mismatch.error().code, ddx::errc::archive_mismatch);
@@ -173,7 +173,7 @@ TEST(RtArchive, RefusesATruncatedFile) {
 
   // Just past the prologue, so the header parses and the payload does not.
   auto cut = whole;
-  cut.resize(ddx::rt::header_bytes + 8);
+  cut.resize(ddx::rt::detail::Container::header_bytes + 8);
   file.write(cut);
   const auto loaded = ddx::rt::load(file.path());
   ASSERT_FALSE(loaded.has_value());
@@ -187,8 +187,8 @@ TEST(RtArchive, RefusesAFlippedByte) {
   auto bytes = file.bytes();
 
   // One bit, in the middle of the payload, where it will land inside a node.
-  const std::size_t at = ddx::rt::header_bytes +
-                         (bytes.size() - ddx::rt::header_bytes) / 2;
+  const std::size_t at = ddx::rt::detail::Container::header_bytes +
+                         (bytes.size() - ddx::rt::detail::Container::header_bytes) / 2;
   bytes[at] ^= std::byte{0x01};
   file.write(bytes);
 
@@ -210,14 +210,15 @@ TEST(RtArchive, RefusesForeignAndFutureFiles) {
   // Bumped in place: the checksum covers the payload, not the prologue, so this
   // is what a future writer's file looks like to us.
   auto future = whole;
-  future[8] = std::byte{0xFF};
+  future[ddx::rt::detail::Container::magic_bytes] = std::byte{0xFF}; // the first `format` byte
   file.write(future);
   EXPECT_EQ(ddx::rt::load(file.path()).error().code, ddx::errc::bad_archive);
 
   // Letting a reserved byte through would make claiming it later a silent
-  // format change.
+  // format change.  Named, not a literal: the described field list decides
+  // where the tail starts, and a field added to it moves this.
   auto reserved = whole;
-  reserved[44] = std::byte{0x01};
+  reserved[ddx::rt::detail::Container::header_bytes - ddx::rt::detail::Container::reserved_bytes] = std::byte{0x01};
   file.write(reserved);
   EXPECT_EQ(ddx::rt::load(file.path()).error().code, ddx::errc::bad_archive);
 }
@@ -274,7 +275,7 @@ TEST(RtArchive, ConcurrentWritersToOnePathAllSucceed) {
     writers.emplace_back([&file, &bytes, &start] {
       start.arrive_and_wait(); // nobody writes until everybody is ready
       for (int spin = 0; spin < 8; ++spin) {
-        EXPECT_TRUE(ddx::rt::write_file(file.path(), bytes).has_value());
+        EXPECT_TRUE(ddx::rt::detail::Container::write(file.path(), bytes).has_value());
       }
     });
   }
@@ -379,14 +380,14 @@ TEST(RtArchive, SurvivesEverySingleByteCorruption) {
   const Scratch file{"fuzz"};
   ASSERT_TRUE(coupled().save(file).has_value());
   const auto whole = file.bytes();
-  ASSERT_GT(whole.size(), ddx::rt::header_bytes);
+  ASSERT_GT(whole.size(), ddx::rt::detail::Container::header_bytes);
 
   // Every offset would be a few hundred thousand loads; a stride samples the
   // prologue densely and the payload throughout.
   std::size_t refused = 0;
   std::size_t accepted = 0;
   for (std::size_t at = 0; at < whole.size();
-       at += (at < ddx::rt::header_bytes ? 1 : 97)) {
+       at += (at < ddx::rt::detail::Container::header_bytes ? 1 : 97)) {
     for (const std::byte mask : {std::byte{0x01}, std::byte{0x80},
                                  std::byte{0xFF}}) {
       auto bytes = whole;
@@ -405,8 +406,8 @@ TEST(RtArchive, SurvivesEverySingleByteCorruption) {
   // file's meaning is protected: 390 of 4290 get past the checksum, and none
   // was the one bit that remapped an opcode -- see RefusesAFlippedOpcodeLabel.
   EXPECT_GT(refused, 0u);
-  EXPECT_EQ(refused + accepted, 3 * (ddx::rt::header_bytes +
-                                     (whole.size() - ddx::rt::header_bytes +
+  EXPECT_EQ(refused + accepted, 3 * (ddx::rt::detail::Container::header_bytes +
+                                     (whole.size() - ddx::rt::detail::Container::header_bytes +
                                       96) / 97));
 }
 
@@ -445,7 +446,7 @@ TEST(RtArchive, RefusesAForgedColouringCount) {
   });
   ASSERT_TRUE(four.save(file).has_value());
 
-  auto snap = ddx::rt::load_snapshot(file.path());
+  auto snap = ddx::rt::load_snapshot<>(file.path());
   ASSERT_TRUE(snap.has_value());
   auto &coloring = snap->hessians.front().coloring;
   const std::size_t nsym = snap->symbols.size();
@@ -462,6 +463,21 @@ TEST(RtArchive, RefusesAForgedColouringCount) {
   const auto loaded = ddx::rt::load(file.path());
   ASSERT_FALSE(loaded.has_value()) << "a wrapped count agreed with a length";
   EXPECT_EQ(loaded.error().code, ddx::errc::archive_corrupt);
+}
+
+// hash2 appends a float as bit_cast<uint64_t>(v + 0), which folds -0.0 onto
+// +0.0.  The digest is the object cache's filename, so agreeing here would hand
+// a graph holding -0.0 the kernel compiled for +0.0 -- 1/x apart, and silently.
+// digest() routes every field through to_bits for exactly this reason.
+TEST(RtArchive, DigestSeparatesTheSignedZeroes) {
+  using ddx::rt::Node;
+  const std::array<std::string, 1> symbols{"x"};
+  const std::array<Node<double>, 1> plus{Node<double>{.value = +0.0}};
+  const std::array<Node<double>, 1> minus{Node<double>{.value = -0.0}};
+
+  ASSERT_TRUE(plus[0].value == minus[0].value) << "the two must compare equal";
+  EXPECT_NE(ddx::rt::digest<double>(symbols, plus, 1),
+            ddx::rt::digest<double>(symbols, minus, 1));
 }
 
 // The opcode table is what every opcode byte in the payload *means*, so it is
@@ -483,7 +499,7 @@ TEST(RtArchive, RefusesAFlippedOpcodeLabel) {
 
   auto bytes = file.bytes();
   bool flipped = false;
-  for (std::size_t i = ddx::rt::header_bytes; i + 9 < bytes.size(); ++i) {
+  for (std::size_t i = ddx::rt::detail::Container::header_bytes; i + 9 < bytes.size(); ++i) {
     std::uint64_t len = 0;
     std::memcpy(&len, bytes.data() + i, sizeof len);
     if (len != 1 || static_cast<char>(bytes[i + 8]) != '+') {
@@ -519,9 +535,9 @@ TEST(RtArchive, EveryPrologueByteIsVerified) {
   const Scratch file{"prologue"};
   ASSERT_TRUE(coupled().save(file).has_value());
   const auto whole = file.bytes();
-  ASSERT_GT(whole.size(), ddx::rt::header_bytes);
+  ASSERT_GT(whole.size(), ddx::rt::detail::Container::header_bytes);
 
-  for (std::size_t at = 0; at < ddx::rt::header_bytes; ++at) {
+  for (std::size_t at = 0; at < ddx::rt::detail::Container::header_bytes; ++at) {
     for (int mask = 1; mask < 256; ++mask) {
       auto bytes = whole;
       bytes[at] ^= static_cast<std::byte>(mask);
@@ -551,9 +567,9 @@ TEST(RtArchive, OpcodesTravelByLabel) {
 // The stamp refuses old files rather than misreading them, so it must actually
 // depend on the fields.
 TEST(RtArchive, TheSchemaStampSeparatesShapes) {
-  constexpr auto snapshot = ddx::rt::detail::schema_of<ddx::rt::Snapshot<double>>();
-  constexpr auto narrower = ddx::rt::detail::schema_of<ddx::rt::Snapshot<float>>();
-  constexpr auto unrelated = ddx::rt::detail::schema_of<ddx::rt::Coloring>();
+  constexpr auto snapshot = ddx::rt::detail::Container::stamp<ddx::rt::Snapshot<double>>();
+  constexpr auto narrower = ddx::rt::detail::Container::stamp<ddx::rt::Snapshot<float>>();
+  constexpr auto unrelated = ddx::rt::detail::Container::stamp<ddx::rt::Coloring>();
   static_assert(snapshot != narrower);
   static_assert(snapshot != unrelated);
   EXPECT_NE(snapshot, 0u);
@@ -566,7 +582,7 @@ TEST(RtArchive, LoadedIdsAreTheSavedIds) {
   const auto built = coupled();
   ASSERT_TRUE(built.save(file).has_value());
 
-  auto snap = ddx::rt::load_snapshot(file.path());
+  auto snap = ddx::rt::load_snapshot<>(file.path());
   ASSERT_TRUE(snap.has_value()) << snap.error().code;
 
   // rebuild() consumes the node array, so the comparison keeps its own copy.
@@ -649,7 +665,7 @@ TEST(RtArchive, SavesNoKernelWithoutRetainObject) {
   ASSERT_TRUE(built.save(file).has_value());
 
   // A shortfall in what the file is worth rather than a failure.
-  const auto snap = ddx::rt::load_snapshot(file.path());
+  const auto snap = ddx::rt::load_snapshot<>(file.path());
   ASSERT_TRUE(snap.has_value());
   EXPECT_TRUE(snap->objects.empty());
   EXPECT_TRUE(ddx::rt::load(file.path()).has_value());
@@ -668,7 +684,7 @@ TEST(RtArchive, RefusesAKernelFromAnotherGraph) {
   // serialiser so the checksum still holds: a stored kernel run against a graph
   // it was not emitted from is silently wrong arithmetic, and the digest is what
   // gates it.
-  auto snap = ddx::rt::load_snapshot(file.path());
+  auto snap = ddx::rt::load_snapshot<>(file.path());
   ASSERT_TRUE(snap.has_value());
   ASSERT_FALSE(snap->objects.empty());
   for (auto &o : snap->objects) {
