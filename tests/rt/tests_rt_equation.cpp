@@ -12,11 +12,16 @@
 #include <cstdint>
 #include <filesystem>
 #include <iterator>
+#include <map>
 #include <numbers>
 #include <ranges>
 #include <span>
+#include <sstream>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 // One name for both kinds of expression, so the same function can be asked the
@@ -66,12 +71,75 @@ TEST(RtEquation, EveryCallSpellingAgrees) {
   const auto positional = *eq.jacobian(1.3, 0.7);
   const auto by_range = *eq.jacobian(std::array{1.3, 0.7});
   const auto by_name = *eq.jacobian(ddx::named<"y">(0.7), ddx::named<"x">(1.3));
+  const auto by_map =
+      *eq.jacobian(std::map<std::string, double>{{"y", 0.7}, {"x", 1.3}});
 
   ASSERT_EQ(positional.size(), 2u);
   for (std::size_t i = 0; i < 2; ++i) {
     EXPECT_DOUBLE_EQ(by_range[i], positional[i]);
     EXPECT_DOUBLE_EQ(by_name[i], positional[i]);
+    EXPECT_DOUBLE_EQ(by_map[i], positional[i]);
   }
+}
+
+// var(name) reads a name the program only has at run time, and a varmap keyed
+// the same way is how a point for it is written.
+TEST(RtEquation, NamesAndPointsBothComeFromRunTimeStrings) {
+  std::istringstream config{"beta alpha"};
+  std::vector<std::string> names;
+  for (std::string n; config >> n;) {
+    names.push_back(n);
+  }
+
+  // 1 * beta + 2 * alpha, weighted in the order the names were read.
+  const auto eq = ddx::rt::equation([&] {
+    ddx::rt::RTExpression<double> acc = 0.0;
+    double weight = 1.0;
+    for (const std::string &n : names) {
+      acc += weight++ * ddx::rt::var(n);
+    }
+    return acc;
+  });
+
+  ASSERT_FALSE(eq.poisoned());
+  EXPECT_TRUE(std::ranges::equal(
+      *eq.symbols(), std::array<std::string_view, 2>{"alpha", "beta"}));
+
+  const std::map<std::string, double> vm{{"alpha", 3.0}, {"beta", 5.0}};
+  EXPECT_DOUBLE_EQ(*eq.evaluate(vm), 1.0 * 5.0 + 2.0 * 3.0);
+  EXPECT_TRUE(std::ranges::equal(*eq.jacobian(vm), std::array{2.0, 1.0}));
+
+  // Any range of pairs, not only a map, and the key need not own its text.
+  const std::vector<std::pair<std::string_view, double>> pairs{{"beta", 5.0},
+                                                               {"alpha", 3.0}};
+  EXPECT_DOUBLE_EQ(*eq.evaluate(pairs), *eq.evaluate(vm));
+}
+
+TEST(RtEquation, EveryNamedPointMustNameEverySymbolAndOnlyRealOnes) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto eq = ddx::rt::equation(x * y);
+
+  // Silence is not zero: a symbol no argument reaches is the mistake, and
+  // every spelling of a named point says so the same way.
+  EXPECT_EQ(eq.evaluate(std::map<std::string, double>{{"x", 1.0}}).error().code,
+            ddx::errc::short_point);
+  EXPECT_EQ(eq.evaluate(ddx::named<"x">(1.0)).error().code,
+            ddx::errc::short_point);
+
+  EXPECT_EQ(eq.evaluate(std::map<std::string, double>{{"x", 1.0}, {"z", 2.0}})
+                .error()
+                .code,
+            ddx::errc::unknown_symbol);
+  EXPECT_EQ(eq.evaluate(ddx::named<"x">(1.0), ddx::named<"z">(2.0)).error().code,
+            ddx::errc::unknown_symbol);
+
+  // A whole point still goes through, either way round.
+  EXPECT_DOUBLE_EQ(*eq.evaluate(ddx::named<"y">(3.0), ddx::named<"x">(2.0)),
+                   6.0);
+  EXPECT_DOUBLE_EQ(
+      *eq.evaluate(std::map<std::string, double>{{"y", 3.0}, {"x", 2.0}}), 6.0);
 }
 
 TEST(RtEquation, SystemsGiveAJacobian) {

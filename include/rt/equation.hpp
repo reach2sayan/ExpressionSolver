@@ -172,7 +172,9 @@ public:
     std::vector<T> at(symbol_count(), T{});
     result<void> ok{};
     if constexpr ((CEntry<Args> && ...) && sizeof...(Args) > 0) {
-      ((ok = ok.and_then([&] { return assign_named(at, args); })), ...);
+      std::vector<bool> seen(at.size(), false);
+      ((ok = ok.and_then([&] { return assign_named(at, seen, args); })), ...);
+      ok = ok.and_then([&] { return whole(seen); });
     } else if constexpr (sizeof...(Args) == 1 &&
                          (rt_detail::CNamedRange<Args, T> && ...)) {
       // Before the plain range: a map is an input_range too, and its elements
@@ -612,22 +614,29 @@ private:
     return std::nullopt;
   }
 
+  // Naming a point is not the same as giving one: a symbol no argument reaches
+  // would otherwise be read as zero, which is a value and not a refusal.
+  [[nodiscard]] constexpr result<void>
+  whole(const std::vector<bool> &seen) const {
+    return std::ranges::contains(seen, false) ? fail(errc::short_point)
+                                              : result<void>{};
+  }
+
   template <CEntry V>
-  [[nodiscard]] constexpr result<void> assign_named(std::vector<T> &at,
-                                                    const V &nv) const {
+  [[nodiscard]] constexpr result<void>
+  assign_named(std::vector<T> &at, std::vector<bool> &seen, const V &nv) const {
     const auto name = std::remove_cvref_t<V>::symbol.view();
     const auto names = arena_->symbols();
     const auto it = std::ranges::find(names, name);
     if (it == names.end()) {
       return fail(errc::unknown_symbol);
     }
-    at[static_cast<std::size_t>(it - names.begin())] = static_cast<T>(nv.value);
+    const auto slot = static_cast<std::size_t>(it - names.begin());
+    at[slot] = static_cast<T>(nv.value);
+    seen[slot] = true;
     return {};
   }
 
-  // Unlike the Entry spellings, this one insists on a complete point: a map
-  // assembled at run time is where a name that never arrives is a mistake to
-  // report rather than a symbol quietly left at zero.
   [[nodiscard]] constexpr result<void>
   assign_named_range(std::vector<T> &at,
                      const rt_detail::CNamedRange<T> auto &vm) const {
@@ -642,10 +651,7 @@ private:
       at[slot] = static_cast<T>(entry.second);
       seen[slot] = true;
     }
-    if (std::ranges::contains(seen, false)) {
-      return fail(errc::short_point);
-    }
-    return {};
+    return whole(seen);
   }
 
   [[nodiscard]] constexpr result<void>

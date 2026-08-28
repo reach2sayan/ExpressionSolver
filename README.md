@@ -217,6 +217,26 @@ const auto sys = rt::equation([] {
 Another scalar type is a template argument on both: `rt::var<T>(name)` inside
 `rt::equation<T>(...)`.
 
+`rt::var` takes the name as a `std::string_view`, so it need not be a literal —
+the symbols can be whatever the program has just read:
+
+```cpp
+std::vector<std::string> names = read_column_headers(file);
+
+const auto eq = rt::equation([&] {
+  rt::RTExpression<double> acc = 0.0;
+  for (const std::string &n : names) {
+    acc += rt::var(n) * rt::var(n);
+  }
+  return acc;
+});
+
+*eq.symbols();                // whatever the file named, alphabetically
+```
+
+Naming the same string twice inside one callback gives the same symbol, so a
+name that recurs across the data is one variable and not several.
+
 Symbols are ordered canonically — **alphabetically by name** — which is the
 order positional points are read in and the order every result is laid out in.
 `symbols()` lists them in that order, `arity()` counts them:
@@ -228,25 +248,42 @@ order positional points are read in and the order every result is laid out in.
 
 ### Written down instead
 
-An equation can be a string rather than a callback. One string per function, so
-a system is a string per output:
+An equation can be a string rather than a callback. Include
+`rt/text/equation.hpp` for it. One string per function, so a system is a string
+per output:
 
 ```cpp
-const auto eq  = rt::equation("sin(x)*y + 3");
-const auto sys = rt::equation("x*x + y*y - 4", "x*y - 1");
+#include "rt/text/equation.hpp"
+
+const auto eq  = *rt::equation("sin(x)*y + 3");
+const auto sys = *rt::equation("x*x + y*y - 4", "x*y - 1");
 ```
+
+These answer `result<Equation>` rather than an `Equation`, since a string can
+fail to parse where a callback cannot — the `*` above is that check skipped.
 
 Everything after that is the same — the same points, the same derivatives, the
 same batch calls. Free identifiers become the symbols, still ordered
-alphabetically, so `eq.symbols()` here is `{"x", "y"}`.
+alphabetically, so `eq.symbols()` here is `{"x", "y"}`, and a
+[varmap](#points-by-name-at-run-time) is the natural point for one.
 
 The grammar is Python's arithmetic: `+ - * /`, `**` for exponentiation (`^` is
 not an operator), parentheses, unary signs, decimals and exponent notation. The
 callable functions are the ones in the [expression table](#expressions), spelled
 the same. `-x**2` is `-(x**2)` and `2**-1` is legal, as in Python.
 
-A string that does not parse gives a [poisoned equation](#errors) carrying
-`bad_syntax`, `unknown_function` or `wrong_argument_count`.
+A string that does not parse comes back as an error — `bad_syntax`,
+`unknown_function` or `wrong_argument_count` — rather than as an equation:
+
+```cpp
+const auto bad = rt::equation("x ^ 2");     // `^` is not exponentiation
+if (!bad) {
+  std::println("{}", bad.error());          // errc::bad_syntax
+}
+```
+
+A string that parses but names no symbol is a different thing: it is an
+`Equation`, and that equation is [poisoned](#errors) with `no_graph`.
 
 ## Expressions
 
@@ -273,17 +310,45 @@ mutating what other expressions already refer to.
 
 ## Points
 
-Every call that needs numbers takes them in four interchangeable spellings:
+Every call that needs numbers takes them in five interchangeable spellings:
 
 ```cpp
 *eq.jacobian(1.3, 0.7);                             // positional
 *eq.jacobian(std::array{1.3, 0.7});                 // any range
 *eq.jacobian(named<"y">(0.7), named<"x">(1.3));     // by name, any order
 *eq.jacobian("y"_s = 0.7, "x"_s = 1.3);             // by name, assignment spelling
+*eq.jacobian(std::map<std::string, double>{{"y", 0.7}, {"x", 1.3}});   // a varmap
 ```
 
 **Positional order is alphabetical by symbol name**, not the order the symbols
 appear in the expression.
+
+### Points by name at run time
+
+The `named<"y">` and `"y"_s` spellings key off a name you write down, which a
+program that read its symbols out of a file does not have. The **varmap** is the
+spelling for that case: any range of `(name, value)`, the name a run-time string,
+matching `rt::var(name)` on the way in.
+
+```cpp
+std::map<std::string, double> at;
+for (const auto &[name, column] : table) {
+  at[name] = column.back();
+}
+
+*eq.evaluate(at);
+*eq.jacobian(at);
+```
+
+A `std::map`, an `unordered_map`, a `vector` of pairs — anything whose elements
+have a `.first` convertible to `std::string_view` and a numeric `.second`. Order
+does not matter; each value lands in the slot its name names.
+
+**A named point must be whole.** Every spelling of one — varmap, `named<>` and
+`"x"_s` alike — refuses a point that leaves a symbol unreached, with
+`errc::short_point`. Naming a point is not the same as giving one, and a symbol
+nothing named would otherwise be read as zero, which is a value rather than a
+refusal. A name matching no symbol is `errc::unknown_symbol`.
 
 `point(args…)` builds the point vector on its own, in canonical order, so a
 point assembled once can be reused:
@@ -406,7 +471,7 @@ if (!j) {
 | `errc` | Means |
 |---|---|
 | `wrong_arity` | the point does not supply one value per symbol |
-| `short_point` | a range point is shorter than the symbol list |
+| `short_point` | a range point is shorter than the symbol list, or a named point leaves a symbol unreached |
 | `unknown_symbol` | a named point uses a name the equation does not have |
 | `index_out_of_range` | the index does not name a symbol of this equation |
 | `wrong_column_count` | a batch block has the wrong number of columns |
@@ -670,7 +735,7 @@ thread-safe except `options()`.
 | `poisoned()`, `status()` | whether the build failed, and with what |
 | `arity()` | `std::optional<std::size_t>` — symbol count, `n` |
 | `symbols()` | `std::optional<std::span<const std::string>>` — canonical order |
-| `point(args…)` | `result<std::vector<T>>` — a point in canonical order |
+| `point(args…)` | `result<std::vector<T>>` — a point in canonical order, from any of the five spellings |
 | `evaluate(point)` | `result<T>`, or `result<std::vector<T>>` for a system |
 | `jacobian(point)` | `result<std::vector<T>>`, row-major m × n |
 | `hessian(point)` | `result<std::vector<T>>`, dense row-major m × n × n |
