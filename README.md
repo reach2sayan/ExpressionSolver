@@ -1,28 +1,20 @@
-<div align="center">
-
-# ddx
-
-**Derivatives of expressions you build while the program runs.**
-
 [![GCC 14](https://github.com/reach2sayan/ddx/actions/workflows/gcc.yml/badge.svg?branch=main)](https://github.com/reach2sayan/ddx/actions/workflows/gcc.yml)
 [![Clang 20](https://github.com/reach2sayan/ddx/actions/workflows/clang.yml/badge.svg?branch=main)](https://github.com/reach2sayan/ddx/actions/workflows/clang.yml)
 [![MSVC 2022](https://github.com/reach2sayan/ddx/actions/workflows/msvc.yml/badge.svg?branch=main)](https://github.com/reach2sayan/ddx/actions/workflows/msvc.yml)
-
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](#requirements)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](#python)
 [![License](https://img.shields.io/badge/license-BSL--1.0-4B8BBE)](LICENSE.txt)
 
-</div>
+# ddx
 
----
-
-ddx builds a function over named symbols at run time — terms looped over a data
-file, a model read from a config, an expression typed by a user — and answers
-values, gradients, Jacobians and Hessians for it. One point at a time, or a
-batch of thousands in a single call. Interpreted by default; compiled to machine
-code through LLVM when you ask. There are [Python bindings](#python) over the
-same runtime, and a [header-only compile-time API](#compile-time-expressions)
-for expressions whose shape you already know.
+A C++23 library for differentiating expressions. Build a function over named
+symbols while the program runs — terms looped over a data file, a model read
+from configuration, an expression typed by a user — and ask it for values,
+gradients, Jacobians and Hessians. One point at a time, or a batch of thousands
+in a single call, interpreted or compiled to machine code through LLVM. There
+are [Python bindings](#python) over the same runtime, and a header-only
+[compile-time API](#compile-time-expressions) for expressions whose shape is
+known when you compile.
 
 ```cpp
 #include "ddx.hpp"
