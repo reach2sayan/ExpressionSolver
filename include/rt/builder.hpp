@@ -74,8 +74,8 @@ reachable(std::size_t n, std::span<const NodeId> roots, auto &&operands_of) {
   return live;
 }
 
-// The operands a node actually has.  Arity is at most two and the absent one is
-// no_node, so every walker would otherwise repeat the same skip.
+// The operands a node actually has.  Arity is at most three and the absent ones
+// are no_node, so every walker would otherwise repeat the same skip.
 [[nodiscard]] constexpr auto operands_of(const auto &nodes, NodeId v) {
   return nodes.operands(v) |
          std::views::filter([](NodeId u) { return u != no_node; });
@@ -87,9 +87,28 @@ template <impl::Numeric T> struct Node {
   OpCode op = OpCode::Const;
   NodeId a = no_node;
   NodeId b = no_node;
+  NodeId c = no_node;     // the third operand, which only a select has
   T value{};              // Const
   std::uint32_t slot = 0; // Var
 };
+
+namespace detail {
+// The layout a node had before a select needed a third operand, kept only so
+// the assertion below can name it.
+template <impl::Numeric T> struct TwoOperandNode {
+  OpCode op;
+  NodeId a;
+  NodeId b;
+  T value;
+  std::uint32_t slot;
+};
+} // namespace detail
+
+// The third operand costs nothing: it lands in padding the two-operand layout
+// already carried.  Pinned rather than assumed, because a member added above
+// `value` would silently widen every node in every arena.
+static_assert(sizeof(Node<double>) ==
+              sizeof(detail::TwoOperandNode<double>));
 
 // Nodes are interned as they are formed, so an id *is* the identity of a
 // subexpression -- where the compile-time side compares types.
@@ -102,14 +121,22 @@ public:
     return intern({.op = OpCode::Const, .value = v});
   }
 
-  [[nodiscard]] constexpr NodeId make(OpCode op, NodeId a, NodeId b = no_node) {
-    if (const auto folded = fold(op, a, b)) {
-      return *folded;
+  [[nodiscard]] constexpr NodeId make(OpCode op, NodeId a, NodeId b = no_node,
+                                      NodeId c = no_node) {
+    // fold() and the commutative swap are both binary questions; a third
+    // operand means neither applies, and asking would hand a binary functor
+    // three arguments.
+    if (c == no_node) {
+      if (const auto folded = fold(op, a, b)) {
+        return *folded;
+      }
+      if (is_commutative<T>(op) && b != no_node && b < a) {
+        std::swap(a, b);
+      }
+    } else if (const auto chosen = fold_select(a, b, c)) {
+      return *chosen;
     }
-    if (is_commutative<T>(op) && b != no_node && b < a) {
-      std::swap(a, b);
-    }
-    return intern({.op = op, .a = a, .b = b});
+    return intern({.op = op, .a = a, .b = b, .c = c});
   }
 
   [[nodiscard]] constexpr const Node<T> &operator[](NodeId id) const {
@@ -121,8 +148,8 @@ public:
   [[nodiscard]] constexpr OpCode op_of(NodeId id) const {
     return nodes_[id].op;
   }
-  [[nodiscard]] constexpr std::array<NodeId, 2> operands(NodeId id) const {
-    return {nodes_[id].a, nodes_[id].b};
+  [[nodiscard]] constexpr std::array<NodeId, 3> operands(NodeId id) const {
+    return {nodes_[id].a, nodes_[id].b, nodes_[id].c};
   }
   [[nodiscard]] constexpr std::size_t size() const { return nodes_.size(); }
   [[nodiscard]] constexpr std::span<const Node<T>> nodes() const {
@@ -212,7 +239,7 @@ private:
   }
 
   static constexpr bool same(const Node<T> &l, const Node<T> &r) {
-    if (l.op != r.op || l.a != r.a || l.b != r.b) {
+    if (l.op != r.op || l.a != r.a || l.b != r.b || l.c != r.c) {
       return false;
     } else if (l.op != OpCode::Const) {
       return l.slot == r.slot;
@@ -236,6 +263,7 @@ private:
     };
     mix(n.a);
     mix(n.b);
+    mix(n.c);
     mix(payload_of(n));
     return static_cast<std::size_t>(h);
   }
@@ -395,6 +423,24 @@ private:
                                                          : apply_rule(*r, a, b);
   }
 
+  // A select's own identities: a literal condition has already chosen, read
+  // as select_impl reads it (any nonzero, NaN included, is true), and two
+  // equal arms leave nothing to choose.  What lets PowOpFn guard its 0 * inf
+  // with a select at no cost to the graphs that never reach it: a literal
+  // exponent folds the guard to the bare partial.
+  constexpr std::optional<NodeId> fold_select(NodeId cond, NodeId t,
+                                              NodeId f) const {
+    if (t == f) {
+      return t;
+    }
+    if (nodes_[cond].op == OpCode::Const) {
+      if constexpr (std::equality_comparable<T>) {
+        return nodes_[cond].value != T{0} ? t : f;
+      }
+    }
+    return std::nullopt;
+  }
+
   // (n/d) * d -> n.  On a DAG the denominator match is an id compare.
   constexpr std::optional<NodeId> cancel_quotient(NodeId quotient,
                                                   NodeId factor) const {
@@ -421,7 +467,7 @@ private:
 template <typename S>
 concept CNodeSource = requires(const S &s, NodeId v) {
   { s.op_of(v) } -> std::same_as<OpCode>;
-  { s.operands(v) } -> std::same_as<std::array<NodeId, 2>>;
+  { s.operands(v) } -> std::same_as<std::array<NodeId, 3>>;
   { s.size() } -> std::convertible_to<std::size_t>;
 };
 

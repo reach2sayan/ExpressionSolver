@@ -264,6 +264,12 @@ not an operator), parentheses, unary signs, decimals and exponent notation. The
 callable functions are the ones in the [expression table](#expressions), spelled
 the same. `-x**2` is `-(x**2)` and `2**-1` is legal, as in Python.
 
+Comparisons are infix — `<` `<=` `>` `>=` — and bind looser than arithmetic, so
+`select(x*x < y + 1, x, y)` needs no parentheses. **One comparison per
+expression**: `a < b < c` is refused rather than read, since Python chains it
+into a conjunction and C folds it into `(a < b) < c`, and picking either
+silently would be picking a language.
+
 A string that does not parse comes back as an error — `bad_syntax`,
 `unknown_function` or `wrong_argument_count` — rather than as an equation:
 
@@ -295,10 +301,47 @@ for (const auto &s : data) {
 | Arithmetic | `+` `-` `*` `/` unary `-` `+=` `-=` `*=` `/=` |
 | Unary | `sin` `cos` `tan` `exp` `log` `log10` `sqrt` `cbrt` `abs` `sign` `asin` `acos` `atan` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` `erf` |
 | Binary | `pow` `atan2` `hypot` `max` `min` |
+| Comparison | `lt` `le` `gt` `ge` `equal` `unequal` — each answers `1.0` or `0.0` |
+| Conditional | `select(cond, if_true, if_false)` |
 
 They are found by argument-dependent lookup, so they work whether or not `rt` is
 in scope. The compound forms are members, and rebind the handle rather than
 mutating what other expressions already refer to.
+
+### Choosing between two expressions
+
+`select` is the only conditional, and it is not a branch: **both arms are
+evaluated** and the condition picks one, so a batch keeps every point on the
+same instruction path and the kernel emits a blend.
+
+```cpp
+const auto capped = rt::equation([&] {
+  const auto x = rt::var("x");
+  return select(lt(x, 1.0), x * x, 2.0 * x - 1.0);   // C¹ at x = 1
+});
+```
+
+The derivative is the taken arm's — `d select(c, t, f) = select(c, dt, df)` —
+and **the condition is never differentiated**, so the symbols it tests get no
+partial through that node. At the switch the function is whatever the two arms
+make it: `select` does not smooth anything, and a discontinuous pair gives a
+discontinuous derivative.
+
+A condition is any nonzero value, as in C, and comparisons are ordinary
+expressions rather than a separate boolean type — which is why they answer
+`1.0` and `0.0` and why `select(x, …)` is legal. Two consequences follow from
+IEEE and are worth stating: a comparison against `NaN` is false (so
+`equal(NaN, NaN)` is `0.0`), while a `NaN` used directly *as* a condition is
+true and takes the first arm, exactly as `if (nan)` does in C.
+
+They are spelled `equal` and `unequal` rather than `eq` and `ne` because
+`const auto eq = rt::equation(…)` is what callers name an equation, and a local
+of that name would shadow the function inside the very lambda the model is
+written in.
+
+Only `lt` and `le` are operations; `gt`, `ge`, `equal` and `unequal` are those
+two read the other way round, so the graph carries two comparison opcodes and
+not six.
 
 ## Points
 
@@ -359,7 +402,7 @@ Every per-point call answers `result<T>` — `std::expected<T, ddx::error>`. The
 |---|---|
 | `evaluate(point)` | `result<T>`, or `result<std::vector<T>>` for a system |
 | `jacobian(point)` | `result<std::vector<T>>`, row-major m × n — so `n` long when m == 1, which is the gradient |
-| `hessian(point)` | `result<std::vector<T>>`, dense row-major m × n × n |
+| `hessian(point)` | `result<std::vector<T>>`, dense row-major m × n × n. Each row is its own sweep, so `H[i*n+j]` and `H[j*n+i]` can differ in the last ULP — symmetrise before a solver that checks |
 | `univariate_derivative<K>(x0)` | `result<T>` — the K-th derivative, one symbol and one output only |
 
 ```cpp
@@ -416,8 +459,34 @@ j[n + 2];                // ∂RSS/∂b there
 A column count that does not match answers `errc::wrong_column_count`, and
 nothing is written.
 
-The Hessian takes a fourth block. Its columns are compressed, so
-`hessian_columns()` is what sizes them — asking costs nothing:
+### The two compressed blocks
+
+Both derivative blocks are **sparse**, so `jacobian_columns()` and
+`hessian_columns()` are what size them — asking costs nothing — and a pattern
+says which cell each column is. A caller who wants the dense matrix uses the
+per-point calls above, which undo both compressions on the way out.
+
+The Jacobian keeps only the cells that structurally exist. `∂fᵢ/∂xⱼ` gets a
+column when the derivative is something other than the literal zero — a symbol
+a function does not mention has no column, and neither has one whose partial
+folded away. `jacobian_pattern()` places them:
+
+```cpp
+const auto &pattern = eq.jacobian_pattern();
+pattern.nonzeros();                    // == *eq.jacobian_columns()
+pattern.row(i);                        // the symbols function i depends on
+
+const std::size_t cell = pattern.at(i, j);
+const double dfi_dxj =
+    cell == rt::no_column ? 0.0 : j[cell * n + point];
+```
+
+For a system whose functions each touch a few symbols that is most of the
+matrix: a tridiagonal residual over six variables has 16 columns rather than 36,
+and the graph, the kernel and the compile shrink with it.
+
+The Hessian takes a fourth block, compressed by colour rather than by pattern —
+one output only. `hessian_cell(i, j)` places those:
 
 ```cpp
 std::vector<double> h(n * *eq.hessian_columns());
@@ -427,6 +496,9 @@ for (std::size_t k = 0; k < *eq.hessian_columns(); ++k) {
 }
 
 const auto ok = eq.hessian(xs, values, partials, hessians, n);
+
+const auto cell = eq.hessian_cell(i, j);         // std::optional
+const double d2 = cell ? h[*cell * n + point] : 0.0;
 ```
 
 `evaluate` is not the Jacobian call with the partials thrown away: columns
@@ -471,6 +543,7 @@ if (!j) {
 | `no_graph` | the expression is a bare literal, naming no function |
 | `sealed_arena` | the symbols already back an equation, so they are final |
 | `not_univariate` | `univariate_derivative` on more than one symbol |
+| `unsupported_scalar` | `univariate_derivative` over an operation its Taylor arithmetic does not define |
 | `bad_syntax` | a text equation the grammar does not accept |
 | `unknown_function` | a text equation calls a function that does not exist |
 | `wrong_argument_count` | a text equation calls one with the wrong arity |
@@ -570,8 +643,14 @@ eq.uses_kernel();              // true
 Values, gradient and Hessian compile separately, each launched the moment it is
 first needed — so a caller who only evaluates never compiles a gradient.
 
-Results either side of the switchover agree **to the bit**. A loop running
-across it sees no movement at all.
+Results either side of the switchover agree **to the bit**, with one exception
+worth knowing. The compiled path sums a reduction spine of sixteen terms or more
+in blocks, where the interpreted one sums it left to right — k dependent adds
+are a latency no lane width hides. Addition is associative in exact arithmetic
+and not in floating point, so a result reached through such a spine can move in
+its last bits the moment the kernel lands: measured at 2 ULP over forty terms and
+4 over eighty. Shorter spines are not rewritten and cannot move, and the Hessian
+lane is built from one graph either way, so it never moves.
 
 `wait_for_kernel()` is the only call that blocks, and only because it was asked
 to:
@@ -729,13 +808,15 @@ thread-safe except `options()`.
 | `symbols()` | `std::optional<std::span<const std::string>>` — canonical order |
 | `point(args…)` | `result<std::vector<T>>` — a point in canonical order, from any of the five spellings |
 | `evaluate(point)` | `result<T>`, or `result<std::vector<T>>` for a system |
-| `jacobian(point)` | `result<std::vector<T>>`, row-major m × n |
+| `jacobian(point)` | `result<std::vector<T>>`, dense row-major m × n |
 | `hessian(point)` | `result<std::vector<T>>`, dense row-major m × n × n |
 | `univariate_derivative<K>(x0)` | `result<T>`, one symbol and one output only |
 | `evaluate(xs, f, n)` | `result<void>` — a batch of `n` |
 | `jacobian(xs, f, g, n)` | `result<void>` |
 | `hessian(xs, f, g, h, n)` | `result<void>`, one output only |
 | `value_columns()`, `jacobian_columns()`, `hessian_columns()` | `std::optional<std::size_t>` — what sizes the batch buffers |
+| `jacobian_pattern()` | `const rt::Sparsity &` — which (function, symbol) cell each Jacobian column is |
+| `hessian_cell(i, j)` | `std::optional<std::size_t>` — which Hessian column holds H(i, j), or none |
 | `hessian_colors()` | `std::optional<std::size_t>` — groups in the Hessian's compression |
 | `options(opts)`, `options()` | set or read the compile options; setting returns `*this` |
 | `uses_kernel()`, `kernel_level()` | whether a batch call runs compiled code, and at which level |
@@ -823,6 +904,37 @@ and an `(n, n)` Hessian; a batch of `p` appends that axis, giving `(p,)`,
 batch calls, the Hessian arrives **dense** — the compression is undone on the
 way out, so nothing here needs `hessian_columns`.
 
+### Calling in a loop
+
+The calls above allocate their answers. `buffer(x)` binds the point and the
+answers once and hands back a `Call`: write the next point into `x`, call it,
+read the blocks back. Same arrays every time, so nothing is allocated per call.
+
+```python
+call = f.buffer(np.array([2.0, 3.0]))
+for _ in range(steps):
+    call()                                  # fills call.value and call.jacobian
+    call.x[:] = next_point(call.jacobian)
+```
+
+`want` chooses how far it goes, and a block nobody asked for is one nobody
+computes:
+
+| `want` | Fills |
+|---|---|
+| `Want.VALUE` | `value` |
+| `Want.JACOBIAN` *(default)* | `value`, `jacobian` |
+| `Want.HESSIAN` | `value`, `jacobian`, `hessian` |
+
+Reading a block the call did not ask for raises `errc.wrong_column_count`, and
+so does binding `Want.HESSIAN` on a system — a frozen graph carries one
+colouring, so m Hessians are read off the arena a point at a time.
+
+Shapes are the ones the allocating calls answer with, `value` included: one
+output at one point is a `float`, and everything else is an array. The point is
+bound as an array whatever was passed, so `call.x` is writable even when the
+argument was a list.
+
 ### Errors
 
 Python raises where C++ returns `result<T>`. `ddx.Error` is a `RuntimeError`
@@ -893,6 +1005,7 @@ values, and only the code says which.
 | `compile(**fields)` | set `Options`, block for the kernel, return self |
 | `uses_kernel`, `wait_for_kernel()` | whether a call runs compiled code, and blocking for it |
 | `hessian_colors` | groups in the Hessian's compression |
+| `buffer(x, *, want)` | a `Call` bound to its buffers, for a loop |
 | `to_dot(*, all=False)` | the expression in Graphviz form; `all=True` draws the pruned nodes too |
 | `save(path)`, `verify(path)` | write this equation; raise unless `path` holds it |
 | `loaded` | property — whether this equation was read rather than built |

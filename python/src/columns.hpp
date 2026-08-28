@@ -20,6 +20,7 @@ namespace ddx::py {
 namespace pyb = pybind11;
 
 class PyEquation;
+class PyCall;
 
 using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
 
@@ -47,6 +48,7 @@ public:
 
 private:
   friend class PyEquation;
+  friend class PyCall;
 
   [[nodiscard]] constexpr std::span<const double *const> columns() const {
     return columns_;
@@ -153,54 +155,65 @@ private:
   bool batched_ = false;
 };
 
-// One block of output columns.  The ABI writes (columns, n) row-major, which is
-// the same memory as the shape the caller wants -- so the array is built at that
-// shape once and never reshaped.  Reshaping cost a Python attribute lookup and
-// call per output, and PyObject_GetAttrString does not intern, so it built the
-// name string afresh on every call.
-class Block {
+// The pointer table the kernel ABI takes: one per output column, `n` apart.
+// Both blocks below build it identically and differ only in what they own.
+//
+// The storage arrives as a constructor argument and is moved into place after,
+// because a base runs before every member a derived class has -- and moving
+// either an ndarray or a vector leaves the buffer these point into where it is.
+class Columns {
 public:
-  Block(const std::vector<pyb::ssize_t> &shape, std::size_t columns,
-        std::size_t n)
-      : array_(shape), rows_(columns, nullptr) {
-    std::ranges::transform(std::views::iota(0uz, columns), rows_.begin(),
-                           [base = array_.mutable_data(), n](std::size_t j) {
-                             return base + j * n;
-                           });
-  }
-
-private:
-  friend class PyEquation;
-
   [[nodiscard]] constexpr std::span<double *const> rows() { return rows_; }
   [[nodiscard]] constexpr double *at(std::size_t column) {
     return rows_[column];
   }
-  [[nodiscard]] pyb::object array() && { return std::move(array_); }
 
-  Array array_;
+protected:
+  Columns(double *base, std::size_t columns, std::size_t n)
+      : rows_(std::views::iota(0uz, columns) |
+              std::views::transform(
+                  [base, n](std::size_t j) { return base + j * n; }) |
+              impl::to<std::vector<double *>>()) {}
+
+private:
   std::vector<double *> rows_;
 };
 
-// Columns the caller never sees: the compressed Hessian on its way to a dense
-// one.  A plain buffer, since an ndarray for a value that is discarded is a
-// Python object and a second heap block bought for nothing.
-class Scratch {
+// The ABI writes (columns, n) row-major, which is the same memory as the shape
+// the caller wants -- so the array is built at that shape once and never
+// reshaped.  Reshaping cost a Python attribute lookup and call per output, and
+// PyObject_GetAttrString does not intern.
+class Block : public Columns {
 public:
-  Scratch(std::size_t columns, std::size_t n)
-      : data_(columns * n), rows_(columns, nullptr) {
-    std::ranges::transform(
-        std::views::iota(0uz, columns), rows_.begin(),
-        [base = data_.data(), n](std::size_t j) { return base + j * n; });
-  }
+  Block(const std::vector<pyb::ssize_t> &shape, std::size_t columns,
+        std::size_t n)
+      : Block(Array{shape}, columns, n) {}
+
+  [[nodiscard]] pyb::object array() && { return std::move(array_); }
+  // A bound call reads the same array on every call, where the allocating ones
+  // hand theirs over once and are done with it.
+  [[nodiscard]] const Array &bound() const noexcept { return array_; }
 
 private:
-  friend class PyEquation;
+  Block(Array a, std::size_t columns, std::size_t n)
+      : Columns(a.mutable_data(), columns, n), array_(std::move(a)) {}
 
-  [[nodiscard]] constexpr std::span<double *const> rows() { return rows_; }
+  Array array_;
+};
+
+// Columns the caller never sees: a compressed block on its way to a dense one.
+// A plain buffer, since an ndarray for a value that is discarded is a Python
+// object and a second heap block bought for nothing.
+class Scratch : public Columns {
+public:
+  Scratch(std::size_t columns, std::size_t n)
+      : Scratch(std::vector<double>(columns * n), columns, n) {}
+
+private:
+  Scratch(std::vector<double> d, std::size_t columns, std::size_t n)
+      : Columns(d.data(), columns, n), data_(std::move(d)) {}
 
   std::vector<double> data_;
-  std::vector<double *> rows_;
 };
 
 } // namespace ddx::py

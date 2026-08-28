@@ -137,6 +137,13 @@ template <impl::Numeric T>
       const RTExpression<T> u{b, node.a};
       const RTExpression<T> self{b, v};
       add_to(node.a, detail::contribution(node.op, a, u, self));
+    } else if (arity_of(node.op) == 3) {
+      // Here rather than in ops/adjoints.hpp: two arms of different types is
+      // what a type-encoded tree cannot hold, so there is no compile-time rule
+      // to share with.  Nothing reaches the condition -- it chooses.
+      const RTExpression<T> cond{b, node.a};
+      add_to(node.b, select(cond, a, RTExpression<T>{0}));
+      add_to(node.c, select(cond, RTExpression<T>{0}, a));
     } else {
       const RTExpression<T> l{b, node.a};
       const RTExpression<T> r{b, node.b};
@@ -187,6 +194,12 @@ template <impl::Numeric T>
         d[v] =
             (detail::partial(node.op, u, self) * RTExpression<T>{b, d[node.a]})
                 .id(b);
+      } else if (arity_of(node.op) == 3) {
+        // select(c, dt, df): the condition picks the derivative as it picks
+        // the value.
+        d[v] = select(RTExpression<T>{b, node.a}, RTExpression<T>{b, d[node.b]},
+                      RTExpression<T>{b, d[node.c]})
+                   .id(b);
       } else {
         const RTExpression<T> l{b, node.a};
         const RTExpression<T> r{b, node.b};
@@ -201,13 +214,19 @@ template <impl::Numeric T>
   return g;
 }
 
-// m functions over the same symbols: m sweeps sharing one graph, row-major by
-// function to match Equation::jacobian.
+// m functions over the same symbols: m sweeps sharing one graph, rows stacked
+// in function order to match Equation::jacobian.  A partial that folded to the
+// literal zero node costs no output column; `pattern` puts the rest at (i, j).
 struct Jacobian {
   std::vector<NodeId> value;   // m
-  std::vector<NodeId> partial; // m * n, row-major
-  std::size_t rows = 0;
-  std::size_t columns = 0;
+  std::vector<NodeId> partial; // pattern.nonzeros(), row-major by function
+  Sparsity pattern;
+  NodeId zero = no_node; // what a cell outside the pattern reads
+
+  [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
+    const std::size_t k = pattern.at(i, j);
+    return k == no_column ? zero : partial[k];
+  }
 };
 
 template <impl::Numeric T>
@@ -215,14 +234,28 @@ template <impl::Numeric T>
 build_jacobian_impl(Builder<T> &b, std::span<const NodeId> roots) {
   Jacobian j{.value = {roots.begin(), roots.end()},
              .partial = {},
-             .rows = roots.size(),
-             .columns = b.symbols().size()};
-  j.partial.reserve(j.rows * j.columns);
+             .pattern = {.rowptr = {0},
+                         .col = {},
+                         .rows = roots.size(),
+                         .columns = b.symbols().size()},
+             .zero = b.constant(T{0})};
+  j.pattern.rowptr.reserve(roots.size() + 1);
   // The previous rows' nodes are unreachable from this root, so the sweep
   // skips them; what they provide is subexpressions to share.
   for (const NodeId r : roots) {
     const auto g = build_reverse_jacobian(b, r);
-    j.partial.insert(j.partial.end(), g.partial.begin(), g.partial.end());
+    // The predicate the sweep itself refuses a contribution by, so the two
+    // cannot drift -- and it reads -0.0 the same way.
+    auto nonzero =
+        g.partial | std::views::enumerate |
+        std::views::filter([&b](const auto &cell) {
+          return !b.is_constant(std::get<1>(cell), T{0});
+        });
+    for (const auto [symbol, node] : nonzero) {
+      j.partial.push_back(node);
+      j.pattern.col.push_back(static_cast<std::uint32_t>(symbol));
+    }
+    j.pattern.rowptr.push_back(j.partial.size());
   }
   return j;
 }

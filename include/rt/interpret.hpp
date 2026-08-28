@@ -25,47 +25,36 @@ namespace ddx::rt {
 // cannot drift between the scalar sweep and this one.
 namespace detail {
 
-template <std::size_t W, impl::Numeric T>
-constexpr void lanes_unary(OpCode op, const T *DDX_RESTRICT u,
-                           T *DDX_RESTRICT out) noexcept {
-  switch (op) {
-#define DDX_RT_LANES(fn, Op, label, functor, ...)                              \
-  case OpCode::Op:                                                             \
-    for (std::size_t k = 0; k < W; ++k) {                                      \
-      out[k] = supported<functor, T, probes_##Op<T>>(u[k]);                    \
-    }                                                                          \
-    return;
-    DDX_RT_UNARY_TABLE(DDX_RT_LANES)
-#undef DDX_RT_LANES
-#define DDX_RT_LANES(fn, Op, label)                                            \
-  case OpCode::Op:                                                             \
-    for (std::size_t k = 0; k < W; ++k) {                                      \
-      out[k] = supported<impl::detail::Op##Fn<T>, T, probes_##Op<T>>(u[k]);    \
-    }                                                                          \
-    return;
-    DDX_UNARY_MATH_TABLE(DDX_RT_LANES)
-#undef DDX_RT_LANES
-  default:
-    std::unreachable(); // every unary row is above; Builder forms no other
+// One counted loop for every arity: the operand columns are the pack, and the
+// body is apply()'s per element.  `supported` is what keeps the loop compiling
+// at a scalar the op has no meaning for.
+template <std::size_t W, typename Fn, impl::Numeric T, bool Ok,
+          std::same_as<const T *>... In>
+constexpr void lanes(T *DDX_RESTRICT out, In DDX_RESTRICT... in) noexcept {
+  for (std::size_t k = 0; k < W; ++k) {
+    out[k] = supported<Fn, T, Ok>(in[k]...);
   }
 }
 
+// Every op's lane loop, off apply.hpp's one dispatch: the row says how many of
+// the three columns it reads, and an operand a row does not read may be null.
+// Builder forms no op outside the tables, so a leaf row is unreachable here.
 template <std::size_t W, impl::Numeric T>
-constexpr void lanes_binary(OpCode op, const T *DDX_RESTRICT l,
-                            const T *DDX_RESTRICT r,
-                            T *DDX_RESTRICT out) noexcept {
-  switch (op) {
-#define DDX_RT_LANES(fn, Op, label, functor, ...)                              \
-  case OpCode::Op:                                                             \
-    for (std::size_t k = 0; k < W; ++k) {                                      \
-      out[k] = supported<functor, T, probes_##Op<T>>(l[k], r[k]);              \
-    }                                                                          \
-    return;
-    DDX_RT_BINARY_TABLE(DDX_RT_LANES)
-#undef DDX_RT_LANES
-  default:
-    std::unreachable();
-  }
+constexpr void lanes_apply(OpCode op, T *DDX_RESTRICT out,
+                           const T *DDX_RESTRICT a, const T *DDX_RESTRICT b,
+                           const T *DDX_RESTRICT c) noexcept {
+  dispatch<T>(op, [&]<typename R>(R) {
+    using Fn = typename R::functor;
+    if constexpr (R::arity == 1) {
+      lanes<W, Fn, T, R::ok>(out, a);
+    } else if constexpr (R::arity == 2) {
+      lanes<W, Fn, T, R::ok>(out, a, b);
+    } else if constexpr (R::arity == 3) {
+      lanes<W, Fn, T, R::ok>(out, a, b, c);
+    } else {
+      std::unreachable();
+    }
+  });
 }
 
 // x * y + z rounded once, which is what the kernel's llvm.fma lowers to.  A
@@ -133,35 +122,49 @@ constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
   const auto lane = [&tape](NodeId v) {
     return tape.data() + std::size_t{v} * W;
   };
-  for (const auto [i, c] : std::views::zip(order, contractions)) {
+  for (const auto [i, fma] : std::views::zip(order, contractions)) {
     const Node<T> &n = b[i];
     U *const out = lane(i);
-    if (c) {
-      detail::lanes_fma<W>(c.negated, lane(c.x), lane(c.y), lane(c.z), out);
+    if (fma) {
+      detail::lanes_fma<W>(fma.negated, lane(fma.x), lane(fma.y), lane(fma.z),
+                           out);
       continue;
     }
-    switch (arity_of(n.op)) {
-    case 0:
-      if (n.op == OpCode::Const) {
-        for (std::size_t k = 0; k < W; ++k) {
-          out[k] = static_cast<U>(n.value);
-        }
-      } else {
-        const auto src =
-            at + static_cast<std::ptrdiff_t>(std::size_t{n.slot} * W);
-        for (std::size_t k = 0; k < W; ++k) {
-          out[k] = src[static_cast<std::ptrdiff_t>(k)];
-        }
+    if (n.op == OpCode::Const) {
+      for (std::size_t k = 0; k < W; ++k) {
+        out[k] = static_cast<U>(n.value);
       }
-      break;
-    case 1:
-      detail::lanes_unary<W>(n.op, lane(n.a), out);
-      break;
-    default:
-      detail::lanes_binary<W>(n.op, lane(n.a), lane(n.b), out);
-      break;
+    } else if (n.op == OpCode::Var) {
+      const auto src =
+          at + static_cast<std::ptrdiff_t>(std::size_t{n.slot} * W);
+      for (std::size_t k = 0; k < W; ++k) {
+        out[k] = src[static_cast<std::ptrdiff_t>(k)];
+      }
+    } else {
+      // Absent operands stay null: lane() on no_node would form a pointer
+      // past the tape, and a row reads only the operands it has.
+      const auto operand = [&lane](NodeId v) {
+        return v == no_node ? nullptr : lane(v);
+      };
+      detail::lanes_apply<W>(n.op, out, operand(n.a), operand(n.b),
+                             operand(n.c));
     }
   }
+}
+
+// Whether every op the roots reach computes at U.  What a sweep at a scalar
+// other than the graph's asks first: apply() answers U{} for an op the scalar
+// lacks, and a zero node is a wrong number with nothing to say so.
+template <impl::Numeric U, impl::Numeric T>
+[[nodiscard]] constexpr bool computes_at(const Builder<T> &b,
+                                         std::span<const NodeId> roots) {
+  const auto live =
+      detail::reachable(b.size(), roots, [&b](NodeId v, auto &&mark) {
+        std::ranges::for_each(detail::operands_of(b, v), mark);
+      });
+  return std::ranges::all_of(
+      std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())),
+      [&](NodeId v) { return !live[v] || supports<U>(b[v].op); });
 }
 
 template <impl::Numeric T, std::ranges::random_access_range R>

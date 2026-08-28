@@ -77,21 +77,31 @@ reverse_sweep(const Expr &expr, const Seeds &seeds, Grads &grads) noexcept {
 
 namespace detail {
 
+// The symbol list a sweep is indexed by: the caller's where it named one, the
+// expression's own otherwise.  An Equation's list can be longer than its
+// canonicalised tree's -- (y*x)/(x*y) folds to 1 and loses both -- and its
+// point is laid out by the longer one.
+template <typename Given, CExpression Expr>
+using sweep_symbols_t =
+    std::conditional_t<std::is_void_v<Given>,
+                       expr_symbols_t<std::remove_cvref_t<Expr>>, Given>;
+
 // One backward sweep per colour.  Colours are an NTTP: as an argument the loop
 // bound is a runtime load, the colour loop stops unrolling, and a dense Hessian
 // measured slower than a plain column sweep.
-template <auto Colors, CExpression Expr, CNumericBuffer Point, typename Harvest>
+template <auto Colors, typename Given = void, CExpression Expr,
+          CNumericBuffer Point, typename Harvest>
   requires std::invocable<
       Harvest &, std::size_t,
       const typename std::remove_cvref_t<Expr>::value_type &,
       std::array<typename std::remove_cvref_t<Expr>::value_type,
-                 detail::expr_arity_v<std::remove_cvref_t<Expr>>> &>
+                 mp::mp_size<sweep_symbols_t<Given, Expr>>::value> &>
 DDX_ALWAYS_INLINE constexpr void color_sweeps(const Expr &expr, const Point &x,
                                               Harvest &&harvest) {
   using E = std::remove_cvref_t<Expr>;
   using T = typename E::value_type;
   using S = dual_scalar_t<T>;
-  using Syms = detail::expr_symbols_t<E>;
+  using Syms = sweep_symbols_t<Given, Expr>;
   constexpr std::size_t N = mp::mp_size<Syms>::value;
 
   // Only the seeded tangents move between colours.
@@ -196,26 +206,31 @@ reverse_mode_jacobian(const Expr &expr, const std::array<T, N> &vals) noexcept {
   return detail::strip_seed(grads);
 }
 
-template <CExpression Expr,
+// `Given` names the symbol list `values` is laid out by, as reverse_sweep's
+// first parameter does; void is the expression's own.
+template <typename Given = void, CExpression Expr,
           Numeric T = typename std::remove_cvref_t<Expr>::value_type,
           Numeric S = dual_scalar_t<T>,
-          std::size_t N = detail::expr_arity_v<Expr>>
+          std::size_t N = mp::mp_size<sweep_symbols_t<Given, Expr>>::value>
   requires DualLike<T>
 [[nodiscard]] constexpr auto
 reverse_mode_hessian(const Expr &expr,
                      const std::array<S, N> &values) noexcept {
   using E = std::remove_cvref_t<Expr>;
+  using Syms = sweep_symbols_t<Given, Expr>;
+  static_assert(N == mp::mp_size<Syms>::value,
+                "reverse_mode_hessian: one value per symbol of the list swept");
 
   // Sparsity is a property of the type, so the sweep loop carries no search.
-  static constexpr const auto &kPattern = hessian_pattern_v<E>;
-  static constexpr const auto &kColors = hessian_colors_v<E, N>;
+  static constexpr const auto &kPattern = hessian_pattern_v<E, Syms>;
+  static constexpr const auto &kColors = hessian_colors_v<E, N, Syms>;
   static constexpr auto kScatter = scatter_targets<N>(kPattern, kColors);
 
   // Value-initialised: the scatter writes only the pattern.  Symmetric-packed,
   // so (i, j) and (j, i) are one cell.
   nd_tensor_t<S, N, 2> H{};
 
-  detail::color_sweeps<kColors>(
+  detail::color_sweeps<kColors, Syms>(
       expr, values, [&](std::size_t c, const T &, const auto &grads) {
         // At most one column per (colour, row), so that entry IS the sum.
         for (const auto [index, target] : std::views::enumerate(kScatter[c])) {

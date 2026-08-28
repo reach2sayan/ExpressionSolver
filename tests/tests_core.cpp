@@ -645,6 +645,40 @@ TEST(EquationTest, ReverseJacobianSingleOutputMatchesFlatRow) {
   for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
     ASSERT_DOUBLE_EQ(J_rev[0][j], g[j]);
 }
+// canonicalise folds (y*x)/(x*y) to 1, so the tree has one symbol where the
+// Equation has three; the sweep is indexed by the Equation's list, or z's
+// partial would land in x's slot.
+TEST(EquationTest, ReverseJacobianIsLaidOutByTheEquationsSymbols) {
+  auto x = var<"x">;
+  auto y = var<"y">;
+  auto z = var<"z">;
+  const Equation eq{(y * x) / (x * y) + z};
+  static_assert(decltype(eq)::input_dim == 3);
+  const auto reverse = eq.jacobian(1.0, 2.0, 3.0);
+  const auto symbolic = eq.jacobian<DiffMode::Symbolic>(1.0, 2.0, 3.0);
+  EXPECT_DOUBLE_EQ(reverse[0], 0.0);
+  EXPECT_DOUBLE_EQ(reverse[1], 0.0);
+  EXPECT_DOUBLE_EQ(reverse[2], 1.0);
+  EXPECT_DOUBLE_EQ(symbolic[2], 1.0);
+}
+// a^0 is the constant 1 and 0^b the constant 0: both partials are 0 there,
+// not the 0 * inf the rules spell.
+TEST(ReverseModeAD, PowAtAZeroBaseOrExponent) {
+  auto x = var<"x">;
+  auto y = var<"y">;
+  const Equation eq{pow(x, y)};
+  const auto at_zero_base = eq.jacobian(0.0, 2.0);
+  EXPECT_DOUBLE_EQ(at_zero_base[0], 0.0);
+  EXPECT_DOUBLE_EQ(at_zero_base[1], 0.0);
+  const auto origin = eq.jacobian(0.0, 0.0);
+  EXPECT_DOUBLE_EQ(origin[0], 0.0);
+  const auto stored = Equation{pow(x, 0.0)}.jacobian(0.0);
+  EXPECT_DOUBLE_EQ(stored[0], 0.0);
+  // Away from zero nothing changes.
+  const auto plain = eq.jacobian(2.0, 3.0);
+  EXPECT_DOUBLE_EQ(plain[0], 12.0);
+  EXPECT_DOUBLE_EQ(plain[1], 8.0 * std::log(2.0));
+}
 TEST(ForwardModeAD, ExpressionStructuredBinding) {
   // A bare expression carries no point, so value and derivative are taken
   // explicitly rather than by structured binding.

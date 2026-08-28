@@ -9,6 +9,7 @@
 #include <ranges>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 // The type-level half of the simplifier: ops/algebra.hpp's predicates answered
@@ -25,11 +26,17 @@ template <Numeric T> inline constexpr bool is_div_op_v<DivideOp<T>> = true;
 template <typename Op> inline constexpr bool is_pow_op_v = false;
 template <Numeric T> inline constexpr bool is_pow_op_v<PowOp<T>> = true;
 
+// Type identity is structural identity only for a stateless tree.  A Lit<T>
+// holds its number at run time and is one type whatever it holds, so x*3.0 and
+// x*5.0 are the same type and must not cancel.
+template <typename A, typename B>
+inline constexpr bool same_tree_v = std::same_as<A, B> && std::is_empty_v<A>;
+
 // Q is a quotient whose denominator is exactly the tree X.
 template <typename Q, typename X> inline constexpr bool is_over_v = false;
 template <Numeric T, CExpression N, CExpression D, typename X>
 inline constexpr bool is_over_v<Expression<DivideOp<T>, N, D>, X> =
-    std::same_as<D, X>;
+    same_tree_v<D, X>;
 
 // Only a Lit carries its value in the type; a Constant<T> never folds.
 template <CExpression E> consteval bool lit_equals(int n) {
@@ -62,8 +69,9 @@ template <COperation Op>
   }
 }
 
-// The predicates, answered structurally: a tree is an empty type carrying its
-// whole shape, so type identity *is* structural identity -- no walk needed.
+// The predicates, answered structurally: a stateless tree is an empty type
+// carrying its whole shape, so type identity *is* structural identity -- no
+// walk needed.
 template <COperation Op, CExpression A, CExpression B>
 [[nodiscard]] constexpr bool holds(algebra::Pred p) noexcept {
   switch (p) {
@@ -76,7 +84,7 @@ template <COperation Op, CExpression A, CExpression B>
   case algebra::Pred::OneB:
     return is_one_v<B>;
   case algebra::Pred::Same:
-    return std::same_as<A, B>;
+    return same_tree_v<A, B>;
   case algebra::Pred::TwoB:
     return is_two_v<B>;
   case algebra::Pred::AOverB:

@@ -59,7 +59,7 @@ namespace ddx::rt {
 
 template <impl::Numeric T> BOOST_DESCRIBE_BASES(Node<T>, )
 template <impl::Numeric T>
-BOOST_DESCRIBE_PUBLIC_MEMBERS(Node<T>, op, a, b, value, slot)
+BOOST_DESCRIBE_PUBLIC_MEMBERS(Node<T>, op, a, b, c, value, slot)
 template <impl::Numeric T> BOOST_DESCRIBE_PROTECTED_MEMBERS(Node<T>)
 template <impl::Numeric T> BOOST_DESCRIBE_PRIVATE_MEMBERS(Node<T>)
 
@@ -70,7 +70,8 @@ BOOST_DESCRIBE_PUBLIC_MEMBERS(Snapshot<T>, symbols, nodes, roots, jacobian,
 template <impl::Numeric T> BOOST_DESCRIBE_PROTECTED_MEMBERS(Snapshot<T>)
 template <impl::Numeric T> BOOST_DESCRIBE_PRIVATE_MEMBERS(Snapshot<T>)
 
-BOOST_DESCRIBE_STRUCT(Jacobian, (), (value, partial, rows, columns))
+BOOST_DESCRIBE_STRUCT(Sparsity, (), (rowptr, col, rows, columns))
+BOOST_DESCRIBE_STRUCT(Jacobian, (), (value, partial, pattern, zero))
 BOOST_DESCRIBE_STRUCT(Hessian, (), (value, partial, compressed, coloring, zero))
 BOOST_DESCRIBE_STRUCT(Coloring, (), (color, count, scatter, cell, cells))
 BOOST_DESCRIBE_STRUCT(Object, (), (want, symbol, host, digest, options, code))

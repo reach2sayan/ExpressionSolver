@@ -56,8 +56,10 @@ private:
           const auto arity = arity_of(node.op);
           return (arity >= 1 ? node.a < static_cast<NodeId>(i)
                              : node.a == no_node) &&
-                 (arity == 2 ? node.b < static_cast<NodeId>(i)
+                 (arity >= 2 ? node.b < static_cast<NodeId>(i)
                              : node.b == no_node) &&
+                 (arity == 3 ? node.c < static_cast<NodeId>(i)
+                             : node.c == no_node) &&
                  (node.op != OpCode::Var || node.slot < nsym);
         }));
   }
@@ -80,18 +82,45 @@ private:
     const auto in = within();
     return holds(std::ranges::all_of(s_.roots, in) &&
                  std::ranges::all_of(s_.jacobian.value, in) &&
-                 std::ranges::all_of(s_.jacobian.partial, in));
+                 std::ranges::all_of(s_.jacobian.partial, in) &&
+                 in(s_.jacobian.zero));
   }
 
-  // Load-bearing order: `rows` and `columns` are pinned before anything
-  // multiplies them, the product otherwise being two unchecked payload scalars
-  // that can wrap into agreeing.
+  // Load-bearing order, and every step is what the next one indexes with.
+  // The shape is pinned against the roots and the symbols first; `rowptr` is
+  // then walked before any `row()` subspan is taken from it, and the columns
+  // are checked last -- each is an unchecked payload scalar until it is.
   [[nodiscard]] result<void> jacobian() const {
     const auto &j = s_.jacobian;
-    return holds(j.rows == s_.roots.size() &&
-                 j.columns == s_.symbols.size())
-        .and_then([&j] {
-          return holds(j.partial.size() == j.rows * j.columns);
+    const auto &p = j.pattern;
+    return holds(p.rows == s_.roots.size() && p.columns == s_.symbols.size())
+        .and_then([&] {
+          // One cell per column and one offset per row; `rows + 1` cannot wrap,
+          // rows having just been pinned to the root count.
+          return holds(p.rowptr.size() == p.rows + 1 &&
+                       p.col.size() == j.partial.size());
+        })
+        .and_then([&] {
+          // Non-decreasing, from 0 to the block's length: every row() subspan
+          // is inside `col` by construction once this holds, and nothing above
+          // has indexed with it yet.
+          return holds(p.rowptr.front() == 0 &&
+                       p.rowptr.back() == p.col.size() &&
+                       std::ranges::is_sorted(p.rowptr));
+        })
+        .and_then([&] {
+          // Strictly ascending inside a row and inside the symbol count: at()
+          // binary searches, so a duplicate or an unsorted row makes a cell
+          // unreachable, and an out-of-range one names a symbol not there.
+          const auto sound_row = [&p](std::size_t i) {
+            const auto row = p.row(i);
+            return std::ranges::all_of(
+                       row, [&p](std::uint32_t c) { return c < p.columns; }) &&
+                   std::ranges::is_sorted(row) &&
+                   std::ranges::adjacent_find(row) == row.end();
+          };
+          return holds(
+              std::ranges::all_of(std::views::iota(0uz, p.rows), sound_row));
         });
   }
 

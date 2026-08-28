@@ -65,13 +65,22 @@ template <std::floating_point T>
   default:
     break;
   }
-  return arity_of(t.op) == 1
-             ? at(built, t.a).transform(
-                   [&t](const Expr &u) { return Expr::form(t.op, u); })
-             : at(built, t.a).and_then([&](const Expr &l) {
-                 return at(built, t.b).transform(
-                     [&](const Expr &r) { return Expr::form(t.op, l, r); });
-               });
+  if (arity_of(t.op) == 1) {
+    return at(built, t.a).transform(
+        [&t](const Expr &u) { return Expr::form(t.op, u); });
+  }
+  if (arity_of(t.op) == 3) {
+    return at(built, t.a).and_then([&](const Expr &c) {
+      return at(built, t.b).and_then([&](const Expr &x) {
+        return at(built, t.c).transform(
+            [&](const Expr &y) { return Expr::form(t.op, c, x, y); });
+      });
+    });
+  }
+  return at(built, t.a).and_then([&](const Expr &l) {
+    return at(built, t.b).transform(
+        [&](const Expr &r) { return Expr::form(t.op, l, r); });
+  });
 }
 
 } // namespace detail

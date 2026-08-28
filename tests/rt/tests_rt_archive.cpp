@@ -698,3 +698,119 @@ TEST(RtArchive, RefusesAKernelFromAnotherGraph) {
   EXPECT_EQ(*loaded->jacobian(kPoint), *coupled().jacobian(kPoint));
 }
 #endif
+
+// The pattern is what makes the Jacobian block mean anything, so a file may not
+// say something the block cannot mean.  Damage never reaches these scalars --
+// the checksum stops it long before the parse -- so each one needs a forged
+// case, written through the real serialiser so the CRC agrees with the lie.
+//
+// The shape is pinned against the roots and the symbols before anything is
+// sized by it, which is why `rows + 1` has no wrap case of its own: `rows` is
+// an equality against the root count by the time it is incremented.
+TEST(RtArchive, RefusesAForgedJacobianPattern) {
+  const Scratch file{"forged_pattern"};
+  const auto built = ddx::rt::equation([] {
+    const auto x = ddx::rt::var("x");
+    const auto y = ddx::rt::var("y");
+    const auto z = ddx::rt::var("z");
+    return std::array{x * log(x) + y, y * y + z, exp(x * z)};
+  });
+  ASSERT_TRUE(built.save(file).has_value());
+
+  {
+    const auto clean = ddx::rt::load_snapshot<>(file.path());
+    ASSERT_TRUE(clean.has_value()) << clean.error().code;
+    ASSERT_LT(clean->jacobian.pattern.nonzeros(), 9u)
+        << "a dense pattern has no hole to forge";
+    ASSERT_EQ(clean->jacobian.pattern.row(1).size(), 2u)
+        << "row 1 needs two columns for the ordering cases";
+  }
+
+  // Rewritten from the equation each time: a damaged file left in place would
+  // make every later case load something already broken and pass for the wrong
+  // reason.
+  const auto refuses = [&file, &built](auto damage, std::string_view what) {
+    EXPECT_TRUE(built.save(file).has_value()) << what;
+    auto snap = ddx::rt::load_snapshot<>(file.path());
+    EXPECT_TRUE(snap.has_value()) << what;
+    if (!snap) {
+      return;
+    }
+    damage(snap->jacobian);
+    EXPECT_TRUE(ddx::rt::save(*snap, file.path()).has_value()) << what;
+    const auto loaded = ddx::rt::load<double, 3>(file.path());
+    EXPECT_FALSE(loaded.has_value()) << what;
+    if (!loaded) {
+      EXPECT_EQ(loaded.error().code, ddx::errc::archive_corrupt) << what;
+    }
+  };
+
+  refuses([](ddx::rt::Jacobian &j) { j.pattern.col.back() = 99; },
+          "a column outside the symbol table");
+  refuses([](ddx::rt::Jacobian &j) { ++j.pattern.rows; },
+          "a row count the roots do not agree with");
+  refuses([](ddx::rt::Jacobian &j) { ++j.pattern.rowptr.back(); },
+          "a rowptr running past the block");
+  refuses([](ddx::rt::Jacobian &j) { j.pattern.rowptr.pop_back(); },
+          "one offset short of a row each");
+  refuses(
+      [](ddx::rt::Jacobian &j) {
+        // Row 1's two columns, out of order: at() binary searches, so an
+        // unsorted row hides a cell that is really there.
+        const auto first = j.pattern.rowptr[1];
+        std::swap(j.pattern.col[first], j.pattern.col[first + 1]);
+      },
+      "a row whose columns descend");
+  refuses(
+      [](ddx::rt::Jacobian &j) {
+        const auto first = j.pattern.rowptr[1];
+        j.pattern.col[first + 1] = j.pattern.col[first];
+      },
+      "a row naming one column twice");
+  refuses([](ddx::rt::Jacobian &j) { j.partial.pop_back(); },
+          "fewer cells than the pattern names");
+
+  // And the untouched file still loads, or every case above is vacuous.
+  {
+    ASSERT_TRUE(built.save(file).has_value());
+    auto snap = ddx::rt::load_snapshot<>(file.path());
+    ASSERT_TRUE(snap.has_value()) << snap.error().code;
+    ASSERT_TRUE(ddx::rt::save(*snap, file.path()).has_value());
+    const auto loaded = ddx::rt::load<double, 3>(file.path());
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().code;
+    EXPECT_EQ(*built.jacobian(0.6, 1.4, 0.9), *loaded->jacobian(0.6, 1.4, 0.9));
+    EXPECT_EQ(built.jacobian_pattern().nonzeros(),
+              loaded->jacobian_pattern().nonzeros());
+    EXPECT_EQ(built.jacobian_pattern().col, loaded->jacobian_pattern().col);
+    EXPECT_EQ(built.jacobian_pattern().rowptr,
+              loaded->jacobian_pattern().rowptr);
+  }
+}
+
+// The digest keys the JIT's object cache, so two graphs it cannot tell apart
+// would be handed each other's machine code.  A select's third operand is the
+// one that folding `a` and `b` alone would have missed.
+//
+// Every operand is a leaf and the root mentions both candidate arms, so the two
+// graphs have identical node arrays, identical ids, identical liveness and
+// identical contraction -- the false arm is the only difference there is.
+// Getting there took three attempts, and the two that did not bite are worth
+// recording: arms that are *different expressions* separate the digest through
+// their own nodes, and a `.build_jacobian()` separates it through the
+// derivative nodes, since the sweep reaches a different arm in each.  A
+// multiply as an arm separates it a third way, by changing which node gets
+// swallowed into an fma and so changing contracted_order().
+TEST(RtArchive, DigestSeparatesASelectsFalseArm) {
+  const auto digest_of = [](bool other_arm) {
+    ddx::rt::Builder<double> b;
+    const auto x = var(b, "x");
+    const auto y = var(b, "y");
+    const auto p = var(b, "p");
+    const auto q = var(b, "q");
+    const auto chosen = select(lt(x, y), p, other_arm ? q : p);
+    return ddx::rt::digest(
+        ddx::rt::GraphBuilder<double>{b}.value(chosen + p + q).finish());
+  };
+  EXPECT_NE(digest_of(false), digest_of(true))
+      << "two selects differing only in the false arm shared a cache key";
+}

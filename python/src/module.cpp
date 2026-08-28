@@ -169,6 +169,7 @@ text_equation(std::span<const std::string> sources,
 PYBIND11_MODULE(_ddx, m) {
   namespace pyb = pybind11;
   using namespace ddx;
+  using ddx::py::PyCall;
   using ddx::py::PyEquation;
   using ddx::py::PyExpression;
 
@@ -291,7 +292,21 @@ PYBIND11_MODULE(_ddx, m) {
       },                                                                       \
       pyb::arg("x"), pyb::arg("y"));
   DDX_RT_BINARY_TABLE(DDX_PY_DEF_BIN)
+  DDX_RT_COMPARE_TABLE(DDX_PY_DEF_BIN)
+  DDX_PY_DEF_BIN(gt, , )
+  DDX_PY_DEF_BIN(ge, , )
+  DDX_PY_DEF_BIN(equal, , )
+  DDX_PY_DEF_BIN(unequal, , )
 #undef DDX_PY_DEF_BIN
+
+  // Both arms are evaluated and the condition picks one; any nonzero condition
+  // is true, as in C.
+  m.def(
+      "select",
+      [](const PyExpression &c, const PyExpression &t, const PyExpression &f) {
+        return ddx::py::select(c, t, f);
+      },
+      pyb::arg("cond"), pyb::arg("if_true"), pyb::arg("if_false"));
 
   pyb::native_enum<jit::Backend>(m, "Backend", "enum.IntEnum",
                                  "Whether an equation compiles its graph.")
@@ -306,6 +321,24 @@ PYBIND11_MODULE(_ddx, m) {
       .value("AUTO", jit::VecLib::Auto)
       .value("LIBMVEC", jit::VecLib::Libmvec)
       .finalize();
+
+  pyb::native_enum<PyEquation::Want>(m, "Want", "enum.IntEnum",
+                                     "Which blocks a bound call fills.")
+      .value("VALUE", PyEquation::Want::Values)
+      .value("JACOBIAN", PyEquation::Want::Jacobian)
+      .value("HESSIAN", PyEquation::Want::Hessian)
+      .finalize();
+
+  // Bound once, called repeatedly: `x` is written into and the blocks are read
+  // back.  Not constructible from Python -- Equation.buffer() is the only way
+  // to get one, because it is the equation that owns the lane behind it.
+  pyb::class_<PyCall>(m, "Call")
+      .def("__repr__", &PyCall::repr)
+      .def("__call__", &PyCall::operator())
+      .def_property_readonly("x", &PyCall::x)
+      .def_property_readonly("value", &PyCall::value)
+      .def_property_readonly("jacobian", &PyCall::jacobian)
+      .def_property_readonly("hessian", &PyCall::hessian);
 
   // Internal.  ddx.Options is the pydantic model over this, which is where the
   // ranges are checked; the defaults stay here, because they follow how the
@@ -336,6 +369,14 @@ PYBIND11_MODULE(_ddx, m) {
       .def("evaluate", &PyEquation::evaluate, pyb::arg("x"))
       .def("jacobian", &PyEquation::jacobian, pyb::arg("x"))
       .def("hessian", &PyEquation::hessian, pyb::arg("x"))
+      .def(
+          "buffer",
+          [](const pyb::object &self, const pyb::handle &x,
+             PyEquation::Want want) {
+            return PyCall{self, pyb::cast<PyEquation &>(self), want, x};
+          },
+          pyb::arg("x"), pyb::kw_only(),
+          pyb::arg("want") = PyEquation::Want::Jacobian)
       .def("to_dot", &PyEquation::to_dot, pyb::kw_only(),
            pyb::arg("all") = false)
       .def("save", &PyEquation::save, pyb::arg("path"))

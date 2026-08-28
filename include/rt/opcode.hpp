@@ -37,11 +37,23 @@ namespace ddx::rt {
   X(max, Max, "max", impl::detail::max_impl, MaxOpFn)                          \
   X(min, Min, "min", impl::detail::min_impl, MinOpFn)
 
+// Their own table, and so no descriptor: the derivative is zero wherever it
+// exists, which is what rt/derivative.hpp's `default` already answers.
+#define DDX_RT_COMPARE_TABLE(X)                                                \
+  X(lt, Lt, "<", impl::detail::lt_impl)                                  \
+  X(le, Le, "<=", impl::detail::le_impl)
+
+// The one ternary: `c != 0 ? t : f`, both arms evaluated.
+#define DDX_RT_TERNARY_TABLE(X)                                                \
+  X(select, Select, "select", impl::detail::select_impl)
+
 #define DDX_RT_OP_TABLE(X)                                                     \
   DDX_RT_LEAF_TABLE(X)                                                         \
   DDX_RT_UNARY_TABLE(X)                                                        \
   DDX_UNARY_MATH_TABLE(X)                                                      \
-  DDX_RT_BINARY_TABLE(X)
+  DDX_RT_BINARY_TABLE(X)                                                       \
+  DDX_RT_COMPARE_TABLE(X)                                                      \
+  DDX_RT_TERNARY_TABLE(X)
 
 enum class OpCode : std::uint8_t {
 #define DDX_RT_ENUMERATOR(fn, Op, label, ...) Op,
@@ -81,6 +93,11 @@ inline constexpr std::array op_info = [] {
 #define DDX_RT_ROW(fn, Op, label, ...)                                         \
   t[static_cast<std::size_t>(OpCode::Op)] = {label, 2};
   DDX_RT_BINARY_TABLE(DDX_RT_ROW)
+  DDX_RT_COMPARE_TABLE(DDX_RT_ROW)
+#undef DDX_RT_ROW
+#define DDX_RT_ROW(fn, Op, label, ...)                                         \
+  t[static_cast<std::size_t>(OpCode::Op)] = {label, 3};
+  DDX_RT_TERNARY_TABLE(DDX_RT_ROW)
 #undef DDX_RT_ROW
   return t;
 }();

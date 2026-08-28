@@ -52,7 +52,7 @@ public:
   // positional convention.
   struct Layout {
     std::size_t values = 0;   // m
-    std::size_t jacobian = 0; // m * n, row-major by function
+    std::size_t jacobian = 0; // the pattern's nonzeros, row-major by function
     std::size_t hessian = 0;  // colours * n, compressed
   };
 
@@ -67,6 +67,7 @@ public:
   [[nodiscard]] static Graph freeze(const Builder<T> &b,
                                     std::span<const NodeId> outputs,
                                     Layout layout = {}, Coloring coloring = {},
+                                    Sparsity jacobian = {},
                                     bool contract = true) {
     Graph g;
     // A default layout means every output is a value; a stated one has to
@@ -78,14 +79,15 @@ public:
     assert(g.layout_.values + g.layout_.jacobian + g.layout_.hessian ==
            outputs.size());
     g.coloring_ = std::move(coloring);
+    g.jacobian_ = std::move(jacobian);
     g.symbols_.assign(b.symbols().begin(), b.symbols().end());
     g.outputs_.assign(outputs.begin(), outputs.end());
     g.properties_.reserve(b.size());
 
     std::vector<std::pair<std::size_t, std::size_t>> edges;
     std::vector<std::uint32_t> slots;
-    edges.reserve(b.size() * 2);
-    slots.reserve(b.size() * 2);
+    edges.reserve(b.size() * 3);
+    slots.reserve(b.size() * 3);
 
     for (const auto [v, n] : b.nodes() | std::views::enumerate) {
       g.properties_.push_back({.op = n.op, .value = n.value, .slot = n.slot});
@@ -94,9 +96,13 @@ public:
         edges.emplace_back(id, n.a);
         slots.push_back(0);
       }
-      if (arity_of(n.op) == 2) {
+      if (arity_of(n.op) >= 2) {
         edges.emplace_back(id, n.b);
         slots.push_back(1);
+      }
+      if (arity_of(n.op) == 3) {
+        edges.emplace_back(id, n.c);
+        slots.push_back(2);
       }
     }
 
@@ -115,6 +121,8 @@ public:
   [[nodiscard]] std::span<const NodeId> outputs() const { return outputs_; }
   [[nodiscard]] const Layout &layout() const { return layout_; }
   [[nodiscard]] const Coloring &coloring() const { return coloring_; }
+  // Which (function, symbol) cells the jacobian block holds, in its order.
+  [[nodiscard]] const Sparsity &jacobian_pattern() const { return jacobian_; }
   [[nodiscard]] const std::vector<std::string> &symbols() const {
     return symbols_;
   }
@@ -156,9 +164,10 @@ public:
 
   [[nodiscard]] OpCode op_of(NodeId v) const { return properties_[v].op; }
 
-  // Operands in slot order; arity is at most two, hence a pair.
-  [[nodiscard]] std::array<NodeId, 2> operands(NodeId v) const {
-    std::array out{no_node, no_node};
+  // Operands in slot order; arity is at most three, a select being the only op
+  // that reaches it.
+  [[nodiscard]] std::array<NodeId, 3> operands(NodeId v) const {
+    std::array out{no_node, no_node, no_node};
     for (const auto &e : operand_edges(v)) {
       out[children_[e]] = static_cast<NodeId>(boost::target(e, children_));
     }
@@ -228,6 +237,7 @@ private:
   std::vector<NodeId> outputs_;
   Layout layout_;
   Coloring coloring_;
+  Sparsity jacobian_;
   std::vector<std::string> symbols_;
   std::vector<bool> live_;
   std::vector<NodeId> live_order_;
@@ -272,18 +282,18 @@ public:
     return *this;
   }
 
-  constexpr GraphBuilder &jacobian_from(std::span<const NodeId> partials) {
-    outputs_.insert(outputs_.end(), partials.begin(), partials.end());
-    layout_.jacobian = partials.size();
+  // The whole sweep rather than its nodes: the pattern is what makes the block
+  // readable, so the two must not travel separately.
+  constexpr GraphBuilder &jacobian_from(const Jacobian &j) {
+    outputs_.insert(outputs_.end(), j.partial.begin(), j.partial.end());
+    layout_.jacobian = j.partial.size();
+    jacobian_ = j.pattern;
     return *this;
   }
 
   // Every partial, in symbol order.  One reverse sweep per function.
   constexpr GraphBuilder &build_jacobian() {
-    const auto j = rt::build_jacobian_impl(*builder_, roots_);
-    outputs_.insert(outputs_.end(), j.partial.begin(), j.partial.end());
-    layout_.jacobian = j.partial.size();
-    return *this;
+    return jacobian_from(rt::build_jacobian_impl(*builder_, roots_));
   }
 
   // Compressed by colour, not n x n: a handful of columns when banded.
@@ -296,7 +306,8 @@ public:
   }
 
   [[nodiscard]] Graph<T> finish(bool contract = true) const {
-    return Graph<T>::freeze(*builder_, outputs_, layout_, coloring_, contract);
+    return Graph<T>::freeze(*builder_, outputs_, layout_, coloring_, jacobian_,
+                            contract);
   }
 
 private:
@@ -316,6 +327,7 @@ private:
   std::vector<NodeId> outputs_;
   typename Graph<T>::Layout layout_;
   Coloring coloring_;
+  Sparsity jacobian_;
 };
 
 template <impl::Numeric T> GraphBuilder(Builder<T> &) -> GraphBuilder<T>;

@@ -5,8 +5,8 @@ from __future__ import annotations
 import enum
 import os
 import typing
-__all__: list[str] = ['Backend', 'Equation', 'Error', 'Expression',
-                      'VecLib', 'abs', 'acos', 'acosh', 'add', 'asin',
+__all__: list[str] = ['Backend', 'Call', 'Equation', 'Error', 'Expression',
+                      'VecLib', 'Want', 'abs', 'acos', 'acosh', 'add', 'asin',
                       'asinh', 'atan', 'atan2', 'atanh', 'cbrt', 'cos',
                       'cosh', 'div', 'equation', 'erf', 'errc', 'exp',
                       'has_jit', 'hypot', 'load', 'log', 'log10', 'max',
@@ -24,10 +24,27 @@ class Backend(enum.IntEnum):
     def __new__(cls, value): pass
     def __format__(self, format_spec): pass
     
+class Call:
+    """
+    A call bound to its buffers: write the next point into `x`, call, read the
+    blocks back.  Equation.buffer() is the only way to get one.
+    """
+    def __call__(self) -> None: pass
+    def __repr__(self) -> str: pass
+    @property
+    def hessian(self) -> typing.Any: pass
+    @property
+    def jacobian(self) -> typing.Any: pass
+    @property
+    def value(self) -> typing.Any: pass
+    @property
+    def x(self) -> typing.Any: pass
+    
 class Equation:
     _options: _Options
     def __call__(self, x: typing.Any) -> typing.Any: pass
     def __repr__(self) -> str: pass
+    def buffer(self, x: typing.Any, *, want: Want = ...) -> Call: pass
     def evaluate(self, x: typing.Any) -> typing.Any: pass
     def hessian(self, x: typing.Any) -> tuple: pass
     def jacobian(self, x: typing.Any) -> tuple: pass
@@ -106,6 +123,17 @@ class VecLib(enum.IntEnum):
     @classmethod
     def __new__(cls, value): pass
     def __format__(self, format_spec): pass
+class Want(enum.IntEnum):
+    """
+    Which blocks a bound call fills.
+    """
+    HESSIAN: typing.ClassVar[Want]  # value = <Want.HESSIAN: 2>
+    JACOBIAN: typing.ClassVar[Want]  # value = <Want.JACOBIAN: 1>
+    VALUE: typing.ClassVar[Want]  # value = <Want.VALUE: 0>
+    @classmethod
+    def __new__(cls, value): pass
+    def __format__(self, format_spec): pass
+    
 class _Options:
     __hash__: typing.ClassVar[None] = None
     backend: Backend
@@ -147,22 +175,23 @@ class errc(enum.IntEnum):
     """
     Why ddx refused; Error.code carries one.
     """
-    archive_corrupt: typing.ClassVar[errc]  # value = <errc.archive_corrupt: 11>
-    archive_io: typing.ClassVar[errc]  # value = <errc.archive_io: 9>
-    archive_mismatch: typing.ClassVar[errc]  # value = <errc.archive_mismatch: 12>
-    bad_archive: typing.ClassVar[errc]  # value = <errc.bad_archive: 10>
+    archive_corrupt: typing.ClassVar[errc]  # value = <errc.archive_corrupt: 12>
+    archive_io: typing.ClassVar[errc]  # value = <errc.archive_io: 10>
+    archive_mismatch: typing.ClassVar[errc]  # value = <errc.archive_mismatch: 13>
+    bad_archive: typing.ClassVar[errc]  # value = <errc.bad_archive: 11>
     index_out_of_range: typing.ClassVar[errc]  # value = <errc.index_out_of_range: 3>
-    jit_lookup: typing.ClassVar[errc]  # value = <errc.jit_lookup: 17>
-    jit_module: typing.ClassVar[errc]  # value = <errc.jit_module: 14>
-    jit_object: typing.ClassVar[errc]  # value = <errc.jit_object: 15>
-    jit_target: typing.ClassVar[errc]  # value = <errc.jit_target: 13>
-    jit_verify: typing.ClassVar[errc]  # value = <errc.jit_verify: 16>
+    jit_lookup: typing.ClassVar[errc]  # value = <errc.jit_lookup: 18>
+    jit_module: typing.ClassVar[errc]  # value = <errc.jit_module: 15>
+    jit_object: typing.ClassVar[errc]  # value = <errc.jit_object: 16>
+    jit_target: typing.ClassVar[errc]  # value = <errc.jit_target: 14>
+    jit_verify: typing.ClassVar[errc]  # value = <errc.jit_verify: 17>
     no_arena: typing.ClassVar[errc]  # value = <errc.no_arena: 5>
     no_graph: typing.ClassVar[errc]  # value = <errc.no_graph: 6>
     not_univariate: typing.ClassVar[errc]  # value = <errc.not_univariate: 8>
     sealed_arena: typing.ClassVar[errc]  # value = <errc.sealed_arena: 7>
     short_point: typing.ClassVar[errc]  # value = <errc.short_point: 0>
     unknown_symbol: typing.ClassVar[errc]  # value = <errc.unknown_symbol: 2>
+    unsupported_scalar: typing.ClassVar[errc]  # value = <errc.unsupported_scalar: 9>
     wrong_arity: typing.ClassVar[errc]  # value = <errc.wrong_arity: 1>
     wrong_column_count: typing.ClassVar[errc]  # value = <errc.wrong_column_count: 4>
     @classmethod

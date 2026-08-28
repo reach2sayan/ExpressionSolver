@@ -62,13 +62,16 @@ template <impl::Numeric T>
   detail::fold(h, order.size());
   for (const NodeId v : order) {
     const auto &p = g[v];
-    const auto [a, b] = g.operands(v);
+    const auto [a, b, c] = g.operands(v);
     detail::fold(h, v);
     detail::fold(h, p.op);
     detail::fold(h, p.slot);
     detail::fold(h, p.value);
     detail::fold(h, a);
     detail::fold(h, b);
+    // The third operand too: a select differing only there is a different
+    // graph, and this digest is what the object cache keys a kernel on.
+    detail::fold(h, c);
   }
   for (const NodeId o : g.outputs()) {
     detail::fold(h, o);

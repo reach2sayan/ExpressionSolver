@@ -37,6 +37,8 @@
 // adopt below runs holding it, and only the kernel or the sweep gives it up.
 namespace ddx::py {
 
+class PyCall;
+
 class PyEquation {
 public:
   // Ordered
@@ -114,17 +116,14 @@ public:
   [[nodiscard]] pyb::tuple jacobian(const pyb::handle &x) {
     const Point at{x, symbols(), names()};
     Lane &l = lane(Want::Jacobian);
+    Scratch cells{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
-            count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
-    if (scalar(at)) {
-      Cell f;
-      run(l, at, f.rows(), g.rows(), {});
-      return pyb::make_tuple(pyb::float_(f.value), std::move(g).array());
-    }
-    Block f{shape_of({ssize(outputs())}, at),
-            count(l, &rt::Graph<double>::Blocks::values), at.size()};
-    run(l, at, f.rows(), g.rows(), {});
-    return pyb::make_tuple(std::move(f).array(), std::move(g).array());
+            outputs() * arity(), at.size()};
+    Cell cell;
+    auto f = values_block(l, at);
+    run(l, at, f ? f->rows() : cell.rows(), cells.rows(), {});
+    scatter_jacobian(cells, g, at.size());
+    return pyb::make_tuple(value_of(f, cell), std::move(g).array());
   }
 
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
@@ -218,6 +217,8 @@ public:
   }
 
 private:
+  friend class PyCall;
+
   // The machine code the lanes are holding, for the file to carry.  Only
   // kernels that kept their bytes -- Options.retain_object, on by default.
   [[nodiscard]] std::vector<rt::Object> objects() {
@@ -273,7 +274,7 @@ private:
     rt::GraphBuilder<double> gb{*arena_};
     gb.values_from(roots_);
     if (want != Want::Values) {
-      gb.jacobian_from(derivative().partial);
+      gb.jacobian_from(derivative());
     }
     if (want == Want::Hessian) {
       gb.hessian_from(sweeps().front());
@@ -481,6 +482,27 @@ private:
     }
   }
 
+  // This side always hands back the dense matrix, so the zeros go back in
+  // here: one fill, then one copy per cell the pattern names.
+  void scatter_jacobian(Scratch &cells, Block &dense, std::size_t points) {
+    const std::size_t n = arity();
+    const std::size_t wide = outputs() * n;
+    if (wide == 0) {
+      return;
+    }
+    std::ranges::fill_n(dense.at(0), static_cast<std::ptrdiff_t>(wide * points),
+                        0.0);
+    const auto compressed = cells.rows();
+    const rt::Sparsity &pattern = derivative().pattern;
+    for (const std::size_t i : std::views::iota(0uz, outputs())) {
+      const auto columns = pattern.row(i);
+      const auto cell = compressed.subspan(pattern.rowptr[i], columns.size());
+      for (const auto [j, src] : std::views::zip(columns, cell)) {
+        std::ranges::copy_n(src, points, dense.at(i * n + j));
+      }
+    }
+  }
+
   // --- the Hessian ---------------------------------------------------------
 
   // One function: the lane holds it compressed by colour, and the colouring says
@@ -488,35 +510,34 @@ private:
   [[nodiscard]] pyb::tuple hessian_from_lane(const Point &at) {
     Lane &l = lane(Want::Hessian);
     const std::size_t n = arity();
-    Block g{shape_of({ssize(outputs()), ssize(n)}, at),
-            count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
+            at.size()};
+    Scratch partials{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
     Scratch compressed{count(l, &rt::Graph<double>::Blocks::hessian), at.size()};
-    // A float at one point, an array across a batch: only the first can skip
-    // the allocation, and this path serves both.
     Cell cell;
-    std::optional<Block> f;
-    if (!scalar(at)) {
-      f.emplace(shape_of({ssize(outputs())}, at),
-                count(l, &rt::Graph<double>::Blocks::values), at.size());
-    }
-    run(l, at, f ? f->rows() : cell.rows(), g.rows(), compressed.rows());
+    auto f = values_block(l, at);
+    run(l, at, f ? f->rows() : cell.rows(), partials.rows(),
+        compressed.rows());
+    scatter_jacobian(partials, g, at.size());
 
     const rt::Coloring &c = l.graph->coloring();
-    const auto column = rt::by_color(compressed.rows(), c.count, n);
+    // Indexed through Coloring::column, never as a dense colours x n grid: the
+    // block holds only the cells a column owns, so `cells` is below count * n
+    // wherever the pattern is sparse and the dense reading runs off the end.
+    const auto cells = compressed.rows();
     Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at), n * n,
                 at.size()};
     const auto dims = std::views::iota(0uz, n);
     for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
       double *const out = dense.at(i * n + j);
       if (c.target(c.color[j], i) == j) {
-        std::ranges::copy_n(column[c.color[j], i], at.size(), out);
+        std::ranges::copy_n(cells[c.column(c.color[j], i)], at.size(), out);
       } else {
         std::ranges::fill_n(out, static_cast<std::ptrdiff_t>(at.size()), 0.0);
       }
     }
-    return pyb::make_tuple(f ? std::move(*f).array()
-                             : pyb::object{pyb::float_(cell.value)},
-                           std::move(g).array(), std::move(dense).array());
+    return pyb::make_tuple(value_of(f, cell), std::move(g).array(),
+                           std::move(dense).array());
   }
 
   // A system: one sweep per root, read off the arena.  A frozen graph carries a
@@ -619,6 +640,23 @@ private:
     }
   };
 
+  // A float at one point, an array across a batch: only the first can skip the
+  // allocation, and every derivative call serves both.
+  [[nodiscard]] std::optional<Block> values_block(const Lane &l,
+                                                  const Point &at) {
+    return scalar(at) ? std::nullopt
+                      : std::optional<Block>{
+                            std::in_place,
+                            shape_of({ssize(outputs())}, at),
+                            count(l, &rt::Graph<double>::Blocks::values),
+                            at.size()};
+  }
+
+  [[nodiscard]] static pyb::object value_of(std::optional<Block> &f,
+                                            Cell &cell) {
+    return f ? std::move(*f).array() : pyb::object{pyb::float_(cell.value)};
+  }
+
   std::shared_ptr<rt::Builder<double>> arena_;
   std::vector<pyb::object> names_;
   std::vector<rt::NodeId> roots_;
@@ -632,6 +670,112 @@ private:
   std::uint32_t model_nodes_ = 0;
   bool loaded_ = false;
   std::array<Lane, 3> lanes_;
+};
+
+// A call bound to its buffers: the point's columns, the output arrays and the
+// row pointers are taken once, so a repeat is a lane lookup and the sweep.
+// Owning them rather than binding the caller's is what leaves no shape, dtype
+// or stride to check.
+class PyCall {
+public:
+  PyCall(pyb::object owner, PyEquation &eq, PyEquation::Want want,
+         const pyb::handle &x)
+      : owner_(std::move(owner)), eq_(&eq), want_(want),
+        x_(pyb::cast<Array>(x)), at_(x_, eq.symbols(), eq.names()) {
+    // A frozen graph carries one colouring, so a system's Hessian is read off
+    // the arena a point at a time and there is no lane to bind.
+    if (want_ == PyEquation::Want::Hessian && eq_->outputs() != 1) {
+      fail_with(errc::wrong_column_count);
+    }
+    const PyEquation::Lane &l = eq_->lane(want_);
+    const auto outputs = ssize(eq_->outputs());
+    const auto n = eq_->arity();
+    f_.emplace(eq_->shape_of({outputs}, at_),
+               PyEquation::count(l, &rt::Graph<double>::Blocks::values),
+               at_.size());
+    if (want_ != PyEquation::Want::Values) {
+      partials_.emplace(
+          PyEquation::count(l, &rt::Graph<double>::Blocks::jacobian),
+          at_.size());
+      g_.emplace(eq_->shape_of({outputs, ssize(n)}, at_), eq_->outputs() * n,
+                 at_.size());
+    }
+    if (want_ == PyEquation::Want::Hessian) {
+      compressed_.emplace(
+          PyEquation::count(l, &rt::Graph<double>::Blocks::hessian),
+          at_.size());
+      h_.emplace(eq_->shape_of({outputs, ssize(n), ssize(n)}, at_), n * n,
+                 at_.size());
+    }
+  }
+
+  // The lane is looked up per call, never cached: adopt() swaps a kernel in,
+  // and a call holding the old one interprets on with every answer still
+  // right.
+  void operator()() {
+    PyEquation::Lane &l = eq_->lane(want_);
+    eq_->run(l, at_, f_->rows(),
+             partials_ ? partials_->rows() : std::span<double *const>{},
+             compressed_ ? compressed_->rows() : std::span<double *const>{});
+    if (g_) {
+      eq_->scatter_jacobian(*partials_, *g_, at_.size());
+    }
+    if (h_) {
+      scatter(l);
+    }
+  }
+
+  [[nodiscard]] pyb::object x() const { return x_; }
+  [[nodiscard]] pyb::object value() const { return read(f_); }
+  [[nodiscard]] pyb::object jacobian() const { return read(g_); }
+  [[nodiscard]] pyb::object hessian() const { return read(h_); }
+
+  [[nodiscard]] std::string repr() const {
+    static constexpr std::array kWants{"value", "jacobian", "hessian"};
+    return std::format("<ddx.Call {} at {} point{}>",
+                       kWants[static_cast<std::size_t>(want_)], at_.size(),
+                       at_.size() == 1 ? "" : "s");
+  }
+
+private:
+  // Into the dense block a caller reads; every other column of a colour is
+  // structurally zero.
+  void scatter(const PyEquation::Lane &l) {
+    const std::size_t n = eq_->arity();
+    const rt::Coloring &c = l.graph->coloring();
+    const auto cells = compressed_->rows();
+    const auto dims = std::views::iota(0uz, n);
+    for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
+      double *const out = h_->at(i * n + j);
+      if (c.target(c.color[j], i) == j) {
+        std::ranges::copy_n(cells[c.column(c.color[j], i)], at_.size(), out);
+      } else {
+        std::ranges::fill_n(out, static_cast<std::ptrdiff_t>(at_.size()), 0.0);
+      }
+    }
+  }
+
+  // A rank-0 block is the scalar case, where the allocating calls answer with
+  // a float; matching them costs a PyFloat only when the value is read.
+  [[nodiscard]] static pyb::object read(const std::optional<Block> &b) {
+    if (!b) {
+      fail_with(errc::wrong_column_count);
+    }
+    const Array &a = b->bound();
+    return a.ndim() == 0 ? pyb::object{pyb::float_(*a.data())}
+                         : pyb::object{a};
+  }
+
+  pyb::object owner_; // the equation, kept alive under the raw pointer below
+  PyEquation *eq_;
+  PyEquation::Want want_;
+  Array x_;   // declared before at_, which points into it
+  Point at_;
+  std::optional<Block> f_;
+  std::optional<Scratch> partials_; // the pattern's cells, on their way to g_
+  std::optional<Block> g_;
+  std::optional<Scratch> compressed_; // the colouring's, on their way to h_
+  std::optional<Block> h_;
 };
 
 } // namespace ddx::py

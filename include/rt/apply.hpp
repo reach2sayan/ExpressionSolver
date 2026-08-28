@@ -4,6 +4,8 @@
 #include "ops/unary_math.hpp" // the eighteen descriptors
 #include "rt/opcode.hpp"
 
+#include <concepts> // std::equality_comparable, std::same_as
+#include <cstddef>
 #include <functional> // std::plus and friends, for the table's eval column
 
 namespace ddx::rt {
@@ -23,10 +25,34 @@ template <> inline constexpr bool is_field_op_v<std::negate<>> = true;
 DDX_UNARY_MATH_TABLE(DDX_RT_PROBE1)
 #undef DDX_RT_PROBE1
 
-#define DDX_RT_PROBE2(fn, Op, label, ...)                                      \
+// What a binary functor's body reaches for, asked by name rather than by the
+// row's spelling: `max(a, b)` is what a caller writes, and extremum_impl never
+// calls one -- it compares and takes a midpoint.  A probe that asked for the
+// spelling answered false at TaylorDual, and supported() below then handed
+// back a zero node with nothing to say it had.
+template <typename Fn, impl::Numeric T>
+inline constexpr bool binary_probe_v = false;
+template <impl::Numeric T>
+inline constexpr bool binary_probe_v<impl::detail::pow_impl, T> =
+    requires(const T &a, const T &b) { pow(a, b); };
+template <impl::Numeric T>
+inline constexpr bool binary_probe_v<impl::detail::atan2_impl, T> =
+    requires(const T &a, const T &b) { atan2(a, b); };
+template <impl::Numeric T>
+inline constexpr bool binary_probe_v<impl::detail::hypot_impl, T> =
+    requires(const T &a, const T &b) { hypot(a, b); };
+template <bool IsMax, impl::Numeric T>
+inline constexpr bool binary_probe_v<impl::detail::extremum_impl<IsMax>, T> =
+    std::equality_comparable<T> && requires(const T &a, const T &b) {
+      { a < b } -> std::convertible_to<bool>;
+      midpoint(a, b);
+    };
+
+#define DDX_RT_PROBE2(fn, Op, label, functor, ...)                             \
   template <impl::Numeric T>                                                   \
   inline constexpr bool probes_##Op =                                          \
-      impl::CArithmetic<T> || requires(const T &a, const T &b) { fn(a, b); };
+      impl::CArithmetic<T> || is_field_op_v<functor> ||                        \
+      binary_probe_v<functor, T>;
 DDX_RT_BINARY_TABLE(DDX_RT_PROBE2)
 #undef DDX_RT_PROBE2
 
@@ -34,54 +60,91 @@ template <impl::Numeric T>
 inline constexpr bool probes_Abs =
     impl::CArithmetic<T> || requires(const T &u) { abs(u); };
 template <impl::Numeric T> inline constexpr bool probes_Neg = true;
+// Comparisons need ordering and nothing else; select needs to ask whether the
+// condition is zero.
+template <impl::Numeric T>
+inline constexpr bool probes_Lt =
+    impl::CArithmetic<T> || std::totally_ordered<T>;
+template <impl::Numeric T> inline constexpr bool probes_Le = probes_Lt<T>;
+template <impl::Numeric T>
+inline constexpr bool probes_Select =
+    impl::CArithmetic<T> || std::equality_comparable<T>;
 // sign_impl only compares, so ordering is the whole requirement.
 template <impl::Numeric T>
 inline constexpr bool probes_Sign =
     impl::CArithmetic<T> || std::totally_ordered<T>;
 
+// Every row instantiates for every T, so an op the scalar lacks has to compile
+// to *something*; T{} is that, and supports() below is how a sweep finds out
+// before it reads one.
 template <typename Fn, impl::Numeric T, bool Ok, impl::Numeric... Args>
 [[nodiscard]] constexpr T supported(const Args &...args) noexcept {
-  if constexpr (Ok || is_field_op_v<Fn>) {
+  if constexpr (Ok) {
     return T{Fn{}(args...)};
   } else {
     return T{};
   }
 }
 
-} // namespace detail
+// One table row as a type: what to call, whether T can, and with how many
+// operands.  A leaf is the row with nothing to call.
+template <typename Fn, bool Ok, std::size_t Arity> struct Row {
+  using functor = Fn;
+  static constexpr bool ok = Ok;
+  static constexpr std::size_t arity = Arity;
+};
+// A field op is computed at every T; the probe only decides the rest.
+template <typename Fn, bool Probed, std::size_t Arity>
+using row_t = Row<Fn, Probed || is_field_op_v<Fn>, Arity>;
 
-// Templated on the scalar, so the interpreter, constant folding and the builder
-// share one definition: at double it computes, at RTExpression it builds.
+// The one switch over the tables.  Every question asked of an opcode --
+// compute it, can T compute it, sweep W lanes of it -- is a visitor over the
+// Row it names, so the operation set is spelled once here and cannot drift
+// between the askers.
 template <impl::Numeric T>
-[[nodiscard]] constexpr T apply(OpCode op, const T &u) noexcept {
+[[nodiscard]] constexpr decltype(auto) dispatch(OpCode op, auto &&visit) {
   switch (op) {
-#define DDX_RT_APPLY(fn, Op, label, functor, ...)                              \
+#define DDX_RT_DISPATCH(fn, Op, label, functor, ...)                           \
   case OpCode::Op:                                                             \
-    return detail::supported<functor, T, detail::probes_##Op<T>>(u);
-    DDX_RT_UNARY_TABLE(DDX_RT_APPLY)
-#undef DDX_RT_APPLY
-#define DDX_RT_APPLY(fn, Op, label)                                            \
+    return visit(row_t<functor, probes_##Op<T>, arity_of(OpCode::Op)>{});
+    DDX_RT_UNARY_TABLE(DDX_RT_DISPATCH)
+    DDX_RT_BINARY_TABLE(DDX_RT_DISPATCH)
+    DDX_RT_COMPARE_TABLE(DDX_RT_DISPATCH)
+    DDX_RT_TERNARY_TABLE(DDX_RT_DISPATCH)
+#undef DDX_RT_DISPATCH
+#define DDX_RT_DISPATCH(fn, Op, label)                                         \
   case OpCode::Op:                                                             \
-    return detail::supported<impl::detail::Op##Fn<T>, T,                       \
-                             detail::probes_##Op<T>>(u);
-    DDX_UNARY_MATH_TABLE(DDX_RT_APPLY)
-#undef DDX_RT_APPLY
+    return visit(Row<impl::detail::Op##Fn<T>, probes_##Op<T>, 1>{});
+    DDX_UNARY_MATH_TABLE(DDX_RT_DISPATCH)
+#undef DDX_RT_DISPATCH
   default:
-    return T{};
+    return visit(Row<void, true, 0>{});
   }
 }
 
+} // namespace detail
+
+// Whether apply<T>(op, ...) computes `op` or answers T{}.  A leaf is always
+// computed.
 template <impl::Numeric T>
-[[nodiscard]] constexpr T apply(OpCode op, const T &l, const T &r) noexcept {
-  switch (op) {
-#define DDX_RT_APPLY(fn, Op, label, functor, ...)                              \
-  case OpCode::Op:                                                             \
-    return detail::supported<functor, T, detail::probes_##Op<T>>(l, r);
-    DDX_RT_BINARY_TABLE(DDX_RT_APPLY)
-#undef DDX_RT_APPLY
-  default:
-    return T{};
-  }
+[[nodiscard]] constexpr bool supports(OpCode op) noexcept {
+  return detail::dispatch<T>(op, []<typename R>(R) { return R::ok; });
+}
+
+// Templated on the scalar, so the interpreter, constant folding and the builder
+// share one definition: at double it computes, at RTExpression it builds.  The
+// operand count is the arity asked for; a row of another arity answers T{},
+// as an unsupported one does.
+template <impl::Numeric T, std::same_as<T>... Args>
+  requires(sizeof...(Args) >= 1 && sizeof...(Args) <= 3)
+[[nodiscard]] constexpr T apply(OpCode op, const Args &...args) noexcept {
+  return detail::dispatch<T>(op, [&]<typename R>(R) -> T {
+    if constexpr (R::arity == sizeof...(Args)) {
+      return detail::supported<typename R::functor, T, R::ok>(args...);
+    } else {
+      return T{};
+    }
+  });
 }
 
 } // namespace ddx::rt

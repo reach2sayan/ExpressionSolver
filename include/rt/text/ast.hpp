@@ -23,7 +23,8 @@ struct Term {
   OpCode op = OpCode::Const;
   std::uint32_t a = no_term;
   std::uint32_t b = no_term;
-  std::uint32_t leaf = 0; // Var: into names.  Const: into literals.
+  std::uint32_t c = no_term; // only a select reaches it
+  std::uint32_t leaf = 0;    // Var: into names.  Const: into literals.
 };
 
 // Children before parents, so one forward pass lowers all of it and nothing

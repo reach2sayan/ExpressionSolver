@@ -173,6 +173,31 @@ template <Numeric T>
 struct MinOp;
 
 namespace detail {
+// The scalar's own 1 or 0 rather than a bool, so the tape keeps one element
+// type and a condition is an ordinary value.
+template <bool OrEqual> struct compare_impl {
+  template <Numeric T>
+    requires std::totally_ordered<T>
+  constexpr T operator()(const T &a, const T &b) const noexcept {
+    // `a < b || a == b`, never `!(b < a)`: the negated form calls a NaN
+    // less-or-equal to itself, where the kernel's `fcmp ole` says false.  Both
+    // paths answer for every value or neither is trustworthy at any.
+    return T(static_cast<int>(OrEqual ? (a < b || a == b) : (a < b)));
+  }
+};
+using lt_impl = compare_impl<false>;
+using le_impl = compare_impl<true>;
+
+// `c != 0 ? t : f`, both arms already computed: one blend per lane, and every
+// lane of a batch on the same instruction path.
+struct select_impl {
+  template <Numeric T>
+    requires std::equality_comparable<T>
+  constexpr T operator()(const T &c, const T &t, const T &f) const noexcept {
+    return c != T{0} ? t : f;
+  }
+};
+
 struct abs_impl {
   constexpr auto operator()(const Numeric auto &a) const noexcept {
     using std::abs;

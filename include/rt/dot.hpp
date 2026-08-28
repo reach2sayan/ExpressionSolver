@@ -66,8 +66,11 @@ private:
                             .live = graph_.live(v),
                             // Only where reading it back matters: nothing to
                             // tell apart on a commutative or unary node.
+                            // `>= 2`, not `== 2`: a select's three operands
+                            // are the one place the slot matters most, the
+                            // condition reading nothing like its arms.
                             .show_slots =
-                                arity_of(op) == 2 && !is_commutative<T>(op)};
+                                arity_of(op) >= 2 && !is_commutative<T>(op)};
            }) |
            impl::to<std::vector<DotNode>>();
   }

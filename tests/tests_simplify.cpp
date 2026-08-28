@@ -32,6 +32,24 @@ TEST(Simplify, OnlyCompileTimeLiteralsFold) {
   static_assert(!std::is_same_v<std::remove_cvref_t<decltype(unfolded)>, X>);
   EXPECT_DOUBLE_EQ(unfolded.eval(3.0), 3.0);
 }
+TEST(Simplify, StoredLiteralsNeverMakeTwoTreesTheSame) {
+  // Every stored literal is the one type Lit<double>, so x*3.0 and x*5.0 are
+  // the same type while holding different numbers.  Same and AOverB may only
+  // read type identity as structural identity for a stateless tree.
+  using One = ddx::impl::Lit<double, 1>;
+  static_assert(!std::is_same_v<decltype((sx * 3.0) / (sx * 5.0)), One>);
+  static_assert(!std::is_same_v<decltype((sx + 3.0) / (sx + 5.0)), One>);
+  using Y = std::remove_cvref_t<decltype(sy)>;
+  static_assert(!std::is_same_v<decltype((sy / (sx + 2.0)) * (sx + 7.0)), Y>);
+  static_assert(!std::is_same_v<decltype((sx + 7.0) * (sy / (sx + 2.0))), Y>);
+  EXPECT_DOUBLE_EQ(((sx * 3.0) / (sx * 5.0)).eval(2.0), 0.6);
+  EXPECT_DOUBLE_EQ(((sx + 3.0) / (sx + 5.0)).eval(1.0), 4.0 / 6.0);
+  EXPECT_DOUBLE_EQ(((sy / (sx + 2.0)) * (sx + 7.0)).eval(1.0, 1.0), 8.0 / 3.0);
+  // Stateless trees still cancel: no literal, so the type is the whole tree.
+  static_assert(std::is_same_v<decltype((sx * sy) / (sx * sy)), One>);
+  using X = std::remove_cvref_t<decltype(sx)>;
+  static_assert(std::is_same_v<decltype((sx / sy) * sy), X>);
+}
 TEST(Simplify, MaxMinDerivativeSizeIsOnTheLedger) {
   // (a'+b'±sign(a-b)*(a'-b'))/2 keeps a whole a-b subtree inside the sign
   // node, and that duplication is structural, so it stays in the type.

@@ -31,6 +31,45 @@ using CouplingRows = std::vector<SymbolSet>;
                           impl::md::dextents<std::size_t, 2>{colors, n}};
 }
 
+// Which cells of a derivative block exist, CSR by row.  Read off a swept row
+// rather than propagated: a partial the sweep folded to the zero constant *is*
+// structurally zero, so this is exact where `coupling_pattern` is conservative.
+struct Sparsity {
+  std::vector<std::size_t> rowptr; // rows + 1
+  std::vector<std::uint32_t> col;  // nonzeros(), ascending within a row
+  std::size_t rows = 0;
+  std::size_t columns = 0;
+
+  [[nodiscard]] constexpr std::size_t nonzeros() const noexcept {
+    return col.size();
+  }
+
+  // What a caller iterates, rather than testing every j.
+  [[nodiscard]] constexpr std::span<const std::uint32_t>
+  row(std::size_t i) const {
+    return std::span{col}.subspan(rowptr[i], rowptr[i + 1] - rowptr[i]);
+  }
+
+  // Where (i, j) sits in the compressed block, or `no_column` for a cell the
+  // structure says cannot be nonzero.
+  [[nodiscard]] constexpr std::size_t at(std::size_t i,
+                                         std::size_t j) const noexcept {
+    const auto columns = row(i);
+    const auto found = std::ranges::lower_bound(columns, j, {},
+                                                [](std::uint32_t c) -> std::size_t {
+                                                  return c;
+                                                });
+    return found != columns.end() && *found == j
+               ? rowptr[i] + static_cast<std::size_t>(found - columns.begin())
+               : no_column;
+  }
+
+  // Every cell present.
+  [[nodiscard]] constexpr bool dense() const noexcept {
+    return nonzeros() == rows * columns;
+  }
+};
+
 // Two columns share a colour only when no row couples them, so one sweep can
 // seed all of a colour's columns and the results still separate.
 struct Coloring {
@@ -81,16 +120,13 @@ template <impl::Numeric T>
 
   // Only what the root reaches: another expression sharing the builder would
   // otherwise contribute couplings this one does not have.
-  const auto live = detail::reachable(b.size(), std::span{&root, 1},
-                                      [&](NodeId v, auto &&mark) {
-                                        const auto &node = b[v];
-                                        if (arity_of(node.op) >= 1) {
-                                          mark(node.a);
-                                        }
-                                        if (arity_of(node.op) == 2) {
-                                          mark(node.b);
-                                        }
-                                      });
+  const auto live = detail::reachable(
+      b.size(), std::span{&root, 1}, [&b](NodeId v, auto &&mark) {
+        // The shared walker, not a hand-rolled arity test: one written here
+        // drifted the moment a third operand existed, and an unmarked operand
+        // leaves `support` an unsized bitset for the next `|=` to meet.
+        std::ranges::for_each(detail::operands_of(b, v), mark);
+      });
 
   std::vector<SymbolSet> support(b.size());
   const auto ids = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size()));
@@ -112,7 +148,20 @@ template <impl::Numeric T>
         detail::couple(rows, support[v], support[v]);
       }
       break;
+    case 3:
+      // As linear as an Add: it chooses between two derivatives rather than
+      // combining them.  The condition is not differentiated, so it carries no
+      // support at all.
+      support[v] = support[node.b];
+      support[v] |= support[node.c];
+      break;
     default:
+      // Zero derivative everywhere it exists, so no support and no coupling --
+      // the conservative arm below cost a colour or two per tested quantity.
+      if (node.op == OpCode::Lt || node.op == OpCode::Le) {
+        support[v] = SymbolSet(n);
+        break;
+      }
       support[v] = support[node.a];
       support[v] |= support[node.b];
       if (node.op == OpCode::Add) {

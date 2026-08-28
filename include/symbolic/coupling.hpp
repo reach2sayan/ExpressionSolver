@@ -109,16 +109,20 @@ consteval coupling_info<N> coupling_of() noexcept {
 
 } // namespace detail
 
-// rows[i][j]: d2f/dxi dxj may be nonzero.  A conservative superset.
-template <CExpression Expr, std::size_t N = detail::expr_arity_v<Expr>>
+// rows[i][j]: d2f/dxi dxj may be nonzero.  A conservative superset.  `Syms`
+// is the list the rows are indexed by: the expression's own by default, or an
+// Equation's, which may name symbols canonicalisation folded out of the tree.
+template <CExpression Expr,
+          CSymbolList Syms = detail::expr_symbols_t<std::remove_cvref_t<Expr>>,
+          std::size_t N = mp::mp_size<Syms>::value>
 consteval coupling_rows<N> hessian_pattern() noexcept {
-  using Syms = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   return detail::coupling_of<std::remove_cvref_t<Expr>, Syms, N>().rows;
 }
 
 // Instantiated once per Expr, so the walk above runs once for all the tables.
-template <CExpression Expr>
-inline constexpr auto hessian_pattern_v = hessian_pattern<Expr>();
+template <CExpression Expr,
+          CSymbolList Syms = detail::expr_symbols_t<std::remove_cvref_t<Expr>>>
+inline constexpr auto hessian_pattern_v = hessian_pattern<Expr, Syms>();
 
 template <std::size_t N> struct column_coloring {
   std::array<std::size_t, N> color{};
@@ -152,9 +156,10 @@ color_columns(const coupling_rows<N> &rows) noexcept {
 
 // A function of the pattern alone, so it too is instantiated once per
 // expression rather than once per driver that sweeps one.
-template <CExpression Expr, std::size_t N>
+template <CExpression Expr, std::size_t N,
+          CSymbolList Syms = detail::expr_symbols_t<std::remove_cvref_t<Expr>>>
 inline constexpr auto hessian_colors_v =
-    color_columns<N>(hessian_pattern_v<Expr>);
+    color_columns<N>(hessian_pattern_v<Expr, Syms>);
 
 // No column of this colour writes into this row.
 inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);

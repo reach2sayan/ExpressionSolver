@@ -71,7 +71,25 @@ template <Numeric T> struct PowOpFn {
   adjoints(const auto &adj, const auto &a, const auto &b) noexcept {
     using std::pow, std::log;
     const T p = pow(a, b);
-    return {adj * b * pow(a, b - T{1}), adj * p * log(a)};
+    const T da = adj * b * pow(a, b - T{1});
+    const T db = adj * p * log(a);
+    // Two 0 * inf at a == 0: b * a^(b-1) with b == 0, where a^0 is the
+    // constant 1, and a^b * log(a) with a^b == 0, where 0^b is the constant 0.
+    // Both are the zero the vanishing factor says.  A number asks with a
+    // comparison; a graph handle has none and asks with a select, which the
+    // builder folds to the bare partial wherever the exponent is a literal.
+    if constexpr (std::equality_comparable<T>) {
+      if (a == T{}) {
+        return {b == T{} ? T{} : da, p == T{} ? T{} : db};
+      }
+      return {da, db};
+    } else if constexpr (requires { select(equal(a, T{0}), da, db); }) {
+      const T at_zero = equal(a, T{0});
+      return {select(at_zero * equal(b, T{0}), T{0}, da),
+              select(at_zero * equal(p, T{0}), T{0}, db)};
+    } else {
+      return {da, db};
+    }
   }
 };
 

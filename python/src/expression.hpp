@@ -80,6 +80,14 @@ private:
 #define DDX_PY_BINFRIEND(fn, Op, label, ...)                                   \
   friend PyExpression fn(const PyExpression &, const PyExpression &);
   DDX_RT_BINARY_TABLE(DDX_PY_BINFRIEND)
+  DDX_RT_COMPARE_TABLE(DDX_PY_BINFRIEND)
+  DDX_PY_BINFRIEND(gt, , )
+  DDX_PY_BINFRIEND(ge, , )
+  DDX_PY_BINFRIEND(equal, , )
+  DDX_PY_BINFRIEND(unequal, , )
+  // The one ternary.
+  friend PyExpression select(const PyExpression &, const PyExpression &,
+                             const PyExpression &);
 #undef DDX_PY_BINFRIEND
 
   [[nodiscard]] constexpr const Base &base() const noexcept {
@@ -112,6 +120,22 @@ DDX_RT_UNARY_TABLE(DDX_PY_UNFN)
     return {fn(l.base(), r.base()), l.arena() ? l.arena() : r.arena()};        \
   }
 DDX_RT_BINARY_TABLE(DDX_PY_BINFN)
+DDX_RT_COMPARE_TABLE(DDX_PY_BINFN)
+DDX_PY_BINFN(gt, , )
+DDX_PY_BINFN(ge, , )
+DDX_PY_BINFN(equal, , )
+DDX_PY_BINFN(unequal, , )
+#undef DDX_PY_BINFN_UNUSED
+
+// The ternary: the arena is whichever operand names one, as above.
+[[nodiscard]] inline PyExpression select(const PyExpression &c,
+                                         const PyExpression &t,
+                                         const PyExpression &f) {
+  const auto arena = c.arena()   ? c.arena()
+                     : t.arena() ? t.arena()
+                                 : f.arena();
+  return {select(c.base(), t.base(), f.base()), arena};
+}
 #undef DDX_PY_BINFN
 
 [[nodiscard]] inline PyExpression operator+(const PyExpression &l,

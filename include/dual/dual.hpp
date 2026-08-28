@@ -292,9 +292,13 @@ constexpr auto pow(A &&a, B &&b) noexcept {
   using T = std::remove_cvref_t<decltype(av)>;
   const T p = pow(av, bv);
   // A constant exponent arrives here too, embedded with a zero derivative, and
-  // its b' ln a term would still be 0 * log(0) = NaN at av <= 0.
-  return (all_zero(bd)) ? DT{p, pow(av, bv - T{1}) * (bv * ad)}
-                        : DT{p, p * (bd * log(av) + bv * ad / av)};
+  // its b' ln a term would still be 0 * log(0) = NaN at av <= 0.  At bv == 0
+  // the b a^(b-1) term is 0 * a^-1, 0 * inf at av == 0, for what is the
+  // constant 1.
+  if (all_zero(bd)) {
+    return bv == T{} ? DT{p, T{}} : DT{p, pow(av, bv - T{1}) * (bv * ad)};
+  }
+  return DT{p, p * (bd * log(av) + bv * ad / av)};
 }
 
 // pow(a, s), s constant.  d(a^s) = s a^(s-1) a', a second pow rather than
@@ -310,7 +314,8 @@ template <DualLike A, CArithmetic U> constexpr auto pow(A &&a, U s) noexcept {
     using DT = std::remove_cvref_t<A>;
     using T = std::remove_cvref_t<decltype(av)>;
     const T p = pow(av, s);
-    return DT{p, pow(av, s - U{1}) * (s * ad)};
+    // s == 0: a^0 is the constant 1, and s * a^(s-1) is 0 * inf at av == 0.
+    return s == U{} ? DT{p, T{}} : DT{p, pow(av, s - U{1}) * (s * ad)};
   }
 }
 

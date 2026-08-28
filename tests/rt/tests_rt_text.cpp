@@ -140,9 +140,10 @@ TEST(RtText, SpellsEveryOpcodeTheTablesName) {
     if (ddx::rt::is_leaf(*op) || !callable(label)) {
       continue;
     }
-    const auto source = ddx::rt::arity_of(*op) == 1
-                            ? std::format("{}(x)", label)
-                            : std::format("{}(x, y)", label);
+    const auto args = ddx::rt::arity_of(*op);
+    const auto source = args == 1   ? std::format("{}(x)", label)
+                        : args == 3 ? std::format("{}(x, y, z)", label)
+                                    : std::format("{}(x, y)", label);
     const auto ast = parse(source);
     ASSERT_TRUE(ast.has_value()) << source;
     EXPECT_EQ(ast->terms[ast->root].op, *op) << source;

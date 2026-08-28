@@ -18,9 +18,14 @@ namespace ddx::rt {
 // Blocked summation over the reduction spines: k terms are k *dependent* adds,
 // which a kernel pays as latency no lane width can hide.
 //
-// This reassociates, which is why it runs in the arena before any freeze --
-// every consumer then reads the one rewritten graph and they still agree with
-// each other to the bit.  Only the recorded hash moves.  `*` is left alone: its
+// This reassociates, and it runs in the arena before any freeze so that every
+// consumer of the *rewritten* roots agrees with every other.  What it does not
+// do is make the rewrite universal: `Equation` keeps both root sets and builds
+// two graphs from them -- the sweep reads the original, the kernel the blocked
+// one -- so on a spine long enough to rewrite, the interpreted and compiled
+// answers differ in their last bits (2 ULP at forty terms, 4 at eighty).  That
+// is the one place in the library where the two paths disagree at all; the
+// Hessian lane shares a single graph and so is exempt.  `*` is left alone: its
 // commutativity is not assumed, `+`'s associativity is.
 
 namespace detail {
@@ -45,7 +50,7 @@ spine_terms(const Builder<T> &b, NodeId top,
       terms.push_back(u);
       continue;
     }
-    const auto [a, c] = b.operands(u);
+    const auto [a, c, absent] = b.operands(u); // Add is binary
     stack.push_back(c); // right pushed first, so the left operand pops first
     stack.push_back(a);
   }
@@ -132,9 +137,20 @@ template <impl::Numeric T>
         continue;
       }
     }
-    remap[v] = arity_of(node.op) == 1
-                   ? b.make(node.op, remap[node.a])
-                   : b.make(node.op, remap[node.a], remap[node.b]);
+    // Every operand the node has, not the two a binary one has: rebuilding a
+    // select as a pair leaves its third `no_node`, which the next walker
+    // dereferences.
+    switch (arity_of(node.op)) {
+    case 1:
+      remap[v] = b.make(node.op, remap[node.a]);
+      break;
+    case 3:
+      remap[v] = b.make(node.op, remap[node.a], remap[node.b], remap[node.c]);
+      break;
+    default:
+      remap[v] = b.make(node.op, remap[node.a], remap[node.b]);
+      break;
+    }
   }
 
   return roots | std::views::transform([&remap](NodeId r) { return remap[r]; }) |

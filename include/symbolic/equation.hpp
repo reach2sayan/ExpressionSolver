@@ -254,9 +254,10 @@ public:
 
   // Symbolic evaluates the stored partial trees; Reverse never builds them.
   // The leading output axis appears only with more than one output, as in
-  // hessian() and derivative_tensor().  The two reverse branches sweep
-  // different symbol lists and part company only when canonicalisation folds a
-  // symbol away.
+  // hessian() and derivative_tensor().  Every branch sweeps `symbols`, the
+  // list the point is laid out by: the canonicalised tree's own list can be
+  // shorter -- (y*x)/(x*y) folds to 1 and loses both -- and a sweep indexed by
+  // it would put z's partial in x's slot.
   template <DiffMode Mode = DiffMode::Reverse>
   [[nodiscard]] constexpr auto
   jacobian(const CEvalArg auto &...args) const noexcept
@@ -268,8 +269,9 @@ public:
             if constexpr (Mode == DiffMode::Symbolic) {
               return symbolic_row(vals);
             } else {
-              return detail::reverse_mode_jacobian(std::get<0>(expressions),
-                                                   vals);
+              std::array<value_type, input_dim> row{};
+              reverse_sweep<symbols>(std::get<0>(expressions), vals, row);
+              return detail::strip_seed(row);
             }
           } else if constexpr (Mode == DiffMode::Symbolic) {
             return jacobian_symbolic(vals);
@@ -290,7 +292,8 @@ public:
     return detail::with_point<symbols, dual_scalar_t<value_type>, input_dim>(
         [&](const auto &vals) {
           if constexpr (output_dim == 1) {
-            return detail::reverse_mode_hessian(std::get<0>(expressions), vals);
+            return detail::reverse_mode_hessian<symbols>(
+                std::get<0>(expressions), vals);
           } else {
             return hessian_forward_over_reverse(vals);
           }

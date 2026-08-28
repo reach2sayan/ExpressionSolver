@@ -423,6 +423,35 @@ TEST(HessianTest, ForwardOverReverse_Symmetric) {
   auto H = ve.hessian(std::array{xv, yv});
   EXPECT_NEAR(H[0][0][1], H[0][1][0], 1e-12);
 }
+// The canonicalised tree loses x and y, the Equation keeps them, and the
+// colouring and scatter are built over the Equation's list.
+TEST(HessianTest, SingleOutputIsLaidOutByTheEquationsSymbols) {
+  using D = Dual<double>;
+  Variable<D, FixedString{"x"}> x;
+  Variable<D, FixedString{"y"}> y;
+  Variable<D, FixedString{"z"}> z;
+  const Equation eq{(y * x) / (x * y) + z * z * z};
+  static_assert(decltype(eq)::input_dim == 3);
+  const auto H = eq.hessian(1.0, 2.0, 3.0);
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      EXPECT_DOUBLE_EQ(H[i][j], (i == 2 && j == 2) ? 18.0 : 0.0) << i << j;
+    }
+  }
+  const auto g = eq.jacobian(1.0, 2.0, 3.0);
+  EXPECT_DOUBLE_EQ(g[2], 27.0);
+}
+TEST(ForwardModeAD, PowAtAZeroExponentIsFlat) {
+  using D = Dual<double>;
+  const D at_zero{0.0, 1.0};
+  EXPECT_DOUBLE_EQ(pow(at_zero, 0.0).deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(pow(at_zero, 0u).deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(pow(at_zero, D{0.0, 0.0}).deriv(), 0.0);
+  EXPECT_DOUBLE_EQ(pow(at_zero, 0.0).value(), 1.0);
+  // The rule is untouched off the corner.
+  EXPECT_DOUBLE_EQ(pow(D{2.0, 1.0}, 3.0).deriv(), 12.0);
+  EXPECT_DOUBLE_EQ(pow(at_zero, 2.0).deriv(), 0.0);
+}
 TEST(HessianForwardTest, FunctionValues) {
   Variable<double, FixedString{"x"}> x;
   Variable<double, FixedString{"y"}> y;

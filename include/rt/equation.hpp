@@ -203,14 +203,28 @@ public:
     });
   }
 
-  // Row-major m x n; at m == 1 the leading axis goes and this is n long.
+  // Dense row-major m x n; at m == 1 the leading axis goes and this is n long.
+  // The graph holds only the cells the pattern names, so the zeros go back in
+  // here and this spelling never meets the compression.
   [[nodiscard]] constexpr result<std::vector<T>>
   jacobian(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform([this](const auto &at) {
+      const std::size_t n = symbol_count();
+      const rt::Sparsity &pattern = derivative_.pattern;
       std::array<T, output_dim> f{};
-      std::vector<T> g(derivative_.partial.size());
-      gather(Want::Jacobian, at, std::span<T>{f}, g);
-      return g;
+      std::vector<T> cells(derivative_.partial.size());
+      gather(Want::Jacobian, at, std::span<T>{f}, cells);
+
+      std::vector<T> out(output_dim * n, T{0});
+      for (const std::size_t i : std::views::iota(0uz, output_dim)) {
+        const auto columns = pattern.row(i);
+        const auto values =
+            std::span{cells}.subspan(pattern.rowptr[i], columns.size());
+        for (const auto [j, v] : std::views::zip(columns, values)) {
+          out[i * n + j] = v;
+        }
+      }
+      return out;
     });
   }
 
@@ -358,6 +372,12 @@ public:
       return fail(errc::not_univariate);
     }
     using Taylor = impl::TaylorDual<T, Order>;
+    const std::span<const rt::NodeId> root{roots_.data(), 1};
+    // Refuse rather than sweep: an op the Taylor scalar lacks evaluates to a
+    // zero node, which is a wrong number with nothing to say so.
+    if (!rt::computes_at<Taylor>(*arena_, root)) {
+      return fail(errc::unsupported_scalar);
+    }
     Taylor seed;
     seed.c[0] = x0;
     seed.c[1] = T{1};
@@ -365,8 +385,7 @@ public:
     const std::array<Taylor, 1> at{seed};
     // One root out of an arena holding a gradient and a Hessian too, and a
     // Taylor node costs (Order + 1) coefficients.
-    const auto values = rt::evaluate_reachable(
-        *arena_, std::span<const rt::NodeId>{roots_}.first(1), at);
+    const auto values = rt::evaluate_reachable(*arena_, root, at);
     return values[roots_[0]].c[Order] *
            static_cast<T>(impl::detail::compile_time_factorial(Order));
   }
@@ -417,6 +436,30 @@ public:
   {
     return poisoned() ? std::nullopt
                       : std::optional{hessians_.front().compressed.size()};
+  }
+
+  // What a batch caller reads the two compressed blocks by: the dense
+  // spellings undo the compression, the batch ones cannot, and without these
+  // the column counts describe a block nobody can index.
+
+  // `at(i, j)` is `rt::no_column` where d f[i] / d x[j] is structurally zero.
+  [[nodiscard]] constexpr const rt::Sparsity &jacobian_pattern() const {
+    return derivative_.pattern;
+  }
+
+  // Where H(i, j) sits, or nullopt for a cell the colouring calls zero.
+  [[nodiscard]] std::optional<std::size_t> hessian_cell(std::size_t i,
+                                                        std::size_t j) const
+    requires(output_dim == 1)
+  {
+    if (poisoned() || hessians_.empty() || i >= symbol_count() ||
+        j >= symbol_count()) {
+      return std::nullopt;
+    }
+    const rt::Coloring &c = hessians_.front().coloring;
+    const std::size_t colour = c.color[j];
+    return c.target(colour, i) == j ? std::optional{c.column(colour, i)}
+                                    : std::nullopt;
   }
 
   // --- the equation on disk --------------------------------------------------
@@ -923,7 +966,7 @@ private:
     rt::GraphBuilder<T> gb{*arena_};
     gb.values_from(roots_);
     if (want != Want::Values) {
-      gb.jacobian_from(derivative_.partial);
+      gb.jacobian_from(derivative_);
     }
     if (want == Want::Hessian) {
       gb.hessian_from(hessians_.front());
@@ -938,7 +981,7 @@ private:
         rt::GraphBuilder<T> cb{*arena_};
         cb.values_from(compile_roots_);
         if (want != Want::Values) {
-          cb.jacobian_from(compile_derivative_.partial);
+          cb.jacobian_from(compile_derivative_);
         }
         compiled = std::make_shared<const rt::Graph<T>>(cb.finish(contracts()));
       }

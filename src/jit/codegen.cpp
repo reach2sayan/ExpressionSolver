@@ -138,9 +138,28 @@ public:
       return b_.CreateFMul(l, r);
     case rt::OpCode::Div:
       return b_.CreateFDiv(l, r);
+    // 1.0 or 0.0 in the lane type, as compare_impl computes.  Ordered, so a
+    // NaN operand compares false.
+    case rt::OpCode::Lt:
+      return b_.CreateUIToFP(b_.CreateFCmpOLT(l, r), lanes_.ty);
+    case rt::OpCode::Le:
+      return b_.CreateUIToFP(b_.CreateFCmpOLE(l, r), lanes_.ty);
     default:
       return call(op, {l, r});
     }
+  }
+
+  // Both arms are already computed, so this is one blend: no branch and no
+  // lane divergence.
+  llvm::Value *ternary(rt::OpCode op, llvm::Value *c, llvm::Value *t,
+                       llvm::Value *f) const {
+    // UNE, not ONE: C's `!=` is unordered, so a NaN condition is true, which
+    // is what select_impl computes.  The ordered form sends the kernel down the
+    // other arm than the sweep, and only a raw value as a condition reaches it
+    // -- a comparison's output is never NaN.
+    return op == rt::OpCode::Select
+               ? b_.CreateSelect(b_.CreateFCmpUNE(c, constant(0.0)), t, f)
+               : llvm::PoisonValue::get(lanes_.ty);
   }
 
 private:
@@ -223,15 +242,15 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name,
 }
 
 // Loaded once in the entry block, so they are loop-invariant.
-struct Columns {
+struct HoistedColumns {
   std::vector<llvm::Value *> inputs;
   std::vector<llvm::Value *> values;   // f[k]
   std::vector<llvm::Value *> jacobian; // g[k*n + j]
   std::vector<llvm::Value *> hessian;  // h[c*n + i]
 };
 
-Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
-                      const rt::Graph<double> &g) {
+HoistedColumns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
+                             const rt::Graph<double> &g) {
   llvm::PointerType *const ptr = llvm::PointerType::getUnqual(fn.getContext());
 
   const auto load_columns = [&](unsigned arg, std::size_t count,
@@ -255,8 +274,8 @@ Columns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
 // Ids are topological, so one pass needs no worklist.  Under contraction the
 // adds carry their product and the multiplies they swallowed are never reached.
 [[nodiscard]] std::vector<llvm::Value *>
-emit_nodes(const Emitter &emit, const rt::Graph<double> &g, const Columns &cols,
-           llvm::Value *index, llvm::Value *mask) {
+emit_nodes(const Emitter &emit, const rt::Graph<double> &g,
+           const HoistedColumns &cols, llvm::Value *index, llvm::Value *mask) {
   std::vector<llvm::Value *> value(g.size(), nullptr);
   for (const auto [v, c] :
        std::views::zip(g.contracted_order(), g.contractions())) {
@@ -275,6 +294,10 @@ emit_nodes(const Emitter &emit, const rt::Graph<double> &g, const Columns &cols,
     case 1:
       value[v] = emit.unary(p.op, value[operands[0]]);
       break;
+    case 3:
+      value[v] = emit.ternary(p.op, value[operands[0]], value[operands[1]],
+                              value[operands[2]]);
+      break;
     default:
       value[v] = emit.binary(p.op, value[operands[0]], value[operands[1]]);
       break;
@@ -284,8 +307,9 @@ emit_nodes(const Emitter &emit, const rt::Graph<double> &g, const Columns &cols,
 }
 
 void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
-                 const Columns &cols, std::span<llvm::Value *const> value,
-                 llvm::Value *index, llvm::Value *mask) {
+                 const HoistedColumns &cols,
+                 std::span<llvm::Value *const> value, llvm::Value *index,
+                 llvm::Value *mask) {
   const auto blocks = g.output_blocks();
   const auto store_block = [&](std::span<llvm::Value *const> columns,
                                std::span<const rt::NodeId> block) {
@@ -325,7 +349,7 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   // llvm.fma, so allowContract would fuse a *second* set the sweep computed
   // separately.
   llvm::IRBuilder<> b(entry);
-  const Columns cols = hoist_columns(b, *fn, g);
+  const HoistedColumns cols = hoist_columns(b, *fn, g);
 
   // n == 0 is a degenerate call, and saying so is what keeps the loop out of
   // the cold half of the layout.

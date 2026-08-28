@@ -148,4 +148,19 @@ TEST(RtInterpreter, EvaluatesSharedNodesOnce) {
   EXPECT_NEAR(ddx::rt::evaluate(b, f.id(b), pt), xy + std::sin(xy), 1e-15);
 }
 
+// A literal condition has chosen, NaN reading as true the way select_impl
+// reads it, and equal arms need no choosing.
+TEST(RtBuilder, SelectFoldsWhereABinaryWould) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  EXPECT_EQ(select(ddx::rt::lit(b, 1.0), x, y).id(b), x.id(b));
+  EXPECT_EQ(select(ddx::rt::lit(b, 0.0), x, y).id(b), y.id(b));
+  EXPECT_EQ(select(ddx::rt::lit(b, -0.0), x, y).id(b), y.id(b));
+  EXPECT_EQ(select(ddx::rt::lit(b, std::nan("")), x, y).id(b), x.id(b));
+  EXPECT_EQ(select(lt(x, y), x, x).id(b), x.id(b));
+  const auto kept = select(lt(x, y), x, y);
+  EXPECT_EQ(b[kept.id(b)].op, ddx::rt::OpCode::Select);
+}
+
 } // namespace

@@ -92,6 +92,19 @@ public:
              : RTExpression{apply<T>(op, l.literal(), r.literal())};
   }
 
+  [[nodiscard]] static constexpr RTExpression
+  form(OpCode op, const RTExpression &c, const RTExpression &t,
+       const RTExpression &f) {
+    if (c.why_ || t.why_ || f.why_) {
+      return poison(c.why_ ? *c.why_ : (t.why_ ? *t.why_ : *f.why_));
+    }
+    Builder<T> *const b =
+        c.builder() ? c.builder() : (t.builder() ? t.builder() : f.builder());
+    return b ? RTExpression{*b, b->make(op, c.id(*b), t.id(*b), f.id(*b))}
+             : RTExpression{apply<T>(op, c.literal(), t.literal(),
+                                     f.literal())};
+  }
+
   // Hidden friends: ordinary functions for a given RTExpression<T>, so `x * 2`
   // and `2 * x` both convert.
   friend constexpr RTExpression operator+(const RTExpression &l,
@@ -146,7 +159,41 @@ public:
     return form(OpCode::Op, l, r);                                             \
   }
   DDX_RT_BINARY_TABLE(DDX_RT_BINFN)
+  DDX_RT_COMPARE_TABLE(DDX_RT_BINFN)
 #undef DDX_RT_BINFN
+
+  // Free functions and never operators: `operator<` would make RTExpression
+  // std::totally_ordered, and adjoints.hpp's numeric `sign` would then outrank
+  // the node-building one.  Only `<` and `<=` are nodes.
+  friend constexpr RTExpression gt(const RTExpression &l,
+                                   const RTExpression &r) {
+    return lt(r, l);
+  }
+  friend constexpr RTExpression ge(const RTExpression &l,
+                                   const RTExpression &r) {
+    return le(r, l);
+  }
+  // `equal`, not `eq`: these are hidden friends, and a local named `eq` -- what
+  // every caller names its equation -- shadows the function inside the very
+  // lambda the model is written in.
+  //
+  // Both ways round, so a NaN operand answers 0 -- where `1 - lt - lt` would
+  // have called two NaNs equal.
+  friend constexpr RTExpression equal(const RTExpression &l,
+                                      const RTExpression &r) {
+    return le(l, r) * le(r, l);
+  }
+  friend constexpr RTExpression unequal(const RTExpression &l,
+                                        const RTExpression &r) {
+    return RTExpression{1} - equal(l, r);
+  }
+
+  // Both arms evaluate; `c` is a condition in the C sense, any nonzero value.
+  friend constexpr RTExpression select(const RTExpression &c,
+                                       const RTExpression &t,
+                                       const RTExpression &f) {
+    return form(OpCode::Select, c, t, f);
+  }
 
 private:
   // What an Equation needs of an expression: which arena it names, and --

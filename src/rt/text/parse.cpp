@@ -104,6 +104,15 @@ constexpr auto fold = [](auto &ctx) {
       append(_globals(ctx).ast, {.op = Op, .a = _val(ctx), .b = _attr(ctx)});
 };
 
+// `a > b` is `b < a` and `a >= b` is `b <= a`: only two comparison opcodes
+// exist, and the other two spellings are those read the other way round -- the
+// same composition rt::gt and rt::ge make in expressions.hpp.
+template <OpCode Op>
+constexpr auto fold_swapped = [](auto &ctx) {
+  _val(ctx) =
+      append(_globals(ctx).ast, {.op = Op, .a = _attr(ctx), .b = _val(ctx)});
+};
+
 // There is no Sub opcode -- the label "-" is unary Neg -- so a difference is
 // the sum of a negation, which is what the C++ operator- builds as well.
 constexpr auto subtract = [](auto &ctx) {
@@ -155,12 +164,13 @@ constexpr auto apply = [](auto &ctx) {
   } else if (arity_of(*op) != invocation.args.size()) {
     refuse(errc::wrong_argument_count);
   } else {
-    _val(ctx) =
-        append(building.ast,
-               {.op = *op,
-                .a = invocation.args.front(),
-                .b = invocation.args.size() > 1 ? invocation.args[1]
-                                                : no_term});
+    const auto arg = [&invocation](const std::size_t i) {
+      return invocation.args.size() > i ? invocation.args[i] : no_term;
+    };
+    _val(ctx) = append(building.ast, {.op = *op,
+                                      .a = invocation.args.front(),
+                                      .b = arg(1),
+                                      .c = arg(2)});
   }
 };
 
@@ -184,6 +194,7 @@ constexpr bp::rule<struct power_tag, std::uint32_t> power = "power";
 // The bool is the rule's local: how many signs it has read, modulo two.
 constexpr bp::rule<struct unary_tag, std::uint32_t, bool> unary = "unary expression";
 constexpr bp::rule<struct product_tag, std::uint32_t> product = "term";
+constexpr bp::rule<struct sum_tag, std::uint32_t> sum = "expression";
 constexpr bp::rule<struct expression_tag, std::uint32_t> expression = "expression";
 
 constexpr auto letter = bp::char_('a', 'z') | bp::char_('A', 'Z') | bp::char_('_');
@@ -201,7 +212,8 @@ constexpr auto literal_def = bp::raw[bp::lexeme[mantissa >> -exponent]][act::cap
 
 constexpr auto number_def = literal[act::leaf<OpCode::Const, &Ast::literals>];
 constexpr auto symbol_def = identifier[act::leaf<OpCode::Var, &Ast::names>];
-// One argument at least: every opcode a call can name has arity 1 or 2.
+// One argument at least; the action below checks the count against
+// arity_of, which is 1, 2 or -- for select -- 3.
 constexpr auto call_text_def = identifier >> '(' >> (expression % ',') >> ')';
 constexpr auto call_def = call_text[act::apply];
 constexpr auto group_def = '(' >> expression >> ')';
@@ -220,12 +232,22 @@ constexpr auto unary_def =
 constexpr auto product_def =
     unary[act::assign] >> *((bp::lit('*') >> unary[act::fold<OpCode::Mul>]) |
                             (bp::lit('/') >> unary[act::fold<OpCode::Div>]));
-constexpr auto expression_def =
+constexpr auto sum_def =
     product[act::assign] >> *((bp::lit('+') >> product[act::fold<OpCode::Add>]) |
                               (bp::lit('-') >> product[act::subtract]));
+// One comparison and no more.  Python chains `a < b < c` into a conjunction and
+// C folds it into `(a < b) < c`; refusing it says so, where either reading
+// would have been a silent choice between two languages.  `<=` before `<`, or
+// the shorter token wins and leaves an `=` nobody can parse.
+constexpr auto expression_def =
+    sum[act::assign] >> -((bp::lit("<=") >> sum[act::fold<OpCode::Le>]) |
+                          (bp::lit(">=") >> sum[act::fold_swapped<OpCode::Le>]) |
+                          (bp::lit('<') >> sum[act::fold<OpCode::Lt>]) |
+                          (bp::lit('>') >> sum[act::fold_swapped<OpCode::Lt>]));
 
 BOOST_PARSER_DEFINE_RULES(identifier, literal, number, symbol, call_text, call,
-                          group, operand, power, unary, product, expression);
+                          group, operand, power, unary, product, sum,
+                          expression);
 
 } // namespace
 

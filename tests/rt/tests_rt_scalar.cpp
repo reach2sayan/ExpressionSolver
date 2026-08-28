@@ -1,10 +1,12 @@
 #include "ddx.hpp"
+#include "dual/taylor_dual.hpp"
 #include "rt/derivative.hpp"
 #include "rt/interpret.hpp"
 #include <array>
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <span>
 
 // Numeric admits matrices and quaternions, so the rewrites that would assume a
 // commuting product have to ask.  M2 is associative under + and *, commutative
@@ -88,6 +90,24 @@ TEST(RtScalar, UnsupportedOpsDoNotBreakTheInstantiation) {
   const auto x = var(b, "x");
   // The assertion is that it instantiates and builds a node at all.
   EXPECT_NE((x + x * x - x / x).id(b), ddx::rt::no_node);
+}
+
+// What apply() cannot compute it answers with a zero, so a sweep asks first.
+TEST(RtScalar, ComputesAtSaysWhichOpsTheScalarHas) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto field = (x + x * x - x / x).id(b);
+  const auto kink = max(x, x * x).id(b);
+  const auto wave = sin(x).id(b);
+  EXPECT_TRUE(ddx::rt::computes_at<M2>(b, std::span{&field, 1}));
+  EXPECT_FALSE(ddx::rt::computes_at<M2>(b, std::span{&kink, 1}));
+  EXPECT_FALSE(ddx::rt::computes_at<M2>(b, std::span{&wave, 1}));
+  using Taylor = ddx::impl::TaylorDual<double, 3>;
+  EXPECT_TRUE(ddx::rt::computes_at<Taylor>(b, std::span{&kink, 1}));
+  EXPECT_TRUE(ddx::rt::computes_at<Taylor>(b, std::span{&wave, 1}));
+  EXPECT_TRUE(ddx::rt::supports<M2>(ddx::rt::OpCode::Mul));
+  EXPECT_FALSE(ddx::rt::supports<M2>(ddx::rt::OpCode::Max));
+  EXPECT_TRUE(ddx::rt::supports<Taylor>(ddx::rt::OpCode::Max));
 }
 
 } // namespace

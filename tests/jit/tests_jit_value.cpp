@@ -491,9 +491,7 @@ TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
   const auto root = (x * log(x) + exp(x * y) + sqrt(y)).id(b);
   const auto graph = ddx::rt::GraphBuilder<double>{b}
                          .values_from(std::array{root})
-                         .jacobian_from(
-                             ddx::rt::build_jacobian_impl<
-                                 ddx::impl::DiffMode::Reverse>(b, root).partial)
+                         .build_jacobian()
                          .finish();
 
   const auto compiled = must_compile(graph, ddx::jit::Options{.retain_object = true});

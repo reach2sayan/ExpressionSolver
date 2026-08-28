@@ -172,11 +172,11 @@ Frozen gradient_graph(const Model &m, std::size_t n, bool contract = true) {
     v.push_back(ddx::rt::var(*arena, "x" + std::to_string(i)));
   }
   const ddx::rt::NodeId root = m.build(std::span<const RE>{v}).id(*arena);
-  const auto row =
-      ddx::rt::build_jacobian_impl<ddx::impl::DiffMode::Reverse>(*arena, root);
+  // The Jacobian block is sparse: a partial the sweep folded to zero has no
+  // column, so the buffers below are sized by the graph, not by n.
   auto graph = ddx::rt::GraphBuilder{*arena}
                    .values_from(std::span<const ddx::rt::NodeId>{&root, 1})
-                   .jacobian_from(row.partial)
+                   .build_jacobian()
                    .finish(contract);
   return {.arena = std::move(arena), .graph = std::move(graph)};
 }
@@ -186,21 +186,25 @@ Frozen gradient_graph(const Model &m, std::size_t n, bool contract = true) {
 // A pipeline that compiles faster and produces a slower kernel is not a saving.
 // Min of several passes over the same batch, reported per point.
 [[nodiscard]] double kernel_ns_per_point(const ddx::jit::Kernel &k,
-                                         std::size_t n, std::size_t count) {
+                                         const Frozen &fr, std::size_t n,
+                                         std::size_t count) {
   std::vector<std::vector<double>> in(n, std::vector<double>(count));
   for (std::size_t i = 0; i < n; ++i) {
     for (std::size_t p = 0; p < count; ++p) {
       in[i][p] = 0.05 + 0.9 * static_cast<double>((i * 37 + p * 11) % 97) / 97.0;
     }
   }
+  const std::size_t columns = fr.graph.layout().jacobian;
   std::vector<double> value(count);
-  std::vector<std::vector<double>> partial(n, std::vector<double>(count));
+  std::vector<std::vector<double>> partial(columns, std::vector<double>(count));
 
   std::vector<const double *> xs(n);
-  std::vector<double *> gs(n);
+  std::vector<double *> gs(columns);
   for (std::size_t i = 0; i < n; ++i) {
     xs[i] = in[i].data();
-    gs[i] = partial[i].data();
+  }
+  for (std::size_t c = 0; c < columns; ++c) {
+    gs[c] = partial[c].data();
   }
   double *v = value.data();
 
@@ -238,7 +242,8 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
     }
   }
   std::vector<double> value(count);
-  std::vector<std::vector<double>> partial(n, std::vector<double>(count));
+  std::vector<std::vector<double>> partial(fr.graph.layout().jacobian,
+                                           std::vector<double>(count));
 
   std::vector<double> lanes(fr.graph.symbols().size() * kSweepLanes);
   std::vector<double> tape(fr.arena->size() * kSweepLanes);
@@ -346,8 +351,8 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
 
       const double sweep =
           interp_ns_per_point(frozen, n, 256);
-      const double n0 = kernel_ns_per_point(*k0, n, 4096);
-      const double n1 = kernel_ns_per_point(*k1, n, 4096);
+      const double n0 = kernel_ns_per_point(*k0, frozen, n, 4096);
+      const double n1 = kernel_ns_per_point(*k1, frozen, n, 4096);
 
       std::printf("%-8s %5zu %9zu %9.1f %9.1f %6.2f %10.1f %10.1f %10.1f "
                   "%10.0f %10.0f %10.0f\n",
@@ -456,7 +461,7 @@ int main(int argc, char **argv) {
                   m.name.data(), n, cell.report.nodes, cell.report.instructions,
                   ms(cell.report.emit), ms(cell.report.optimize),
                   ms(cell.report.codegen), cell.total_ms, sl,
-                  kernel_ns_per_point(*kernel, n, 4096));
+                  kernel_ns_per_point(*kernel, frozen, n, 4096));
       std::fflush(stdout);
 
       cells.push_back(cell);

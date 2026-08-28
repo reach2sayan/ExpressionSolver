@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 from conftest import Derivatives
@@ -140,3 +142,33 @@ def test_to_dot_renders_the_frozen_graph(scalar: ddx.Equation) -> None:
     live = scalar.to_dot()
     assert live.startswith("digraph")
     assert len(scalar.to_dot(all=True)) >= len(live)
+
+
+def test_a_sparse_coupling_scatters_to_the_right_cells() -> None:
+    """The compressed Hessian is indexed by colour and row, not as colours x n.
+
+    ``exp(a) sin(b) + c*c*a`` needs three colours over three symbols and still
+    leaves cells unowned -- b and c never couple -- so the block is shorter than
+    colours x n.  Read as a dense grid it hands back another cell's value and
+    then runs off the end.
+    """
+    e = math.exp(0.3)
+
+    @ddx.equation
+    def eq() -> ddx.Expression:
+        """exp(a) sin(b) + c*c*a."""
+        a, b, c = ddx.var("a"), ddx.var("b"), ddx.var("c")
+        return ddx.exp(a) * ddx.sin(b) + c * c * a
+
+    _, _, hessian = eq.hessian([0.3, 0.7, 1.1])
+
+    assert eq.hessian_colors == 3
+    assert hessian == pytest.approx(
+        np.array(
+            [
+                [e * math.sin(0.7), e * math.cos(0.7), 2 * 1.1],
+                [e * math.cos(0.7), -e * math.sin(0.7), 0.0],
+                [2 * 1.1, 0.0, 2 * 0.3],
+            ]
+        )
+    )

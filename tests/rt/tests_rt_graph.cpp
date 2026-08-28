@@ -19,7 +19,7 @@ TEST(RtGraph, OperandOrderSurvivesCompression) {
   const auto f = x / y; // not commutative: the slots must not be swapped
   const auto graph = Graph<>::freeze(b, std::array{f.id(b)});
 
-  const auto [lhs, rhs] = graph.operands(f.id(b));
+  const auto [lhs, rhs, absent] = graph.operands(f.id(b));
   EXPECT_EQ(lhs, x.id(b));
   EXPECT_EQ(rhs, y.id(b));
 }
@@ -29,7 +29,7 @@ TEST(RtGraph, UnaryNodeHasOneOperand) {
   const auto x = var(b, "x");
   const auto f = sin(x);
   const auto graph = Graph<>::freeze(b, std::array{f.id(b)});
-  const auto [lhs, rhs] = graph.operands(f.id(b));
+  const auto [lhs, rhs, absent] = graph.operands(f.id(b));
   EXPECT_EQ(lhs, x.id(b));
   EXPECT_EQ(rhs, ddx::rt::no_node);
 }

@@ -6,7 +6,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <format>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -530,6 +532,28 @@ TEST(RtEquation, UnivariateDerivativesToArbitraryOrder) {
             ddx::errc::not_univariate);
 }
 
+// max and min take the winning side's coefficients; the Taylor scalar is
+// asked for a comparison and a midpoint, never for a max of its own.
+TEST(RtEquation, UnivariateDerivativesThroughMaxAndMin) {
+  const auto kink = ddx::rt::equation([] {
+    const auto x = ddx::rt::var("x");
+    return max(x * x, x) * tanh(x) + min(x * x, x);
+  });
+  // At 2: x*x wins max, x wins min.
+  const double t = std::tanh(2.0), s = 1 - t * t;
+  EXPECT_NEAR(*kink.univariate_derivative<1>(2.0), 4 * t + 4 * s + 1, 1e-12);
+  EXPECT_NEAR(*kink.univariate_derivative<2>(2.0),
+              2 * t + 8 * s + 4 * (-2 * t * s), 1e-12);
+  EXPECT_NEAR(*kink.univariate_derivative<1>(0.5),
+              1 * std::tanh(0.5) + 0.5 * (1 - std::pow(std::tanh(0.5), 2)) + 1,
+              1e-12);
+  // The reverse sweep says the same.
+  EXPECT_NEAR(*kink.univariate_derivative<1>(2.0), (*kink.jacobian(2.0))[0],
+              1e-12);
+  EXPECT_NEAR(*kink.univariate_derivative<2>(2.0), (*kink.hessian(2.0))[0],
+              1e-10);
+}
+
 } // namespace
 
 // --- choosing the backend ---------------------------------------------------
@@ -574,6 +598,66 @@ TEST(RtEquation, ScalarAccessorsAgreeWithTheArenaWalkToTheBit) {
 
 
 #ifdef DDX_HAS_JIT
+
+// The switchover contract, both halves of it.  `rebalance` blocks a reduction
+// spine of `least` = 16 terms or more for the kernel and leaves the sweep's
+// graph alone, so those two paths sum in different orders -- the one place in
+// the library where interpreted and compiled answers differ at all.  README
+// quotes the ULP figures below, so they are pinned here.
+TEST(RtEquation, ShortSpinesSurviveTheSwitchoverToTheBit) {
+  const auto spine = [](std::size_t terms) {
+    return ddx::rt::equation([terms] {
+      ddx::rt::RTExpression<double> acc = 0.0;
+      for (const std::size_t i : std::views::iota(0uz, terms)) {
+        acc = acc + ddx::rt::var(std::format("x{:03d}", i)) *
+                        (1.0 / (1.0 + static_cast<double>(i)));
+      }
+      return acc;
+    });
+  };
+  const auto point = [](std::size_t terms) {
+    std::vector<double> at(terms);
+    for (const std::size_t i : std::views::iota(0uz, terms)) {
+      at[i] = 0.1 + 0.9 * static_cast<double>(i % 7) / 7.0 +
+              static_cast<double>(i) * 1e-3;
+    }
+    return at;
+  };
+  const auto ulps = [](double a, double b) {
+    return std::abs(
+        static_cast<std::int64_t>(std::bit_cast<std::uint64_t>(a)) -
+        static_cast<std::int64_t>(std::bit_cast<std::uint64_t>(b)));
+  };
+
+  // Under the threshold nothing is rewritten, so the two agree exactly.
+  for (const std::size_t terms : {4uz, 8uz, 15uz}) {
+    auto eq = spine(terms);
+    const auto at = point(terms);
+    const double swept = *eq.evaluate(std::span<const double>{at});
+    eq.options({.backend = ddx::jit::Backend::Compile, .points = 1});
+    ASSERT_TRUE(eq.wait_for_kernel());
+    const double compiled = *eq.evaluate(std::span<const double>{at});
+    EXPECT_EQ(ulps(swept, compiled), 0)
+        << terms << " terms is below the rewrite threshold";
+  }
+
+  // Over it the kernel sums in blocks, and the gap is small and bounded.  A
+  // test that only checked "they agree" would have to be deleted here; one that
+  // pins the size is what keeps README honest.
+  for (const auto [terms, bound] :
+       std::array{std::pair{40uz, std::int64_t{8}},
+                  std::pair{80uz, std::int64_t{16}}}) {
+    auto eq = spine(terms);
+    const auto at = point(terms);
+    const double swept = *eq.evaluate(std::span<const double>{at});
+    eq.options({.backend = ddx::jit::Backend::Compile, .points = 1});
+    ASSERT_TRUE(eq.wait_for_kernel());
+    const double compiled = *eq.evaluate(std::span<const double>{at});
+    EXPECT_LE(ulps(swept, compiled), bound) << terms << " terms drifted";
+    EXPECT_NEAR(swept, compiled, 1e-12 * std::abs(swept));
+  }
+}
+
 TEST(RtEquation, InterpretDeclinesTheBackendAndAgreesWithIt) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1136,15 +1220,34 @@ TEST(RtEquation, EvaluatingUsesAValuesOnlyGraph) {
 
   // Against the values+Jacobian lane: a different graph over the same nodes,
   // and bit-exact since neither reorders anything.
-  double f0 = 0, f1 = 0, f2 = 0, dx0 = 0, dx1 = 0, dx2 = 0, dy0 = 0, dy1 = 0,
-         dy2 = 0;
+  double f0 = 0, f1 = 0, f2 = 0;
   const double *const columns[]{&at[0], &at[1]};
   double *const values[]{&f0, &f1, &f2};
-  double *const partials[]{&dx0, &dy0, &dx1, &dy1, &dx2, &dy2};
+
+  // Five columns, not six: d(x log x)/dy is structurally zero, so it has no
+  // column and the pattern is what says which five these are.
+  const auto &pattern = eq.jacobian_pattern();
+  ASSERT_EQ(*eq.jacobian_columns(), 5u);
+  EXPECT_EQ(pattern.nonzeros(), 5u);
+  EXPECT_EQ(pattern.at(0, 1), ddx::rt::no_column);
+  EXPECT_EQ(pattern.at(0, 0), 0u);
+
+  std::vector<double> cells(*eq.jacobian_columns());
+  const auto partials =
+      cells | std::views::transform([](double &c) { return &c; }) |
+      ddx::impl::to<std::vector<double *>>();
   ASSERT_TRUE(eq.jacobian(columns, values, partials, 1).has_value());
   EXPECT_EQ(v[0], f0);
   EXPECT_EQ(v[1], f1);
   EXPECT_EQ(v[2], f2);
+
+  // And the dense spelling puts the zero back where the pattern left a hole.
+  const auto dense = *eq.jacobian(0.6, 1.4);
+  ASSERT_EQ(dense.size(), 6u);
+  EXPECT_EQ(dense[1], 0.0);
+  EXPECT_EQ(dense[0], cells[pattern.at(0, 0)]);
+  EXPECT_EQ(dense[2], cells[pattern.at(1, 0)]);
+  EXPECT_EQ(dense[5], cells[pattern.at(2, 1)]);
 }
 
 // Scalar and batch Hessians share a lane, with the scalar caller freezing it
