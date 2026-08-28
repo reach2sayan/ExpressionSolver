@@ -1,14 +1,15 @@
 # The Python bindings.  `uv pip install .` configures this repository's own
 # CMakeLists with the extension turned on, so one command builds libddx and the
 # module that links it.  Building needs the machine's LLVM 20, as a C++ build
-# does; the wheel does not, since libddx carries it.
+# does; the wheel does not, since libddx carries it.  A release builds that
+# wheel per platform under [tool.cibuildwheel] below.
 [build-system]
-requires = ["scikit-build-core>=0.10", "pybind11>=3.0"]
+requires = ["scikit-build-core>=1.0", "pybind11>=3.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "ddx"
-version = "1.1.0"
+dynamic = ["version"]
 description = "Reverse-mode automatic differentiation over a runtime graph, compiled through LLVM"
 readme = "README.md"
 license = { file = "LICENSE.txt" }
@@ -37,6 +38,14 @@ compare = [
     "scipy>=1.11",
 ]
 
+# One version, CMake's: `project(ddx VERSION …)` is where it is written, and a
+# release tag is checked against the same line.
+[[tool.dynamic-metadata]]
+field = "version"
+provider = "scikit_build_core.metadata.regex"
+input = "CMakeLists.txt"
+regex = 'project\(ddx VERSION (?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
+
 [tool.scikit-build]
 cmake.version = ">=3.26"
 cmake.build-type = "Release"
@@ -55,6 +64,46 @@ DDX_INSTALL = "OFF"
 # Where the Linux presets look too.  A path that does not exist is searched
 # past, so another layout loses nothing; `-C cmake.define.LLVM_DIR=...` overrides.
 LLVM_DIR = "/usr/lib/llvm-20/lib/cmake/llvm"
+
+# No LLVM archives on Windows yet, so that wheel interprets and ddx.has_jit
+# says so.
+[[tool.scikit-build.overrides]]
+if.platform-system = "win32"
+cmake.define.DDX_BUILD_JIT = "OFF"
+
+# --- release wheels -----------------------------------------------------------
+# One wheel per CPython: pybind11 has no stable-ABI mode, and module.cpp's
+# native_enum and array_t are outside the limited API in any case.
+[tool.cibuildwheel]
+build = "cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux* *-win32 *_i686 cp3??t-*"
+build-frontend = "build[uv]"
+manylinux-x86_64-image = "manylinux_2_28"
+build-verbosity = 1
+test-requires = "pytest"
+test-command = "pytest -q {package}/python/tests"
+
+# The archives are built in the container -- no package there has them -- and
+# scripts/build_llvm.py is idempotent, so a cached .deps skips the hour.  The
+# manylinux image's own python3 is too old for the script; one of the builds'
+# is not, and before-all runs before any of them is on the PATH.
+# CMAKE_PREFIX_PATH rather than LLVM_DIR: the same prefix holds the static zlib
+# and zstd LLVMConfig goes looking for.
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+before-all = "/opt/python/cp312-cp312/bin/python {project}/scripts/build_llvm.py /project/.deps/llvm-20"
+environment = { CMAKE_PREFIX_PATH = "/project/.deps/llvm-20" }
+
+# Homebrew's llvm@20 keg ships the component archives beside its dylib; zlib
+# and zstd kegs supply the .a files the SDK does not.  The deployment target
+# is the runner's own release, which is what those bottles were built for.
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+before-all = "brew install llvm@20 zlib zstd ninja"
+environment = { MACOSX_DEPLOYMENT_TARGET = "15.0", CMAKE_PREFIX_PATH = "$(brew --prefix llvm@20):$(brew --prefix zlib):$(brew --prefix zstd)" }
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

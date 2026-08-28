@@ -925,12 +925,28 @@ thread-safe except `options()`.
 
 ## Python
 
-The same runtime, as an extension module. Build it with a preset, or install the
-package — scikit-build-core drives CMake, so `pip install .` configures and
-builds a wheel in one step:
+The same runtime, as an extension module. A [release](https://github.com/reach2sayan/ddx/releases)
+carries one wheel per platform and CPython version (3.11–3.14) and a source
+distribution. A wheel needs nothing installed beside it — LLVM is inside the
+library:
 
 ```sh
-pip install .                       # wheel; turns the JIT on, so building needs LLVM 20
+uv pip install https://github.com/reach2sayan/ddx/releases/download/v1.1.0/ddx-1.1.0-cp312-cp312-manylinux_2_28_x86_64.whl
+```
+
+| Wheel | JIT |
+|---|---|
+| Linux x86_64 (glibc 2.28+) | yes |
+| macOS 15+ arm64 | yes |
+| Windows x64 | no — calls interpret |
+
+Building from source instead — `pip install .`, or a preset — needs a C++23
+compiler and, for the JIT, LLVM 20's archives with a static zlib and zstd;
+`scripts/build_llvm.py` builds that set from source into a prefix, and is what
+the Linux wheel uses:
+
+```sh
+pip install .                       # wheel; JIT on, so building needs LLVM 20
 cmake --preset python               # in-tree, JIT
 cmake --preset python_no_jit        # in-tree, no LLVM
 ```

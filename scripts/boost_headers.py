@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
 """Regenerate cmake/DdxBoostHeaders.cmake, the Boost subset an installed ddx ships.
 
-An installed ddx carries Boost inside its own prefix so a consumer needs none of
-their own, and the whole tree is 190 MB of which ddx names a tenth.  This asks
-the compiler which Boost headers the installed headers actually reach, then
-widens each answer to its containing directory.
-
-Directories, not files, and that is the point.  The reachable *files* differ by
-toolchain -- boost/config/compiler/gcc.hpp against clang.hpp,
-spinlock_std_atomic.hpp against spinlock_gcc_atomic.hpp -- and every such variant
-sits beside a header the closure already names, so shipping whole directories
-absorbs the difference instead of guessing at it.
-
 Three libraries put the variant in a *subdirectory* instead, where widening
-cannot reach it, and name it with a macro the closure never records: MSVC takes
-preprocessor/control/detail/msvc/while.hpp where gcc takes
-control/detail/while.hpp, and mpl/aux_/preprocessed/plain where gcc takes
-.../gcc.  Those three go in entire, all variants, whichever compiler is asked.
+cannot reach it, and name it with a macro the closure never records:
+MSVC takes preprocessor/control/detail/msvc/while.hpp where
+gcc takes control/detail/while.hpp;
+MSVC take mpl/aux_/preprocessed/plain where
+gcc takes .../gcc.
+Those three go in entire, all variants, whichever compiler is asked.
 
 Usage:
     python3 boost_headers.py                 # rewrite the list
     python3 boost_headers.py --check         # exit 1 if the list is stale
     python3 boost_headers.py --cxx clang++   # ask a different compiler
-
-Standard library only, deliberately: this is run while bumping
-DDX_BOOST_VERSION, which is not a moment when a configured venv is to hand.
 
 Expected output today: 198 directories, 3099 files, 32 MB installed.
 """
@@ -52,9 +40,10 @@ COMPILERS = ("g++-15", "g++-14", "g++", "clang++")
 # union costs nothing if they ever stop.
 VARIANTS = ((), ("-DDDX_HAS_JIT",))
 
-# Every file, every subdirectory: the libraries whose variant is chosen by macro
-# -- BOOST_COMPILER_CONFIG, the BOOST_PP_CONFIG_FLAGS() ladder,
-# BOOST_MPL_CFG_COMPILER_DIR -- so that one compiler's closure answers for all.
+# Every file, every subdirectory: the libraries whose variant is
+# chosen by -- BOOST_COMPILER_CONFIG,
+# the BOOST_PP_CONFIG_FLAGS() ladder,
+# BOOST_MPL_CFG_COMPILER_DIR
 WHOLE = ("boost/config", "boost/mpl", "boost/preprocessor")
 
 VERSION = re.compile(r'set\(DDX_BOOST_VERSION\s+"([^"]+)"')
@@ -74,43 +63,30 @@ set(DDX_BOOST_HEADER_DIRS
 {entries})
 """
 
-
 def pinned_version() -> str:
     """Read DDX_BOOST_VERSION out of the one place that pins it."""
     found = VERSION.search(DEPENDENCIES.read_text())
-    if found is None:
-        sys.exit(f"no DDX_BOOST_VERSION in {DEPENDENCIES}")
+    if found is None: sys.exit(f"no DDX_BOOST_VERSION in {DEPENDENCIES}")
     return found.group(1)
-
 
 def pick_compiler() -> str:
     """Choose the compiler to ask: $CXX, else the newest of COMPILERS on PATH."""
-    chosen = os.environ.get("CXX") or next(
-        (c for c in COMPILERS if shutil.which(c)), None
-    )
-    if chosen is None:
-        sys.exit(f"no C++ compiler found; tried $CXX and {', '.join(COMPILERS)}")
+    chosen = os.environ.get("CXX") or next((c for c in COMPILERS if shutil.which(c)), None)
+    if chosen is None: sys.exit(f"no C++ compiler found; tried $CXX and {', '.join(COMPILERS)}")
     return chosen
-
 
 def installed_headers() -> list[Path]:
     """Every header DdxInstall.cmake ships, found the same way it finds them."""
     headers = sorted(INCLUDE.rglob("*.hpp"))
-    if not headers:
-        sys.exit(f"no headers under {INCLUDE}")
+    if not headers: sys.exit(f"no headers under {INCLUDE}")
     return headers
-
 
 def reachable(cxx: str, boost_root: Path, extra: tuple[str, ...]) -> set[Path]:
     """Boost headers the installed headers reach, as paths under boost_root."""
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "installed.cpp"
-        source.write_text(
-            "".join(
-                f'#include "{h.relative_to(INCLUDE).as_posix()}"\n'
-                for h in installed_headers()
-            )
-        )
+        source.write_text("".join(f'#include "{h.relative_to(INCLUDE).as_posix()}"\n'
+                                  for h in installed_headers()))
         # -M, not -MM: -MM drops everything found through -isystem, which is
         # every Boost header there is.
         done = subprocess.run(
@@ -120,8 +96,7 @@ def reachable(cxx: str, boost_root: Path, extra: tuple[str, ...]) -> set[Path]:
             text=True,
             check=False,
         )
-    if done.returncode != 0:
-        sys.exit(f"{cxx} could not preprocess ddx's headers:\n{done.stderr}")
+    if done.returncode != 0: sys.exit(f"{cxx} could not preprocess ddx's headers:\n{done.stderr}")
     # Makefile syntax: a target, then paths split over backslash-continued lines.
     tokens = done.stdout.replace("\\\n", " ").split()
     return {
@@ -129,7 +104,6 @@ def reachable(cxx: str, boost_root: Path, extra: tuple[str, ...]) -> set[Path]:
         for path in (Path(t) for t in tokens)
         if path.is_absolute() and path.is_relative_to(boost_root)
     }
-
 
 def directories(boost_root: Path, cxx: str) -> list[str]:
     """Collect the directories to ship: every one reached, plus the WHOLE trees."""
@@ -149,13 +123,9 @@ def directories(boost_root: Path, cxx: str) -> list[str]:
     # "boost" sorts before "boost/assert": a prefix is shorter than what extends it.
     return sorted(names)
 
-
 def render(names: list[str], version: str) -> str:
     """Build the generated CMake as text, so --check compares without writing."""
-    return BANNER.format(
-        version=version, entries="\n".join(f"        {n}" for n in names)
-    )
-
+    return BANNER.format(version=version, entries="\n".join(f"        {n}" for n in names))
 
 def main() -> int:
     """Regenerate the list, or check it, and report what was found."""
@@ -198,15 +168,12 @@ def main() -> int:
         return 0
 
     GENERATED.write_text(wanted)
-    files = sum(
-        1 for n in names for f in (boost_root / n).glob("*") if f.is_file()
-    )
+    files = sum(1 for n in names for f in (boost_root / n).glob("*") if f.is_file())
     print(
         f"{GENERATED.relative_to(ROOT)}: {len(names)} directories, "
         f"{files} files, asked {cxx} against Boost {version}"
     )
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

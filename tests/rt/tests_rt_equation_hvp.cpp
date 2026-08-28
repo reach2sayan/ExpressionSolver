@@ -156,6 +156,7 @@ TEST(RtEquationHvp, BatchAgreesWithThePointSpelling) {
 // The lane is exempted from the rebalanced compile graph, exactly as the
 // Hessian lane is, so the kernel and the sweep are the same arithmetic in the
 // same order -- which makes bit equality the honest assertion here.
+#ifdef DDX_HAS_JIT
 TEST(RtEquationHvp, TheKernelAgreesWithTheSweepToTheBit) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -207,6 +208,7 @@ TEST(RtEquationHvp, TheKernelAgreesWithTheSweepToTheBit) {
     }
   }
 }
+#endif
 
 TEST(RtEquationHvp, ColumnCountIsTheSymbolCount) {
   const auto eq = ddx::rt::equation([] {

@@ -1,0 +1,94 @@
+# Wheels and an sdist, attached to a GitHub Release.  A tag `vX.Y.Z` builds and
+# publishes; a manual run builds the same artifacts and publishes nothing, which
+# is how a change to the pipeline is tried before a version rides on it.
+#
+# Linux wheels carry the JIT: LLVM is built as archives inside the manylinux
+# container by scripts/build_llvm.py, once, and cached under .deps -- the
+# checkout is what cibuildwheel mounts at /project, so a cache on the host is
+# what the container's before-all finds.  macOS takes the archives from
+# Homebrew.  Windows builds without the JIT (pyproject.toml's override) and
+# says so through ddx.has_jit.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  # First and cheap: a tag that does not name the CMake version stops here,
+  # before an hour of wheels is spent on the wrong number.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: read
+        run: |
+          version=$(sed -nE 's/^project\(ddx VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not name CMakeLists.txt's version $version"
+            exit 1
+          fi
+
+  wheels:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The script is the key: a change to what it builds is a new prefix.
+      - name: Cache LLVM archives (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: .deps/llvm-20
+          key: llvm-manylinux_2_28-x86_64-${{ hashFiles('scripts/build_llvm.py') }}
+
+      # build[uv] wants a uv of its own on the two hosts that build outside a
+      # container; the Linux container brings one.
+      - name: Install uv
+        if: runner.os != 'Linux'
+        run: pipx install uv
+
+      - uses: pypa/cibuildwheel@v3
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  sdist:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: pipx install uv
+      - run: uv build --sdist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, wheels, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
