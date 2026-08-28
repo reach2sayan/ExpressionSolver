@@ -8,10 +8,15 @@ widens each answer to its containing directory.
 
 Directories, not files, and that is the point.  The reachable *files* differ by
 toolchain -- boost/config/compiler/gcc.hpp against clang.hpp,
-spinlock_std_atomic.hpp against spinlock_gcc_atomic.hpp -- but every such variant
+spinlock_std_atomic.hpp against spinlock_gcc_atomic.hpp -- and every such variant
 sits beside a header the closure already names, so shipping whole directories
-absorbs the difference instead of guessing at it.  boost/config goes in entire
-regardless: no Linux closure touches boost/config/abi/, which MSVC needs.
+absorbs the difference instead of guessing at it.
+
+Three libraries put the variant in a *subdirectory* instead, where widening
+cannot reach it, and name it with a macro the closure never records: MSVC takes
+preprocessor/control/detail/msvc/while.hpp where gcc takes
+control/detail/while.hpp, and mpl/aux_/preprocessed/plain where gcc takes
+.../gcc.  Those three go in entire, all variants, whichever compiler is asked.
 
 Usage:
     python3 boost_headers.py                 # rewrite the list
@@ -21,7 +26,7 @@ Usage:
 Standard library only, deliberately: this is run while bumping
 DDX_BOOST_VERSION, which is not a moment when a configured venv is to hand.
 
-Expected output today: 142 directories, 2317 files, 22 MB installed.
+Expected output today: 198 directories, 3099 files, 32 MB installed.
 """
 
 import argparse
@@ -47,9 +52,10 @@ COMPILERS = ("g++-15", "g++-14", "g++", "clang++")
 # union costs nothing if they ever stop.
 VARIANTS = ((), ("-DDDX_HAS_JIT",))
 
-# Selected by macro rather than by include, so the reachable set names only the
-# variant this machine uses.  Shipped whole.
-ALWAYS = "boost/config"
+# Every file, every subdirectory: the libraries whose variant is chosen by macro
+# -- BOOST_COMPILER_CONFIG, the BOOST_PP_CONFIG_FLAGS() ladder,
+# BOOST_MPL_CFG_COMPILER_DIR -- so that one compiler's closure answers for all.
+WHOLE = ("boost/config", "boost/mpl", "boost/preprocessor")
 
 VERSION = re.compile(r'set\(DDX_BOOST_VERSION\s+"([^"]+)"')
 
@@ -126,17 +132,20 @@ def reachable(cxx: str, boost_root: Path, extra: tuple[str, ...]) -> set[Path]:
 
 
 def directories(boost_root: Path, cxx: str) -> list[str]:
-    """Collect the directories to ship: every one reached, plus boost/config."""
+    """Collect the directories to ship: every one reached, plus the WHOLE trees."""
     reached: set[Path] = set()
     for extra in VARIANTS:
         reached |= reachable(cxx, boost_root, extra)
     names = {header.parent.as_posix() for header in reached}
+    # Named by the files they hold, not by the directories they are: a name that
+    # holds none -- mpl/aux_/preprocessed, all variants and no headers -- would
+    # install nothing and trip DdxInstall.cmake's own check.
     names |= {
-        found.relative_to(boost_root).as_posix()
-        for found in (boost_root / ALWAYS).rglob("*")
-        if found.is_dir()
+        found.parent.relative_to(boost_root).as_posix()
+        for lib in WHOLE
+        for found in (boost_root / lib).rglob("*")
+        if found.is_file()
     }
-    names.add(ALWAYS)
     # "boost" sorts before "boost/assert": a prefix is shorter than what extends it.
     return sorted(names)
 

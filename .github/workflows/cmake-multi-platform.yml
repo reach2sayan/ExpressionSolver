@@ -107,8 +107,9 @@ jobs:
       # header that names a new Boost library silently installs short without
       # this.  Run after configuring, which is what fetches the Boost tree to
       # read.  Linux only -- the answer is the same on every toolchain, because
-      # the list is directories and the per-compiler variants are siblings
-      # inside them.
+      # the list is directories, the per-compiler variants are siblings inside
+      # them, and the libraries that hide a variant in a subdirectory instead
+      # go in whole.
       - name: Installed Boost list is current
         if: runner.os == 'Linux'
         run: python3 scripts/boost_headers.py --check --cxx ${{ matrix.cpp_compiler }}

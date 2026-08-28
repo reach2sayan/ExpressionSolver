@@ -98,9 +98,40 @@ set(DDX_BOOST_HEADER_DIRS
         boost/mpl
         boost/mpl/aux_
         boost/mpl/aux_/config
+        boost/mpl/aux_/preprocessed/bcc
+        boost/mpl/aux_/preprocessed/bcc551
+        boost/mpl/aux_/preprocessed/bcc_pre590
+        boost/mpl/aux_/preprocessed/dmc
         boost/mpl/aux_/preprocessed/gcc
+        boost/mpl/aux_/preprocessed/msvc60
+        boost/mpl/aux_/preprocessed/msvc70
+        boost/mpl/aux_/preprocessed/mwcw
+        boost/mpl/aux_/preprocessed/no_ctps
+        boost/mpl/aux_/preprocessed/no_ttp
+        boost/mpl/aux_/preprocessed/plain
         boost/mpl/aux_/preprocessor
+        boost/mpl/aux_/range_c
+        boost/mpl/aux_/test
         boost/mpl/limits
+        boost/mpl/list
+        boost/mpl/list/aux_
+        boost/mpl/list/aux_/preprocessed/plain
+        boost/mpl/map
+        boost/mpl/map/aux_
+        boost/mpl/map/aux_/preprocessed/no_ctps
+        boost/mpl/map/aux_/preprocessed/plain
+        boost/mpl/map/aux_/preprocessed/typeof_based
+        boost/mpl/math
+        boost/mpl/multiset
+        boost/mpl/multiset/aux_
+        boost/mpl/set
+        boost/mpl/set/aux_
+        boost/mpl/set/aux_/preprocessed/plain
+        boost/mpl/vector
+        boost/mpl/vector/aux_
+        boost/mpl/vector/aux_/preprocessed/no_ctps
+        boost/mpl/vector/aux_/preprocessed/plain
+        boost/mpl/vector/aux_/preprocessed/typeof_based
         boost/pending
         boost/pending/detail
         boost/preprocessor
@@ -108,20 +139,36 @@ set(DDX_BOOST_HEADER_DIRS
         boost/preprocessor/arithmetic/detail
         boost/preprocessor/arithmetic/limits
         boost/preprocessor/array
+        boost/preprocessor/array/detail
         boost/preprocessor/comparison
         boost/preprocessor/comparison/limits
         boost/preprocessor/config
         boost/preprocessor/control
         boost/preprocessor/control/detail
+        boost/preprocessor/control/detail/dmc
+        boost/preprocessor/control/detail/edg
+        boost/preprocessor/control/detail/edg/limits
         boost/preprocessor/control/detail/limits
+        boost/preprocessor/control/detail/msvc
         boost/preprocessor/control/limits
         boost/preprocessor/debug
         boost/preprocessor/detail
+        boost/preprocessor/detail/dmc
         boost/preprocessor/detail/limits
         boost/preprocessor/facilities
         boost/preprocessor/facilities/detail
+        boost/preprocessor/facilities/limits
+        boost/preprocessor/iteration
+        boost/preprocessor/iteration/detail
+        boost/preprocessor/iteration/detail/bounds
+        boost/preprocessor/iteration/detail/iter
+        boost/preprocessor/iteration/detail/iter/limits
+        boost/preprocessor/iteration/detail/limits
         boost/preprocessor/list
         boost/preprocessor/list/detail
+        boost/preprocessor/list/detail/dmc
+        boost/preprocessor/list/detail/edg
+        boost/preprocessor/list/detail/edg/limits
         boost/preprocessor/list/detail/limits
         boost/preprocessor/list/limits
         boost/preprocessor/logical
@@ -130,13 +177,22 @@ set(DDX_BOOST_HEADER_DIRS
         boost/preprocessor/punctuation/detail
         boost/preprocessor/repetition
         boost/preprocessor/repetition/detail
+        boost/preprocessor/repetition/detail/dmc
+        boost/preprocessor/repetition/detail/edg
+        boost/preprocessor/repetition/detail/edg/limits
         boost/preprocessor/repetition/detail/limits
+        boost/preprocessor/repetition/detail/msvc
         boost/preprocessor/repetition/limits
+        boost/preprocessor/selection
         boost/preprocessor/seq
         boost/preprocessor/seq/detail
+        boost/preprocessor/seq/detail/limits
         boost/preprocessor/seq/limits
+        boost/preprocessor/slot
+        boost/preprocessor/slot/detail
         boost/preprocessor/tuple
         boost/preprocessor/tuple/detail
+        boost/preprocessor/tuple/limits
         boost/preprocessor/variadic
         boost/preprocessor/variadic/detail
         boost/preprocessor/variadic/limits

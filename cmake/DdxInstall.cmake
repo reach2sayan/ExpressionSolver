@@ -24,10 +24,12 @@ install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/" DESTINATION ${CMAKE_INSTALL_I
 # build never consults the machine's Boost and neither should what it installs.
 #
 # Only what the installed headers reach, as whole directories, listed by
-# scripts/boost_headers.py in DdxBoostHeaders.cmake: 22 MB against 190 MB for
+# scripts/boost_headers.py in DdxBoostHeaders.cmake: 32 MB against 190 MB for
 # the tree.  Directories rather than the reachable files because the files
 # differ by toolchain -- config/compiler/gcc.hpp against clang.hpp -- and every
-# such variant sits beside a header the closure already names.
+# such variant sits beside a header the closure already names.  config, mpl and
+# preprocessor arrive entire, every variant of each: those three hide the
+# toolchain's copy in a subdirectory a Linux closure never enters.
 #
 # Only the fetched one.  A DDX_BOOST_INCLUDEDIR build is a caller who keeps
 # their own Boost, and copying it here would leave two of it -- theirs and a
