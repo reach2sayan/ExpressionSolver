@@ -111,9 +111,8 @@ public:
                        edges.end(), slots.begin(), b.size());
     g.mark_live();
     g.contract(contract);
-    // Read off what survived rather than taken from the builder: a lane that
-    // kept no seed is exactly as wide as it was before seeds existed, so its
-    // kernel and its digest do not move.
+    // Read off what survived rather than taken from the builder, so a lane
+    // that kept no seed keeps the kernel and the digest it had.
     for (const NodeId v : g.contracted_order_) {
       if (g.properties_[v].op == OpCode::Seed) {
         g.seeds_ = std::max(g.seeds_, std::size_t{g.properties_[v].slot} + 1);
@@ -135,8 +134,7 @@ public:
     return symbols_;
   }
 
-  // How many input columns `xs` carries.  The symbols, and then whatever
-  // non-symbol leaves this freeze kept -- symbols().size() is not the width.
+  // How many input columns `xs` carries: symbols().size() is not the width.
   [[nodiscard]] std::size_t arity() const { return symbols_.size() + seeds_; }
 
   [[nodiscard]] bool live(NodeId v) const { return live_[v]; }
@@ -336,9 +334,8 @@ private:
     return *this;
   }
 
-  // H v rides in the second-order block, which it is: a Hessian compressed to
-  // the one column the direction asks for.  The colouring stays empty, so
-  // coloring() is not always a way to read that block back.
+  // H v is a second-order block of one column, so the colouring stays empty
+  // and coloring() is not always a way to read that block back.
   constexpr GraphBuilder &hessian_vector_from(const HessianVector &h) {
     outputs_.insert(outputs_.end(), h.product.begin(), h.product.end());
     layout_.hessian = h.product.size();
@@ -352,8 +349,8 @@ private:
     return *this;
   }
 
-  // w'J is a first-order block of n columns, and dense: it is a gradient, so
-  // there is no pattern to carry and jacobian_pattern() stays empty.
+  // w'J is a first-order block of n columns and dense, so
+  // jacobian_pattern() stays empty.
   constexpr GraphBuilder &vector_jacobian_from(const VectorJacobian &j) {
     outputs_.insert(outputs_.end(), j.product.begin(), j.product.end());
     layout_.jacobian = j.product.size();

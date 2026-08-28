@@ -47,8 +47,7 @@ TEST(RtJvp, MatchesTheDenseJacobianTimesTheDirection) {
   }
 }
 
-// The independent oracle: a dual point carries J v through the ordinary walk,
-// so this agrees without going near tangent_sweep.
+// The independent oracle: a dual point agrees without going near tangent_sweep.
 TEST(RtJvp, AgreesWithADualPointThroughTheInterpreter) {
   using D = ddx::impl::Dual<double>;
   ddx::rt::Builder<> b;
@@ -136,8 +135,6 @@ TEST(RtJvp, BatchAgreesWithThePointSpelling) {
   }
 }
 
-// One column per function, whatever n is -- the property that makes it worth
-// having when m is small and n is not.
 TEST(RtJvp, CostsOneColumnPerFunction) {
   ddx::rt::Builder<> b;
   std::vector<ddx::rt::RTExpression<>> v;

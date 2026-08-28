@@ -27,10 +27,13 @@ namespace detail {
 
 // One counted loop for every arity: the operand columns are the pack, and the
 // body is apply()'s per element.  `supported` is what keeps the loop compiling
-// at a scalar the op has no meaning for.
+// at a scalar the op has no meaning for.  The pack deduces the element type
+// through the pointer rather than naming `const T *` whole: MSVC parses a
+// restrict only after an explicit `*`, and every column is restrict.
 template <std::size_t W, typename Fn, impl::Numeric T, bool Ok,
-          std::same_as<const T *>... In>
-constexpr void lanes(T *DDX_RESTRICT out, In DDX_RESTRICT... in) noexcept {
+          std::same_as<T>... Ts>
+constexpr void lanes(T *DDX_RESTRICT out,
+                     const Ts *DDX_RESTRICT... in) noexcept {
   for (std::size_t k = 0; k < W; ++k) {
     out[k] = supported<Fn, T, Ok>(in[k]...);
   }

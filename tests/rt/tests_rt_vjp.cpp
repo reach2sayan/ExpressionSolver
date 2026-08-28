@@ -49,7 +49,6 @@ TEST(RtVjp, MatchesTheDenseJacobianForASystem) {
   }
 }
 
-// A unit covector picks one function's gradient out of the system.
 TEST(RtVjp, AUnitCovectorIsOneJacobianRow) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -129,7 +128,6 @@ TEST(RtVjp, BatchAgreesWithThePointSpelling) {
   }
 }
 
-// The reason to have it: n columns instead of one per structural nonzero.
 TEST(RtVjp, CostsFewerColumnsThanTheJacobian) {
   ddx::rt::Builder<> b;
   std::vector<ddx::rt::RTExpression<>> v;

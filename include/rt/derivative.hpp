@@ -168,8 +168,8 @@ template <impl::Numeric T>
 }
 
 // dv/ds carried up the graph in one pass, where `tangent[j]` is ds for symbol
-// j.  The roots' cone only: by the time an Equation asks, the arena also holds
-// a gradient and a whole Hessian, whose tangents nobody wants.
+// j.  The roots' cone only, the arena by then holding derivative blocks whose
+// tangents nobody asked for.
 template <impl::Numeric T>
 [[nodiscard]] constexpr std::vector<NodeId>
 tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
@@ -219,10 +219,8 @@ tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
   return out;
 }
 
-// One pass per symbol, with a unit tangent in each: the Mul/One and Add/Zero
-// rewrites delete the seed before a node exists, so this emits exactly what
-// carrying the basis vector by hand would.  Here to check Reverse against,
-// which produces fewer nodes on everything but a single variable.
+// One sweep per symbol, with a unit tangent in each.  Here to check Reverse
+// against, which produces fewer nodes on everything but a single variable.
 template <impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow build_symbolic_jacobian(Builder<T> &b,
                                                             NodeId root) {
@@ -364,11 +362,11 @@ template <impl::Numeric T>
   return h;
 }
 
-// H(x)v without ever forming H.  The colour seed above is a re-rooting, not an
-// adjoint seed: sweeping from a sum of partials gives the second derivatives of
-// exactly that sum.  Put the direction in the sum and one sweep answers, where
-// the coloured Hessian needs one per colour and n columns per sweep.
-// Ref: Pearlmutter, Neural Computation 6(1) (1994) 147.
+// H(x)v without ever forming H.  Sweeping from s = Sum_j v_j df/dx_j gives
+// ds/dx_i = Sum_j v_j d2f/dx_i dx_j = (Hv)_i, so the direction goes into the
+// same fold the colouring above sums and one sweep answers.
+// Pearlmutter, "Fast Exact Multiplication by the Hessian", Neural Computation
+// 6(1) (1994) 147-160.
 struct HessianVector {
   NodeId value = no_node;
   std::vector<NodeId> partial; // n -- the gradient, which comes free
@@ -394,12 +392,10 @@ template <impl::Numeric T>
           .product = build_reverse_jacobian(b, along.id(b)).partial};
 }
 
-// w'J, the same re-rooting one order down: sweeping from a weighted sum of the
-// functions gives that sum's gradient, which is the row vector.  One sweep and
-// n columns, where jacobian() is m sweeps and pattern.nonzeros() columns.
-//
-// The covector rides in the seed slots too, but counted in *functions*: a lane
-// carries one product or the other, never both, so the two never share a slot.
+// w'J, the same re-rooting one order down: sweeping from s = Sum_i w_i f_i
+// gives ds/dx_j = (w'J)_j.  One sweep and n columns, where jacobian() is m
+// sweeps and pattern.nonzeros() columns; the seed slots here are counted in
+// functions, not symbols.
 struct VectorJacobian {
   std::vector<NodeId> value;   // m
   std::vector<NodeId> product; // n -- w'J
@@ -420,9 +416,8 @@ build_vjp_impl(Builder<T> &b, std::span<const NodeId> roots) {
           .product = build_reverse_jacobian(b, along.id(b)).partial};
 }
 
-// J v: one forward pass, m outputs, whatever n is.  The mirror of vjp -- there
-// the seeds are one per function and the answer is n long, here one per symbol
-// and the answer is m.
+// J v, the one product that is a forward sweep: one pass, m outputs, whatever
+// n is.
 struct Tangent {
   std::vector<NodeId> value;   // m
   std::vector<NodeId> product; // m -- J v

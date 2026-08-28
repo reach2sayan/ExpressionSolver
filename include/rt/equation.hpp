@@ -84,9 +84,8 @@ template <Numeric T, typename... Rest>
   requires(std::same_as<Rest, rt::RTExpression<T>> && ...)
 class Equation<rt::RTExpression<T>, Rest...> {
   // What a lane's graph carries; each level is the one below plus a block.
-  // Hvp is last, and not a level: it takes a wider point and answers a product
-  // rather than a matrix.  Appended rather than inserted, so a saved Object's
-  // `want` byte still names the same lane it did.
+  // Appended rather than inserted, so a saved Object's `want` byte still names
+  // the same lane it did.
   enum class Want : std::uint8_t { Values, Jacobian, Hessian, Hvp, Vjp, Jvp };
 
 public:
@@ -231,9 +230,8 @@ public:
     });
   }
 
-  // H(x)v, n long, without forming H: one sweep where hessian() needs one per
-  // colour.  The direction leads and is a span, so it cannot be read as a
-  // point value however the point itself is spelled.
+  // H(x)v, n long.  The direction leads and is a span, so it cannot be read as
+  // a point value however the point itself is spelled.
   [[nodiscard]] result<std::vector<T>>
   hvp(std::span<const T> direction,
       const rt_detail::CPointArg<T> auto &...args) const
@@ -258,8 +256,8 @@ public:
     });
   }
 
-  // The j-th Hessian column, for a caller who would otherwise write a basis
-  // vector.  A name and not a slot: the symbol list exists only at run time.
+  // The j-th Hessian column, named and not indexed: the symbol list exists
+  // only at run time.
   [[nodiscard]] result<std::vector<T>>
   hvp(std::string_view along, const rt_detail::CPointArg<T> auto &...args) const
     requires(output_dim == 1)
@@ -277,8 +275,7 @@ public:
     return hvp(std::span<const T>{unit}, args...);
   }
 
-  // w'J, n long: one sweep and n columns, where jacobian() is m sweeps and one
-  // column per structural nonzero.  The covector is one weight per function.
+  // w'J, n long: one weight per function.
   [[nodiscard]] result<std::vector<T>>
   vjp(std::span<const T> weights,
       const rt_detail::CPointArg<T> auto &...args) const {
@@ -299,7 +296,7 @@ public:
     });
   }
 
-  // J v, m long: one forward pass whatever n is, the mirror of vjp().
+  // J v, m long: the mirror of vjp().
   [[nodiscard]] result<std::vector<T>>
   jvp(std::span<const T> direction,
       const rt_detail::CPointArg<T> auto &...args) const {
@@ -515,8 +512,7 @@ public:
   }
 
   // `v` is a second block of input columns, not a second point: one column per
-  // symbol, each n long, spliced behind `xs` for the ABI.  The gradient comes
-  // out of the same sweep, so `g` is filled rather than wasted.
+  // symbol, each n long, spliced behind `xs`.  `g` comes out of the same sweep.
   [[nodiscard]] result<void>
   hvp(const rt_detail::CColumns<const T *> auto &xs,
       const rt_detail::CColumns<const T *> auto &v,
@@ -758,9 +754,8 @@ private:
                     return rt::build_hessian_impl(*arena_, r);
                   }) |
                   to<std::vector<rt::Hessian>>();
-      // One more sweep, where the Hessian above is one per colour.  Here for
-      // the same reason as everything else in this block: prepare() is const
-      // and runs under a lane lock, and these append.
+      // Here for the same reason as the rest of this block: prepare() is
+      // const, runs under a lane lock, and these append.
       if constexpr (output_dim == 1) {
         hvp_ = rt::build_hvp_impl(*arena_, roots_.front());
       }
@@ -1153,11 +1148,9 @@ private:
     }
     auto swept = std::make_shared<const rt::Graph<T>>(gb.finish(contracts()));
 #ifdef DDX_HAS_JIT
-    // The Hessian and Hvp lanes share one graph: blocking would cost a second
-    // reverse-over-reverse for a lane the ladder never climbs, and their
-    // second-order block is swept from the unblocked roots, so a rebalanced
-    // copy would answer in different last bits than the sweep it is checked
-    // against.
+    // The seeded lanes skip the rebalanced graph: their second-order block is
+    // swept from the unblocked roots, so a rebalanced copy would answer in
+    // different last bits than the sweep it is checked against.
     auto compiled = swept;
     if constexpr (std::same_as<T, double>) {
       if (want != Want::Hessian && want != Want::Hvp && want != Want::Vjp &&

@@ -20,8 +20,7 @@
 #include <vector>
 
 namespace ddx::impl {
-// Befriended by Builder: an Equation is the one thing that makes an arena's
-// symbols final, and seal() is that and nothing else.
+// Befriended by Builder: making an arena's symbols final is an Equation's alone.
 template <typename... Ts> class Equation;
 } // namespace ddx::impl
 
@@ -33,14 +32,12 @@ inline constexpr NodeId no_node = ~NodeId{0};
 template <impl::Numeric T> class RTExpression;
 template <impl::Numeric T = double> class Builder;
 
-// Befriended by Builder: naming a symbol is var()'s alone, since a new one
-// moves the slots above it.
+// Befriended by Builder: naming a symbol is var()'s alone.
 template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> var(Builder<T> &b,
                                             std::string_view name);
 
-// Befriended by Builder for symmetry with var(), though nothing here can go
-// wrong: a seed slot is given rather than looked up, so it moves nothing.
+// Befriended for symmetry with var(); a seed slot moves nothing.
 template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> seed(Builder<T> &b,
                                              std::uint32_t slot);
@@ -62,8 +59,8 @@ struct Contraction {
 namespace detail {
 
 // Befriended by Builder: installing a saved node stream verbatim is the
-// loader's alone, since every other way in interns and folds.  Defined in
-// rt/archive/snapshot.hpp, which is the only thing that needs it.
+// loader's alone, every other way in interning and folding.  Defined in
+// rt/archive/snapshot.hpp, its only user.
 struct Restore;
 
 // Ids are topological, so one descending pass settles it.  Not a filtered view:
@@ -99,8 +96,7 @@ template <impl::Numeric T> struct Node {
 };
 
 namespace detail {
-// The layout a node had before a select needed a third operand, kept only so
-// the assertion below can name it.
+// The layout before a select needed a third operand, kept for the assertion.
 template <impl::Numeric T> struct TwoOperandNode {
   OpCode op;
   NodeId a;
@@ -110,9 +106,9 @@ template <impl::Numeric T> struct TwoOperandNode {
 };
 } // namespace detail
 
-// The third operand costs nothing: it lands in padding the two-operand layout
-// already carried.  Pinned rather than assumed, because a member added above
-// `value` would silently widen every node in every arena.
+// The third operand lands in padding the two-operand layout already carried.
+// Pinned rather than assumed: a member above `value` would silently widen every
+// node in every arena.
 static_assert(sizeof(Node<double>) ==
               sizeof(detail::TwoOperandNode<double>));
 
@@ -149,8 +145,7 @@ public:
     return nodes_[id];
   }
 
-  // What a walker reads that does not care which arity a node has, and the two
-  // Graph answers as well -- contraction_at() is written once over both.
+  // The CNodeSource half, which the frozen Graph answers as well.
   [[nodiscard]] constexpr OpCode op_of(NodeId id) const {
     return nodes_[id].op;
   }
@@ -188,9 +183,9 @@ private:
     if (at != symbols_.end() && *at == name) {
       return vars_[slot];
     }
-    // A new symbol moves the slots above it, which an Equation that has already
-    // frozen a lane cannot follow.  Naming one again is free, adding one is
-    // not; var() turns the no_node into a poisoned expression.
+    // An Equation that has already frozen a lane cannot follow that lift.
+    // Naming one again is free, adding one is not; var() turns the no_node
+    // into a poisoned expression.
     if (sealed_) {
       return no_node;
     }
@@ -203,9 +198,8 @@ private:
     return vars_[slot];
   }
 
-  // Not gated on sealed_, unlike variable(): a seed slot is the caller's to
-  // name, so it lifts nothing and a sealed arena can still take one.  Interning
-  // leaves one node per slot, so asking twice is free.
+  // Not gated on sealed_, unlike variable(): a seed slot is given rather than
+  // looked up, so it lifts nothing.  Interning leaves one node per slot.
   template <impl::Numeric U>
   friend constexpr RTExpression<U> seed(Builder<U> &, std::uint32_t);
   [[nodiscard]] constexpr NodeId seed_node(std::uint32_t slot) {
@@ -219,9 +213,9 @@ private:
   constexpr void seal() noexcept { sealed_ = true; }
 
   // An arena as it was, not as make() would form it again: make() folds and
-  // swaps commutative operands, and here an id *is* the identity of a
-  // subexpression, which the saved sweeps name by number.  Sealed on arrival.
-  // The one caller is the loader, which has checked what this cannot.
+  // swaps commutative operands, and the saved sweeps name subexpressions by id.
+  // Sealed on arrival; the one caller is the loader, which has checked what
+  // this cannot.
   friend struct detail::Restore;
   constexpr void restore(std::vector<Node<T>> nodes,
                          std::vector<std::string> symbols) {
@@ -239,7 +233,6 @@ private:
     sealed_ = true;
   }
 
-  // Open addressing in a plain vector rather than a hash map
   static constexpr std::uint64_t payload_of(const Node<T> &n) {
     if (n.op != OpCode::Const) {
       return std::uint64_t{n.slot};
@@ -438,11 +431,10 @@ private:
                                                          : apply_rule(*r, a, b);
   }
 
-  // A select's own identities: a literal condition has already chosen, read
-  // as select_impl reads it (any nonzero, NaN included, is true), and two
-  // equal arms leave nothing to choose.  What lets PowOpFn guard its 0 * inf
-  // with a select at no cost to the graphs that never reach it: a literal
-  // exponent folds the guard to the bare partial.
+  // A literal condition has already chosen, read as select_impl reads it (any
+  // nonzero, NaN included, is true), and two equal arms leave nothing to
+  // choose.  What lets PowOpFn guard its 0 * inf at no cost to the graphs that
+  // never reach it: a literal exponent folds the guard to the bare partial.
   constexpr std::optional<NodeId> fold_select(NodeId cond, NodeId t,
                                               NodeId f) const {
     if (t == f) {
@@ -478,7 +470,7 @@ private:
 
 // What a walker reads: an id-addressed source that answers a node's operation
 // and its operands.  Builder and the frozen Graph both do, which is what lets
-// contraction_at() is written once over the two.
+// contraction_at() be written once over the two.
 template <typename S>
 concept CNodeSource = requires(const S &s, NodeId v) {
   { s.op_of(v) } -> std::same_as<OpCode>;
@@ -492,11 +484,9 @@ concept CNodeSource = requires(const S &s, NodeId v) {
 //
 // The rule is structural -- it asks the add what its operands are and nothing
 // about how many readers they have -- which is what lets the arena walk, the
-// frozen graph and the kernel agree to the bit.  A multiply two adds swallow
-// costs nothing extra, an fma being one instruction.
-//
-// The lower-id operand wins where an add has two products, which is the order
-// Builder::make already sorted commutative operands into.
+// frozen graph and the kernel agree to the bit.  The lower-id operand wins
+// where an add has two products, the order Builder::make already sorted
+// commutative operands into.
 [[nodiscard]] constexpr Contraction
 contraction_at(const CNodeSource auto &nodes, NodeId v) {
   if (nodes.op_of(v) != OpCode::Add) {

@@ -59,8 +59,7 @@ void expect_hvp_matches_hessian(auto build, std::size_t nvars,
   }
 }
 
-// Dense coupling: every symbol touches every other, so colours == n and the
-// coloured path is n sweeps where this is one.
+// Dense coupling: colours == n, the worst case for the coloured path.
 auto dense = [](Builder<> &, auto &v) {
   auto acc = ddx::rt::RTExpression<>{0};
   for (const auto &a : v) {
@@ -71,8 +70,8 @@ auto dense = [](Builder<> &, auto &v) {
   return acc;
 };
 
-// Separable: one colour, and every off-diagonal cell structurally zero -- the
-// case where the fold's terms mostly vanish before a node exists.
+// Separable: one colour, and every off-diagonal cell structurally zero, so the
+// fold's terms mostly vanish before a node exists.
 auto separable = [](Builder<> &, auto &v) {
   auto acc = ddx::rt::RTExpression<>{0};
   for (const auto &a : v) {
@@ -93,8 +92,6 @@ TEST(RtHvp, MatchesTheColouredHessianSeparable) {
   expect_hvp_matches_hessian(separable, 4, x, v);
 }
 
-// A unit direction picks out one column, which is the spelling a caller who
-// wants the j-th Hessian column would use.
 TEST(RtHvp, AUnitDirectionIsOneHessianColumn) {
   const std::array x{0.3, 0.7, 0.5};
   for (const std::size_t j : std::views::iota(0uz, 3uz)) {
@@ -123,8 +120,6 @@ TEST(RtHvp, IsLinearInTheDirection) {
   }
 }
 
-// The gradient falls out of the same sweep, so a caller asking for H v does not
-// pay twice for it.
 TEST(RtHvp, CarriesTheGradient) {
   Builder<> b;
   const auto p = var(b, "a");

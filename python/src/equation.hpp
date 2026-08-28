@@ -17,6 +17,8 @@
 #include "jit/kernel.hpp"
 #include "rt/equation.hpp"
 
+#include <boost/algorithm/string/join.hpp>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -80,9 +82,8 @@ public:
 
   [[nodiscard]] std::size_t arity() const { return arena_->symbols().size(); }
   [[nodiscard]] constexpr std::size_t outputs() const { return roots_.size(); }
-  // The symbols as interned Python strings, built once.  Lazy, and safe: every
-  // caller holds the GIL here -- run() does not drop it until after the Point
-  // is built.
+  // The symbols as interned Python strings, built once.  Lazy and safe: run()
+  // does not drop the GIL until after the Point is built.
   [[nodiscard]] std::span<const pyb::object> names() {
     if (names_.size() != symbols().size()) {
       names_.clear();
@@ -134,7 +135,6 @@ public:
 
   // --- the seeded products -------------------------------------------------
   //
-  // J(x)v, w'J(x) and H(x)v, none of which forms the matrix it is named after.
   // The direction rides in its own argument, so it can never be read as part
   // of the point.
 
@@ -164,8 +164,8 @@ public:
     return pyb::make_tuple(value_of(f, cell), std::move(out).array());
   }
 
-  // (value, gradient, H v): the gradient comes off the same sweep, so it is
-  // handed back rather than thrown away.  One output only, as hessian() is.
+  // (value, gradient, H v): the gradient comes off the same sweep.  One
+  // output only, as hessian() is.
   [[nodiscard]] pyb::tuple hvp(const pyb::handle &v, const pyb::handle &x) {
     if (outputs() != 1) {
       fail_with(errc::not_univariate);
@@ -232,12 +232,13 @@ public:
   }
 
   // Only what is free to answer: uses_kernel() would freeze a lane, and a repr
-  // that compiles something is one nobody can call in a debugger.
+  // that compiles something is one nobody can call in a debugger.  Boost's
+  // join, not views::join_with: libstdc++ 14.2 gets that one wrong under
+  // clang, and 14.2 is what Ubuntu 24.04 ships.
   [[nodiscard]] std::string repr() const {
     return std::format("<ddx.Equation ({}) -> {} output{}>",
-                       symbols() | std::views::join_with(std::string{", "}) |
-                           impl::to<std::string>(),
-                       outputs(), outputs() == 1 ? "" : "s");
+                       boost::algorithm::join(symbols(), ", "), outputs(),
+                       outputs() == 1 ? "" : "s");
   }
 
   // --- the equation on disk ------------------------------------------------
@@ -432,9 +433,8 @@ private:
   }
 
   // The process's one LLJIT, borrowed rather than founded: making its own would
-  // stand a second one up beside whatever C++ Equations already use.  Null in a
-  // build without the backend, where the sweep answers everything -- the path a
-  // Compile backend takes anyway while its compile is in flight.
+  // stand a second one up beside whatever C++ Equations already use.  Null
+  // without the backend, where the sweep answers everything.
   [[nodiscard]] static jit::Compiler *compiler() {
 #ifdef DDX_HAS_JIT
     return impl::rt_detail::shared_compiler();
@@ -517,8 +517,8 @@ private:
                std::array{f, g, h},
                std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
         for (const auto [column, o] : std::views::zip(columns, block)) {
-          std::ranges::copy_n(tape.data() + std::size_t{o} * stride, width,
-                              column + i);
+          std::ranges::copy_n(tape.data() + std::size_t{o} * stride,
+                              static_cast<std::ptrdiff_t>(width), column + i);
         }
       }
     };
@@ -527,14 +527,12 @@ private:
     // since the freeze, and live ids index below that.  A short batch sweeps one
     // point at a time rather than padding out to kLanes.
     //
-    // Scratch, and thread_local rather than a member: run() drops the GIL, so
-    // two Python threads can be inside one Equation at once and a shared buffer
-    // would be a race.  Grown and never shrunk, so a loop allocates once.
+    // thread_local rather than a member: run() drops the GIL, so two Python
+    // threads can be inside one Equation at once and a shared buffer would be a
+    // race.  Grown and never shrunk, so a loop allocates once.
     //
-    // resize() rather than assign(): every id in `order` is written by
-    // evaluate_block before it is read, and the scatter reads only live output
-    // ids, which are in `order` -- so a stale value in an id this graph does not
-    // touch is never seen, and zeroing the whole arena per call is waste.
+    // resize() rather than assign(): every id read is written first, so no
+    // stale value is ever seen and zeroing the arena per call is waste.
     if (n < kLanes) {
       static thread_local std::vector<double> at;
       static thread_local std::vector<double> tape;
@@ -563,8 +561,8 @@ private:
       const std::size_t width = std::min(kLanes, n - base);
       for (const auto [dst, column] :
            std::views::zip(lanes | std::views::chunk(kLanes), xs)) {
-        const auto tail =
-            std::ranges::copy_n(column + base, width, dst.begin());
+        const auto tail = std::ranges::copy_n(
+            column + base, static_cast<std::ptrdiff_t>(width), dst.begin());
         std::ranges::fill(tail.out, dst.end(), column[base + width - 1]);
       }
       rt::evaluate_block<kLanes>(*arena_, std::span<const double>{lanes}, order,
@@ -589,7 +587,8 @@ private:
       const auto columns = pattern.row(i);
       const auto cell = compressed.subspan(pattern.rowptr[i], columns.size());
       for (const auto [j, src] : std::views::zip(columns, cell)) {
-        std::ranges::copy_n(src, points, dense.at(i * n + j));
+        std::ranges::copy_n(src, static_cast<std::ptrdiff_t>(points),
+                            dense.at(i * n + j));
       }
     }
   }
@@ -622,7 +621,8 @@ private:
     for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
       double *const out = dense.at(i * n + j);
       if (c.target(c.color[j], i) == j) {
-        std::ranges::copy_n(cells[c.column(c.color[j], i)], at.size(), out);
+        std::ranges::copy_n(cells[c.column(c.color[j], i)],
+                            static_cast<std::ptrdiff_t>(at.size()), out);
       } else {
         std::ranges::fill_n(out, static_cast<std::ptrdiff_t>(at.size()), 0.0);
       }
@@ -687,8 +687,8 @@ private:
     return *sweeps_;
   }
 
-  // The three seeded products, each swept on first ask.  Hash consing makes a
-  // repeat free, so this is about not sweeping for a caller who never asks.
+  // The three seeded products, each swept on first ask: nothing is swept for a
+  // caller who never asks.
   [[nodiscard]] const rt::HessianVector &hvp_sweep() {
     if (!hvp_) {
       hvp_ = rt::build_hvp_impl(*arena_, roots_.front());
@@ -807,8 +807,8 @@ public:
          const pyb::handle &x)
       : owner_(std::move(owner)), eq_(&eq), want_(want),
         x_(pyb::cast<Array>(x)), at_(x_, eq.symbols(), eq.names()) {
-    // A frozen graph carries one colouring, so a system's Hessian is read off
-    // the arena a point at a time and there is no lane to bind.
+    // A system's Hessian is read off the arena a point at a time, so there is
+    // no lane to bind.
     if (want_ == PyEquation::Want::Hessian && eq_->outputs() != 1) {
       fail_with(errc::wrong_column_count);
     }
@@ -873,7 +873,8 @@ private:
     for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
       double *const out = h_->at(i * n + j);
       if (c.target(c.color[j], i) == j) {
-        std::ranges::copy_n(cells[c.column(c.color[j], i)], at_.size(), out);
+        std::ranges::copy_n(cells[c.column(c.color[j], i)],
+                            static_cast<std::ptrdiff_t>(at_.size()), out);
       } else {
         std::ranges::fill_n(out, static_cast<std::ptrdiff_t>(at_.size()), 0.0);
       }

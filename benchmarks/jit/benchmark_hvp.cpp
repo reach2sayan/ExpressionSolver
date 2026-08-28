@@ -1,15 +1,11 @@
-// What H(x)v costs against the Hessian it never forms.
+// What H(x)v costs against the Hessian it never forms: one Hessian, one HVP,
+// and n HVPs, the third being what makes the first two honest.
 //
 // Not a Google Benchmark loop: the argument is a scaling exponent, so each cell
 // is run at its own n and the table prints the log-log slope against the row
 // above.  Wall clock and the minimum over repetitions, per NOTES.md house
 // style -- do not re-tune this with callgrind, which is how the deleted
 // vector-forward driver was mis-priced.
-//
-// Three numbers per model per n, and the third is what makes the first two
-// honest: one Hessian, one HVP, and n HVPs.  A caller who genuinely wants the
-// dense matrix should still use the colouring, and a table that hid that would
-// be an advertisement rather than a measurement.
 
 #include "rt/equation.hpp"
 #include "rt/expressions.hpp"
@@ -114,10 +110,8 @@ void run(const char *name, RE (*build)(std::span<const RE>),
     eq.options({.backend = ddx::jit::Backend::Compile});
     (void)eq.wait_for_kernel();
 
-    // A batch, not a point: at one point the answer is per-call overhead --
-    // allocation, the lane lookup, the dispatch -- and the blocks being
-    // compared are the same size in that noise.  kPoints amortises it so what
-    // is left is the arithmetic each block actually costs.
+    // A batch, not a point: at one point the answer is per-call overhead, and
+    // the two blocks are the same size in that noise.
     std::vector<std::vector<double>> xcols(n, std::vector<double>(kPoints, 0.5));
     std::vector<std::vector<double>> vcols(n, std::vector<double>(kPoints, 1.0));
     std::vector<const double *> xs;

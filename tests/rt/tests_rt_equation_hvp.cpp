@@ -93,7 +93,6 @@ TEST(RtEquationHvp, RefusesAnUnknownSymbol) {
   EXPECT_EQ(r.error().code, ddx::errc::unknown_symbol);
 }
 
-// Every point spelling still works behind the direction.
 TEST(RtEquationHvp, TakesEveryPointSpelling) {
   using namespace ddx::literals;
   const auto eq = ddx::rt::equation([] {
@@ -153,9 +152,8 @@ TEST(RtEquationHvp, BatchAgreesWithThePointSpelling) {
   }
 }
 
-// The lane is exempted from the rebalanced compile graph, exactly as the
-// Hessian lane is, so the kernel and the sweep are the same arithmetic in the
-// same order -- which makes bit equality the honest assertion here.
+// The lane is exempted from the rebalanced compile graph, so the kernel and the
+// sweep are the same arithmetic in the same order and bit equality is honest.
 #ifdef DDX_HAS_JIT
 TEST(RtEquationHvp, TheKernelAgreesWithTheSweepToTheBit) {
   ddx::rt::Builder<> b;

@@ -63,8 +63,7 @@ TEST(RtSeed, WidensTheGraphArity) {
   EXPECT_EQ(graph.arity(), 2u);
 }
 
-// The regression guard for every graph that existed before seeds did: a lane
-// that kept none is exactly as wide as it was.
+// The regression guard for every graph that existed before seeds did.
 TEST(RtSeed, AGraphWithoutSeedsIsUnchanged) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -75,7 +74,6 @@ TEST(RtSeed, AGraphWithoutSeedsIsUnchanged) {
   EXPECT_EQ(graph.arity(), graph.symbols().size());
 }
 
-// A seed the outputs do not reach is not a column anybody has to supply.
 TEST(RtSeed, ADeadSeedDoesNotWiden) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
