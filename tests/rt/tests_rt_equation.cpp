@@ -644,7 +644,7 @@ TEST(RtEquation, ShortSpinesSurviveTheSwitchoverToTheBit) {
   // Over it the kernel sums in blocks, and the gap is small and bounded.  A
   // test that only checked "they agree" would have to be deleted here; one that
   // pins the size is what keeps README honest.
-  for (const auto [terms, bound] :
+  for (const auto &[terms, bound] :
        std::array{std::pair{40uz, std::int64_t{8}},
                   std::pair{80uz, std::int64_t{16}}}) {
     auto eq = spine(terms);

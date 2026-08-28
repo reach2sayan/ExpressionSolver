@@ -74,7 +74,9 @@ public:
     snap.roots = roots_;
     snap.options = options_;
     snap.model_nodes = model_nodes_;
+#ifdef DDX_HAS_JIT
     snap.objects = objects();
+#endif
     return snap;
   }
 
@@ -278,6 +280,7 @@ public:
 private:
   friend class PyCall;
 
+#ifdef DDX_HAS_JIT
   // The machine code the lanes are holding, for the file to carry.  Only
   // kernels that kept their bytes -- Options.retain_object, on by default.
   [[nodiscard]] std::vector<rt::Object> objects() {
@@ -300,6 +303,7 @@ private:
     }
     return out;
   }
+#endif
 
   // Filled once and never invalidated; a new backend throws the whole set away
   // rather than editing one.
@@ -354,6 +358,7 @@ private:
       l.settled = true;
       return;
     }
+#ifdef DDX_HAS_JIT
     jit::Compiler *const c = compiler();
     if (c == nullptr) {
       l.settled = true;
@@ -391,6 +396,9 @@ private:
       l.pending = c->compile_async(l.graph, effective_options());
       l.settled = true;
     }
+#else
+    l.settled = true;
+#endif
   }
 
   // Charge the lane for a batch and launch the compile the points have bought.
@@ -402,9 +410,11 @@ private:
     if (l.points < options_.warm_points) {
       return;
     }
+#ifdef DDX_HAS_JIT
     if (jit::Compiler *const c = compiler(); c != nullptr) {
       l.pending = c->compile_async(l.graph, effective_options());
     }
+#endif
     l.settled = true;
   }
 
@@ -432,16 +442,16 @@ private:
     return opt;
   }
 
-  // The process's one LLJIT, borrowed rather than founded: making its own would
-  // stand a second one up beside whatever C++ Equations already use.  Null
-  // without the backend, where the sweep answers everything.
-  [[nodiscard]] static jit::Compiler *compiler() {
 #ifdef DDX_HAS_JIT
+  // The process's one LLJIT, borrowed rather than founded: making its own would
+  // stand a second one up beside whatever C++ Equations already use.  Null on
+  // a host that cannot bring one up, where the sweep answers everything.
+  // Guarded with every caller: a null-checked call is still a symbol a module
+  // built without the backend would have to import.
+  [[nodiscard]] static jit::Compiler *compiler() {
     return impl::rt_detail::shared_compiler();
-#else
-    return nullptr;
-#endif
   }
+#endif
 
   // Decided in the graph, so a batch answers the same whichever path ran it.
   [[nodiscard]] constexpr bool contracts() const noexcept {
