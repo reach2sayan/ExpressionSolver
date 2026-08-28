@@ -28,14 +28,14 @@ from typing import TYPE_CHECKING, Any
 
 from ._ddx import (Backend, Call, Expression, VecLib, Want, abs,  # noqa: A004  -- the opcode is spelled `abs`, as it is in C++
                    acos, acosh, add, asin, asinh, atan, atan2, atanh,
-                   cbrt, cos, cosh, div, equal, erf, errc, exp, ge, gt,
-                   has_jit, hypot, le, lt,
+                   cbrt, cos, cosh, div, erf, errc, exp,
+                   has_jit, hypot,
                    log, log10, max,  # noqa: A004
                    min,  # noqa: A004
                    mul, neg,
                    pow,  # noqa: A004
                    select, sign, sin, sinh, sqrt, tan, tanh,
-                   unequal, var, )
+                   var, )
 from ._options import Options
 
 if TYPE_CHECKING:
@@ -98,7 +98,7 @@ Equation.compile = _compile  # type: ignore[method-assign]
 __all__ = ["Backend", "Call", "Equation", "Error", "Expression", "Options",
            "VecLib", "Want", "__version__",	"abs", "acos", "acosh",	"add",
            "asin", "asinh",	"atan", "atan2", "atanh", "cbrt", "cos",
-           "cosh", "div", "equal", "equation", "erf", "errc", "exp", "ge",
-           "gt", "has_jit", "hypot", "le", "load", "log", "log10", "lt", "max",
+           "cosh", "div", "equation", "erf", "errc", "exp",
+           "has_jit", "hypot", "load", "log", "log10", "max",
            "min", "mul", "neg", "pow", "select", "sign", "sin", "sinh", "sqrt",
-           "tan", "tanh", "unequal", "var",]
+           "tan", "tanh", "var",]

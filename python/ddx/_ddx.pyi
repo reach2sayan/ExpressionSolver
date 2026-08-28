@@ -73,11 +73,37 @@ class Expression:
     def __add__(self, arg0: Expression) -> Expression: pass
     @typing.overload
     def __add__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    def __bool__(self) -> bool: pass
+    @typing.overload
+    def __eq__(self, arg0: Expression) -> Expression: pass
+    @typing.overload
+    def __eq__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    @typing.overload
+    def __ge__(self, arg0: Expression) -> Expression: pass
+    @typing.overload
+    def __ge__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    @typing.overload
+    def __gt__(self, arg0: Expression) -> Expression: pass
+    @typing.overload
+    def __gt__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    __hash__: typing.ClassVar[None] = None
     def __init__(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None: pass
+    @typing.overload
+    def __le__(self, arg0: Expression) -> Expression: pass
+    @typing.overload
+    def __le__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    @typing.overload
+    def __lt__(self, arg0: Expression) -> Expression: pass
+    @typing.overload
+    def __lt__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     @typing.overload
     def __mul__(self, arg0: Expression) -> Expression: pass
     @typing.overload
     def __mul__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
+    @typing.overload
+    def __ne__(self, arg0: Expression) -> Expression: pass
+    @typing.overload
+    def __ne__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     def __neg__(self) -> Expression: pass
     @typing.overload
     def __pow__(self, arg0: Expression) -> Expression: pass
@@ -255,6 +281,8 @@ def mul(x: Expression, y: Expression) -> Expression:
 def neg(x: Expression) -> Expression:
     ...
 def pow(x: Expression, y: Expression) -> Expression:
+    ...
+def select(cond: Expression, if_true: Expression, if_false: Expression) -> Expression:
     ...
 def sign(x: Expression) -> Expression:
     ...

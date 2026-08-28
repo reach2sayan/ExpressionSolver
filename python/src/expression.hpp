@@ -81,10 +81,15 @@ private:
   friend PyExpression fn(const PyExpression &, const PyExpression &);
   DDX_RT_BINARY_TABLE(DDX_PY_BINFRIEND)
   DDX_RT_COMPARE_TABLE(DDX_PY_BINFRIEND)
-  DDX_PY_BINFRIEND(gt, , )
-  DDX_PY_BINFRIEND(ge, , )
-  DDX_PY_BINFRIEND(equal, , )
-  DDX_PY_BINFRIEND(unequal, , )
+#define DDX_PY_CMPFRIEND(op)                                                   \
+  friend PyExpression operator op(const PyExpression &, const PyExpression &);
+  DDX_PY_CMPFRIEND(<)
+  DDX_PY_CMPFRIEND(<=)
+  DDX_PY_CMPFRIEND(>)
+  DDX_PY_CMPFRIEND(>=)
+  DDX_PY_CMPFRIEND(==)
+  DDX_PY_CMPFRIEND(!=)
+#undef DDX_PY_CMPFRIEND
   // The one ternary.
   friend PyExpression select(const PyExpression &, const PyExpression &,
                              const PyExpression &);
@@ -121,11 +126,20 @@ DDX_RT_UNARY_TABLE(DDX_PY_UNFN)
   }
 DDX_RT_BINARY_TABLE(DDX_PY_BINFN)
 DDX_RT_COMPARE_TABLE(DDX_PY_BINFN)
-DDX_PY_BINFN(gt, , )
-DDX_PY_BINFN(ge, , )
-DDX_PY_BINFN(equal, , )
-DDX_PY_BINFN(unequal, , )
-#undef DDX_PY_BINFN_UNUSED
+
+// The comparisons answer an expression, as the base's do.
+#define DDX_PY_CMPFN(op)                                                       \
+  [[nodiscard]] inline PyExpression operator op(const PyExpression &l,         \
+                                                const PyExpression &r) {       \
+    return {l.base() op r.base(), l.arena() ? l.arena() : r.arena()};          \
+  }
+DDX_PY_CMPFN(<)
+DDX_PY_CMPFN(<=)
+DDX_PY_CMPFN(>)
+DDX_PY_CMPFN(>=)
+DDX_PY_CMPFN(==)
+DDX_PY_CMPFN(!=)
+#undef DDX_PY_CMPFN
 
 // The ternary: the arena is whichever operand names one, as above.
 [[nodiscard]] inline PyExpression select(const PyExpression &c,

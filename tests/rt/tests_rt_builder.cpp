@@ -163,4 +163,22 @@ TEST(RtBuilder, SelectFoldsWhereABinaryWould) {
   EXPECT_EQ(b[kept.id(b)].op, ddx::rt::OpCode::Select);
 }
 
+// Two comparison opcodes carry six operators: each is `lt` or `le`, some read
+// the other way round, and a bare number converts on either side.
+TEST(RtBuilder, ComparisonOperatorsAreTheTwoNodes) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  EXPECT_EQ((x < y).id(b), lt(x, y).id(b));
+  EXPECT_EQ((x <= y).id(b), le(x, y).id(b));
+  EXPECT_EQ((x > y).id(b), lt(y, x).id(b));
+  EXPECT_EQ((x >= y).id(b), le(y, x).id(b));
+  EXPECT_EQ((x == y).id(b), (le(x, y) * le(y, x)).id(b));
+  EXPECT_EQ((x != y).id(b), (1.0 - (x == y)).id(b));
+  EXPECT_EQ((1.0 < x).id(b), (x > 1.0).id(b));
+  EXPECT_EQ((x < 1).id(b), (x < 1.0).id(b));
+  EXPECT_EQ(b[(x < y).id(b)].op, ddx::rt::OpCode::Lt);
+  EXPECT_EQ(b[(x >= y).id(b)].op, ddx::rt::OpCode::Le);
+}
+
 } // namespace

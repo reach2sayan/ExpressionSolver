@@ -9,9 +9,10 @@
 
 A C++23 library for differentiating expressions. Build a function over named
 symbols while the program runs — terms looped over a data file, a model read
-from configuration, an expression typed by a user — and ask it for values,
-gradients, Jacobians and Hessians. One point at a time, or a batch of thousands
-in a single call, interpreted or compiled to machine code through LLVM. There
+from configuration, an expression typed by a user, a loss that switches shape
+on a comparison — and ask it for values, gradients, Jacobians and Hessians. One
+point at a time, or a batch of thousands in a single call, interpreted or
+compiled to machine code through LLVM. There
 are [Python bindings](#python) over the same runtime, and a header-only
 [compile-time API](#compile-time-expressions) for expressions whose shape is
 known when you compile.
@@ -24,22 +25,26 @@ using namespace ddx;
 struct Sample { double t, y; };
 const std::vector<Sample> data{{0.0, 2.00}, {1.0, 1.21}, {2.0, 0.74}, {3.0, 0.45}};
 
-// residual sum of squares of the fit m(t) = a·exp(−b·t)
+// Huber loss of the fit m(t) = a·exp(−b·t): quadratic while a residual is
+// inside δ, linear once it is past.  `select` is a value, not a branch, so the
+// derivative follows whichever arm each residual is on.
+const double delta = 0.05;
 const auto eq = rt::equation([&] {
   const auto a = rt::var("a");
   const auto b = rt::var("b");
 
-  rt::RTExpression<double> rss = 0.0;
+  rt::RTExpression<double> loss = 0.0;
   for (const auto &s : data) {
     const auto r = s.y - a * exp(-b * s.t);
-    rss += r * r;
+    loss += select(abs(r) < delta, r * r, delta * (2.0 * abs(r) - delta));
   }
-  return rss;
+  return loss;
 });
 
-*eq.evaluate(2.0, 0.5);     // 4.1343959887e-05
+*eq.evaluate(2.0, 0.5);     // 4.1343959887e-05 — every residual inside δ: the RSS
 *eq.jacobian(2.0, 0.5);     // {-0.0010757424682, 0.0150678475595}
 *eq.hessian(2.0, 0.5);      // 2 × 2, row-major
+*eq.evaluate(1.8, 0.45);    // 2.1570396028e-02 — two residuals past δ, on the linear arm
 ```
 
 **Contents** — [Requirements](#requirements) · [Using it](#using-it) ·
@@ -264,7 +269,7 @@ not an operator), parentheses, unary signs, decimals and exponent notation. The
 callable functions are the ones in the [expression table](#expressions), spelled
 the same. `-x**2` is `-(x**2)` and `2**-1` is legal, as in Python.
 
-Comparisons are infix — `<` `<=` `>` `>=` — and bind looser than arithmetic, so
+Comparisons are infix, as in C++ — `<` `<=` `>` `>=` — and bind looser than arithmetic, so
 `select(x*x < y + 1, x, y)` needs no parentheses. **One comparison per
 expression**: `a < b < c` is refused rather than read, since Python chains it
 into a conjunction and C folds it into `(a < b) < c`, and picking either
@@ -301,23 +306,31 @@ for (const auto &s : data) {
 | Arithmetic | `+` `-` `*` `/` unary `-` `+=` `-=` `*=` `/=` |
 | Unary | `sin` `cos` `tan` `exp` `log` `log10` `sqrt` `cbrt` `abs` `sign` `asin` `acos` `atan` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` `erf` |
 | Binary | `pow` `atan2` `hypot` `max` `min` |
-| Comparison | `lt` `le` `gt` `ge` `equal` `unequal` — each answers `1.0` or `0.0` |
+| Comparison | `<` `<=` `>` `>=` `==` `!=` — each answers `1.0` or `0.0` |
 | Conditional | `select(cond, if_true, if_false)` |
 
 They are found by argument-dependent lookup, so they work whether or not `rt` is
 in scope. The compound forms are members, and rebind the handle rather than
 mutating what other expressions already refer to.
 
+Where a rule has a choice to make, it is made the same way everywhere: `abs`
+differentiates to `0` at zero and `sign` to `0` throughout, `max` and `min` give
+each side half at a tie, and `pow(a, b)` at `a == 0` answers the zeros its
+constant arms say — `a⁰` is `1` and `0ᵇ` is `0`, so neither partial is the `0·∞`
+the textbook rule spells.
+
 ### Choosing between two expressions
 
 `select` is the only conditional, and it is not a branch: **both arms are
 evaluated** and the condition picks one, so a batch keeps every point on the
-same instruction path and the kernel emits a blend.
+same instruction path and the kernel emits a blend. The loss at the top of this
+page is the usual shape: a residual tested against a threshold, with a different
+expression on each side.
 
 ```cpp
 const auto capped = rt::equation([&] {
   const auto x = rt::var("x");
-  return select(lt(x, 1.0), x * x, 2.0 * x - 1.0);   // C¹ at x = 1
+  return select(x < 1.0, x * x, 2.0 * x - 1.0);   // C¹ at x = 1
 });
 ```
 
@@ -331,17 +344,15 @@ A condition is any nonzero value, as in C, and comparisons are ordinary
 expressions rather than a separate boolean type — which is why they answer
 `1.0` and `0.0` and why `select(x, …)` is legal. Two consequences follow from
 IEEE and are worth stating: a comparison against `NaN` is false (so
-`equal(NaN, NaN)` is `0.0`), while a `NaN` used directly *as* a condition is
+`NaN == NaN` is `0.0`), while a `NaN` used directly *as* a condition is
 true and takes the first arm, exactly as `if (nan)` does in C.
 
-They are spelled `equal` and `unequal` rather than `eq` and `ne` because
-`const auto eq = rt::equation(…)` is what callers name an equation, and a local
-of that name would shadow the function inside the very lambda the model is
-written in.
+A comparison answers an expression and never a `bool`, so `if (x < 1.0)` does
+not compile — but `a < b < c` does, folded to `(a < b) < c` as C reads it. A
+range test is `(a < b) * (b < c)`.
 
-Only `lt` and `le` are operations; `gt`, `ge`, `equal` and `unequal` are those
-two read the other way round, so the graph carries two comparison opcodes and
-not six.
+Only `<` and `<=` are operations; the other four are those two read the other
+way round, so the graph carries two comparison opcodes and not six.
 
 ## Points
 
@@ -417,6 +428,12 @@ const auto in_b = rt::equation([] { return sin(rt::var("b")); });
 *in_b.univariate_derivative<4>(0.5);       //  sin⁗(0.5)
 ```
 
+`univariate_derivative` sweeps the graph once in truncated-Taylor arithmetic,
+and every operation above is defined there — `max`, `min`, `abs`, `select` and
+the comparisons included, taking the side the point is on. Should a scalar type
+ever lack one of them, the call answers `errc::unsupported_scalar` rather than a
+zero.
+
 Values, gradient and Hessian are prepared separately, each the first time it is
 asked for. A caller who only ever evaluates never pays for a gradient.
 
@@ -451,10 +468,16 @@ if (const auto ok = eq.jacobian(xs, values, partials, n); !ok) {
   std::println("{}", ok.error());
 }
 
-f[2];                    // 4.1343959887e-05  — RSS at (2.0, 0.50)
-j[2];                    // ∂RSS/∂a there
-j[n + 2];                // ∂RSS/∂b there
+f[2];                    // 4.1343959887e-05  — the loss at (2.0, 0.50)
+j[2];                    // ∂loss/∂a there
+j[n + 2];                // ∂loss/∂b there
+f[0];                    // 2.1570396028e-02  — (1.8, 0.45): two terms on the linear arm
+j[0];                    // -0.1617863027     — and the gradient is theirs, ±2δ·∂r/∂a
 ```
+
+Every point of a batch runs the same instructions: the `select` in the model
+computes both arms and keeps one per point, so a batch that straddles δ costs no
+more than one that does not, and compiles to a single blend.
 
 A column count that does not match answers `errc::wrong_column_count`, and
 nothing is written.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import operator
 from collections.abc import Callable
 
 import pytest
@@ -47,13 +48,12 @@ def test_every_exported_unary_is_covered() -> None:
         if callable(getattr(ddx, name)) and not isinstance(getattr(ddx, name), type)
     }
     binary = {"add", "mul", "div", "pow", "atan2", "hypot", "max", "min"}
-    # Comparisons answer 1.0 or 0.0 rather than a value, so they have no entry
-    # in the table above; `select` is the one ternary.
-    comparisons = {"lt", "le", "gt", "ge", "equal", "unequal"}
+    # Comparisons are operators on Expression, not functions; `select` is the
+    # one ternary.
     ternary = {"select"}
     # Not operations at all: these build or read an equation.
     not_an_op = {"equation", "load", "var"}
-    assert functions - binary - comparisons - ternary - not_an_op == set(UNARY)
+    assert functions - binary - ternary - not_an_op == set(UNARY)
 
 
 @pytest.mark.parametrize("name", sorted(UNARY))
@@ -151,34 +151,53 @@ def test_repr_names_what_it_is() -> None:
 
 
 @pytest.mark.parametrize(
-    ("spelling", "a", "b", "want"),
+    ("compare", "a", "b", "want"),
     [
-        ("lt", 1.0, 2.0, 1.0),
-        ("lt", 2.0, 1.0, 0.0),
-        ("lt", 2.0, 2.0, 0.0),
-        ("le", 2.0, 2.0, 1.0),
-        ("gt", 2.0, 1.0, 1.0),
-        ("ge", 2.0, 2.0, 1.0),
-        ("equal", 2.0, 2.0, 1.0),
-        ("equal", 2.0, 1.0, 0.0),
-        ("unequal", 2.0, 1.0, 1.0),
+        (operator.lt, 1.0, 2.0, 1.0),
+        (operator.lt, 2.0, 1.0, 0.0),
+        (operator.lt, 2.0, 2.0, 0.0),
+        (operator.le, 2.0, 2.0, 1.0),
+        (operator.gt, 2.0, 1.0, 1.0),
+        (operator.ge, 2.0, 2.0, 1.0),
+        (operator.eq, 2.0, 2.0, 1.0),
+        (operator.eq, 2.0, 1.0, 0.0),
+        (operator.ne, 2.0, 1.0, 1.0),
     ],
 )
 def test_comparisons_answer_one_or_zero(
-    spelling: str, a: float, b: float, want: float
+    compare: Callable[[object, object], object], a: float, b: float, want: float
 ) -> None:
     """A comparison is a value, not a separate kind of thing."""
-    eq = ddx.equation(
-        lambda: getattr(ddx, spelling)(ddx.var("x"), ddx.var("y"))
-    )
+    eq = ddx.equation(lambda: compare(ddx.var("x"), ddx.var("y")))
     assert eq.evaluate([a, b]) == pytest.approx(want)
+
+
+def test_a_number_compares_from_either_side() -> None:
+    """`1.0 < x` reflects to `x > 1.0`; both are the same node."""
+    left = ddx.equation(lambda: 1.0 < ddx.var("x"))
+    right = ddx.equation(lambda: ddx.var("x") > 1.0)
+    for x in (0.5, 1.0, 2.0):
+        assert left.evaluate([x]) == right.evaluate([x])
+    assert isinstance(ddx.var("x") == 1.0, ddx.Expression)
+
+
+def test_an_expression_has_no_truth_value() -> None:
+    """A condition is a value until a point is given, so Python's own branch
+    refuses rather than taking the first arm every time."""
+    x = ddx.var("x")
+    with pytest.raises(TypeError):
+        bool(x < 1.0)
+    with pytest.raises(TypeError):
+        _ = x * x if x < 1.0 else 2.0 * x - 1.0
+    with pytest.raises(TypeError):
+        _ = x != 1.0 and x
 
 
 def test_select_takes_the_arm_the_condition_names() -> None:
     """Both arms evaluate; the derivative is the taken arm's and nothing else."""
     eq = ddx.equation(
         lambda: ddx.select(
-            ddx.lt(ddx.var("x"), ddx.var("y")),
+            ddx.var("x") < ddx.var("y"),
             ddx.var("x") * ddx.var("x"),
             ddx.var("y") ** 3,
         )
@@ -197,7 +216,7 @@ def test_a_comparison_is_infix_in_text() -> None:
     written = ddx.equation("select(x < y, x*x, y**3)")
     by_hand = ddx.equation(
         lambda: ddx.select(
-            ddx.lt(ddx.var("x"), ddx.var("y")),
+            ddx.var("x") < ddx.var("y"),
             ddx.var("x") * ddx.var("x"),
             ddx.var("y") ** 3,
         )

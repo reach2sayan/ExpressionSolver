@@ -176,10 +176,13 @@ DDX_RT_UNARY_TABLE(DDX_TEST_UNARY_RULE)
 DDX_RT_BINARY_TABLE(DDX_TEST_BINARY_RULE)
 #undef DDX_TEST_BINARY_RULE
 
-// Why ExtremumOp keeps a rule of its own, and why AbsOpFn's unqualified sign()
-// reaches RTExpression's hidden friend rather than the one in ops/adjoints.hpp.
-// If this ever becomes true both facts go stale silently.
+// The comparison operators answer expressions, nothing boolean-testable, so
+// neither concept holds: that is why ExtremumOp keeps a rule of its own, and
+// why AbsOpFn's unqualified sign() reaches RTExpression's hidden friend rather
+// than the one in ops/adjoints.hpp.  If either ever becomes true both facts go
+// stale silently.
 static_assert(!std::totally_ordered<ddx::rt::RTExpression<>>);
+static_assert(!std::equality_comparable<ddx::rt::RTExpression<>>);
 
 // A node stands for a double, so it answers the commutativity question the way
 // a double does -- which is what picks DivideOpFn's branch.
@@ -501,11 +504,11 @@ TEST(RtJacobian, ComparisonsComposeFromTheTwoOpcodes) {
     const std::array<double, 2> at{a, b};
     return *eq.evaluate(std::span<const double>{at});
   };
-  const auto less = [](auto x, auto y) { return lt(x, y); };
-  const auto greater = [](auto x, auto y) { return gt(x, y); };
-  const auto at_least = [](auto x, auto y) { return ge(x, y); };
-  const auto is_equal = [](auto x, auto y) { return equal(x, y); };
-  const auto is_unequal = [](auto x, auto y) { return unequal(x, y); };
+  const auto less = [](auto x, auto y) { return x < y; };
+  const auto greater = [](auto x, auto y) { return x > y; };
+  const auto at_least = [](auto x, auto y) { return x >= y; };
+  const auto is_equal = [](auto x, auto y) { return x == y; };
+  const auto is_unequal = [](auto x, auto y) { return x != y; };
 
   EXPECT_DOUBLE_EQ(value(less, 1.0, 2.0), 1.0);
   EXPECT_DOUBLE_EQ(value(less, 2.0, 1.0), 0.0);
@@ -559,9 +562,8 @@ TEST(RtJacobian, ComparisonsAgreeWithTheKernelAtNaN) {
     const auto x = ddx::rt::var("x");
     const auto y = ddx::rt::var("y");
     // Every spelling, so one wrong predicate cannot hide behind the others.
-    return lt(x, y) + le(x, y) * 2.0 + gt(x, y) * 4.0 + ge(x, y) * 8.0 +
-           equal(x, y) * 16.0 + unequal(x, y) * 32.0 +
-           select(le(x, y), x, y) * 64.0;
+    return (x < y) + (x <= y) * 2.0 + (x > y) * 4.0 + (x >= y) * 8.0 +
+           (x == y) * 16.0 + (x != y) * 32.0 + select(x <= y, x, y) * 64.0;
   });
 
   const std::array<std::array<double, 2>, 7> points{

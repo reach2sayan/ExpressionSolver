@@ -242,12 +242,27 @@ PYBIND11_MODULE(_ddx, m) {
       .DDX_PY_BINOP("__rtruediv__", r / l)
       .DDX_PY_BINOP("__pow__", ddx::py::pow(l, r))
       .DDX_PY_BINOP("__rpow__", ddx::py::pow(r, l))
+      // `1.0 < x` reaches __gt__ by Python's own reflection.  __ne__ is
+      // spelled out: Python would otherwise derive it as `not (a == b)`.
+      .DDX_PY_BINOP("__lt__", l < r)
+      .DDX_PY_BINOP("__le__", l <= r)
+      .DDX_PY_BINOP("__gt__", l > r)
+      .DDX_PY_BINOP("__ge__", l >= r)
+      .DDX_PY_BINOP("__eq__", l == r)
+      .DDX_PY_BINOP("__ne__", l != r)
       .def(
           "__neg__", [](const PyExpression &u) { return -u; },
           pyb::is_operator())
       .def(
           "__abs__", [](const PyExpression &u) { return ddx::py::abs(u); },
-          pyb::is_operator());
+          pyb::is_operator())
+      // A comparison is a value with no truth until a point is given, so
+      // `if x < 1:` and `a if x < 1 else b` refuse rather than take the first
+      // arm every time.
+      .def("__bool__", [](const PyExpression &) -> bool {
+        throw pyb::type_error("the truth value of an Expression is ambiguous; "
+                              "use select(cond, if_true, if_false)");
+      });
 #undef DDX_PY_BINOP
 
   pyb::implicitly_convertible<double, PyExpression>();
@@ -292,11 +307,6 @@ PYBIND11_MODULE(_ddx, m) {
       },                                                                       \
       pyb::arg("x"), pyb::arg("y"));
   DDX_RT_BINARY_TABLE(DDX_PY_DEF_BIN)
-  DDX_RT_COMPARE_TABLE(DDX_PY_DEF_BIN)
-  DDX_PY_DEF_BIN(gt, , )
-  DDX_PY_DEF_BIN(ge, , )
-  DDX_PY_DEF_BIN(equal, , )
-  DDX_PY_DEF_BIN(unequal, , )
 #undef DDX_PY_DEF_BIN
 
   // Both arms are evaluated and the condition picks one; any nonzero condition

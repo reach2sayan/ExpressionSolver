@@ -162,30 +162,37 @@ public:
   DDX_RT_COMPARE_TABLE(DDX_RT_BINFN)
 #undef DDX_RT_BINFN
 
-  // Free functions and never operators: `operator<` would make RTExpression
-  // std::totally_ordered, and adjoints.hpp's numeric `sign` would then outrank
-  // the node-building one.  Only `<` and `<=` are nodes.
-  friend constexpr RTExpression gt(const RTExpression &l,
-                                   const RTExpression &r) {
+  // Operators that answer an expression, not a bool.  That is what keeps
+  // RTExpression outside std::totally_ordered -- every comparison there must be
+  // boolean-testable -- so adjoints.hpp's numeric `sign` never outranks the
+  // node-building one.  Only `<` and `<=` are nodes; the rest are those two
+  // read the other way round.
+  friend constexpr RTExpression operator<(const RTExpression &l,
+                                          const RTExpression &r) {
+    return lt(l, r);
+  }
+  friend constexpr RTExpression operator<=(const RTExpression &l,
+                                           const RTExpression &r) {
+    return le(l, r);
+  }
+  friend constexpr RTExpression operator>(const RTExpression &l,
+                                          const RTExpression &r) {
     return lt(r, l);
   }
-  friend constexpr RTExpression ge(const RTExpression &l,
-                                   const RTExpression &r) {
+  friend constexpr RTExpression operator>=(const RTExpression &l,
+                                           const RTExpression &r) {
     return le(r, l);
   }
-  // `equal`, not `eq`: these are hidden friends, and a local named `eq` -- what
-  // every caller names its equation -- shadows the function inside the very
-  // lambda the model is written in.
-  //
   // Both ways round, so a NaN operand answers 0 -- where `1 - lt - lt` would
   // have called two NaNs equal.
-  friend constexpr RTExpression equal(const RTExpression &l,
-                                      const RTExpression &r) {
+  friend constexpr RTExpression operator==(const RTExpression &l,
+                                           const RTExpression &r) {
     return le(l, r) * le(r, l);
   }
-  friend constexpr RTExpression unequal(const RTExpression &l,
-                                        const RTExpression &r) {
-    return RTExpression{1} - equal(l, r);
+  // Spelled out: the rewritten `!(l == r)` is ill-formed when `==` is not bool.
+  friend constexpr RTExpression operator!=(const RTExpression &l,
+                                           const RTExpression &r) {
+    return RTExpression{1} - (l == r);
   }
 
   // Both arms evaluate; `c` is a condition in the C sense, any nonzero value.
