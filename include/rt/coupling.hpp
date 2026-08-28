@@ -54,13 +54,13 @@ struct Sparsity {
   // structure says cannot be nonzero.
   [[nodiscard]] constexpr std::size_t at(std::size_t i,
                                          std::size_t j) const noexcept {
-    const auto columns = row(i);
-    const auto found = std::ranges::lower_bound(columns, j, {},
+    const auto present = row(i);
+    const auto found = std::ranges::lower_bound(present, j, {},
                                                 [](std::uint32_t c) -> std::size_t {
                                                   return c;
                                                 });
-    return found != columns.end() && *found == j
-               ? rowptr[i] + static_cast<std::size_t>(found - columns.begin())
+    return found != present.end() && *found == j
+               ? rowptr[i] + static_cast<std::size_t>(found - present.begin())
                : no_column;
   }
 

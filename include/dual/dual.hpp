@@ -315,7 +315,8 @@ template <DualLike A, CArithmetic U> constexpr auto pow(A &&a, U s) noexcept {
     using T = std::remove_cvref_t<decltype(av)>;
     const T p = pow(av, s);
     // s == 0: a^0 is the constant 1, and s * a^(s-1) is 0 * inf at av == 0.
-    return s == U{} ? DT{p, T{}} : DT{p, pow(av, s - U{1}) * (s * ad)};
+    return s == U{} ? DT{p, T{}}
+                    : DT{p, pow(av, s - U{1}) * (static_cast<T>(s) * ad)};
   }
 }
 
