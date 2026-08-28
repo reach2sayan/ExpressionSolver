@@ -91,14 +91,6 @@ add_subdirectory(include)
 # --- libddx -----------------------------------------------------------------
 option(DDX_BUILD_JIT "Build the LLVM JIT backend into libddx" OFF)
 
-# One knob for the one library ddx produces.
-option(DDX_SHARED_LIBS "Build libddx as a shared library" ON)
-if (DDX_SHARED_LIBS)
-    set(DDX_LIBRARY_TYPE SHARED)
-else ()
-    set(DDX_LIBRARY_TYPE STATIC)
-endif ()
-
 add_subdirectory(src/rt)
 add_subdirectory(include/rt)
 

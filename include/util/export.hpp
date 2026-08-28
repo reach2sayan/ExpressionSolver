@@ -1,8 +1,6 @@
 #pragma once
 
-#if defined(DDX_STATIC_LIB)
-#define DDX_API
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER)
 #if defined(DDX_BUILDING)
 #define DDX_API __declspec(dllexport)
 #else

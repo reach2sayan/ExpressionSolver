@@ -1,7 +1,7 @@
 # The Python bindings.  `uv pip install .` configures this repository's own
 # CMakeLists with the extension turned on, so one command builds libddx and the
-# module that links it.  LLVM 20 and Boost are the machine's, exactly as for a
-# C++ build; nothing is vendored into the wheel.
+# module that links it.  Building needs the machine's LLVM 20, as a C++ build
+# does; the wheel does not, since libddx carries it.
 [build-system]
 requires = ["scikit-build-core>=0.10", "pybind11>=3.0"]
 build-backend = "scikit_build_core.build"
@@ -52,6 +52,9 @@ DDX_BUILD_BENCHMARKS = "OFF"
 # python/CMakeLists.txt installs the two shared objects into the package itself;
 # the headers and the CMake package are not a wheel's business.
 DDX_INSTALL = "OFF"
+# Where the Linux presets look too.  A path that does not exist is searched
+# past, so another layout loses nothing; `-C cmake.define.LLVM_DIR=...` overrides.
+LLVM_DIR = "/usr/lib/llvm-20/lib/cmake/llvm"
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

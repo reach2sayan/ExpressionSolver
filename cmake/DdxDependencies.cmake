@@ -123,12 +123,35 @@ macro(_ddx_adopt_boost root)
 endmacro()
 
 # --- LLVM -------------------------------------------------------------------
-# Sets LLVM_DEFINITIONS_LIST and DDX_LLVM_LIBS for src/jit.
+# Found, then linked as archives: libddx carries LLVM and the zlib and zstd
+# behind it, so a client loads the C runtime and nothing else.  Sets
+# LLVM_DEFINITIONS_LIST and DDX_LLVM_LIBS for src/jit.
 macro(ddx_use_llvm)
     if (NOT LLVM_FOUND)
+        # LLVMConfig finds ZLIB itself and FindZLIB honours this -- for a fresh
+        # find_library only, so a libz.so cached by an earlier configure goes
+        # first.
+        foreach (_ddx_zlib_var ZLIB_LIBRARY_RELEASE ZLIB_LIBRARY_DEBUG)
+            if (${_ddx_zlib_var} AND NOT ${_ddx_zlib_var} MATCHES "\\${CMAKE_STATIC_LIBRARY_SUFFIX}$")
+                unset(${_ddx_zlib_var} CACHE)
+            endif ()
+        endforeach ()
+        unset(_ddx_zlib_var)
+        set(ZLIB_USE_STATIC_LIBS ON)
+        # LLVMConfig also looks for what its other components want.  ddx links
+        # none of these, and FindLibEdit's header check is a C try_compile in
+        # a C++-only project, which is a configure error on a fresh tree.
+        foreach (_ddx_llvm_extra FFI LibEdit LibXml2 CURL)
+            set(CMAKE_DISABLE_FIND_PACKAGE_${_ddx_llvm_extra} ON)
+        endforeach ()
         # LLVMConfig matches only an exact version request, so a find_package
         # range never does; check the major here.
         find_package(LLVM REQUIRED CONFIG)
+        foreach (_ddx_llvm_extra FFI LibEdit LibXml2 CURL)
+            unset(CMAKE_DISABLE_FIND_PACKAGE_${_ddx_llvm_extra})
+        endforeach ()
+        unset(_ddx_llvm_extra)
+        unset(ZLIB_USE_STATIC_LIBS)
         if (NOT LLVM_VERSION_MAJOR EQUAL DDX_LLVM_VERSION)
             message(FATAL_ERROR
                     "ddx::jit is built against LLVM ${DDX_LLVM_VERSION}; found "
@@ -140,7 +163,42 @@ macro(ddx_use_llvm)
         llvm_map_components_to_libnames(DDX_LLVM_LIBS
                 core orcjit native passes support analysis target)
     endif ()
+    _ddx_llvm_archives()
 endmacro()
+
+# What libddx swallows has to exist as archives, and a .so slipping in here
+# would surface as a client's missing library rather than a build error.
+# LLVMExports names zstd's shared target on LLVMSupport verbatim and Findzstd
+# has no switch, so that one property is retargeted to the static target
+# Findzstd defines beside it.  Outside the LLVM_FOUND guard: a parent project
+# that found LLVM first still needs this, and it is idempotent.
+function(_ddx_llvm_archives)
+    set(missing "")
+    if (NOT TARGET LLVMCore)
+        string(APPEND missing "  LLVM's component archives (llvm-${DDX_LLVM_VERSION}-dev)\n")
+    endif ()
+    if (NOT TARGET zstd::libzstd_static)
+        string(APPEND missing "  libzstd.a (libzstd-dev)\n")
+    endif ()
+    set(zlib "")
+    if (TARGET ZLIB::ZLIB)
+        get_target_property(zlib ZLIB::ZLIB IMPORTED_LOCATION_RELEASE)
+        if (NOT zlib)
+            get_target_property(zlib ZLIB::ZLIB IMPORTED_LOCATION)
+        endif ()
+    endif ()
+    if (NOT zlib MATCHES "\\${CMAKE_STATIC_LIBRARY_SUFFIX}$")
+        string(APPEND missing "  libz.a (zlib1g-dev)\n")
+    endif ()
+    if (missing)
+        message(FATAL_ERROR
+                "libddx links LLVM and what it needs as archives, and these were "
+                "not found:\n${missing}")
+    endif ()
+    get_target_property(deps LLVMSupport INTERFACE_LINK_LIBRARIES)
+    string(REPLACE "zstd::libzstd_shared" "zstd::libzstd_static" deps "${deps}")
+    set_property(TARGET LLVMSupport PROPERTY INTERFACE_LINK_LIBRARIES "${deps}")
+endfunction()
 
 # --- pybind11 ---------------------------------------------------------------
 # Found in the build *environment*, not on the machine: an extension is built

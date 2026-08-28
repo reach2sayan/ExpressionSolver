@@ -102,9 +102,6 @@ endfunction()
 # Windows has no RPATH at all, so there the DLL is copied next to the .exe.
 # Every executable linking ddx::rt needs it.
 function(ddx_runtime_deps target)
-    if (NOT DDX_SHARED_LIBS)
-        return ()
-    endif ()
     set_property(TARGET ${target} APPEND PROPERTY BUILD_RPATH "$ORIGIN")
     if (WIN32)
         add_custom_command(TARGET ${target} POST_BUILD

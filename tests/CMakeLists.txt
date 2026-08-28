@@ -13,8 +13,8 @@ add_executable(tests ${DDX_TEST_SOURCES})
 target_include_directories(tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(tests PRIVATE gtest_main ddx)
 ddx_target_flags(tests)
-# libLLVM will never be instrumented, so without ignore_noninstrumented_modules
-# every ORC internal is a report rather than a finding.
+# libstdc++ is not instrumented, hence ignore_noninstrumented_modules.  LLVM is
+# not either, but sits inside libddx, which is, so tsan.supp names it by frame.
 set(DDX_TEST_ENV "")
 if (DDX_SANITIZE STREQUAL "thread")
     set(DDX_TEST_ENV PROPERTIES ENVIRONMENT
@@ -57,6 +57,15 @@ if (DDX_BUILD_JIT)
     if (DDX_TEST_ENV)
         set_tests_properties(jit.exit_stress ${DDX_TEST_ENV})
     endif ()
+
+    # What a client loads, held as a test.  Not under a sanitizer, whose runtime
+    # is a dependency the shipped library does not have.
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND DDX_SANITIZE STREQUAL "off")
+        add_test(NAME jit.exports
+                COMMAND ${CMAKE_COMMAND} -DNM=${CMAKE_NM} -DREADELF=${CMAKE_READELF}
+                -DLIB=$<TARGET_FILE:ddx_rt>
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/jit/check_exports.cmake")
+    endif ()
 endif ()
 
 # --- packaging ---------------------------------------------------------------
@@ -88,9 +97,6 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
             -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
             -DDDX_CONSUMER_COMPONENTS=${DDX_PACKAGE_COMPONENTS_ARG})
-    if (DDX_BUILD_JIT)
-        list(APPEND DDX_PACKAGE_COMMON_OPTIONS -DLLVM_DIR=${LLVM_DIR})
-    endif ()
 
     # A multi-config generator carries the configuration on the command line,
     # and none of it reaches a nested cmake: left alone the consumer is built

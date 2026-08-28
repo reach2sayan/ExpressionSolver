@@ -1,7 +1,7 @@
 # The extension module: a consumer of libddx like compare/, living in this tree
-# so one `uv pip install .` builds the pair.  LLVM is the machine's and Boost is
-# fetched; the wheel carries neither, and DDX_INSTALL is off, so it ships the two
-# libraries below and no headers.
+# so one `uv pip install .` builds the pair.  LLVM is inside libddx and Boost is
+# headers, so with DDX_INSTALL off the wheel is the two libraries below and
+# nothing else.
 #
 #   ddx/_ddx.cpython-*.so   these bindings
 #   ddx/libddx.so.1         the library they link
@@ -23,15 +23,15 @@ ddx_runtime_deps(ddx_python)
 # $ORIGIN is how _ddx finds libddx once the wheel is unpacked somewhere CMake
 # never saw.
 set_target_properties(ddx_python PROPERTIES INSTALL_RPATH "$ORIGIN")
-# And libddx has to keep finding LLVM: install() strips the build-tree RUNPATH,
-# and ddx_rt is created in src/rt before this directory is read, hence the
-# property set here.  Easy to miss -- this machine has libLLVM on the default
-# loader path, so a wheel without it loads and fails somewhere else.
-if (DDX_BUILD_JIT)
-    set_property(TARGET ddx_rt APPEND PROPERTY INSTALL_RPATH "${LLVM_LIBRARY_DIR}")
-endif ()
 install(TARGETS ddx_python LIBRARY DESTINATION ddx)
-install(TARGETS ddx_rt LIBRARY DESTINATION ddx)
+install(TARGETS ddx_rt LIBRARY DESTINATION ddx NAMELINK_SKIP)
+# A wheel holds no symlinks, so the soname link would be a second copy of a
+# 40 MB library; the real file takes the one name _ddx asks for instead.
+if (NOT WIN32)
+    install(CODE "file(RENAME
+            \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/ddx/$<TARGET_FILE_NAME:ddx_rt>\"
+            \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/ddx/$<TARGET_SONAME_FILE_NAME:ddx_rt>\")")
+endif ()
 
 # --- the package, in the build tree ------------------------------------------
 # The wheel gets this layout from install(); a preset build has to be given it,

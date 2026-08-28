@@ -78,7 +78,8 @@ until 20, and libc++ has no `views::enumerate` — hence the two floors.
 - GoogleTest and Google Benchmark are fetched at configure time, so a first
   configure that builds the tests or the benchmarks wants a network.
 - `-DDDX_BUILD_JIT=ON` additionally needs an LLVM 20 installation, pointed at
-  with `LLVM_DIR`.
+  with `LLVM_DIR` — to build. The library it produces carries LLVM, and loads
+  on a machine that has none.
 - `-DDDX_BUILD_PYTHON=ON` additionally needs **Python 3.11+** and pybind11; the
   module imports NumPy 1.23+ and pydantic 2.7+.
 
@@ -160,7 +161,6 @@ cmake --preset release_jit -DLLVM_DIR=/opt/llvm-20/lib/cmake/llvm
 | Option | Default | Meaning |
 |---|---|---|
 | `DDX_BUILD_JIT` | `OFF` | compile the LLVM backend into the library |
-| `DDX_SHARED_LIBS` | `ON` | build the library shared rather than static |
 | `DDX_BUILD_PYTHON` | `OFF` | build the pybind11 extension module |
 | `DDX_BUILD_BENCHMARKS` | `ON` | build the benchmark targets |
 | `DDX_SANITIZE` | `off` | `thread`, `address` or `undefined` — instrument the build |
@@ -930,7 +930,7 @@ package — scikit-build-core drives CMake, so `pip install .` configures and
 builds a wheel in one step:
 
 ```sh
-pip install .                       # wheel; turns the JIT on, so LLVM 20 is needed
+pip install .                       # wheel; turns the JIT on, so building needs LLVM 20
 cmake --preset python               # in-tree, JIT
 cmake --preset python_no_jit        # in-tree, no LLVM
 ```

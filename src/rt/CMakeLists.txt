@@ -2,7 +2,7 @@
 # no scalar at all -- the colouring, the graphviz writer, the archive prologue --
 # which would otherwise be emitted once per scalar for byte-identical code, and
 # would put Boost.Graph on the include path of every TU that only evaluates.
-add_library(ddx_rt ${DDX_LIBRARY_TYPE} coupling.cpp dot.cpp archive.cpp)
+add_library(ddx_rt SHARED coupling.cpp dot.cpp archive.cpp)
 add_library(ddx::rt ALIAS ddx_rt)
 
 # One binary artifact, libddx, and EXPORT_NAME so an installed ddx spells its
@@ -19,10 +19,6 @@ set_target_properties(ddx_rt PROPERTIES
 
 # DDX_BUILDING only while this library compiles -- see include/util/export.hpp.
 target_compile_definitions(ddx_rt PRIVATE DDX_BUILDING)
-if (NOT DDX_SHARED_LIBS)
-    # A consumer's declarations have to agree about whether there is a boundary.
-    target_compile_definitions(ddx_rt PUBLIC DDX_STATIC_LIB)
-endif ()
 
 # PUBLIC because Boost is named in include/rt, so a consumer of these headers
 # needs the include path.  Header-only throughout, so nothing links a Boost

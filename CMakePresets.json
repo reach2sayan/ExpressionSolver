@@ -55,7 +55,7 @@
     {
       "name": "debug_jit_tsan",
       "displayName": "Debug + JIT + ThreadSanitizer",
-      "description": "Everything in the tree instrumented, gtest included. libLLVM is not, so TSAN_OPTIONS carries ignore_noninstrumented_modules.",
+      "description": "Everything in the tree instrumented, gtest included. The LLVM inside libddx is not, so tests/tsan.supp names it by frame.",
       "inherits": [
         "debug_jit"
       ],
