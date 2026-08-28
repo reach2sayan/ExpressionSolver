@@ -36,6 +36,7 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Keyed on the RTExpression<T> *pattern*: a `requires` over <TFirst, TRest...>
@@ -44,9 +45,20 @@ namespace ddx::impl {
 
 namespace rt_detail {
 
+// A point keyed by name at run time: any range of (name, value), which is the
+// map spelling of the names rt::var(name) reads.  Entry keys off a FixedString
+// and so cannot say a name the program only learns while it runs.
+template <typename R, typename T>
+concept CNamedRange =
+    std::ranges::input_range<R> &&
+    requires(const std::ranges::range_value_t<R> &e) {
+      { e.first } -> std::convertible_to<std::string_view>;
+      requires Numeric<std::remove_cvref_t<decltype(e.second)>>;
+    };
+
 template <typename A, typename T>
 concept CPointArg =
-    Numeric<std::remove_cvref_t<A>> || CEntry<A> ||
+    Numeric<std::remove_cvref_t<A>> || CEntry<A> || CNamedRange<A, T> ||
     (std::ranges::input_range<A> &&
      Numeric<std::remove_cvref_t<std::ranges::range_value_t<A>>>);
 
@@ -161,6 +173,11 @@ public:
     result<void> ok{};
     if constexpr ((CEntry<Args> && ...) && sizeof...(Args) > 0) {
       ((ok = ok.and_then([&] { return assign_named(at, args); })), ...);
+    } else if constexpr (sizeof...(Args) == 1 &&
+                         (rt_detail::CNamedRange<Args, T> && ...)) {
+      // Before the plain range: a map is an input_range too, and its elements
+      // are pairs rather than the numbers assign_range would read.
+      ok = assign_named_range(at, args...);
     } else if constexpr (sizeof...(Args) == 1 &&
                          (std::ranges::input_range<Args> && ...)) {
       ok = assign_range(at, args...);
@@ -605,6 +622,29 @@ private:
       return fail(errc::unknown_symbol);
     }
     at[static_cast<std::size_t>(it - names.begin())] = static_cast<T>(nv.value);
+    return {};
+  }
+
+  // Unlike the Entry spellings, this one insists on a complete point: a map
+  // assembled at run time is where a name that never arrives is a mistake to
+  // report rather than a symbol quietly left at zero.
+  [[nodiscard]] constexpr result<void>
+  assign_named_range(std::vector<T> &at,
+                     const rt_detail::CNamedRange<T> auto &vm) const {
+    const auto names = arena_->symbols();
+    std::vector<bool> seen(at.size(), false);
+    for (const auto &entry : vm) {
+      const auto it = std::ranges::find(names, std::string_view{entry.first});
+      if (it == names.end()) {
+        return fail(errc::unknown_symbol);
+      }
+      const auto slot = static_cast<std::size_t>(it - names.begin());
+      at[slot] = static_cast<T>(entry.second);
+      seen[slot] = true;
+    }
+    if (std::ranges::contains(seen, false)) {
+      return fail(errc::short_point);
+    }
     return {};
   }
 

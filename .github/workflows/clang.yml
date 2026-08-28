@@ -1,0 +1,15 @@
+name: Clang 20
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  clang:
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-latest
+      c_compiler: clang-20
+      cpp_compiler: clang++-20
