@@ -465,9 +465,9 @@ TEST(HessianForwardTest, AgreesWithForwardOverReverse) {
   auto ve_fwd = Equation(xf * yf, xf * xf);
   auto H_fwd = ve_fwd.derivative_tensor<2>(std::array{xv, yv});
 
-  for (int k = 0; k < 2; ++k)
-    for (int i = 0; i < 2; ++i)
-      for (int j = 0; j < 2; ++j)
+  for (const auto k : {0uz, 1uz})
+    for (const auto i : {0uz, 1uz})
+      for (const auto j : {0uz, 1uz})
         EXPECT_NEAR(H_fwd[k][i][j], H_rev[k][i][j], 1e-12);
 }
 TEST(HessianForwardTest, WithValues) {
@@ -564,8 +564,8 @@ TEST(ScalarHessianTest, ForwardAgreesWithReverse) {
   auto H_fwd =
       Equation{expr_f}.template derivative_tensor<2>(std::array{xv, yv});
 
-  for (int i = 0; i < 2; ++i)
-    for (int j = 0; j < 2; ++j)
+  for (const auto i : {0uz, 1uz})
+    for (const auto j : {0uz, 1uz})
       EXPECT_NEAR(H_fwd[i][j], H_rev[i][j], 1e-12);
 }
 TEST(DerivativeTensorTest, Order1_ScalarVariable) {
@@ -750,10 +750,10 @@ TEST(TutorialHigherOrder, FourthOrder_AllCrossPartialsOfSinXplusY) {
   auto T4 =
       Equation{sin(x + y)}.template derivative_tensor<4>(std::array{xv, yv});
   double expected = std::sin(xv + yv);
-  for (int i : {0, 1})
-    for (int j : {0, 1})
-      for (int k : {0, 1})
-        for (int l : {0, 1})
+  for (const auto i : {0uz, 1uz})
+    for (const auto j : {0uz, 1uz})
+      for (const auto k : {0uz, 1uz})
+        for (const auto l : {0uz, 1uz})
           EXPECT_NEAR(T4[i][j][k][l], expected, 1e-8);
 }
 TEST(TutorialHigherOrder, ThirdOrder_MixedPartial) {
@@ -901,8 +901,8 @@ TEST(TutorialReverseHigherOrder, ForwardReverseHessianAgree) {
   Variable<D, FixedString{"y"}> yr;
   auto f_rev = sin(xr) * exp(yr);
   auto H_rev = Equation{f_rev}.hessian(std::array{xv, yv});
-  for (int i : {0, 1})
-    for (int j : {0, 1})
+  for (const auto i : {0uz, 1uz})
+    for (const auto j : {0uz, 1uz})
       EXPECT_NEAR(H_fwd[i][j], H_rev[i][j], 1e-12);
 }
 TEST(DualScalarContract, ValAndToDouble) {
