@@ -14,9 +14,14 @@
 // spelling, enumerator, label), the shape DDX_UNARY_MATH_TABLE already has.
 namespace ddx::rt {
 
+// A Seed is a symbol's opposite: an input column that is never differentiated.
+// Being a leaf that is not a Var is what keeps it out of symbols(), out of the
+// reverse sweep's harvest and out of the coupling pattern, with no slot-range
+// convention for any of them to agree on.
 #define DDX_RT_LEAF_TABLE(X)                                                   \
   X(constant, Const, "const")                                                  \
-  X(var, Var, "var")
+  X(var, Var, "var")                                                           \
+  X(seed, Seed, "seed")
 
 // The last cell is the ops/adjoints.hpp descriptor carrying the reverse-mode
 // rule, which the compile-time ops call too -- the rule is written once, there.
@@ -163,6 +168,13 @@ template <impl::Numeric T>
 
 [[nodiscard]] constexpr bool is_leaf(OpCode op) noexcept {
   return arity_of(op) == 0;
+}
+
+// Which column of `xs` a leaf reads: the symbols first, then the seeds.
+// Written once, because the interpreter, codegen and the ABI have to agree.
+[[nodiscard]] constexpr std::size_t
+input_column(std::size_t symbols, OpCode op, std::uint32_t slot) noexcept {
+  return op == OpCode::Var ? slot : symbols + slot;
 }
 
 } // namespace ddx::rt

@@ -15,6 +15,7 @@ namespace ddx {
   /* A point that does not match the expression's symbols. */                              \
   X(short_point,        "the point supplies fewer values than the expression has symbols") \
   X(wrong_arity,        "the point supplies one value per symbol, and this one does not")  \
+  X(wrong_direction,    "the direction supplies one value per symbol, and this one does not") \
   X(unknown_symbol,     "no symbol of that name")                                          \
   X(index_out_of_range, "the index does not name a symbol of this expression")             \
   X(wrong_column_count, "wrong number of output columns")                                  \

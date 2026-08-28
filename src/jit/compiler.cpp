@@ -410,7 +410,7 @@ private:
     }
     const auto &layout = g_.layout();
     return Kernel{sym->toPtr<Kernel::function_type>(),
-                  g_.symbols().size(),
+                  g_.arity(),
                   layout.values,
                   layout.jacobian,
                   layout.hessian,
@@ -738,7 +738,7 @@ struct Compiler::Impl {
         // supplies code and a symbol, never a column count.
         const auto &layout = g.layout();
         if (auto adopted =
-                link(self, entry->code, entry->symbol, g.symbols().size(),
+                link(self, entry->code, entry->symbol, g.arity(),
                      layout.values, layout.jacobian, layout.hessian);
             adopted) {
           // The phases are zero because they did not happen.

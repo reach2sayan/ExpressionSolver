@@ -103,6 +103,29 @@ TEST(RtArchive, RoundTripsEveryDerivative) {
   EXPECT_FALSE(built.loaded());
 }
 
+// The seeded products are serialised, not re-swept, so a loaded equation must
+// answer them without ever running build_hvp_impl.
+TEST(RtArchive, RoundTripsTheSeededProducts) {
+  const Scratch file{"seeded"};
+  const auto built = coupled();
+  ASSERT_TRUE(built.save(file).has_value());
+
+  const auto loaded = ddx::rt::load(file.path());
+  ASSERT_TRUE(loaded.has_value()) << loaded.error().code;
+  ASSERT_TRUE(loaded->loaded());
+
+  const std::vector<double> v(*built.arity(), 0.5);
+  const std::vector<double> w{2.0};
+  const auto point = std::vector<double>(*built.arity(), 0.6);
+
+  EXPECT_EQ(*built.hvp(std::span<const double>{v}, point),
+            *loaded->hvp(std::span<const double>{v}, point));
+  EXPECT_EQ(*built.vjp(std::span<const double>{w}, point),
+            *loaded->vjp(std::span<const double>{w}, point));
+  EXPECT_EQ(built.hvp_columns(), loaded->hvp_columns());
+  EXPECT_EQ(built.vjp_columns(), loaded->vjp_columns());
+}
+
 TEST(RtArchive, RoundTripsASystem) {
   const Scratch file{"system"};
   const auto built = ddx::rt::equation([] {

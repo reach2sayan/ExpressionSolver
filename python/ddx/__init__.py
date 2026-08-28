@@ -17,8 +17,9 @@ A model can also be written down rather than built, one string per function:
     >>> f = ddx.equation("exp(x) * sin(y)")
     >>> system = ddx.equation(["x*x + y*y - 4", "x*y - 1"])
 
-The grammar is Python's arithmetic: ``+ - * /``, ``**`` for powers, calls by the
-name ddx gives the operation, and every free identifier a symbol.
+The grammar is Python's arithmetic: ``+ - * /``, ``**`` for powers, one
+comparison ``< <= > >= == !=`` per expression, calls by the name ddx gives the
+operation, and every free identifier a symbol.
 """
 
 from __future__ import annotations

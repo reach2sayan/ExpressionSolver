@@ -40,6 +40,11 @@ template <impl::Numeric T> struct Snapshot {
   std::vector<NodeId> roots;
   Jacobian jacobian;
   std::vector<Hessian> hessians;
+  // Serialised rather than re-swept: Equation(Snapshot&&) calls no build_*, so
+  // the file describes every block its lanes can freeze.
+  HessianVector hvp;
+  VectorJacobian vjp;
+  Tangent jvp;
   jit::Options options;
   // The staleness key: rebuilding the model reproduces this prefix.
   std::uint32_t model_nodes = 0;
@@ -66,13 +71,17 @@ template <impl::Numeric T> BOOST_DESCRIBE_PRIVATE_MEMBERS(Node<T>)
 template <impl::Numeric T> BOOST_DESCRIBE_BASES(Snapshot<T>, )
 template <impl::Numeric T>
 BOOST_DESCRIBE_PUBLIC_MEMBERS(Snapshot<T>, symbols, nodes, roots, jacobian,
-                              hessians, options, model_nodes, objects)
+                              hessians, hvp, vjp, jvp, options, model_nodes,
+                              objects)
 template <impl::Numeric T> BOOST_DESCRIBE_PROTECTED_MEMBERS(Snapshot<T>)
 template <impl::Numeric T> BOOST_DESCRIBE_PRIVATE_MEMBERS(Snapshot<T>)
 
 BOOST_DESCRIBE_STRUCT(Sparsity, (), (rowptr, col, rows, columns))
 BOOST_DESCRIBE_STRUCT(Jacobian, (), (value, partial, pattern, zero))
 BOOST_DESCRIBE_STRUCT(Hessian, (), (value, partial, compressed, coloring, zero))
+BOOST_DESCRIBE_STRUCT(HessianVector, (), (value, partial, product))
+BOOST_DESCRIBE_STRUCT(VectorJacobian, (), (value, product))
+BOOST_DESCRIBE_STRUCT(Tangent, (), (value, product))
 BOOST_DESCRIBE_STRUCT(Coloring, (), (color, count, scatter, cell, cells))
 BOOST_DESCRIBE_STRUCT(Object, (), (want, symbol, host, digest, options, code))
 

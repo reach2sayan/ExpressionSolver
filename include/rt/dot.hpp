@@ -83,6 +83,8 @@ private:
     switch (p.op) {
     case OpCode::Var:
       return id + graph_.symbols()[p.slot];
+    case OpCode::Seed:
+      return id + "v[" + std::to_string(p.slot) + "]";
     case OpCode::Const:
       if constexpr (std::formattable<T, char>) {
         return id + std::format("{}", p.value);

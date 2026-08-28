@@ -111,6 +111,14 @@ public:
                        edges.end(), slots.begin(), b.size());
     g.mark_live();
     g.contract(contract);
+    // Read off what survived rather than taken from the builder: a lane that
+    // kept no seed is exactly as wide as it was before seeds existed, so its
+    // kernel and its digest do not move.
+    for (const NodeId v : g.contracted_order_) {
+      if (g.properties_[v].op == OpCode::Seed) {
+        g.seeds_ = std::max(g.seeds_, std::size_t{g.properties_[v].slot} + 1);
+      }
+    }
     return g;
   }
 
@@ -126,6 +134,11 @@ public:
   [[nodiscard]] const std::vector<std::string> &symbols() const {
     return symbols_;
   }
+
+  // How many input columns `xs` carries.  The symbols, and then whatever
+  // non-symbol leaves this freeze kept -- symbols().size() is not the width.
+  [[nodiscard]] std::size_t arity() const { return symbols_.size() + seeds_; }
+
   [[nodiscard]] bool live(NodeId v) const { return live_[v]; }
 
   // How many ids the freeze kept, which is what a compile reports having
@@ -239,6 +252,7 @@ private:
   Coloring coloring_;
   Sparsity jacobian_;
   std::vector<std::string> symbols_;
+  std::size_t seeds_ = 0;
   std::vector<bool> live_;
   std::vector<NodeId> live_order_;
   std::vector<NodeId> contracted_order_;
@@ -319,6 +333,30 @@ private:
     outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
     layout_.hessian = h.compressed.size();
     coloring_ = h.coloring;
+    return *this;
+  }
+
+  // H v rides in the second-order block, which it is: a Hessian compressed to
+  // the one column the direction asks for.  The colouring stays empty, so
+  // coloring() is not always a way to read that block back.
+  constexpr GraphBuilder &hessian_vector_from(const HessianVector &h) {
+    outputs_.insert(outputs_.end(), h.product.begin(), h.product.end());
+    layout_.hessian = h.product.size();
+    return *this;
+  }
+
+  // J v is a first-order block of m columns, one per function.
+  constexpr GraphBuilder &tangent_from(const Tangent &t) {
+    outputs_.insert(outputs_.end(), t.product.begin(), t.product.end());
+    layout_.jacobian = t.product.size();
+    return *this;
+  }
+
+  // w'J is a first-order block of n columns, and dense: it is a gradient, so
+  // there is no pattern to carry and jacobian_pattern() stays empty.
+  constexpr GraphBuilder &vector_jacobian_from(const VectorJacobian &j) {
+    outputs_.insert(outputs_.end(), j.product.begin(), j.product.end());
+    layout_.jacobian = j.product.size();
     return *this;
   }
 

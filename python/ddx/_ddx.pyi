@@ -47,10 +47,13 @@ class Equation:
     def buffer(self, x: typing.Any, *, want: Want = ...) -> Call: pass
     def evaluate(self, x: typing.Any) -> typing.Any: pass
     def hessian(self, x: typing.Any) -> tuple: pass
+    def hvp(self, v: typing.Any, x: typing.Any) -> tuple: pass
     def jacobian(self, x: typing.Any) -> tuple: pass
+    def jvp(self, v: typing.Any, x: typing.Any) -> tuple: pass
     def save(self, path: str | os.PathLike) -> None: pass
     def to_dot(self, *, all: bool = False) -> str: pass
     def verify(self, path: str | os.PathLike) -> None: pass
+    def vjp(self, w: typing.Any, x: typing.Any) -> tuple: pass
     def wait_for_kernel(self) -> bool: pass
     @property
     def arity(self) -> int: pass

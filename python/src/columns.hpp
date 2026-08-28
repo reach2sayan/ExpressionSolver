@@ -50,6 +50,12 @@ private:
   friend class PyEquation;
   friend class PyCall;
 
+  // A direction, by position only: a covector is indexed by function, and
+  // functions have no names for a dict to key on.
+  Point(const pyb::handle &x, std::size_t count) : columns_(count, nullptr) {
+    from_array(x, count);
+  }
+
   [[nodiscard]] constexpr std::span<const double *const> columns() const {
     return columns_;
   }

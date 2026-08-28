@@ -423,6 +423,61 @@ H[0];                                      //  3.1060035856
 H[1];                                      // -3.1441109272
 ```
 
+### What each call computes
+
+For $f : \mathbb{R}^n \to \mathbb{R}^m$ at a point $x$, with $n$ = `arity()`
+symbols in `symbols()` order and $m$ = `output_dim` functions:
+
+| Call | Computes | Shape |
+|---|---|---|
+| `evaluate(x)` | $f(x)$ | $m$ |
+| `jacobian(x)` | $J(x)$, where $J_{ij} = \dfrac{\partial f_i}{\partial x_j}$ | $m \times n$ |
+| `hessian(x)` | $H(x)$, where $H_{ij} = \dfrac{\partial^2 f}{\partial x_i \, \partial x_j}$ | $n \times n$ per function |
+| `univariate_derivative<K>(x₀)` | $\dfrac{d^K f}{dx^K}$ at $x_0$ | scalar |
+| `jvp(v, x)` | $J(x)\,v$, so $(Jv)_i = \sum_j \dfrac{\partial f_i}{\partial x_j} v_j$ — the directional derivative of $f$ along $v$ | $m$ |
+| `vjp(w, x)` | $w^{\top} J(x)$, so $(w^{\top}J)_j = \sum_i w_i \dfrac{\partial f_i}{\partial x_j}$ — the gradient of $w \cdot f$ | $n$ |
+| `hvp(v, x)` | $H(x)\,v$, so $(Hv)_i = \sum_j \dfrac{\partial^2 f}{\partial x_i \, \partial x_j} v_j$ — the directional derivative of $\nabla f$ along $v$ | $n$ |
+
+The last three are the matrix-free products. Each is one number per output, and
+none of them ever forms the matrix it is named after.
+
+```cpp
+const std::vector<double> v{1.0, 0.0};
+
+*eq.jvp(v, 2.0, 0.5);      // J·v   — m long: how f moves if x moves along v
+*eq.vjp(v, 2.0, 0.5);      // wᵀJ   — n long: ∇(w·f), one weight per function
+*eq.hvp(v, 2.0, 0.5);      // H·v   — n long: how ∇f moves if x moves along v
+```
+
+`hvp` also takes a symbol name, for the common case where $v$ is a basis vector:
+`eq.hvp("a", x)` is $H(x)\,e_a$, the Hessian column for `a`. It refuses with
+`errc::unknown_symbol` if no such symbol exists.
+
+```cpp
+*eq.hvp("a", 2.0, 0.5);    // {∂²f/∂a², ∂²f/∂b∂a}
+```
+
+**Why they are worth asking for, and when they are not.** Each answers in one
+number per output and needs no matrix: `hvp` is $n$ columns whatever the
+coupling, where `hessian()` is $\text{colours} \times n$ and reaches $n^2$ when
+every symbol touches every other; `vjp` is $n$ where `jacobian()` is one column
+per structural nonzero; `jvp` is $m$.
+
+What that buys is **storage and bandwidth, not time**. Measured
+(`benchmarks/jit/benchmark_hvp.cpp`), one `hvp` costs about the same as one
+whole `hessian` — within 10% across $n = 8 \ldots 128$ on both dense and banded
+coupling — because the two lanes share one interned graph and the model's own
+cone dominates both. So:
+
+- **Want the whole matrix?** Use `hessian()`. Asking for $n$ products to
+  assemble it is far slower than one colouring — at $n = 64$, roughly 70×.
+- **Want one product, or cannot afford $n^2$ storage?** Use `hvp`. At $n = 64$
+  the Hessian block is 4096 columns per point against 64.
+
+A direction is one value per symbol ($v \in \mathbb{R}^n$), a covector one per
+function ($w \in \mathbb{R}^m$); either of the wrong length answers
+`errc::wrong_direction` and computes nothing.
+
 ```cpp
 const auto in_b = rt::equation([] { return sin(rt::var("b")); });
 *in_b.univariate_derivative<4>(0.5);       //  sin⁗(0.5)
@@ -447,7 +502,16 @@ and answer `result<void>`.
 result<void> evaluate(xs, values, n);
 result<void> jacobian(xs, values, partials, n);
 result<void> hessian (xs, values, partials, hessians, n);
+
+// The seeded products take a second block of input columns: `vs` is the
+// direction at each point, one column per symbol, and `ws` one per function.
+result<void> jvp(xs, vs, values, products, n);   // J v,  m columns
+result<void> vjp(xs, ws, values, products, n);   // wᵀJ,  n columns
+result<void> hvp(xs, vs, values, partials, products, n);  // H v, n columns
 ```
+
+`hvp` fills `partials` with $\nabla f$ as well: the gradient falls out of the
+same sweep the product is built on, so asking for $Hv$ never costs it twice.
 
 Ask the equation how many output columns each block wants, and size the buffers
 by that:
@@ -558,6 +622,7 @@ if (!j) {
 | `errc` | Means |
 |---|---|
 | `wrong_arity` | the point does not supply one value per symbol |
+| `wrong_direction` | a direction does not supply one value per symbol, or a covector one per function |
 | `short_point` | a range point is shorter than the symbol list, or a named point leaves a symbol unreached |
 | `unknown_symbol` | a named point uses a name the equation does not have |
 | `index_out_of_range` | the index does not name a symbol of this equation |
@@ -834,10 +899,18 @@ thread-safe except `options()`.
 | `jacobian(point)` | `result<std::vector<T>>`, dense row-major m × n |
 | `hessian(point)` | `result<std::vector<T>>`, dense row-major m × n × n |
 | `univariate_derivative<K>(x0)` | `result<T>`, one symbol and one output only |
+| `jvp(v, point)` | `result<std::vector<T>>`, $m$ long — $Jv$ |
+| `vjp(w, point)` | `result<std::vector<T>>`, $n$ long — $w^{\top}J$ |
+| `hvp(v, point)` | `result<std::vector<T>>`, $n$ long — $Hv$, one output only |
+| `hvp(name, point)` | the same, along the basis vector for that symbol |
 | `evaluate(xs, f, n)` | `result<void>` — a batch of `n` |
 | `jacobian(xs, f, g, n)` | `result<void>` |
 | `hessian(xs, f, g, h, n)` | `result<void>`, one output only |
+| `jvp(xs, vs, f, p, n)` | `result<void>` |
+| `vjp(xs, ws, f, p, n)` | `result<void>` |
+| `hvp(xs, vs, f, g, p, n)` | `result<void>`, one output only — `g` gets $\nabla f$ |
 | `value_columns()`, `jacobian_columns()`, `hessian_columns()` | `std::optional<std::size_t>` — what sizes the batch buffers |
+| `jvp_columns()`, `vjp_columns()`, `hvp_columns()` | the same, for the seeded products — `m`, `n`, `n` |
 | `jacobian_pattern()` | `const rt::Sparsity &` — which (function, symbol) cell each Jacobian column is |
 | `hessian_cell(i, j)` | `std::optional<std::size_t>` — which Hessian column holds H(i, j), or none |
 | `hessian_colors()` | `std::optional<std::size_t>` — groups in the Hessian's compression |
@@ -914,11 +987,17 @@ never costs a second evaluation:
 | `evaluate(x)` | `f` |
 | `jacobian(x)` | `(f, J)` |
 | `hessian(x)` | `(f, J, H)` |
+| `jvp(v, x)` | $(f,\; J v)$ — the directional derivative of $f$ along $v$ |
+| `vjp(w, x)` | $(f,\; w^{\top} J)$ — the gradient of $w \cdot f$ |
+| `hvp(v, x)` | $(f,\; \nabla f,\; H v)$ — the directional derivative of $\nabla f$ along $v$ |
 
 ```python
 value, gradient = f.jacobian([2.0, 3.0])
 value, gradient, hessian = f.hessian([2.0, 3.0])
 hessian.shape                               # (2, 2)
+
+value, gradient, hv = f.hvp([1.0, 0.0], [2.0, 3.0])
+hv.shape                                    # (2,) — H·v, without forming H
 ```
 
 Shapes follow the point: a single point gives a scalar `f`, an `(n,)` gradient
@@ -926,6 +1005,14 @@ and an `(n, n)` Hessian; a batch of `p` appends that axis, giving `(p,)`,
 `(n, p)` and `(n, n, p)`. A system prepends its output axis. Unlike the C++
 batch calls, the Hessian arrives **dense** — the compression is undone on the
 way out, so nothing here needs `hessian_columns`.
+
+The three products never form the matrix they are named after, which is what
+makes them worth having when $n^2$ storage is the problem — though not when
+speed is, since one product costs about what the whole matrix does. $Jv$ and
+$Hv$ take a direction over symbols, so it accepts the same spellings a point
+does — a sequence, a dict, or a `(symbols, points)` batch alongside a batched
+point. $w^{\top}J$ takes one weight per *function*, so it is positional only.
+`hvp` needs a single-output model, as `hessian`'s compressed path does.
 
 ### Calling in a loop
 
@@ -1023,6 +1110,7 @@ values, and only the code says which.
 | `arity`, `outputs`, `symbols` | properties — symbol count, output count, canonical names |
 | `evaluate(x)`, `__call__(x)` | `f` at the point or batch |
 | `jacobian(x)` | `(f, J)` |
+| `jvp(v, x)`, `vjp(w, x)`, `hvp(v, x)` | $(f, Jv)$, $(f, w^{\top}J)$, $(f, \nabla f, Hv)$ |
 | `hessian(x)` | `(f, J, H)`, dense |
 | `options` | property — read or assign an `Options` |
 | `compile(**fields)` | set `Options`, block for the kernel, return self |

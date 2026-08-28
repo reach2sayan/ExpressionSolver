@@ -16,6 +16,13 @@ if (DDX_BUILD_JIT)
     target_link_libraries(benchmarks_jit_compile PRIVATE ddx::jit)
     ddx_target_flags(benchmarks_jit_compile)
     ddx_runtime_deps(benchmarks_jit_compile)
+
+    # Likewise its own main: the argument is a scaling exponent per n, not a
+    # steady-state loop, so it prints a table rather than reporting timings.
+    add_executable(benchmarks_hvp jit/benchmark_hvp.cpp)
+    target_link_libraries(benchmarks_hvp PRIVATE ddx::jit)
+    ddx_target_flags(benchmarks_hvp)
+    ddx_runtime_deps(benchmarks_hvp)
 endif ()
 
 add_custom_target(benchmark_json

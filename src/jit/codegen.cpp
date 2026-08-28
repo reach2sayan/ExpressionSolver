@@ -217,7 +217,7 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name,
   // not asked for arrives as an empty span, whose data() may be null, so it
   // gets neither nonnull nor a size.
   const auto &layout = g.layout();
-  const std::array counts{g.symbols().size(), layout.values, layout.jacobian,
+  const std::array counts{g.arity(), layout.values, layout.jacobian,
                           layout.hessian};
   for (const auto [i, count] : counts | std::views::enumerate) {
     const auto arg = static_cast<unsigned>(i);
@@ -265,7 +265,7 @@ HoistedColumns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
   };
 
   const auto &layout = g.layout();
-  return {.inputs = load_columns(0, g.symbols().size(), "col"),
+  return {.inputs = load_columns(0, g.arity(), "col"),
           .values = load_columns(1, layout.values, "f"),
           .jacobian = load_columns(2, layout.jacobian, "g"),
           .hessian = load_columns(3, layout.hessian, "h")};
@@ -287,9 +287,12 @@ emit_nodes(const Emitter &emit, const rt::Graph<double> &g,
     const auto operands = g.operands(v);
     switch (rt::arity_of(p.op)) {
     case 0:
-      value[v] = p.op == rt::OpCode::Const
-                     ? emit.constant(p.value)
-                     : emit.load(cols.inputs[p.slot], index, mask, "");
+      value[v] =
+          p.op == rt::OpCode::Const
+              ? emit.constant(p.value)
+              : emit.load(cols.inputs[rt::input_column(g.symbols().size(), p.op,
+                                                       p.slot)],
+                          index, mask, "");
       break;
     case 1:
       value[v] = emit.unary(p.op, value[operands[0]]);

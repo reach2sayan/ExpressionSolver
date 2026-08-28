@@ -26,7 +26,8 @@ public:
         .and_then([&] { return vars(); })
         .and_then([&] { return reachable(); })
         .and_then([&] { return jacobian(); })
-        .and_then([&] { return hessians(); });
+        .and_then([&] { return hessians(); })
+        .and_then([&] { return seeded(); });
   }
 
 private:
@@ -50,8 +51,11 @@ private:
   // vars() then indexes by.
   [[nodiscard]] result<void> nodes() const {
     const auto nsym = s_.symbols.size();
+    // A seed slot is an xs column the kernel loads, and the widest block any
+    // lane can carry is one per symbol or one per function.
+    const auto nseed = std::max(nsym, s_.roots.size());
     return holds(std::ranges::all_of(
-        s_.nodes | std::views::enumerate, [nsym](const auto &at) {
+        s_.nodes | std::views::enumerate, [nsym, nseed](const auto &at) {
           const auto &[i, node] = at;
           const auto arity = arity_of(node.op);
           return (arity >= 1 ? node.a < static_cast<NodeId>(i)
@@ -60,7 +64,8 @@ private:
                              : node.b == no_node) &&
                  (arity == 3 ? node.c < static_cast<NodeId>(i)
                              : node.c == no_node) &&
-                 (node.op != OpCode::Var || node.slot < nsym);
+                 (node.op != OpCode::Var || node.slot < nsym) &&
+                 (node.op != OpCode::Seed || node.slot < nseed);
         }));
   }
 
@@ -134,6 +139,40 @@ private:
             ok = ok.and_then([&] { return coloured(h); });
           }
           return ok;
+        });
+  }
+
+  // Both products, together: each is either whole or absent -- a constant-
+  // evaluated equation swept neither, and a half-written one is corrupt.
+  [[nodiscard]] result<void> seeded() const {
+    const auto in = within();
+    const auto nsym = s_.symbols.size();
+    const auto &h = s_.hvp;
+    const auto &j = s_.vjp;
+
+    const bool hvp_absent = h.value == no_node && h.partial.empty() &&
+                            h.product.empty();
+    const bool vjp_absent = j.value.empty() && j.product.empty();
+    const auto &t = s_.jvp;
+    const bool jvp_absent = t.value.empty() && t.product.empty();
+
+    return holds(hvp_absent || (in(h.value) && h.partial.size() == nsym &&
+                                h.product.size() == nsym &&
+                                std::ranges::all_of(h.partial, in) &&
+                                std::ranges::all_of(h.product, in)))
+        .and_then([&] {
+          return holds(vjp_absent ||
+                       (j.value.size() == s_.roots.size() &&
+                        j.product.size() == nsym &&
+                        std::ranges::all_of(j.value, in) &&
+                        std::ranges::all_of(j.product, in)));
+        })
+        .and_then([&] {
+          return holds(jvp_absent ||
+                       (t.value.size() == s_.roots.size() &&
+                        t.product.size() == s_.roots.size() &&
+                        std::ranges::all_of(t.value, in) &&
+                        std::ranges::all_of(t.product, in)));
         });
   }
 

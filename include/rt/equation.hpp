@@ -84,7 +84,10 @@ template <Numeric T, typename... Rest>
   requires(std::same_as<Rest, rt::RTExpression<T>> && ...)
 class Equation<rt::RTExpression<T>, Rest...> {
   // What a lane's graph carries; each level is the one below plus a block.
-  enum class Want : std::uint8_t { Values, Jacobian, Hessian };
+  // Hvp is last, and not a level: it takes a wider point and answers a product
+  // rather than a matrix.  Appended rather than inserted, so a saved Object's
+  // `want` byte still names the same lane it did.
+  enum class Want : std::uint8_t { Values, Jacobian, Hessian, Hvp, Vjp, Jvp };
 
 public:
   using value_type = T;
@@ -224,6 +227,95 @@ public:
           out[i * n + j] = v;
         }
       }
+      return out;
+    });
+  }
+
+  // H(x)v, n long, without forming H: one sweep where hessian() needs one per
+  // colour.  The direction leads and is a span, so it cannot be read as a
+  // point value however the point itself is spelled.
+  [[nodiscard]] result<std::vector<T>>
+  hvp(std::span<const T> direction,
+      const rt_detail::CPointArg<T> auto &...args) const
+    requires(output_dim == 1)
+  {
+    if (bad_) {
+      return std::unexpected{*bad_};
+    }
+    if (direction.size() != symbol_count()) {
+      return fail(errc::wrong_direction);
+    }
+    return point(args...).transform([this, direction](const auto &at) {
+      // Symbols first, then the direction, as input_column() has it.
+      std::vector<T> widened = at;
+      widened.insert(widened.end(), direction.begin(), direction.end());
+
+      std::array<T, 1> f{};
+      std::vector<T> g(derivative_.partial.size());
+      std::vector<T> out(symbol_count());
+      gather(Want::Hvp, widened, std::span<T>{f}, g, out);
+      return out;
+    });
+  }
+
+  // The j-th Hessian column, for a caller who would otherwise write a basis
+  // vector.  A name and not a slot: the symbol list exists only at run time.
+  [[nodiscard]] result<std::vector<T>>
+  hvp(std::string_view along, const rt_detail::CPointArg<T> auto &...args) const
+    requires(output_dim == 1)
+  {
+    if (bad_) {
+      return std::unexpected{*bad_};
+    }
+    const auto &names = arena_->symbols();
+    const auto at = std::ranges::lower_bound(names, along);
+    if (at == names.end() || *at != along) {
+      return fail(errc::unknown_symbol);
+    }
+    std::vector<T> unit(names.size(), T{0});
+    unit[static_cast<std::size_t>(at - names.begin())] = T{1};
+    return hvp(std::span<const T>{unit}, args...);
+  }
+
+  // w'J, n long: one sweep and n columns, where jacobian() is m sweeps and one
+  // column per structural nonzero.  The covector is one weight per function.
+  [[nodiscard]] result<std::vector<T>>
+  vjp(std::span<const T> weights,
+      const rt_detail::CPointArg<T> auto &...args) const {
+    if (bad_) {
+      return std::unexpected{*bad_};
+    }
+    if (weights.size() != output_dim) {
+      return fail(errc::wrong_direction);
+    }
+    return point(args...).transform([this, weights](const auto &at) {
+      std::vector<T> widened = at;
+      widened.insert(widened.end(), weights.begin(), weights.end());
+
+      std::array<T, output_dim> f{};
+      std::vector<T> out(symbol_count());
+      gather(Want::Vjp, widened, std::span<T>{f}, out);
+      return out;
+    });
+  }
+
+  // J v, m long: one forward pass whatever n is, the mirror of vjp().
+  [[nodiscard]] result<std::vector<T>>
+  jvp(std::span<const T> direction,
+      const rt_detail::CPointArg<T> auto &...args) const {
+    if (bad_) {
+      return std::unexpected{*bad_};
+    }
+    if (direction.size() != symbol_count()) {
+      return fail(errc::wrong_direction);
+    }
+    return point(args...).transform([this, direction](const auto &at) {
+      std::vector<T> widened = at;
+      widened.insert(widened.end(), direction.begin(), direction.end());
+
+      std::array<T, output_dim> f{};
+      std::vector<T> out(output_dim);
+      gather(Want::Jvp, widened, std::span<T>{f}, out);
       return out;
     });
   }
@@ -422,6 +514,39 @@ public:
                     as_columns(g), as_columns(h), n);
   }
 
+  // `v` is a second block of input columns, not a second point: one column per
+  // symbol, each n long, spliced behind `xs` for the ABI.  The gradient comes
+  // out of the same sweep, so `g` is filled rather than wasted.
+  [[nodiscard]] result<void>
+  hvp(const rt_detail::CColumns<const T *> auto &xs,
+      const rt_detail::CColumns<const T *> auto &v,
+      const rt_detail::CColumns<T *> auto &f,
+      const rt_detail::CColumns<T *> auto &g,
+      const rt_detail::CColumns<T *> auto &hv, std::size_t n) const
+    requires(output_dim == 1)
+  {
+    return dispatch(*snapshot(Want::Hvp, n), as_columns(widen(xs, v)),
+                    as_columns(f), as_columns(g), as_columns(hv), n);
+  }
+
+  [[nodiscard]] result<void>
+  vjp(const rt_detail::CColumns<const T *> auto &xs,
+      const rt_detail::CColumns<const T *> auto &w,
+      const rt_detail::CColumns<T *> auto &f,
+      const rt_detail::CColumns<T *> auto &out, std::size_t n) const {
+    return dispatch(*snapshot(Want::Vjp, n), as_columns(widen(xs, w)),
+                    as_columns(f), as_columns(out), {}, n);
+  }
+
+  [[nodiscard]] result<void>
+  jvp(const rt_detail::CColumns<const T *> auto &xs,
+      const rt_detail::CColumns<const T *> auto &v,
+      const rt_detail::CColumns<T *> auto &f,
+      const rt_detail::CColumns<T *> auto &out, std::size_t n) const {
+    return dispatch(*snapshot(Want::Jvp, n), as_columns(widen(xs, v)),
+                    as_columns(f), as_columns(out), {}, n);
+  }
+
   // What a caller sizes buffers by, read off the constructor's sweep rather
   // than a frozen graph: asking must not build a lane.
   [[nodiscard]] constexpr std::optional<std::size_t> value_columns() const {
@@ -436,6 +561,17 @@ public:
   {
     return poisoned() ? std::nullopt
                       : std::optional{hessians_.front().compressed.size()};
+  }
+  [[nodiscard]] std::optional<std::size_t> hvp_columns() const
+    requires(output_dim == 1)
+  {
+    return poisoned() ? std::nullopt : std::optional{hvp_.product.size()};
+  }
+  [[nodiscard]] std::optional<std::size_t> vjp_columns() const {
+    return poisoned() ? std::nullopt : std::optional{vjp_.product.size()};
+  }
+  [[nodiscard]] std::optional<std::size_t> jvp_columns() const {
+    return poisoned() ? std::nullopt : std::optional{jvp_.product.size()};
   }
 
   // What a batch caller reads the two compressed blocks by: the dense
@@ -520,6 +656,9 @@ private:
     snap.roots = roots_;
     snap.jacobian = derivative_;
     snap.hessians = hessians_;
+    snap.hvp = hvp_;
+    snap.vjp = vjp_;
+    snap.jvp = jvp_;
     snap.model_nodes = model_nodes_;
 #ifdef DDX_HAS_JIT
     snap.options = options_;
@@ -542,7 +681,8 @@ private:
     }
     std::vector<rt::Object> out;
     for (const Want want :
-         {Want::Values, Want::Jacobian, Want::Hessian}) {
+         {Want::Values, Want::Jacobian, Want::Hessian, Want::Hvp,
+          Want::Vjp, Want::Jvp}) {
       Lane &lane = lane_for(want);
       const std::shared_lock read{lane.mutex};
       if (!lane.ready || !lane.ready->kernel ||
@@ -618,6 +758,14 @@ private:
                     return rt::build_hessian_impl(*arena_, r);
                   }) |
                   to<std::vector<rt::Hessian>>();
+      // One more sweep, where the Hessian above is one per colour.  Here for
+      // the same reason as everything else in this block: prepare() is const
+      // and runs under a lane lock, and these append.
+      if constexpr (output_dim == 1) {
+        hvp_ = rt::build_hvp_impl(*arena_, roots_.front());
+      }
+      vjp_ = rt::build_vjp_impl(*arena_, roots_);
+      jvp_ = rt::build_jvp_impl(*arena_, roots_);
       cache_ = std::make_unique<Cache>();
     }
   }
@@ -634,7 +782,9 @@ private:
       : arena_(rt::rebuild(snap).release(), reclaim),
         roots_(std::move(snap.roots)), model_nodes_(snap.model_nodes),
         derivative_(std::move(snap.jacobian)),
-        hessians_(std::move(snap.hessians)), loaded_(true) {
+        hessians_(std::move(snap.hessians)), hvp_(std::move(snap.hvp)),
+        vjp_(std::move(snap.vjp)), jvp_(std::move(snap.jvp)),
+        loaded_(true) {
 #ifdef DDX_HAS_JIT
     options_ = snap.options;
     objects_ = std::move(snap.objects);
@@ -716,6 +866,16 @@ private:
     return out;
   }
 
+  // The point columns and the direction's, in one array: symbols first, then
+  // the seeds, which is the order the ABI takes and input_column() states.
+  [[nodiscard]] static auto widen(const auto &xs, const auto &seeds) {
+    boost::container::small_vector<const T *, 64> out;
+    out.reserve(std::ranges::size(xs) + std::ranges::size(seeds));
+    std::ranges::copy(xs, std::back_inserter(out));
+    std::ranges::copy(seeds, std::back_inserter(out));
+    return out;
+  }
+
   // One point through the batch path at n = 1, not the arena walk -- which would
   // compute the Hessian the constructor swept in for a caller wanting a
   // gradient.  Constant evaluation keeps it, having no Cache.
@@ -787,6 +947,9 @@ private:
     Lane values;       // the roots alone
     Lane plain;        // values and Jacobian
     Lane with_hessian; // and the compressed Hessian columns
+    Lane hvp;          // the value, the gradient and H v
+    Lane vjp;          // the values and w'J
+    Lane jvp;          // the values and J v
   };
 
   [[nodiscard]] Lane &lane_for(Want want) const {
@@ -795,6 +958,12 @@ private:
       return cache_->values;
     case Want::Jacobian:
       return cache_->plain;
+    case Want::Hvp:
+      return cache_->hvp;
+    case Want::Vjp:
+      return cache_->vjp;
+    case Want::Jvp:
+      return cache_->jvp;
     default:
       return cache_->with_hessian;
     }
@@ -965,19 +1134,34 @@ private:
     }
     rt::GraphBuilder<T> gb{*arena_};
     gb.values_from(roots_);
-    if (want != Want::Values) {
-      gb.jacobian_from(derivative_);
-    }
-    if (want == Want::Hessian) {
-      gb.hessian_from(hessians_.front());
+    // Vjp replaces the Jacobian block rather than adding to it: n columns
+    // instead of the pattern's nonzeros is the whole point of asking.
+    if (want == Want::Vjp) {
+      gb.vector_jacobian_from(vjp_);
+    } else if (want == Want::Jvp) {
+      gb.tangent_from(jvp_);
+    } else {
+      if (want != Want::Values) {
+        gb.jacobian_from(derivative_);
+      }
+      if (want == Want::Hessian) {
+        gb.hessian_from(hessians_.front());
+      }
+      if (want == Want::Hvp) {
+        gb.hessian_vector_from(hvp_);
+      }
     }
     auto swept = std::make_shared<const rt::Graph<T>>(gb.finish(contracts()));
 #ifdef DDX_HAS_JIT
-    // The Hessian lane shares one graph: blocking it would cost a second
-    // colouring and reverse-over-reverse for a lane the ladder never climbs.
+    // The Hessian and Hvp lanes share one graph: blocking would cost a second
+    // reverse-over-reverse for a lane the ladder never climbs, and their
+    // second-order block is swept from the unblocked roots, so a rebalanced
+    // copy would answer in different last bits than the sweep it is checked
+    // against.
     auto compiled = swept;
     if constexpr (std::same_as<T, double>) {
-      if (want != Want::Hessian && !compile_roots_.empty()) {
+      if (want != Want::Hessian && want != Want::Hvp && want != Want::Vjp &&
+          want != Want::Jvp && !compile_roots_.empty()) {
         rt::GraphBuilder<T> cb{*arena_};
         cb.values_from(compile_roots_);
         if (want != Want::Values) {
@@ -1007,7 +1191,7 @@ private:
         // entry supplies code and a symbol, never a column count.
         const auto &layout = lane.ready->compile_graph->layout();
         if (auto adopted = c->adopt(have->code, have->symbol,
-                                    lane.ready->compile_graph->symbols().size(),
+                                    lane.ready->compile_graph->arity(),
                                     layout.values, layout.jacobian,
                                     layout.hessian)) {
           const unsigned level = have->options.codegen_level;
@@ -1089,7 +1273,9 @@ private:
     // The freeze settled both, so there is no choice left here.
     const auto order = c.graph->contracted_order();
     const auto contractions = c.graph->contractions();
-    const std::size_t symbols = symbol_count();
+    // The graph's width, not the arena's symbol count: `xs` carries one column
+    // per input, and a lane may hold leaves that are not symbols.
+    const std::size_t symbols = c.graph->arity();
 
     // Tapes are sized by the arena rather than the graph: a borrowed builder
     // may have grown since the freeze, and live ids index below that.
@@ -1156,7 +1342,7 @@ private:
       return std::unexpected{*bad_};
     }
     const auto blocks = c.graph->output_blocks();
-    if (xs.size() != symbol_count() || f.size() != blocks.values.size() ||
+    if (xs.size() != c.graph->arity() || f.size() != blocks.values.size() ||
         g.size() != blocks.jacobian.size() ||
         h.size() != blocks.hessian.size()) {
       return fail(errc::wrong_column_count);
@@ -1202,6 +1388,11 @@ private:
   // const members safe to call concurrently: rt::build_hessian_impl *appends to
   // the arena*, and a borrowed arena may be lent to another Equation too.
   std::vector<rt::Hessian> hessians_;
+  // Empty for a system: only root 0's second-order block is ever a lane, as
+  // hessian() has it.
+  rt::HessianVector hvp_;
+  rt::VectorJacobian vjp_;
+  rt::Tangent jvp_;
 #ifdef DDX_HAS_JIT
   std::vector<rt::NodeId> compile_roots_;
   rt::Jacobian compile_derivative_;

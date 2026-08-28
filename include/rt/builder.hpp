@@ -39,6 +39,12 @@ template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> var(Builder<T> &b,
                                             std::string_view name);
 
+// Befriended by Builder for symmetry with var(), though nothing here can go
+// wrong: a seed slot is given rather than looked up, so it moves nothing.
+template <impl::Numeric T>
+[[nodiscard]] constexpr RTExpression<T> seed(Builder<T> &b,
+                                             std::uint32_t slot);
+
 // A multiply and an add taken as one rounding: x * y + z, with x negated where
 // the multiply reached the add through a Neg, which is what a subtraction
 // builds.  Named by the add.
@@ -195,6 +201,15 @@ private:
     vars_.insert(std::ranges::next(vars_.begin(), slot),
                  intern({.op = OpCode::Var, .slot = slot}));
     return vars_[slot];
+  }
+
+  // Not gated on sealed_, unlike variable(): a seed slot is the caller's to
+  // name, so it lifts nothing and a sealed arena can still take one.  Interning
+  // leaves one node per slot, so asking twice is free.
+  template <impl::Numeric U>
+  friend constexpr RTExpression<U> seed(Builder<U> &, std::uint32_t);
+  [[nodiscard]] constexpr NodeId seed_node(std::uint32_t slot) {
+    return intern({.op = OpCode::Seed, .slot = slot});
   }
 
   // One caller: the Equation taking this arena over, so the numbering its lanes

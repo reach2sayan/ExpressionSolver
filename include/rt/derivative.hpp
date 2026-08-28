@@ -167,49 +167,75 @@ template <impl::Numeric T>
   return g;
 }
 
-// One pass per symbol, carrying d[v]/dx_s up the graph.  Here to check Reverse
-// against, which produces fewer nodes on everything but a single variable.
+// dv/ds carried up the graph in one pass, where `tangent[j]` is ds for symbol
+// j.  The roots' cone only: by the time an Equation asks, the arena also holds
+// a gradient and a whole Hessian, whose tangents nobody wants.
+template <impl::Numeric T>
+[[nodiscard]] constexpr std::vector<NodeId>
+tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
+              std::span<const NodeId> tangent) {
+  const auto n = static_cast<NodeId>(b.size());
+  const auto live = detail::reachable(n, roots, [&b](NodeId v, auto &&mark) {
+    std::ranges::for_each(detail::operands_of(b, v), mark);
+  });
+  std::vector<NodeId> d(n, no_node);
+
+  for (NodeId v = 0; v < n; ++v) {
+    if (!live[v]) {
+      continue;
+    }
+    const auto node = b[v]; // by value: building below may reallocate
+    if (is_leaf(node.op)) {
+      // A Seed is a direction, not a variable, so it carries no tangent.
+      d[v] = node.op == OpCode::Var ? tangent[node.slot] : b.constant(T{0});
+      continue;
+    }
+    if (arity_of(node.op) == 1) {
+      const RTExpression<T> u{b, node.a};
+      const RTExpression<T> self{b, v};
+      d[v] = (detail::partial(node.op, u, self) * RTExpression<T>{b, d[node.a]})
+                 .id(b);
+    } else if (arity_of(node.op) == 3) {
+      // select(c, dt, df): the condition picks the derivative as it picks
+      // the value.
+      d[v] = select(RTExpression<T>{b, node.a}, RTExpression<T>{b, d[node.b]},
+                    RTExpression<T>{b, d[node.c]})
+                 .id(b);
+    } else {
+      const RTExpression<T> l{b, node.a};
+      const RTExpression<T> r{b, node.b};
+      const auto [dl, dr] = detail::partials(node.op, l, r);
+      d[v] = (dl * RTExpression<T>{b, d[node.a]} +
+              dr * RTExpression<T>{b, d[node.b]})
+                 .id(b);
+    }
+  }
+
+  std::vector<NodeId> out;
+  out.reserve(roots.size());
+  for (const NodeId r : roots) {
+    out.push_back(d[r]);
+  }
+  return out;
+}
+
+// One pass per symbol, with a unit tangent in each: the Mul/One and Add/Zero
+// rewrites delete the seed before a node exists, so this emits exactly what
+// carrying the basis vector by hand would.  Here to check Reverse against,
+// which produces fewer nodes on everything but a single variable.
 template <impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow build_symbolic_jacobian(Builder<T> &b,
                                                             NodeId root) {
   const auto nsym = b.symbols().size();
   JacobianRow g{.value = root, .partial = std::vector<NodeId>(nsym, no_node)};
+  const std::array<NodeId, 1> roots{root};
 
   for (std::uint32_t s = 0; s < nsym; ++s) {
-    // Snapshot per pass: the previous pass appended nodes, and those are not
-    // part of the function being differentiated.
-    const auto n = static_cast<NodeId>(b.size());
-    std::vector<NodeId> d(n, no_node);
-
-    for (NodeId v = 0; v < n; ++v) {
-      const auto node = b[v]; // by value: building below may reallocate
-      if (is_leaf(node.op)) {
-        d[v] = node.op == OpCode::Var && node.slot == s ? b.constant(T{1})
-                                                        : b.constant(T{0});
-        continue;
-      }
-      if (arity_of(node.op) == 1) {
-        const RTExpression<T> u{b, node.a};
-        const RTExpression<T> self{b, v};
-        d[v] =
-            (detail::partial(node.op, u, self) * RTExpression<T>{b, d[node.a]})
-                .id(b);
-      } else if (arity_of(node.op) == 3) {
-        // select(c, dt, df): the condition picks the derivative as it picks
-        // the value.
-        d[v] = select(RTExpression<T>{b, node.a}, RTExpression<T>{b, d[node.b]},
-                      RTExpression<T>{b, d[node.c]})
-                   .id(b);
-      } else {
-        const RTExpression<T> l{b, node.a};
-        const RTExpression<T> r{b, node.b};
-        const auto [dl, dr] = detail::partials(node.op, l, r);
-        d[v] = (dl * RTExpression<T>{b, d[node.a]} +
-                dr * RTExpression<T>{b, d[node.b]})
-                   .id(b);
-      }
+    std::vector<NodeId> unit(nsym);
+    for (std::uint32_t j = 0; j < nsym; ++j) {
+      unit[j] = b.constant(j == s ? T{1} : T{0});
     }
-    g.partial[s] = d[root];
+    g.partial[s] = tangent_sweep(b, roots, unit).front();
   }
   return g;
 }
@@ -336,6 +362,81 @@ template <impl::Numeric T>
     }
   }
   return h;
+}
+
+// H(x)v without ever forming H.  The colour seed above is a re-rooting, not an
+// adjoint seed: sweeping from a sum of partials gives the second derivatives of
+// exactly that sum.  Put the direction in the sum and one sweep answers, where
+// the coloured Hessian needs one per colour and n columns per sweep.
+// Ref: Pearlmutter, Neural Computation 6(1) (1994) 147.
+struct HessianVector {
+  NodeId value = no_node;
+  std::vector<NodeId> partial; // n -- the gradient, which comes free
+  std::vector<NodeId> product; // n -- H v
+};
+
+template <impl::Numeric T>
+[[nodiscard]] constexpr HessianVector build_hvp_impl(Builder<T> &b,
+                                                     NodeId root) {
+  const auto g = build_reverse_jacobian(b, root);
+  // A structurally-zero partial is the literal zero node, so Mul/ZeroB and
+  // Add/Zero drop its term before either node exists.
+  auto term = [&b, &g](std::size_t j) {
+    return seed(b, static_cast<std::uint32_t>(j)) *
+           RTExpression<T>{b, g.partial[j]};
+  };
+  const auto along = std::ranges::fold_left(
+      std::views::iota(0uz, g.partial.size()) |
+          std::views::transform(std::move(term)),
+      RTExpression<T>{0}, std::plus<>{});
+  return {.value = g.value,
+          .partial = g.partial,
+          .product = build_reverse_jacobian(b, along.id(b)).partial};
+}
+
+// w'J, the same re-rooting one order down: sweeping from a weighted sum of the
+// functions gives that sum's gradient, which is the row vector.  One sweep and
+// n columns, where jacobian() is m sweeps and pattern.nonzeros() columns.
+//
+// The covector rides in the seed slots too, but counted in *functions*: a lane
+// carries one product or the other, never both, so the two never share a slot.
+struct VectorJacobian {
+  std::vector<NodeId> value;   // m
+  std::vector<NodeId> product; // n -- w'J
+};
+
+template <impl::Numeric T>
+[[nodiscard]] constexpr VectorJacobian
+build_vjp_impl(Builder<T> &b, std::span<const NodeId> roots) {
+  auto term = [&b, roots](std::size_t i) {
+    return seed(b, static_cast<std::uint32_t>(i)) *
+           RTExpression<T>{b, roots[i]};
+  };
+  const auto along = std::ranges::fold_left(
+      std::views::iota(0uz, roots.size()) |
+          std::views::transform(std::move(term)),
+      RTExpression<T>{0}, std::plus<>{});
+  return {.value = {roots.begin(), roots.end()},
+          .product = build_reverse_jacobian(b, along.id(b)).partial};
+}
+
+// J v: one forward pass, m outputs, whatever n is.  The mirror of vjp -- there
+// the seeds are one per function and the answer is n long, here one per symbol
+// and the answer is m.
+struct Tangent {
+  std::vector<NodeId> value;   // m
+  std::vector<NodeId> product; // m -- J v
+};
+
+template <impl::Numeric T>
+[[nodiscard]] constexpr Tangent build_jvp_impl(Builder<T> &b,
+                                               std::span<const NodeId> roots) {
+  std::vector<NodeId> along(b.symbols().size());
+  for (const auto [j, node] : along | std::views::enumerate) {
+    node = seed(b, static_cast<std::uint32_t>(j)).id(b);
+  }
+  return {.value = {roots.begin(), roots.end()},
+          .product = tangent_sweep(b, roots, along)};
 }
 
 } // namespace ddx::rt

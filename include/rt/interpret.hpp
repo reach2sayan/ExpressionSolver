@@ -134,9 +134,10 @@ constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
       for (std::size_t k = 0; k < W; ++k) {
         out[k] = static_cast<U>(n.value);
       }
-    } else if (n.op == OpCode::Var) {
+    } else if (is_leaf(n.op)) {
       const auto src =
-          at + static_cast<std::ptrdiff_t>(std::size_t{n.slot} * W);
+          at + static_cast<std::ptrdiff_t>(
+                   input_column(b.symbols().size(), n.op, n.slot) * W);
       for (std::size_t k = 0; k < W; ++k) {
         out[k] = src[static_cast<std::ptrdiff_t>(k)];
       }

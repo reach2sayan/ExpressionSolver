@@ -54,7 +54,7 @@ template <impl::Numeric T>
 [[nodiscard]] std::uint64_t digest(const Graph<T> &g) {
   boost::hash2::fnv1a_64 h;
   const auto &layout = g.layout();
-  detail::fold(h, g.symbols().size());
+  detail::fold(h, g.arity());
   detail::fold(h, layout.values);
   detail::fold(h, layout.jacobian);
   detail::fold(h, layout.hessian);

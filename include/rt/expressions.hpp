@@ -244,6 +244,13 @@ template <impl::Numeric T>
   return id == no_node ? RTExpression<T>::poison(errc::sealed_arena)
                        : RTExpression<T>{b, id};
 }
+// The direction a seeded product is taken along, as a leaf the sweeps read but
+// never differentiate.  No poison arm: nothing about a slot can be refused.
+template <impl::Numeric T>
+[[nodiscard]] constexpr RTExpression<T> seed(Builder<T> &b,
+                                             std::uint32_t slot) {
+  return RTExpression<T>{b, b.seed_node(slot)};
+}
 template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> lit(Builder<T> &b, const T &v) {
   return RTExpression<T>{b, b.constant(v)};

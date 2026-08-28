@@ -379,6 +379,11 @@ PYBIND11_MODULE(_ddx, m) {
       .def("evaluate", &PyEquation::evaluate, pyb::arg("x"))
       .def("jacobian", &PyEquation::jacobian, pyb::arg("x"))
       .def("hessian", &PyEquation::hessian, pyb::arg("x"))
+      // The direction leads, as it does in C++: a trailing one could not be
+      // told from the point.
+      .def("jvp", &PyEquation::jvp, pyb::arg("v"), pyb::arg("x"))
+      .def("vjp", &PyEquation::vjp, pyb::arg("w"), pyb::arg("x"))
+      .def("hvp", &PyEquation::hvp, pyb::arg("v"), pyb::arg("x"))
       .def(
           "buffer",
           [](const pyb::object &self, const pyb::handle &x,

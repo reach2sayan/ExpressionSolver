@@ -42,7 +42,8 @@ class PyCall;
 class PyEquation {
 public:
   // Ordered
-  enum class Want : std::uint8_t { Values, Jacobian, Hessian };
+  enum class Want : std::uint8_t { Values, Jacobian, Hessian, Hvp, Vjp,
+                                   Jvp };
 
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
              std::vector<rt::NodeId> roots)
@@ -129,6 +130,63 @@ public:
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
     const Point at{x, symbols(), names()};
     return outputs() == 1 ? hessian_from_lane(at) : hessian_from_arena(at);
+  }
+
+  // --- the seeded products -------------------------------------------------
+  //
+  // J(x)v, w'J(x) and H(x)v, none of which forms the matrix it is named after.
+  // The direction rides in its own argument, so it can never be read as part
+  // of the point.
+
+  [[nodiscard]] pyb::tuple jvp(const pyb::handle &v, const pyb::handle &x) {
+    const Point at{x, symbols(), names()};
+    const Point dir{v, symbols(), names()};
+    Lane &l = lane(Want::Jvp);
+    Block out{shape_of({ssize(outputs())}, at),
+              count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Cell cell;
+    auto f = values_block(l, at);
+    run_seeded(l, at, dir, f ? f->rows() : cell.rows(), out.rows(), {});
+    return pyb::make_tuple(value_of(f, cell), std::move(out).array());
+  }
+
+  [[nodiscard]] pyb::tuple vjp(const pyb::handle &w, const pyb::handle &x) {
+    const Point at{x, symbols(), names()};
+    // By position: the covector is indexed by function, and a dict would have
+    // nothing to key on.
+    const Point dir{w, outputs()};
+    Lane &l = lane(Want::Vjp);
+    Block out{symbol_shape(at),
+              count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Cell cell;
+    auto f = values_block(l, at);
+    run_seeded(l, at, dir, f ? f->rows() : cell.rows(), out.rows(), {});
+    return pyb::make_tuple(value_of(f, cell), std::move(out).array());
+  }
+
+  // (value, gradient, H v): the gradient comes off the same sweep, so it is
+  // handed back rather than thrown away.  One output only, as hessian() is.
+  [[nodiscard]] pyb::tuple hvp(const pyb::handle &v, const pyb::handle &x) {
+    if (outputs() != 1) {
+      fail_with(errc::not_univariate);
+    }
+    const Point at{x, symbols(), names()};
+    const Point dir{v, symbols(), names()};
+    Lane &l = lane(Want::Hvp);
+    const std::size_t n = arity();
+
+    Scratch partials{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
+            at.size()};
+    Block out{symbol_shape(at),
+              count(l, &rt::Graph<double>::Blocks::hessian), at.size()};
+    Cell cell;
+    auto f = values_block(l, at);
+    run_seeded(l, at, dir, f ? f->rows() : cell.rows(), partials.rows(),
+               out.rows());
+    scatter_jacobian(partials, g, at.size());
+    return pyb::make_tuple(value_of(f, cell), std::move(g).array(),
+                           std::move(out).array());
   }
 
   // --- the JIT -------------------------------------------------------------
@@ -273,11 +331,22 @@ private:
   void prepare(Lane &l, Want want) {
     rt::GraphBuilder<double> gb{*arena_};
     gb.values_from(roots_);
-    if (want != Want::Values) {
-      gb.jacobian_from(derivative());
-    }
-    if (want == Want::Hessian) {
-      gb.hessian_from(sweeps().front());
+    // The seeded lanes replace the Jacobian block rather than adding to it,
+    // except Hvp, whose gradient falls out of the same sweep.
+    if (want == Want::Vjp) {
+      gb.vector_jacobian_from(vjp_sweep());
+    } else if (want == Want::Jvp) {
+      gb.tangent_from(jvp_sweep());
+    } else {
+      if (want != Want::Values) {
+        gb.jacobian_from(derivative());
+      }
+      if (want == Want::Hessian) {
+        gb.hessian_from(sweeps().front());
+      }
+      if (want == Want::Hvp) {
+        gb.hessian_vector_from(hvp_sweep());
+      }
     }
     l.graph = std::make_shared<const rt::Graph<double>>(gb.finish(contracts()));
     if (options_.backend == jit::Backend::Interpret) {
@@ -306,7 +375,7 @@ private:
       // may supply code and a symbol but cannot claim an arity.
       const auto &layout = l.graph->layout();
       if (auto adopted =
-              c->adopt(stored->code, stored->symbol, l.graph->symbols().size(),
+              c->adopt(stored->code, stored->symbol, l.graph->arity(),
                        layout.values, layout.jacobian, layout.hessian)) {
         l.kernel = std::move(*adopted);
         l.settled = true;
@@ -390,24 +459,44 @@ private:
 
   void run(Lane &l, const Point &at, std::span<double *const> f,
            std::span<double *const> g, std::span<double *const> h) {
-    const auto xs = at.columns();
+    run_columns(l, at.columns(), at.size(), f, g, h);
+  }
+
+  // The point's columns and the direction's, in one array: symbols first, then
+  // the seeds, which is the order input_column() states.
+  void run_seeded(Lane &l, const Point &at, const Point &dir,
+                  std::span<double *const> f, std::span<double *const> g,
+                  std::span<double *const> h) {
+    if (dir.size() != at.size()) {
+      fail_with(errc::wrong_direction);
+    }
+    std::vector<const double *> xs;
+    xs.reserve(at.columns().size() + dir.columns().size());
+    std::ranges::copy(at.columns(), std::back_inserter(xs));
+    std::ranges::copy(dir.columns(), std::back_inserter(xs));
+    run_columns(l, xs, at.size(), f, g, h);
+  }
+
+  void run_columns(Lane &l, std::span<const double *const> xs, std::size_t n,
+                   std::span<double *const> f, std::span<double *const> g,
+                   std::span<double *const> h) {
     const auto blocks = l.graph->output_blocks();
-    if (xs.size() != arity() || f.size() != blocks.values.size() ||
+    if (xs.size() != l.graph->arity() || f.size() != blocks.values.size() ||
         g.size() != blocks.jacobian.size() ||
         h.size() != blocks.hessian.size()) {
       fail_with(errc::wrong_column_count);
     }
     // Before the GIL goes, and after the shape check: a call that will not run
     // has bought nothing.
-    charge(l, at.size());
+    charge(l, n);
     // Past here nothing touches Python, so the GIL goes -- which is what lets
     // another thread call in while a long batch runs.
     const pyb::gil_scoped_release unlocked;
     if (l.kernel) {
-      l.kernel(xs, f, g, h, at.size());
+      l.kernel(xs, f, g, h, n);
       return;
     }
-    interpret(*l.graph, xs, f, g, h, at.size());
+    interpret(*l.graph, xs, f, g, h, n);
   }
 
   // The block sweep, within ~1.4x of a kernel and not a sad path.
@@ -419,7 +508,9 @@ private:
     // The freeze settled both; there is no choice left to make here.
     const auto order = graph.contracted_order();
     const auto contractions = graph.contractions();
-    const std::size_t symbols = arity();
+    // The graph's width, not the symbol count: `xs` carries one column per
+    // input, and a seeded lane holds leaves that are not symbols.
+    const std::size_t symbols = graph.arity();
     const auto scatter = [&](const auto &tape, std::size_t i,
                              std::size_t stride, std::size_t width) {
       for (const auto [columns, block] : std::views::zip(
@@ -596,6 +687,27 @@ private:
     return *sweeps_;
   }
 
+  // The three seeded products, each swept on first ask.  Hash consing makes a
+  // repeat free, so this is about not sweeping for a caller who never asks.
+  [[nodiscard]] const rt::HessianVector &hvp_sweep() {
+    if (!hvp_) {
+      hvp_ = rt::build_hvp_impl(*arena_, roots_.front());
+    }
+    return *hvp_;
+  }
+  [[nodiscard]] const rt::VectorJacobian &vjp_sweep() {
+    if (!vjp_) {
+      vjp_ = rt::build_vjp_impl(*arena_, roots_);
+    }
+    return *vjp_;
+  }
+  [[nodiscard]] const rt::Tangent &jvp_sweep() {
+    if (!jvp_) {
+      jvp_ = rt::build_jvp_impl(*arena_, roots_);
+    }
+    return *jvp_;
+  }
+
   // Held for the same reason the Hessians are: swept per lane otherwise, which
   // leaves a loaded equation recomputing what its file just handed it.
   [[nodiscard]] const rt::Jacobian &derivative() {
@@ -618,6 +730,16 @@ private:
       ++first;
     }
     std::vector<pyb::ssize_t> dims(first, base.end());
+    if (at.batched()) {
+      dims.push_back(ssize(at.size()));
+    }
+    return dims;
+  }
+
+  // A block indexed by symbol rather than by function, so shape_of's leading
+  // axis -- which it drops at one output -- is not one this has.
+  [[nodiscard]] std::vector<pyb::ssize_t> symbol_shape(const Point &at) const {
+    std::vector<pyb::ssize_t> dims{ssize(arity())};
     if (at.batched()) {
       dims.push_back(ssize(at.size()));
     }
@@ -662,6 +784,9 @@ private:
   std::vector<rt::NodeId> roots_;
   std::optional<rt::Jacobian> derivative_;
   std::optional<std::vector<rt::Hessian>> sweeps_;
+  std::optional<rt::HessianVector> hvp_;
+  std::optional<rt::VectorJacobian> vjp_;
+  std::optional<rt::Tangent> jvp_;
   jit::Options options_{};
   // Machine code a file handed over, consulted once per lane by prepare().
   std::vector<rt::Object> objects_{};
@@ -669,7 +794,7 @@ private:
   // roots are in.
   std::uint32_t model_nodes_ = 0;
   bool loaded_ = false;
-  std::array<Lane, 3> lanes_;
+  std::array<Lane, 6> lanes_;
 };
 
 // A call bound to its buffers: the point's columns, the output arrays and the
