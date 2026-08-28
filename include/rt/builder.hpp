@@ -397,9 +397,10 @@ private:
 
   // (n/d) * d -> n.  On a DAG the denominator match is an id compare.
   constexpr std::optional<NodeId> cancel_quotient(NodeId quotient,
-                                                  NodeId x) const {
+                                                  NodeId factor) const {
     const Node<T> &q = nodes_[quotient];
-    return q.op == OpCode::Div && q.b == x ? std::optional{q.a} : std::nullopt;
+    return q.op == OpCode::Div && q.b == factor ? std::optional{q.a}
+                                                : std::nullopt;
   }
 
   std::vector<Node<T>> nodes_;

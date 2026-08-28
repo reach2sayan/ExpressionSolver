@@ -152,7 +152,7 @@ template <impl::Numeric T>
                                   std::views::filter([](const auto &entry) {
                                     return std::get<1>(entry).op == OpCode::Var;
                                   })) {
-    g.partial[node.slot] = adj[v];
+    g.partial[node.slot] = adj[static_cast<std::size_t>(v)];
   }
   // A symbol the expression never mentions has no leaf, so no adjoint reached
   // it; those partials are the literal zero.

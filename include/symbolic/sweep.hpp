@@ -321,7 +321,8 @@ derivative_tensor_impl(const Expr &expr,
     static_for<N>([&]<std::size_t Seeded>() {
       std::array<U, N> seeds{};
       for (const auto [k, v] : std::views::enumerate(values)) {
-        seeds[k] = U{v, static_cast<std::size_t>(k) == Seeded ? S{1} : S{}};
+        const auto i = static_cast<std::size_t>(k);
+        seeds[i] = U{v, i == Seeded ? S{1} : S{}};
       }
       result[Seeded] =
           expr.template eval_seeded<symbols>(seeds).template get<1>();

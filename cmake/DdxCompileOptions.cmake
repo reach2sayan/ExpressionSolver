@@ -23,6 +23,12 @@ if (MSVC)
     set(DDX_WARNINGS /Wall /wd4061 /wd4623 /wd4625 /wd4626 /wd5026 /wd5027
                      /wd4710 /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514
                      /wd4324 /wd5266 /wd4866)
+    # C4371 and C4686 report that a layout or a calling convention differs from
+    # what a compiler of the previous decade chose.  Both fire on standard
+    # library templates this tree instantiates -- and, like C4702, from far
+    # enough inside the compiler that /external:W0 no longer knows whose header
+    # it was.  ddx ships no ABI it has to keep, so neither says anything.
+    list(APPEND DDX_WARNINGS /wd4371 /wd4686)
     # /Wall is for our code and no one else's.  Which code that is by the shape
     # of the include rather than by CMake's SYSTEM include paths -- those are
     # /external:I on a command line and something else again in a .vcxproj:

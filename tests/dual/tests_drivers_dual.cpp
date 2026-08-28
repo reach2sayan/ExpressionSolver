@@ -6,7 +6,8 @@ TEST(HessianRouter, RawCallableTakesTheScalarDriver) {
                         std::size_t{12}, std::size_t{20}, std::size_t{40}}) {
     std::vector<double> x(n);
     for (std::size_t k = 0; k < n; ++k) {
-      x[k] = 0.15 + 0.6 * (k + 1.0) / (n + 1.0);
+      x[k] = 0.15 + 0.6 * (static_cast<double>(k) + 1.0) /
+                        (static_cast<double>(n) + 1.0);
     }
     auto f = [n](const auto *dof) { return vf_sample(dof, n); };
     const std::span<const double> xs{x.data(), x.size()};

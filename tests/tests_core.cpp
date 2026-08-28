@@ -318,7 +318,8 @@ TEST(ExpressionTest, ExpDerivative) {
   for (std::size_t i = 1; i < 1000; ++i) {
     Variable<double, ddx::impl::FixedString{"x"}> xv;
     auto target = exp(xv);
-    ASSERT_EQ(target.derivative().eval(i * 1.0), target.eval(i * 1.0));
+    const double at = static_cast<double>(i);
+    ASSERT_EQ(target.derivative().eval(at), target.eval(at));
   }
 }
 TEST(ExpressionTest, Combination) {
