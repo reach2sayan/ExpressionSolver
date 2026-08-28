@@ -92,6 +92,40 @@ TEST(RtText, BuildsTheSameArenaAsTheCppSpelling) {
   EXPECT_TRUE(std::ranges::equal(written.symbols(), parsed.symbols()));
 }
 
+// The four comparisons the graph does not carry are compositions, and the text
+// makes the same ones the operators do -- node for node, `1` included.
+TEST(RtText, ComposesEqualityAsTheOperatorsDo) {
+  const auto same_arena = [](const std::string_view source, auto &&build) {
+    ddx::rt::Builder<> written;
+    const auto x = var(written, "x");
+    const auto y = var(written, "y");
+    const auto by_hand = build(x, y);
+
+    ddx::rt::Builder<> parsed;
+    const auto ast = parse(source);
+    ASSERT_TRUE(ast.has_value()) << source;
+    const auto lowered = lower(parsed, *ast);
+    ASSERT_TRUE(lowered.has_value()) << source;
+    const auto same = [](const auto &l, const auto &r) {
+      return l.op == r.op && l.a == r.a && l.b == r.b && l.slot == r.slot &&
+             l.value == r.value;
+    };
+    EXPECT_TRUE(std::ranges::equal(written.nodes(), parsed.nodes(), same))
+        << source;
+    EXPECT_EQ(by_hand.id(written), lowered->id(parsed)) << source;
+  };
+  same_arena("x == y", [](auto x, auto y) { return x == y; });
+  same_arena("x != y", [](auto x, auto y) { return x != y; });
+  same_arena("x >= y", [](auto x, auto y) { return x >= y; });
+  same_arena("x > y + 1", [](auto x, auto y) { return x > y + 1.0; });
+
+  EXPECT_DOUBLE_EQ(value_of("x == y", 2.0, 2.0), 1.0);
+  EXPECT_DOUBLE_EQ(value_of("x == y", 2.0, 1.0), 0.0);
+  EXPECT_DOUBLE_EQ(value_of("x != y", 2.0, 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(value_of("x != y", std::nan(""), 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(value_of("x == y", std::nan(""), std::nan("")), 0.0);
+}
+
 TEST(RtText, ReadsEveryLiteralAtTheScalarType) {
   // The grammar has no types, so this is a quotient and never a truncation.
   EXPECT_DOUBLE_EQ(value_of("(1/2) * x", 1.0), 0.5);
@@ -165,11 +199,15 @@ TEST(RtText, LowersADifferenceAsTheSumOfANegation) {
 }
 
 TEST(RtText, RefusesWhatItCannotMean) {
-  // Python's spellings: `^` is not exponentiation, and there is no ternary to
-  // lower -- the opcode table has no comparison and no select.
+  // Python's spellings: `^` is not exponentiation, there is no ternary --
+  // `select` is a call -- and a comparison is one per expression.
   EXPECT_EQ(parse("x ^ 2").error().code, errc::bad_syntax);
   EXPECT_EQ(parse("x > 0 ? x : -x").error().code, errc::bad_syntax);
   EXPECT_EQ(parse("x % y").error().code, errc::bad_syntax);
+  EXPECT_EQ(parse("x < y < 2").error().code, errc::bad_syntax);
+  EXPECT_EQ(parse("x == y == 2").error().code, errc::bad_syntax);
+  EXPECT_EQ(parse("x = y").error().code, errc::bad_syntax);
+  EXPECT_EQ(parse("x <> y").error().code, errc::bad_syntax);
 
   // Malformed rather than unmeanable.
   EXPECT_EQ(parse("x +").error().code, errc::bad_syntax);

@@ -165,7 +165,10 @@ def test_repr_names_what_it_is() -> None:
     ],
 )
 def test_comparisons_answer_one_or_zero(
-    compare: Callable[[object, object], object], a: float, b: float, want: float
+    compare: Callable[[ddx.Expression, ddx.Expression], ddx.Expression],
+    a: float,
+    b: float,
+    want: float,
 ) -> None:
     """A comparison is a value, not a separate kind of thing."""
     eq = ddx.equation(lambda: compare(ddx.var("x"), ddx.var("y")))
@@ -174,23 +177,27 @@ def test_comparisons_answer_one_or_zero(
 
 def test_a_number_compares_from_either_side() -> None:
     """`1.0 < x` reflects to `x > 1.0`; both are the same node."""
-    left = ddx.equation(lambda: 1.0 < ddx.var("x"))
+    left = ddx.equation(lambda: 1.0 < ddx.var("x"))  # noqa: SIM300  -- the reflected form is the point
     right = ddx.equation(lambda: ddx.var("x") > 1.0)
     for x in (0.5, 1.0, 2.0):
         assert left.evaluate([x]) == right.evaluate([x])
-    assert isinstance(ddx.var("x") == 1.0, ddx.Expression)
+    assert isinstance(ddx.Expression(2.0) == 1.0, ddx.Expression)
 
 
 def test_an_expression_has_no_truth_value() -> None:
-    """A condition is a value until a point is given, so Python's own branch
-    refuses rather than taking the first arm every time."""
-    x = ddx.var("x")
+    """A condition has no truth until a point is given.
+
+    Python's own branch refuses rather than taking the first arm every time.
+    """
     with pytest.raises(TypeError):
-        bool(x < 1.0)
+        bool(ddx.Expression(2.0) < 1.0)
+
+    def branched() -> ddx.Expression:
+        x = ddx.var("x")
+        return x * x if x < 1.0 else 2.0 * x - 1.0
+
     with pytest.raises(TypeError):
-        _ = x * x if x < 1.0 else 2.0 * x - 1.0
-    with pytest.raises(TypeError):
-        _ = x != 1.0 and x
+        ddx.equation(branched)
 
 
 def test_select_takes_the_arm_the_condition_names() -> None:
@@ -224,3 +231,5 @@ def test_a_comparison_is_infix_in_text() -> None:
     assert written.jacobian([1.0, 3.0])[1] == pytest.approx(
         by_hand.jacobian([1.0, 3.0])[1]
     )
+    assert ddx.equation("x != y").evaluate([1.0, 3.0]) == 1.0
+    assert ddx.equation("x == y").evaluate([3.0, 3.0]) == 1.0

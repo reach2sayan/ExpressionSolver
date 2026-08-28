@@ -113,6 +113,27 @@ constexpr auto fold_swapped = [](auto &ctx) {
       append(_globals(ctx).ast, {.op = Op, .a = _attr(ctx), .b = _val(ctx)});
 };
 
+// `a == b` is `le(a,b) * le(b,a)` -- both ways round, so a NaN operand answers
+// 0 -- and `a != b` is `1 - (a == b)`: the compositions operator== and
+// operator!= make in expressions.hpp, built in the same order, so the text and
+// the C++ spelling are the same arena node for node.
+constexpr auto equal = [](auto &ctx) {
+  Ast &ast = _globals(ctx).ast;
+  const std::uint32_t l = _val(ctx);
+  const std::uint32_t r = _attr(ctx);
+  const auto le = append(ast, {.op = OpCode::Le, .a = l, .b = r});
+  const auto ge = append(ast, {.op = OpCode::Le, .a = r, .b = l});
+  _val(ctx) = append(ast, {.op = OpCode::Mul, .a = le, .b = ge});
+};
+constexpr auto unequal = [](auto &ctx) {
+  equal(ctx);
+  Ast &ast = _globals(ctx).ast;
+  const auto one =
+      append(ast, {.op = OpCode::Const, .leaf = intern(ast.literals, "1")});
+  const auto negated = append(ast, {.op = OpCode::Neg, .a = _val(ctx)});
+  _val(ctx) = append(ast, {.op = OpCode::Add, .a = one, .b = negated});
+};
+
 // There is no Sub opcode -- the label "-" is unary Neg -- so a difference is
 // the sum of a negation, which is what the C++ operator- builds as well.
 constexpr auto subtract = [](auto &ctx) {
@@ -237,11 +258,14 @@ constexpr auto sum_def =
                               (bp::lit('-') >> product[act::subtract]));
 // One comparison and no more.  Python chains `a < b < c` into a conjunction and
 // C folds it into `(a < b) < c`; refusing it says so, where either reading
-// would have been a silent choice between two languages.  `<=` before `<`, or
-// the shorter token wins and leaves an `=` nobody can parse.
+// would have been a silent choice between two languages.  The two-character
+// tokens before the one-character ones, or the shorter token wins and leaves
+// an `=` nobody can parse.
 constexpr auto expression_def =
     sum[act::assign] >> -((bp::lit("<=") >> sum[act::fold<OpCode::Le>]) |
                           (bp::lit(">=") >> sum[act::fold_swapped<OpCode::Le>]) |
+                          (bp::lit("==") >> sum[act::equal]) |
+                          (bp::lit("!=") >> sum[act::unequal]) |
                           (bp::lit('<') >> sum[act::fold<OpCode::Lt>]) |
                           (bp::lit('>') >> sum[act::fold_swapped<OpCode::Lt>]));
 

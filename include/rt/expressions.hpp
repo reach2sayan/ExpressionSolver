@@ -184,10 +184,12 @@ public:
     return le(r, l);
   }
   // Both ways round, so a NaN operand answers 0 -- where `1 - lt - lt` would
-  // have called two NaNs equal.
+  // have called two NaNs equal.  Sequenced: an operand order left to the
+  // compiler is a node order, and the text parser builds this one.
   friend constexpr RTExpression operator==(const RTExpression &l,
                                            const RTExpression &r) {
-    return le(l, r) * le(r, l);
+    const RTExpression forward = le(l, r);
+    return forward * le(r, l);
   }
   // Spelled out: the rewritten `!(l == r)` is ill-formed when `==` is not bool.
   friend constexpr RTExpression operator!=(const RTExpression &l,

@@ -269,9 +269,9 @@ not an operator), parentheses, unary signs, decimals and exponent notation. The
 callable functions are the ones in the [expression table](#expressions), spelled
 the same. `-x**2` is `-(x**2)` and `2**-1` is legal, as in Python.
 
-Comparisons are infix, as in C++ — `<` `<=` `>` `>=` — and bind looser than arithmetic, so
-`select(x*x < y + 1, x, y)` needs no parentheses. **One comparison per
-expression**: `a < b < c` is refused rather than read, since Python chains it
+Comparisons are infix, as in C++ — `<` `<=` `>` `>=` `==` `!=` — and bind
+looser than arithmetic, so `select(x*x < y + 1, x, y)` needs no parentheses.
+**One comparison per expression**: `a < b < c` is refused rather than read, since Python chains it
 into a conjunction and C folds it into `(a < b) < c`, and picking either
 silently would be picking a language.
 
