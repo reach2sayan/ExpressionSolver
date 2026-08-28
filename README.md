@@ -1,15 +1,28 @@
-[![CMake](https://github.com/reach2sayan/ddx/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/reach2sayan/ddx/actions/workflows/cmake-multi-platform.yml)
-[![C++](https://img.shields.io/badge/C++-%2300599C.svg?logo=c%2B%2B&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/Python-3776AB.svg?logo=python&logoColor=white)](#python)
+<div align="center">
 
 # ddx
 
-A C++23 library for differentiating expressions. Build a function over named
-symbols while the program runs — terms looped over a data file, a model read
-from configuration — and ask it for values, gradients, Jacobians and Hessians.
-One point at a time, or a batch of thousands in a single call, interpreted or
-compiled to machine code through LLVM. There are [Python bindings](#python)
-over the same runtime.
+**Derivatives of expressions you build while the program runs.**
+
+[![GCC 14](https://github.com/reach2sayan/ddx/actions/workflows/gcc.yml/badge.svg?branch=main)](https://github.com/reach2sayan/ddx/actions/workflows/gcc.yml)
+[![Clang 20](https://github.com/reach2sayan/ddx/actions/workflows/clang.yml/badge.svg?branch=main)](https://github.com/reach2sayan/ddx/actions/workflows/clang.yml)
+[![MSVC 2022](https://github.com/reach2sayan/ddx/actions/workflows/msvc.yml/badge.svg?branch=main)](https://github.com/reach2sayan/ddx/actions/workflows/msvc.yml)
+
+[![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](#requirements)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](#python)
+[![License](https://img.shields.io/badge/license-BSL--1.0-4B8BBE)](LICENSE.txt)
+
+</div>
+
+---
+
+ddx builds a function over named symbols at run time — terms looped over a data
+file, a model read from a config, an expression typed by a user — and answers
+values, gradients, Jacobians and Hessians for it. One point at a time, or a
+batch of thousands in a single call. Interpreted by default; compiled to machine
+code through LLVM when you ask. There are [Python bindings](#python) over the
+same runtime, and a [header-only compile-time API](#compile-time-expressions)
+for expressions whose shape you already know.
 
 ```cpp
 #include "ddx.hpp"
@@ -41,29 +54,36 @@ const auto eq = rt::equation([&] {
 [Building](#building) · [Equations](#equations) · [Expressions](#expressions) ·
 [Points](#points) · [Values and derivatives](#values-and-derivatives) ·
 [Batches](#batches) · [Errors](#errors) ·
-[Ownership and threads](#ownership-and-threads) · [The JIT](#the-jit) ·
-[Reference](#reference) · [Python](#python) ·
-[Compile-time expressions](#compile-time-expressions) · [Printing](#printing)
+[Ownership and threads](#ownership-and-threads) · [Compiling](#compiling) ·
+[Saving and loading](#saving-and-loading) · [Reference](#reference) ·
+[Python](#python) · [Compile-time expressions](#compile-time-expressions) ·
+[Printing](#printing)
 
 ---
 
 ## Requirements
 
-- A C++23 compiler and standard library: **GCC 14+**, **Clang 20+** over
-  libstdc++ 14+, or MSVC (VS 2022, `/std:c++latest`).  ddx writes every
-  accessor as an explicit object parameter (P0847) and gates on
-  `__cpp_explicit_this_parameter`, which Clang compiles from 18 but does not
-  define until 20.  libc++ is not supported -- it has no `views::enumerate`.
+A C++23 compiler and standard library:
+
+| Compiler | Needs |
+|---|---|
+| **GCC** | 14 or newer |
+| **Clang** | 20 or newer, over libstdc++ 14+ — libc++ is not supported |
+| **MSVC** | Visual Studio 2022, `/std:c++latest` |
+
+Clang compiles the accessor spelling ddx uses from 18 but does not advertise it
+until 20, and libc++ has no `views::enumerate` — hence the two floors.
+
 - **CMake 3.26+**.
-- **Boost's headers**, on the machine that builds ddx and on any machine that
-  compiles against it — `libboost-dev`, `boost-devel`, `brew install boost`.
-  All of it is header-only, so no compiled Boost library is ever linked.
+- **Boost** is downloaded and unpacked at configure time; nothing needs to be
+  installed, and no compiled Boost library is ever linked. Point
+  `DDX_BOOST_INCLUDEDIR` at your own headers to use those instead.
 - GoogleTest and Google Benchmark are fetched at configure time, so a first
   configure that builds the tests or the benchmarks wants a network.
 - `-DDDX_BUILD_JIT=ON` additionally needs an LLVM 20 installation, pointed at
   with `LLVM_DIR`.
-- `-DDDX_BUILD_PYTHON=ON` additionally needs **Python 3.11+** and pybind11;
-  the module itself imports NumPy 1.23+ and pydantic 2.7+.
+- `-DDDX_BUILD_PYTHON=ON` additionally needs **Python 3.11+** and pybind11; the
+  module imports NumPy 1.23+ and pydantic 2.7+.
 
 ## Using it
 
@@ -150,8 +170,7 @@ cmake --preset release_jit -DLLVM_DIR=/opt/llvm-20/lib/cmake/llvm
 | `DDX_INSTALL` | on if top-level | generate the install and `find_package` rules |
 | `ENABLE_NATIVE_ARCH` | `ON` | `-march=native`, falling back to `x86-64-v3` |
 | `DDX_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
-| `DDX_MDSPAN_MODE` | `auto` | `auto` / `std` / `vendored` — which `mdspan` to bind to |
-| `DDX_DEDUCING_THIS` | `auto` | `auto` / `on` / `off` — accessor spelling (P0847) |
+| `DDX_BOOST_INCLUDEDIR` | *(empty)* | use Boost headers from here instead of fetching |
 
 `-ffast-math` is not used and not recommended: it changes derivative values.
 
@@ -207,6 +226,28 @@ order positional points are read in and the order every result is laid out in.
 *eq.symbols();                // {"x", "y"}
 ```
 
+### Written down instead
+
+An equation can be a string rather than a callback. One string per function, so
+a system is a string per output:
+
+```cpp
+const auto eq  = rt::equation("sin(x)*y + 3");
+const auto sys = rt::equation("x*x + y*y - 4", "x*y - 1");
+```
+
+Everything after that is the same — the same points, the same derivatives, the
+same batch calls. Free identifiers become the symbols, still ordered
+alphabetically, so `eq.symbols()` here is `{"x", "y"}`.
+
+The grammar is Python's arithmetic: `+ - * /`, `**` for exponentiation (`^` is
+not an operator), parentheses, unary signs, decimals and exponent notation. The
+callable functions are the ones in the [expression table](#expressions), spelled
+the same. `-x**2` is `-(x**2)` and `2**-1` is legal, as in Python.
+
+A string that does not parse gives a [poisoned equation](#errors) carrying
+`bad_syntax`, `unknown_function` or `wrong_argument_count`.
+
 ## Expressions
 
 `rt::RTExpression<T>` is the expression type. A bare number converts to one, so
@@ -226,10 +267,9 @@ for (const auto &s : data) {
 | Unary | `sin` `cos` `tan` `exp` `log` `log10` `sqrt` `cbrt` `abs` `sign` `asin` `acos` `atan` `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` `erf` |
 | Binary | `pow` `atan2` `hypot` `max` `min` |
 
-They are found by argument-dependent lookup, so they work whether or not `rt`
-is in scope — the compound forms are members, and rebind the handle rather than
-mutating a node. Identical subexpressions are shared as they are built, and
-literal arithmetic folds before it reaches the graph.
+They are found by argument-dependent lookup, so they work whether or not `rt` is
+in scope. The compound forms are members, and rebind the handle rather than
+mutating what other expressions already refer to.
 
 ## Points
 
@@ -277,8 +317,8 @@ const auto in_b = rt::equation([] { return sin(rt::var("b")); });
 *in_b.univariate_derivative<4>(0.5);       //  sin⁗(0.5)
 ```
 
-Values, gradient and Hessian are three separate graphs, each built the first
-time it is asked for. A caller who only ever evaluates never builds a gradient.
+Values, gradient and Hessian are prepared separately, each the first time it is
+asked for. A caller who only ever evaluates never pays for a gradient.
 
 ## Batches
 
@@ -319,8 +359,8 @@ j[n + 2];                // ∂RSS/∂b there
 A column count that does not match answers `errc::wrong_column_count`, and
 nothing is written.
 
-The Hessian takes a fourth block. Its columns are compressed by colour, so
-`hessian_columns()` is what sizes them — asking builds nothing:
+The Hessian takes a fourth block. Its columns are compressed, so
+`hessian_columns()` is what sizes them — asking costs nothing:
 
 ```cpp
 std::vector<double> h(n * *eq.hessian_columns());
@@ -332,15 +372,14 @@ for (std::size_t k = 0; k < *eq.hessian_columns(); ++k) {
 const auto ok = eq.hessian(xs, values, partials, hessians, n);
 ```
 
-`evaluate` has its own graph rather than the Jacobian's with the partials
-thrown away: columns nobody asks for are work nobody does.
+`evaluate` is not the Jacobian call with the partials thrown away: columns
+nobody asks for are work nobody does.
 
 ## Errors
 
-`rt::equation` always hands back an `Equation`. When the callback could not
-produce one — a symbol named with no arena, an expression naming no graph — that
-equation is *poisoned*: it carries the error rather than a graph, and every call
-on it answers with that error.
+`rt::equation` always hands back an `Equation`. When the callback or the string
+could not produce one, that equation is *poisoned*: it carries the error rather
+than a function, and every call on it answers with that error.
 
 ```cpp
 const auto eq = rt::equation([] { return rt::var("x") * 2.0; });
@@ -366,14 +405,23 @@ if (!j) {
 
 | `errc` | Means |
 |---|---|
-| `no_arena` | a symbol was named outside an `rt::equation` callback |
-| `no_graph` | the expression names no graph — a bare literal, for instance |
 | `wrong_arity` | the point does not supply one value per symbol |
-| `unknown_symbol` | a named point uses a name the equation does not have |
 | `short_point` | a range point is shorter than the symbol list |
+| `unknown_symbol` | a named point uses a name the equation does not have |
+| `index_out_of_range` | the index does not name a symbol of this equation |
 | `wrong_column_count` | a batch block has the wrong number of columns |
+| `no_arena` | a symbol was named outside an `rt::equation` callback |
+| `no_graph` | the expression is a bare literal, naming no function |
+| `sealed_arena` | the symbols already back an equation, so they are final |
 | `not_univariate` | `univariate_derivative` on more than one symbol |
-| `jit_target`, `jit_module`, `jit_verify`, `jit_lookup` | the JIT could not compile the graph |
+| `bad_syntax` | a text equation the grammar does not accept |
+| `unknown_function` | a text equation calls a function that does not exist |
+| `wrong_argument_count` | a text equation calls one with the wrong arity |
+| `archive_io` | the file could not be read or written |
+| `bad_archive` | not a ddx file, or a format this build does not read |
+| `archive_corrupt` | the file's checksum or structure does not hold |
+| `archive_mismatch` | the file loads, but does not describe this equation |
+| `jit_target`, `jit_module`, `jit_object`, `jit_verify`, `jit_lookup` | the compiler could not produce or link a kernel |
 
 An `errc` and an `error` both format and stream as their text, so
 `std::println("{}", j.error())` is the whole of reporting one. Nothing here
@@ -381,8 +429,8 @@ throws.
 
 The accessors that answer no `result` answer `std::optional` instead —
 `arity()`, `symbols()`, `value_columns()`, `jacobian_columns()`,
-`hessian_columns()` and `hessian_colors()` are `nullopt` on a poisoned
-equation. A bare count could not say it: an equation over a literal-only graph
+`hessian_columns()` and `hessian_colors()` are `nullopt` on a poisoned equation.
+A bare count could not say it: an equation over a literal-only expression
 legitimately has no symbols and no output columns.
 
 ## Ownership and threads
@@ -409,19 +457,18 @@ const auto eq = make_model(load());     // `data` is gone; `eq` is complete
 
 **Symbols belong to the callback.** `rt::var` is meaningful while the callback
 that named it runs. Build the expression there and return it; do not store an
-`RTExpression` and use it afterwards. A symbol named outside a callback reaches
-`rt::equation` with no arena behind it, and the equation that comes back is
-poisoned with `errc::no_arena`.
+`RTExpression` and use it afterwards. A symbol named outside a callback gives a
+poisoned equation carrying `errc::no_arena`.
 
 **Batch columns are yours.** The equation writes through the pointers you give
 it and keeps none of them; every buffer must be alive for the duration of the
 call, and each column must hold at least `n` elements.
 
-Building is independent per thread: two threads may run `rt::equation`
-callbacks at the same time. An equation fills internal state on the first call
-of each kind — make that first call before handing one to several threads, or
-give each thread its own. A batch call splits across threads by slicing the
-columns, each thread getting its own offset pointers and its own `n`:
+Building is independent per thread: two threads may run `rt::equation` callbacks
+at the same time. An equation prepares itself on the first call of each kind —
+make that first call before handing one to several threads, or give each thread
+its own. A batch call splits across threads by slicing the columns, each thread
+getting its own offset pointers and its own `n`:
 
 ```cpp
 const std::size_t chunk = (n + threads - 1) / threads;
@@ -437,11 +484,11 @@ for (std::size_t t = 0; t < n; t += chunk) {
 }
 ```
 
-## The JIT
+## Compiling
 
 Configure with `-DDDX_BUILD_JIT=ON` and link `ddx::jit`, and the batch calls can
 run compiled code. The spellings do not change, the answers do not change, and
-there is no compiler or kernel object to hold.
+there is no compiler or kernel object for you to hold.
 
 Nothing compiles unless you ask. An equation left alone interprets, which costs
 no compiler and runs within ~1.4x of a kernel. Asking is what starts the build,
@@ -455,49 +502,72 @@ auto eq = rt::equation([] {
 });
 
 eq.options({.backend = rt::Backend::Compile, .points = 4096});
-// Starts the gradient graph's compile here and now.  Returns immediately;
-// nothing has been compiled yet.
+// Starts the compile here and now.  Returns immediately; nothing is ready yet.
 
 eq.jacobian(xs, f, g, n);      // compile in flight -> interpreted
-// ... the compile lands about here ...
-eq.jacobian(xs, f, g, n);      // kernel, and from here on
+// ... the kernel lands about here ...
+eq.jacobian(xs, f, g, n);      // compiled, and from here on
 eq.uses_kernel();              // true
 ```
 
-Values, gradient and Hessian compile separately, each launched the moment its
-graph is built — so a caller who only evaluates never compiles a gradient.
+Values, gradient and Hessian compile separately, each launched the moment it is
+first needed — so a caller who only evaluates never compiles a gradient.
 
-Results either side of the switchover agree **to the bit**. A multiply feeding
-an add is one rounding in both, because the contraction is decided in the graph
-rather than by the backend: the sweep calls `std::fma` where the kernel emits
-`llvm.fma`. A loop running across the switchover sees no movement at all.
+Results either side of the switchover agree **to the bit**. A loop running
+across it sees no movement at all.
 
 `wait_for_kernel()` is the only call that blocks, and only because it was asked
 to:
 
 ```cpp
 eq.wait_for_kernel();          // true once it lands
-eq.jacobian(xs, f, g, n);      // kernel, guaranteed
+eq.jacobian(xs, f, g, n);      // compiled, guaranteed
 ```
 
 Setting `Options` to the value it already holds does nothing. Changing it
-discards every graph and abandons a compile still in flight rather than waiting
-for it — including a change back to `Backend::Interpret`, after which no
+discards the compiled code and abandons a compile still in flight rather than
+waiting for it — including a change back to `Backend::Interpret`, after which no
 compiler is asked at all.
+
+### Backends
+
+| `Backend` | Is |
+|---|---|
+| `Interpret` | the default. No compiler is asked, so a program that never says otherwise never loads LLVM |
+| `Compile` | start compiling now |
+| `Adapt` | start compiling once the batch traffic has paid for it — for a caller who cannot say up front which of their equations are hot |
+
+Either compiling backend answers first with a quick kernel and replaces it with
+a better one; every level agrees to the bit, so the swap is invisible.
+`kernel_level()` says which one is answering, and under `Adapt`, `warming()`
+answers how far along the next step is:
+
+```cpp
+eq.options({.backend = rt::Backend::Adapt});
+
+if (const auto w = eq.warming()) {
+  std::println("{} of {} points", w->points, w->threshold);
+}
+*eq.kernel_level();            // 0 at first, then the level you asked for
+```
 
 ### `jit::Options`
 
 | Field | Default | Is |
 |---|---|---|
-| `backend` | `Interpret` | `Interpret` or `Compile`; choosing `Compile` starts the build |
+| `backend` | `Interpret` | `Interpret`, `Compile` or `Adapt` |
 | `points` | `1` | the batch you intend to hand one call — stated, since the kernel is built before any call exists to infer it from |
-| `lanes` | `0` | points per loop iteration; `0` derives it from `points`, `1` is scalar |
+| `lanes` | `0` | points per loop iteration; `0` derives it from `points`, `1` is scalar. Every width gives the same bits |
 | `opt_level` | follows the build type | LLVM's IR pipeline, 0–3 — 3 in a Release build, 1 in a Debug one |
 | `codegen_level` | `1` | LLVM's codegen, 0–3 — the knob that trades kernel speed for compile time |
-| `slp` | `false` | SLP vectorisation: packs subexpressions within one point |
+| `slp` | `false` | pack independent subexpressions within one point; model-dependent, hence off |
 | `loop_vectorize` | `false` | loop vectorisation, on a loop already emitted `lanes` wide |
+| `warm_points` | `65536` | batch points that buy the first step, under `Adapt` |
+| `hot_points` | `1048576` | further points that buy the top one, under `Adapt` |
 | `veclib` | `None` | vector math library for transcendentals; `Libmvec` trades ~0.5 ULP for ~4 |
-| `contract` | follows `DDX_FP_FLAGS` | fold a multiply feeding an add into one rounding, in both the kernel and the sweep |
+| `contract` | follows `DDX_FP_FLAGS` | fold a multiply feeding an add into one rounding |
+| `retain_object` | `true` | keep the compiled object so [`save`](#saving-and-loading) can write it |
+| `cache_dir` | *(empty)* | keep compiled objects here between runs; a second run links instead of compiling |
 | `time_passes` | `false` | per-pass timing to stderr |
 
 `points` decides the lane width and nothing else: a call carrying some other
@@ -510,31 +580,33 @@ eq.options({.backend = rt::Backend::Compile, .points = 1});     // a gradient pe
 eq.options({.backend = rt::Backend::Compile, .points = 4096});  // a batch at a time
 ```
 
-The compile is paid once and nothing waits for it: calls are interpreted until
-it lands. Codegen — instruction selection and register allocation — is 68–92% of
-it, which is why `codegen_level` and not `opt_level` is the knob that moves a
-compile time.
+Naming a `cache_dir` is the cheapest thing you can do about compile time: a run
+that finds its object there links it instead of compiling, which is roughly
+three orders of magnitude quicker. Failing that, `codegen_level` — not
+`opt_level` — is the knob that moves a compile time.
 
-## Saving a built equation
+```cpp
+eq.options({.backend = rt::Backend::Compile, .points = 4096, .cache_dir = "/var/cache/ddx"});
+```
 
-Building an equation sweeps it: one reverse pass per function for the Jacobian,
-and for the Hessian a coupling pattern that is quadratic in the symbols followed
-by a colouring. `save` writes that work to a file, and `load` reads it back
-without a model:
+## Saving and loading
+
+Preparing an equation for derivatives is work you can do once. `save` writes it
+to a file, and `load` reads it back without a model:
 
 ```cpp
 const auto eq = rt::equation([] { return exp(rt::var("x")) * rt::var("y"); });
 eq.save("f.ddx");
 
-const auto same = *rt::load("f.ddx");            // no model, nothing swept
+const auto same = *rt::load("f.ddx");            // no model, nothing rebuilt
 const auto sys  = *rt::load<double, 3>("s.ddx"); // three functions
 ```
 
 The output count is a template parameter because it is part of the type, and a
 file holding some other number is refused rather than adapted to.
 
-Pair a model with a file and it becomes a cache — the lambda is the model as it
-would be written anyway, and the path is only where the result is kept:
+Pair a model with a file and it becomes a cache — the lambda is the model as you
+would write it anyway, and the path is only where the result is kept:
 
 ```cpp
 const auto eq = rt::equation("f.ddx", [] {
@@ -543,11 +615,10 @@ const auto eq = rt::equation("f.ddx", [] {
 });
 ```
 
-The first run builds, sweeps and writes the file. A later one rebuilds the arena
-— interning, which is cheap — finds the file still describes it, and takes the
-sweeps off disk. Editing the model changes the key, so the file is rebuilt and
-overwritten rather than trusted. It never refuses: an absent file is the first
-run and a stale one is a rebuild, and `loaded()` says which happened.
+The first run builds and writes the file. A later one finds the file still
+describes the model and takes the work off disk. Editing the model rebuilds and
+overwrites rather than trusting a stale file, and it never refuses: an absent
+file is the first run, a stale one is a rebuild. `loaded()` says which happened.
 
 Two questions about a file, and they are different:
 
@@ -556,45 +627,35 @@ rt::verify("f.ddx");     // result<void> — can this build read it at all?
 eq.verify("f.ddx");      // result<void> — ...and is it *this* equation?
 ```
 
-A file is binary, little-endian, and carries a checksum plus the schema of every
-struct in it, so one written by a different version of ddx is refused rather than
-misread. Nothing in it is trusted before the checksum and the structural
-invariants have passed. What travels is the arena and the sweeps; a lane's
-frozen graph does not, because freezing one is a single linear pass over an
-arena the file already has.
+Files are binary and little-endian, checked before anything in them is used, so
+one written by a different version of ddx is refused rather than misread.
 
-Loading instead of sweeping is about 1.7×. Under `Interpret` — the default —
-that is 1.7× off the whole cost of having an equation. Under a compiling
-backend the sweeps are a few milliseconds against a compile of hundreds or
-thousands — so there the saving worth having is the machine code, which the
-file also carries:
+Compiled code travels in the file too:
 
 ```cpp
 eq.options({.backend = rt::Backend::Compile});
 eq.wait_for_kernel();
-eq.save("f.ddx");                 // the kernel travels with the graph
+eq.save("f.ddx");                 // the kernel goes with it
 
 const auto warm = *rt::load("f.ddx");
 warm.uses_kernel();               // true, with nothing having compiled
 ```
 
-Measured at 64, 128 and 256 variables: 38/79/179 ms to build and compile, against
-0.40/0.63/1.12 ms to load — 96× to 160×, with emission, the pass pipeline and
-codegen not run at all. `retain_object` is on by default, so the bytes are
-there when a save comes; the price is that every kernel holds its object alive,
-and a caller that never saves turns it off — the equation then saves its graph
-and no code.
+Measured at 64, 128 and 256 variables: 38/79/179 ms to build and compile against
+0.40/0.63/1.12 ms to load. `retain_object` is on by default so the code is there
+when a save comes; a caller that never saves turns it off, and the file then
+carries the equation and no code.
 
-A stored kernel is run only where the graph, the host and the options it was
-emitted under all still agree. Anything else compiles instead — a mismatch is
-answered by compiling, never by running the wrong code.
+Stored code runs only where the equation, the host and the options it was built
+under all still agree. Anything else compiles instead — a mismatch is answered
+by compiling, never by running the wrong code.
 
 | Member | Answers |
 |---|---|
 | `save(path)` | `result<void>` — write this equation |
 | `verify(path)` | `result<void>` — does `path` hold *this* equation? |
-| `Equation::load(path)` | `result<Equation>` — read one, sweeping nothing |
-| `loaded()` | whether this equation came off disk rather than being swept |
+| `Equation::load(path)` | `result<Equation>` — read one |
+| `loaded()` | whether this equation came off disk |
 | `rt::verify<T>(path)` | `result<void>` — is `path` readable by this build? |
 
 ---
@@ -618,12 +679,13 @@ thread-safe except `options()`.
 | `jacobian(xs, f, g, n)` | `result<void>` |
 | `hessian(xs, f, g, h, n)` | `result<void>`, one output only |
 | `value_columns()`, `jacobian_columns()`, `hessian_columns()` | `std::optional<std::size_t>` — what sizes the batch buffers |
-| `hessian_colors()` | `std::optional<std::size_t>` — colours in the Hessian's compression |
-| `options(opts)`, `options()` | set or read the JIT options; setting returns `*this` |
-| `uses_kernel()` | whether a batch call goes through compiled code |
+| `hessian_colors()` | `std::optional<std::size_t>` — groups in the Hessian's compression |
+| `options(opts)`, `options()` | set or read the compile options; setting returns `*this` |
+| `uses_kernel()`, `kernel_level()` | whether a batch call runs compiled code, and at which level |
+| `warming()` | under `Adapt`, points seen against the next threshold |
 | `wait_for_kernel()` | block until a compile in flight has landed |
 | `save(path)`, `verify(path)` | write this equation; ask whether a file holds it |
-| `load(path)`, `loaded()` | read one, sweeping nothing; whether this one was read |
+| `load(path)`, `loaded()` | read one; whether this one was read |
 
 ---
 
@@ -655,9 +717,17 @@ def f():
     return ddx.exp(x) * ddx.sin(y)
 ```
 
+Or a string, or a list of strings for a system, in the same grammar the
+[C++ side](#written-down-instead) reads:
+
+```python
+g   = ddx.equation("exp(x) * sin(y)")
+sys = ddx.equation(["x*x + y*y - 4", "x*y - 1"])
+```
+
 Symbols are named inside the model with `ddx.var(name)`, and they order
-alphabetically as they do in C++. `f.symbols` lists them, `f.arity` counts
-them, `f.outputs` counts the model's outputs. Arithmetic operators work on
+alphabetically as they do in C++. `f.symbols` lists them, `f.arity` counts them,
+`f.outputs` counts the model's outputs. Arithmetic operators work on
 `Expression`, and a bare number mixes in; the free functions are the same set
 the C++ side has.
 
@@ -693,8 +763,8 @@ hessian.shape                               # (2, 2)
 Shapes follow the point: a single point gives a scalar `f`, an `(n,)` gradient
 and an `(n, n)` Hessian; a batch of `p` appends that axis, giving `(p,)`,
 `(n, p)` and `(n, n, p)`. A system prepends its output axis. Unlike the C++
-batch calls, the Hessian arrives **dense** — the colour compression is undone
-on the way out, so nothing here needs `hessian_columns`.
+batch calls, the Hessian arrives **dense** — the compression is undone on the
+way out, so nothing here needs `hessian_columns`.
 
 ### Errors
 
@@ -713,7 +783,7 @@ except ddx.Error as e:
 is the spelling. The codes are the ones in the [table above](#errors); the
 exception's own message is the text.
 
-### The JIT
+### Compiling
 
 `Options` is a frozen pydantic model of the same fields as `jit::Options`,
 validated on the way in. `eq.options` reads and assigns it; `eq.compile()` sets
@@ -730,12 +800,14 @@ f.options = ddx.Options(backend=ddx.Backend.INTERPRET)   # discards the kernel
 set first. Assigning `options` does not: calls interpret until the kernel lands
 and switch over when it does, as in C++.
 
-Equations save and load here too, over the same file format and the same
-serialiser — a file written by C++ loads in Python and the other way round:
+### Saving and loading
+
+Equations save and load here too, over the same file format — a file written by
+C++ loads in Python and the other way round:
 
 ```python
 eq.save("f.ddx")
-same = ddx.load("f.ddx")          # no model runs, nothing is swept
+same = ddx.load("f.ddx")          # no model runs, nothing is rebuilt
 
 @ddx.equation                      # or pair a model with a file, as a cache
 def model() -> ddx.Expression:
@@ -745,6 +817,8 @@ def model() -> ddx.Expression:
 cached = ddx.equation(model, cache="f.ddx")
 cached.loaded                      # False the first run, True after
 ```
+
+A text equation caches the same way: `ddx.equation("exp(x) * y", cache="f.ddx")`.
 
 `save`, `load` and `verify` raise `ddx.Error` rather than answering `False`:
 unreadable, unloadable and "a different equation" are three different `errc`
@@ -760,9 +834,9 @@ values, and only the code says which.
 | `hessian(x)` | `(f, J, H)`, dense |
 | `options` | property — read or assign an `Options` |
 | `compile(**fields)` | set `Options`, block for the kernel, return self |
-| `uses_kernel`, `wait_for_kernel()` | whether a call goes through compiled code, and blocking for it |
-| `hessian_colors` | colours in the Hessian's compression |
-| `to_dot(*, all=False)` | the graph in Graphviz form; `all=True` draws the pruned nodes too |
+| `uses_kernel`, `wait_for_kernel()` | whether a call runs compiled code, and blocking for it |
+| `hessian_colors` | groups in the Hessian's compression |
+| `to_dot(*, all=False)` | the expression in Graphviz form; `all=True` draws the pruned nodes too |
 | `save(path)`, `verify(path)` | write this equation; raise unless `path` holds it |
 | `loaded` | property — whether this equation was read rather than built |
 
@@ -788,9 +862,9 @@ static_assert(g[0] == 5.0);        // ∂f/∂x
 static_assert(g[1] == 2.0);        // ∂f/∂y
 ```
 
-Points come in the same four spellings, and results are `std::array` or a
-tensor rather than `result<std::vector<T>>` — the shapes are in the type, so
-nothing has to be checked at run time.
+Points come in the same four spellings, and results are `std::array` or a tensor
+rather than `result<std::vector<T>>` — the shapes are in the type, so nothing
+has to be checked at run time.
 
 | Member | Answers |
 |---|---|
@@ -807,8 +881,8 @@ H[0, 1];                                          // 1.0
 Equation{x * y}.derivative_tensor<3>(1.0, 2.0);   // rank 3
 ```
 
-`record(named<"n">(3), named<"x">(1.5))` collects keyword arguments into a
-value with the keys in its type, readable with `m.get<"n">()` or `m["x"_s]`.
+`record(named<"n">(3), named<"x">(1.5))` collects keyword arguments into a value
+with the keys in its type, readable with `m.get<"n">()` or `m["x"_s]`.
 
 ## Printing
 
@@ -840,4 +914,5 @@ std::format("{}", eq[idx<1>()]);        // "y_c" — ∂f/∂x
 
 ## License
 
-See [LICENSE.txt](LICENSE.txt). Suggestions and pull requests are welcome.
+[Boost Software License 1.0](LICENSE.txt). Suggestions and pull requests are
+welcome.
