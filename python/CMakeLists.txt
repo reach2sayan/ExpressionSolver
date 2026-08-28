@@ -42,9 +42,11 @@ endif ()
 # --- the package, in the build tree ------------------------------------------
 # The wheel gets this layout from install(); a preset build has to be given it,
 # so that pytest imports the same `ddx` a user would rather than a loose .so.
+# A generator expression, or a multi-config generator appends Release/ and
+# the module lands one directory below the package that imports it.
 set(DDX_PYTHON_PACKAGE "${CMAKE_CURRENT_BINARY_DIR}/ddx")
 set_target_properties(ddx_python PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${DDX_PYTHON_PACKAGE}")
+        LIBRARY_OUTPUT_DIRECTORY "$<1:${DDX_PYTHON_PACKAGE}>")
 
 file(GLOB DDX_PYTHON_SOURCES CONFIGURE_DEPENDS "ddx/*.py" "ddx/py.typed" "ddx/*.pyi")
 add_custom_target(ddx_python_package ALL

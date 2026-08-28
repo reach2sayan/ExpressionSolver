@@ -1,6 +1,12 @@
 # The build every compiler runs.  Called only: the three per-compiler workflows
 # beside this one exist so each gets its own badge, and a badge names a
 # workflow, never a job within one.
+#
+# Two jobs.  `build` is the library as a default configure makes it, no JIT,
+# with the Python module on top, on every OS.  `jit` is the other half --
+# libddx with LLVM inside, the JIT tests, and the module against it -- and
+# runs where the LLVM archives can be had: Linux, from scripts/build_llvm.py,
+# an hour once and then a cache.
 name: Build
 
 on:
@@ -81,6 +87,14 @@ jobs:
         shell: bash
         run: echo "build-dir=${GITHUB_WORKSPACE}/build" >> "$GITHUB_OUTPUT"
 
+      # The extension builds against an interpreter that has pybind11 -- the
+      # same .venv the `python` presets ask for, with what the dev group names.
+      - name: Python environment
+        shell: bash
+        run: |
+          pipx install uv
+          uv sync --group dev --no-install-project
+
       - name: Configure CMake (Linux)
         if: runner.os == 'Linux'
         run: >
@@ -88,6 +102,9 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ inputs.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ inputs.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ inputs.build_type }}
+          -DDDX_BUILD_PYTHON=ON
+          -DPython_ROOT_DIR=${{ github.workspace }}/.venv
+          -DPython_FIND_VIRTUALENV=ONLY
           -S ${{ github.workspace }}
 
       - name: Configure CMake (Windows)
@@ -98,6 +115,9 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ inputs.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ inputs.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ inputs.build_type }}
+          -DDDX_BUILD_PYTHON=ON
+          -DPython_ROOT_DIR="${{ github.workspace }}/.venv"
+          -DPython_FIND_VIRTUALENV=ONLY
           -S "${{ github.workspace }}"
 
       # The Boost subset an installed ddx ships is a checked-in list, and a public
@@ -117,6 +137,63 @@ jobs:
       - name: Build tests
         run: cmake --build "${{ steps.strings.outputs.build-dir }}" --config ${{ inputs.build_type }} --target tests
 
+      # python.pytest is among these: the module is configured on.
       - name: Test
         working-directory: ${{ steps.strings.outputs.build-dir }}
+        run: ctest --build-config ${{ inputs.build_type }} --output-on-failure
+
+  jit:
+    if: startsWith(inputs.os, 'ubuntu')
+    runs-on: ${{ inputs.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install compilers (Ubuntu)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang-20 gcc-14 g++-14
+
+      # Its own key, not the release workflow's: a prefix built here carries
+      # this runner's glibc, which a manylinux wheel must never link.
+      - name: Cache LLVM archives
+        uses: actions/cache@v4
+        with:
+          path: .deps/llvm-20
+          key: llvm-${{ inputs.os }}-x86_64-${{ hashFiles('scripts/build_llvm.py') }}
+
+      - name: LLVM archives
+        run: python3 scripts/build_llvm.py .deps/llvm-20
+
+      # The extension builds against an interpreter that has pybind11 -- the
+      # same .venv the `python` preset asks for, with what the dev group names.
+      - name: Python environment
+        run: |
+          pipx install uv
+          uv sync --group dev --no-install-project
+
+      - name: Configure CMake
+        run: >
+          cmake -B ${{ github.workspace }}/build
+          -DCMAKE_CXX_COMPILER=${{ inputs.cpp_compiler }}
+          -DCMAKE_C_COMPILER=${{ inputs.c_compiler }}
+          -DCMAKE_BUILD_TYPE=${{ inputs.build_type }}
+          -DDDX_BUILD_JIT=ON
+          -DDDX_BUILD_PYTHON=ON
+          -DDDX_BUILD_BENCHMARKS=OFF
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/.deps/llvm-20
+          -DPython_ROOT_DIR=${{ github.workspace }}/.venv
+          -DPython_FIND_VIRTUALENV=ONLY
+          -S ${{ github.workspace }}
+
+      - name: Build
+        run: cmake --build "${{ github.workspace }}/build" --config ${{ inputs.build_type }}
+
+      - name: Build tests
+        run: cmake --build "${{ github.workspace }}/build" --config ${{ inputs.build_type }} --target tests
+
+      # jit.* and python.pytest ride along: the JIT is configured on, so ctest
+      # has them.
+      - name: Test
+        working-directory: ${{ github.workspace }}/build
         run: ctest --build-config ${{ inputs.build_type }} --output-on-failure
