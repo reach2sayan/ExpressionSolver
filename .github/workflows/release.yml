@@ -44,9 +44,13 @@ jobs:
       - uses: actions/checkout@v5
 
       # The script is the key: a change to what it builds is a new prefix.
-      - name: Cache LLVM archives (Linux)
+      # Restore and save separately: before-all builds LLVM inside the
+      # cibuildwheel step, and a wheel failing after it must not cost the
+      # archives -- the save below runs either way.
+      - name: Restore LLVM archives (Linux)
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        id: llvm
+        uses: actions/cache/restore@v4
         with:
           path: .deps/llvm-20
           key: llvm-manylinux_2_28-x86_64-${{ hashFiles('scripts/build_llvm.py') }}
@@ -58,6 +62,16 @@ jobs:
         run: pipx install uv
 
       - uses: pypa/cibuildwheel@v3
+
+      # Only a prefix that reached its LLVMConfig: a key can be written once,
+      # and a partial build saved under it would be restored as if whole.
+      - name: Save LLVM archives (Linux)
+        if: always() && runner.os == 'Linux' && steps.llvm.outputs.cache-hit != 'true'
+            && hashFiles('.deps/llvm-20/lib/cmake/llvm/LLVMConfig.cmake') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .deps/llvm-20
+          key: ${{ steps.llvm.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v5
         with:

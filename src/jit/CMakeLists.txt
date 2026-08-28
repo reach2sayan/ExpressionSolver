@@ -17,11 +17,17 @@ target_include_directories(ddx_jit_objs SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 # ddx_rt's header dependencies, not ddx_rt: these link *into* it.
 target_link_libraries(ddx_jit_objs PRIVATE ddx Boost::headers)
 
-# No -fno-rtti, even against an LLVM built without it: the flag matters only to
-# code deriving from an LLVM polymorphic class, and isa<>/cast<> use LLVM's own
-# RTTI.  Exceptions are off as everywhere -- LLVM is built the same way, and
+# Exceptions are off as everywhere -- LLVM is built the same way, and
 # llvm::Error comes out as jit::error.
 ddx_target_flags(ddx_jit_objs)
+# RTTI as LLVM has it.  compiler.cpp derives from IRCompiler and ObjectCache,
+# and a derived vtable names the base's typeinfo, which an LLVM built without
+# RTTI -- its default, and what build_llvm.py makes -- never emitted.  Nothing
+# here needs it: isa<>/cast<> are LLVM's own.
+if (NOT LLVM_ENABLE_RTTI)
+    target_compile_options(ddx_jit_objs PRIVATE
+            $<IF:$<CXX_COMPILER_ID:MSVC>,/GR-,-fno-rtti>)
+endif ()
 
 # Into libddx; ddx::jit is that library under the name the backend is asked for.
 target_sources(ddx_rt PRIVATE $<TARGET_OBJECTS:ddx_jit_objs>)

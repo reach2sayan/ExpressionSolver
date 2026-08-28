@@ -156,14 +156,26 @@ jobs:
 
       # Its own key, not the release workflow's: a prefix built here carries
       # this runner's glibc, which a manylinux wheel must never link.
-      - name: Cache LLVM archives
-        uses: actions/cache@v4
+      # Restored and saved as two steps rather than one actions/cache: that one
+      # saves when the job ends, and only if it passed, so a ddx build that
+      # fails throws an hour of LLVM away.  Saved here, the archives outlive
+      # whatever the build does with them.
+      - name: Restore LLVM archives
+        id: llvm
+        uses: actions/cache/restore@v4
         with:
           path: .deps/llvm-20
           key: llvm-${{ inputs.os }}-x86_64-${{ hashFiles('scripts/build_llvm.py') }}
 
       - name: LLVM archives
         run: python3 scripts/build_llvm.py .deps/llvm-20
+
+      - name: Save LLVM archives
+        if: steps.llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .deps/llvm-20
+          key: ${{ steps.llvm.outputs.cache-primary-key }}
 
       # The extension builds against an interpreter that has pybind11 -- the
       # same .venv the `python` preset asks for, with what the dev group names.

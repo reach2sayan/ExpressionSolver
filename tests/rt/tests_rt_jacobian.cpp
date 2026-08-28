@@ -72,6 +72,10 @@ void expect_agrees_with_ddx(const E &e, std::array<double, N> pt) {
   }
 }
 
+// A namespace of its own so the runtime tests below can call their variables
+// x, y and z too without hiding these.
+namespace sym {
+
 constexpr auto x = ddx::var<"x">;
 constexpr auto y = ddx::var<"y">;
 constexpr auto z = ddx::var<"z">;
@@ -263,6 +267,7 @@ TEST(RtJacobian, ForwardModeAgreesWithReverse) {
         {1.3, 2.1});
 }
 
+} // namespace sym
 } // namespace
 
 // A banded system, where the pattern is most of the point: residual i touches
