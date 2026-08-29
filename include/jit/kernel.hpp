@@ -74,6 +74,8 @@ struct Options {
   // swept point saves about what a node saves, so the size cancels out.
   std::size_t warm_points = 1uz << 16;
   std::size_t hot_points = 1uz << 20;
+  // With one, a derived `lanes` is the widest width the library serves -- four
+  // doubles for libmvec -- whatever the host's registers hold.
   VecLib veclib = VecLib::None;
   bool contract = default_contract; // Follows DDX_FP_FLAGS
   bool time_passes = false;         // Per-pass timing to stderr

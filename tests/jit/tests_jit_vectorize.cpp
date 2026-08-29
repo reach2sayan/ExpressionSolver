@@ -117,6 +117,24 @@ TEST(JitVectorize, VecLibLibmvecUsesVectorLibm) {
   EXPECT_TRUE(calls_vector_libm(ir, "exp")) << "exp was not vectorised";
 }
 
+// A derived width under the vector library is the widest it serves: LLVM 20's
+// libmvec stops at four doubles, and an AVX-512 host would otherwise emit an
+// eight-wide sin with no library form and get scalar calls back.
+TEST(JitVectorize, VecLibCapsADerivedWidth) {
+  if constexpr (!host_has_libmvec) {
+    GTEST_SKIP() << "libmvec is glibc on x86-64";
+  }
+  ddx::jit::Options on;
+  on.veclib = ddx::jit::VecLib::Libmvec;
+  const auto ir = ir_for([](auto &v) { return sin(v[0]) + v[1]; }, 2, on);
+  EXPECT_FALSE(std::regex_search(ir, std::regex{R"(<(8|16) x double>)"}))
+      << "wider than the library serves";
+  // Stated widths are taken as stated, whatever the library has.
+  on.lanes = 8;
+  const auto wide = ir_for([](auto &v) { return sin(v[0]) + v[1]; }, 2, on);
+  EXPECT_NE(wide.find("<8 x double>"), std::string::npos) << wide;
+}
+
 TEST(JitVectorize, JacobianLoopVectorises) {
   // Wider and sharing subexpressions, and still has to vectorise.
   Builder<> b;

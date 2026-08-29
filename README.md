@@ -790,7 +790,7 @@ if (const auto w = eq.warming()) {
 | `loop_vectorize` | `false` | loop vectorisation, on a loop already emitted `lanes` wide |
 | `warm_points` | `65536` | batch points that buy the first step, under `Adapt` |
 | `hot_points` | `1048576` | further points that buy the top one, under `Adapt` |
-| `veclib` | `None` | vector math library for transcendentals; `Libmvec` trades ~0.5 ULP for ~4 |
+| `veclib` | `None` | vector math library for transcendentals; `Libmvec` trades ~0.5 ULP for ~4, and a derived `lanes` is then the widest it serves (four) |
 | `contract` | follows `DDX_FP_FLAGS` | fold a multiply feeding an add into one rounding |
 | `retain_object` | `true` | keep the compiled object so [`save`](#saving-and-loading) can write it |
 | `cache_dir` | *(empty)* | keep compiled objects here between runs; a second run links instead of compiling |

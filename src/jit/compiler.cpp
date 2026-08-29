@@ -117,6 +117,34 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
   return tlii;
 }
 
+// The widest fixed width the vector library serves a transcendental at: LLVM
+// 20's libmvec table stops at four doubles, so an AVX-512 host's eight-wide
+// intrinsic has no library form and unrolls to scalar calls.
+[[nodiscard]] unsigned library_lanes(const llvm::Triple &triple) {
+  llvm::TargetLibraryInfoImpl tlii(triple);
+  tlii.addVectorizableFunctionsFromVecLib(
+      llvm::TargetLibraryInfoImpl::LIBMVEC_X86, triple);
+  llvm::ElementCount fixed;
+  llvm::ElementCount scalable;
+  tlii.getWidestVF("sin", fixed, scalable);
+  return std::max(1u, static_cast<unsigned>(fixed.getFixedValue()));
+}
+
+// What `lanes == 0` comes to: the host's width, or under a vector library the
+// widest it serves, so a derived width never asks for a call that is not there.
+// A stated width is taken as stated.
+[[nodiscard]] unsigned emitted_lanes(const Options &opt,
+                                     const std::string &triple,
+                                     const bool have_libmvec,
+                                     const unsigned host, const unsigned lib) {
+  if (opt.lanes != 0) {
+    return opt.lanes;
+  }
+  return want_veclib(llvm::Triple{triple}, opt, have_libmvec)
+             ? std::min(host, lib)
+             : host;
+}
+
 // On the module rather than the JIT, so one JIT serves compiles at different
 // levels.
 constexpr const char *kCodegenFlag = "ddx.codegen";
@@ -320,7 +348,8 @@ struct Host {
   llvm::orc::JITTargetMachineBuilder machine;
   std::string triple;
   bool libmvec;
-  unsigned lanes; // What Options::lanes == 0 means here
+  unsigned lanes;        // What Options::lanes == 0 means here
+  unsigned veclib_lanes; // and under a vector library
   Objects &objects;
   std::shared_ptr<void> code;
 };
@@ -351,7 +380,8 @@ private:
         [this, start = Clock::now()] { rep_.emit = Clock::now() - start; }};
     auto ctx = std::make_unique<llvm::LLVMContext>();
     auto m = detail::emit_module(*ctx, g_, name_,
-                                 opt_.lanes != 0 ? opt_.lanes : host_.lanes,
+                                 emitted_lanes(opt_, host_.triple, host_.libmvec,
+                                               host_.lanes, host_.veclib_lanes),
                                  host_.jit.getDataLayout(), host_.triple);
     if (!m) {
       // The emitter has already written the verifier's own diagnosis.
@@ -603,8 +633,9 @@ struct Compiler::Impl {
   // The only shared mutable state: LLJIT is synchronised, but two threads naming
   // a module alike would hand it a duplicate symbol.
   std::atomic<unsigned> counter{0};
-  bool libmvec = false; // Whether the vector forms resolve here
-  unsigned lanes = 1;   // The host's vector width in doubles
+  bool libmvec = false;      // Whether the vector forms resolve here
+  unsigned lanes = 1;        // The host's vector width in doubles
+  unsigned veclib_lanes = 1; // The widest the vector library serves
 
   [[nodiscard]] static std::expected<std::shared_ptr<Impl>, error> bring_up() {
     init_native_target_once();
@@ -619,6 +650,7 @@ struct Compiler::Impl {
     impl->machine = *jtmb;
     impl->triple = jtmb->getTargetTriple().str();
     impl->lanes = host_lanes(*jtmb);
+    impl->veclib_lanes = library_lanes(jtmb->getTargetTriple());
     impl->host = host_identity_of(*jtmb);
 
     // Not setNumCompileThreads: the backend runs on the thread that asked, and
@@ -730,7 +762,8 @@ struct Compiler::Impl {
     const bool caching = !opt.cache_dir.empty();
     const std::uint64_t key =
         caching ? cache_key(rt::digest(g), self->host, opt,
-                            opt.lanes != 0 ? opt.lanes : self->lanes)
+                            emitted_lanes(opt, self->triple, self->libmvec,
+                                          self->lanes, self->veclib_lanes))
                 : 0;
     if (caching) {
       if (const auto entry = read_entry(opt.cache_dir, key)) {
@@ -755,7 +788,8 @@ struct Compiler::Impl {
     effective.retain_object = effective.retain_object || caching;
 
     Compilation work{Host{*self->jit, *self->machine, self->triple,
-                          self->libmvec, self->lanes, self->objects, self},
+                          self->libmvec, self->lanes, self->veclib_lanes,
+                          self->objects, self},
                      g, effective,
                      "ddx_kernel_" + std::to_string(self->counter++), rep};
     auto kernel = work();
@@ -817,7 +851,8 @@ result<std::string> Compiler::render_ir(const rt::Graph<double> &g,
                                         const Options &opt) const {
   CompileReport discard;
   Compilation run{Host{*impl_->jit, *impl_->machine, impl_->triple,
-                       impl_->libmvec, impl_->lanes, impl_->objects, impl_},
+                       impl_->libmvec, impl_->lanes, impl_->veclib_lanes,
+                       impl_->objects, impl_},
                   g, opt, "ddx_kernel_dump", discard};
   return run.prepared().transform([](llvm::orc::ThreadSafeModule m) {
     std::string out;
