@@ -27,10 +27,6 @@ template <typename C, typename A>
 concept ConstOperand =
     CArithmetic<C> || std::same_as<std::remove_cvref_t<C>, dual_value_t<A>>;
 
-// Anything other than Dual<T>: selects the (Dual, scalar) formulas below.
-template <typename C, typename T>
-concept ScalarOperand = !std::same_as<std::remove_cvref_t<C>, Dual<T>>;
-
 // Ref: Clifford, Proc. LMS s1-4 (1873) 381 -- adjoin ε with ε² = 0.
 template <Numeric T> class Dual {
 private:
@@ -42,28 +38,19 @@ public:
   constexpr explicit Dual(T v, T d = T{}) noexcept : val_(v), deriv_(d) {}
   constexpr Dual(CArithmetic auto s) noexcept : val_(T(s)), deriv_(T{}) {}
 
-  // Gated on what the binary operators below take rather than on Numeric: the
-  // body is `*this + o`, so anything looser only moves the refusal here.
-  template <typename B>
-    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
-  constexpr Dual &operator+=(const B &o) noexcept {
-    return *this = *this + o;
+  // Gated on the body itself rather than on Numeric: whatever the binary
+  // operators below refuse is refused at this signature, not inside it.
+#define DDX_DUAL_COMPOUND(OP)                                                  \
+  template <typename B>                                                        \
+    requires requires(Dual &d, const B &o) { d = d OP o; }                     \
+  constexpr Dual &operator OP##=(const B &o) noexcept {                        \
+    return *this = *this OP o;                                                 \
   }
-  template <typename B>
-    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
-  constexpr Dual &operator-=(const B &o) noexcept {
-    return *this = *this - o;
-  }
-  template <typename B>
-    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
-  constexpr Dual &operator*=(const B &o) noexcept {
-    return *this = *this * o;
-  }
-  template <typename B>
-    requires DualCompatible<B, Dual> || ConstOperand<B, Dual>
-  constexpr Dual &operator/=(const B &o) noexcept {
-    return *this = *this / o;
-  }
+  DDX_DUAL_COMPOUND(+)
+  DDX_DUAL_COMPOUND(-)
+  DDX_DUAL_COMPOUND(*)
+  DDX_DUAL_COMPOUND(/)
+#undef DDX_DUAL_COMPOUND
 
   constexpr Dual &operator++() noexcept {
     ++val_;
@@ -127,7 +114,7 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a,
   return Dual<T>{av + bv, ad + bd};
 }
 
-template <Numeric T, ScalarOperand<T> C>
+template <Numeric T, ConstOperand<Dual<T>> C>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a,
                                              const C &s) noexcept {
   const auto &[av, ad] = a;
@@ -140,13 +127,13 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a,
   const auto &[bv, bd] = b;
   return Dual<T>{av - bv, ad - bd};
 }
-template <Numeric T, ScalarOperand<T> C>
+template <Numeric T, ConstOperand<Dual<T>> C>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a,
                                              const C &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av - s, ad};
 }
-template <Numeric T, ScalarOperand<T> C>
+template <Numeric T, ConstOperand<Dual<T>> C>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const C &s,
                                              const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s - a == -(a - s);
@@ -159,7 +146,7 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a,
   const auto &[bv, bd] = b;
   return Dual<T>{av * bv, ad * bv + av * bd};
 }
-template <Numeric T, ScalarOperand<T> C>
+template <Numeric T, ConstOperand<Dual<T>> C>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a,
                                              const C &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
@@ -176,14 +163,14 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a,
   const T q = av * inv; // value = a / b
   return Dual<T>{q, (ad - q * bd) * inv};
 }
-template <Numeric T, ScalarOperand<T> C>
+template <Numeric T, ConstOperand<Dual<T>> C>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a,
                                              const C &s) noexcept {
   const auto &[av, ad] = a; // s is a zero-derivative constant
   const T inv = T{1} / T(s);
   return Dual<T>{av * inv, ad * inv};
 }
-template <Numeric T, ScalarOperand<T> C>
+template <Numeric T, ConstOperand<Dual<T>> C>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s,
                                              const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (wide-scalar-safe)

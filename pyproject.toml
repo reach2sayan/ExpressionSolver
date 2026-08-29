@@ -58,6 +58,10 @@ build-dir = "build/wheel/{wheel_tag}"
 DDX_BUILD_PYTHON = "ON"
 DDX_BUILD_JIT = "ON"
 DDX_BUILD_BENCHMARKS = "OFF"
+# A wheel runs on machines other than the one that built it: the x86 baseline
+# (AVX2), not the runner's CPU.  Kernels are compiled for the host at run time
+# regardless.
+ENABLE_NATIVE_ARCH = "OFF"
 # python/CMakeLists.txt installs the two shared objects into the package itself;
 # the headers and the CMake package are not a wheel's business.
 DDX_INSTALL = "OFF"
@@ -100,7 +104,17 @@ environment = { CMAKE_PREFIX_PATH = "/project/.deps/llvm-20" }
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
 before-all = "brew install llvm@20 zlib zstd ninja"
-environment = { MACOSX_DEPLOYMENT_TARGET = "15.0", CMAKE_PREFIX_PATH = "$(brew --prefix llvm@20):$(brew --prefix zlib):$(brew --prefix zstd)" }
+
+# The keg's clang as well as its archives: AppleClang -- 17 on the macOS 15
+# runner -- is below the C++23 floor.  Its libc++ with it, as Homebrew's
+# caveat says: LLVM 20's headers assume LLVM 20's dylib, and the SDK's is
+# older.  delocate copies that libc++ into the wheel beside libddx.
+[tool.cibuildwheel.macos.environment]
+MACOSX_DEPLOYMENT_TARGET = "15.0"
+CMAKE_PREFIX_PATH = "$(brew --prefix llvm@20):$(brew --prefix zlib):$(brew --prefix zstd)"
+CC = "$(brew --prefix llvm@20)/bin/clang"
+CXX = "$(brew --prefix llvm@20)/bin/clang++"
+LDFLAGS = "-L$(brew --prefix llvm@20)/lib/c++ -L$(brew --prefix llvm@20)/lib/unwind -lunwind -Wl,-rpath,$(brew --prefix llvm@20)/lib/c++"
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]

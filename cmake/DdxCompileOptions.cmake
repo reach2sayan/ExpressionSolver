@@ -44,10 +44,16 @@ if (MSVC)
     # the recorded flags without our /Wall set gets it too.
     list(APPEND DDX_CODEGEN_FLAGS /EHs-c- /D_HAS_EXCEPTIONS=0 /wd4577)
 else ()
-    if (ENABLE_NATIVE_ARCH)
-        set(DDX_CODEGEN_FLAGS -march=native)
-    else ()
-        set(DDX_CODEGEN_FLAGS -march=x86-64-v3)
+    # x86 only: x86-64-v3 is the AVX2 baseline /arch:AVX2 states above.  An
+    # arm64 build takes the compiler's default, which for Apple silicon is
+    # already the M1's set.
+    set(DDX_CODEGEN_FLAGS "")
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+        if (ENABLE_NATIVE_ARCH)
+            set(DDX_CODEGEN_FLAGS -march=native)
+        else ()
+            set(DDX_CODEGEN_FLAGS -march=x86-64-v3)
+        endif ()
     endif ()
     if (DDX_FP_FLAGS)
         list(APPEND DDX_CODEGEN_FLAGS -ffp-contract=fast -fno-math-errno)

@@ -165,7 +165,7 @@ cmake --preset release_jit -DLLVM_DIR=/opt/llvm-20/lib/cmake/llvm
 | `DDX_BUILD_BENCHMARKS` | `ON` | build the benchmark targets |
 | `DDX_SANITIZE` | `off` | `thread`, `address` or `undefined` — instrument the build |
 | `DDX_INSTALL` | on if top-level | generate the install and `find_package` rules |
-| `ENABLE_NATIVE_ARCH` | `ON` | `-march=native`, falling back to `x86-64-v3` |
+| `ENABLE_NATIVE_ARCH` | `ON` | `-march=native`, else `x86-64-v3`; x86 only, arm64 takes the compiler's default |
 | `DDX_FP_FLAGS` | `ON` | `-ffp-contract=fast -fno-math-errno` |
 | `DDX_BOOST_INCLUDEDIR` | *(empty)* | use Boost headers from here instead of fetching |
 
