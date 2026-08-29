@@ -77,6 +77,7 @@ inline constexpr std::size_t op_count = [] {
 namespace detail {
 
 struct OpInfo {
+  std::string_view name; // the factory spelling, and the Python name
   std::string_view label;
   std::uint8_t arity;
 };
@@ -87,21 +88,21 @@ struct OpInfo {
 inline constexpr std::array op_info = [] {
   std::array<OpInfo, op_count> t{};
 #define DDX_RT_ROW(fn, Op, label, ...)                                         \
-  t[static_cast<std::size_t>(OpCode::Op)] = {label, 0};
+  t[static_cast<std::size_t>(OpCode::Op)] = {#fn, label, 0};
   DDX_RT_LEAF_TABLE(DDX_RT_ROW)
 #undef DDX_RT_ROW
 #define DDX_RT_ROW(fn, Op, label, ...)                                         \
-  t[static_cast<std::size_t>(OpCode::Op)] = {label, 1};
+  t[static_cast<std::size_t>(OpCode::Op)] = {#fn, label, 1};
   DDX_RT_UNARY_TABLE(DDX_RT_ROW)
   DDX_UNARY_MATH_TABLE(DDX_RT_ROW)
 #undef DDX_RT_ROW
 #define DDX_RT_ROW(fn, Op, label, ...)                                         \
-  t[static_cast<std::size_t>(OpCode::Op)] = {label, 2};
+  t[static_cast<std::size_t>(OpCode::Op)] = {#fn, label, 2};
   DDX_RT_BINARY_TABLE(DDX_RT_ROW)
   DDX_RT_COMPARE_TABLE(DDX_RT_ROW)
 #undef DDX_RT_ROW
 #define DDX_RT_ROW(fn, Op, label, ...)                                         \
-  t[static_cast<std::size_t>(OpCode::Op)] = {label, 3};
+  t[static_cast<std::size_t>(OpCode::Op)] = {#fn, label, 3};
   DDX_RT_TERNARY_TABLE(DDX_RT_ROW)
 #undef DDX_RT_ROW
   return t;
@@ -122,6 +123,11 @@ static_assert([] {
 [[nodiscard]] constexpr std::string_view label_of(OpCode op) noexcept {
   const auto i = static_cast<std::size_t>(op);
   return i < op_count ? detail::op_info[i].label : "?";
+}
+
+[[nodiscard]] constexpr std::string_view name_of(OpCode op) noexcept {
+  const auto i = static_cast<std::size_t>(op);
+  return i < op_count ? detail::op_info[i].name : "?";
 }
 
 [[nodiscard]] consteval std::optional<OpCode>

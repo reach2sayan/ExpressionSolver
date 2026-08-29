@@ -4,6 +4,7 @@
 #include "symbolic/expressions.hpp"
 #include "symbolic/simplify.hpp"
 #include "symbolic/symbol.hpp"
+#include <functional> // the literal folds
 #include <utility>
 
 namespace ddx::impl {
@@ -31,49 +32,86 @@ constexpr Constant<VT> promote_scalar(S s) noexcept {
       ConstantEmbedder<VT>::embed(static_cast<scalar_base_t<VT>>(s))};
 }
 
-// Each arithmetic operator in its three shapes: expression OP expression with
-// the folding ladder, and the two scalar-promoted forms.  Only the node branch
-// differs, so that is the macro argument.  A T-valued template argument exists
-// only for structural T, so a dual scalar puts back only 0 and 1.
-#define DDX_EXPR_BINOP(OP, ...)                                                \
-  template <CExpression LHS, CExpression RHS>                                  \
-    requires CompatibleValueTypes<LHS, RHS>                                    \
-  constexpr auto operator OP(const LHS &a, const RHS &b) noexcept {            \
-    using value_type = typename LHS::value_type;                               \
-    if constexpr (CLit<LHS> && CLit<RHS>) {                                    \
-      constexpr auto folded =                                                  \
-          std::remove_cvref_t<LHS>::value OP std::remove_cvref_t<RHS>::value;  \
-      if constexpr (CArithmetic<value_type>) {                                 \
-        return Lit<value_type, static_cast<value_type>(folded)>{};             \
-      } else if constexpr (folded == value_type(0)) {                          \
-        return Lit<value_type, 0>{};                                           \
-      } else if constexpr (folded == value_type(1)) {                          \
-        return Lit<value_type, 1>{};                                           \
-      } else {                                                                 \
-        return Constant<value_type>{folded};                                   \
-      }                                                                        \
-    } else if constexpr (CConstant<LHS> && CConstant<RHS>) {                   \
-      return Constant<value_type>{a.get() OP b.get()};                         \
-    } else {                                                                   \
-      __VA_ARGS__                                                              \
-    }                                                                          \
-  }                                                                            \
-  template <CArithmetic S, CExpression RHS>                                    \
-  constexpr auto operator OP(S s, const RHS &b) noexcept {                     \
-    return promote_scalar<typename RHS::value_type>(s) OP b;                   \
-  }                                                                            \
-  template <CExpression LHS, CArithmetic S>                                    \
-  constexpr auto operator OP(const LHS &a, S s) noexcept {                     \
-    return a OP promote_scalar<typename LHS::value_type>(s);                   \
-  }
+// The three spellings each arithmetic operator serves: two expressions of
+// compatible value type, or an expression and a bare scalar on either side.
+template <typename A, typename B>
+concept CBinaryOperands =
+    (CExpression<A> && CExpression<B> && CompatibleValueTypes<A, B>) ||
+    (CExpression<A> && CArithmetic<B>) || (CArithmetic<A> && CExpression<B>);
 
-DDX_EXPR_BINOP(+, return detail::simplify_node<SumOp<value_type>>(a, b);)
-DDX_EXPR_BINOP(*, return detail::simplify_node<MultiplyOp<value_type>>(a, b);)
-DDX_EXPR_BINOP(/, return detail::simplify_node<DivideOp<value_type>>(a, b);)
+namespace detail {
+
+// What every arithmetic operator does before it builds a node: a bare scalar
+// is promoted, two literals fold to a literal, two constants to a constant;
+// anything else is what `build` makes.  A T-valued template argument exists
+// only for structural T, so a dual scalar puts back only 0 and 1.  Fold is a
+// type so that the literal fold is a constant expression.
+template <typename Fold, typename A, typename B>
+  requires CBinaryOperands<A, B>
+constexpr auto arithmetic(const A &a, const B &b, auto build) noexcept {
+  if constexpr (CArithmetic<A>) {
+    return arithmetic<Fold>(promote_scalar<typename B::value_type>(a), b,
+                            build);
+  } else if constexpr (CArithmetic<B>) {
+    return arithmetic<Fold>(a, promote_scalar<typename A::value_type>(b),
+                            build);
+  } else {
+    using value_type = typename A::value_type;
+    if constexpr (CLit<A> && CLit<B>) {
+      constexpr auto folded = Fold{}(A::value, B::value);
+      if constexpr (CArithmetic<value_type>) {
+        return Lit<value_type, static_cast<value_type>(folded)>{};
+      } else if constexpr (folded == value_type(0)) {
+        return Lit<value_type, 0>{};
+      } else if constexpr (folded == value_type(1)) {
+        return Lit<value_type, 1>{};
+      } else {
+        return Constant<value_type>{folded};
+      }
+    } else if constexpr (CConstant<A> && CConstant<B>) {
+      return Constant<value_type>{Fold{}(a.get(), b.get())};
+    } else {
+      return build(a, b);
+    }
+  }
+}
+
+} // namespace detail
+
+template <typename A, typename B>
+  requires CBinaryOperands<A, B>
+constexpr auto operator+(const A &a, const B &b) noexcept {
+  return detail::arithmetic<std::plus<>>(
+      a, b, []<CExpression L>(const L &l, const CExpression auto &r) {
+        return detail::simplify_node<SumOp<typename L::value_type>>(l, r);
+      });
+}
+template <typename A, typename B>
+  requires CBinaryOperands<A, B>
+constexpr auto operator*(const A &a, const B &b) noexcept {
+  return detail::arithmetic<std::multiplies<>>(
+      a, b, []<CExpression L>(const L &l, const CExpression auto &r) {
+        return detail::simplify_node<MultiplyOp<typename L::value_type>>(l, r);
+      });
+}
+template <typename A, typename B>
+  requires CBinaryOperands<A, B>
+constexpr auto operator/(const A &a, const B &b) noexcept {
+  return detail::arithmetic<std::divides<>>(
+      a, b, []<CExpression L>(const L &l, const CExpression auto &r) {
+        return detail::simplify_node<DivideOp<typename L::value_type>>(l, r);
+      });
+}
 // a - b is a + (-b): one adjoint rule instead of two, and both operators get to
 // apply their folding rules.
-DDX_EXPR_BINOP(-, return detail::simplify_node<SumOp<value_type>>(a, -b);)
-#undef DDX_EXPR_BINOP
+template <typename A, typename B>
+  requires CBinaryOperands<A, B>
+constexpr auto operator-(const A &a, const B &b) noexcept {
+  return detail::arithmetic<std::minus<>>(
+      a, b, []<CExpression L>(const L &l, const CExpression auto &r) {
+        return detail::simplify_node<SumOp<typename L::value_type>>(l, -r);
+      });
+}
 
 template <CExpression Expr> constexpr auto operator-(const Expr &a) noexcept {
   using value_type = typename Expr::value_type;

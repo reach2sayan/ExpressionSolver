@@ -71,29 +71,26 @@ public:
 private:
   // The arithmetic surface below is the only thing that puts an arena back on a
   // new handle, so the two halves of a handle are reachable there and nowhere
-  // else.
-#define DDX_PY_UNFRIEND(fn, Op, label, ...)                                    \
-  friend PyExpression fn(const PyExpression &);
-  DDX_UNARY_MATH_TABLE(DDX_PY_UNFRIEND)
-  DDX_RT_UNARY_TABLE(DDX_PY_UNFRIEND)
-#undef DDX_PY_UNFRIEND
-#define DDX_PY_BINFRIEND(fn, Op, label, ...)                                   \
-  friend PyExpression fn(const PyExpression &, const PyExpression &);
-  DDX_RT_BINARY_TABLE(DDX_PY_BINFRIEND)
-  DDX_RT_COMPARE_TABLE(DDX_PY_BINFRIEND)
-#define DDX_PY_CMPFRIEND(op)                                                   \
-  friend PyExpression operator op(const PyExpression &, const PyExpression &);
-  DDX_PY_CMPFRIEND(<)
-  DDX_PY_CMPFRIEND(<=)
-  DDX_PY_CMPFRIEND(>)
-  DDX_PY_CMPFRIEND(>=)
-  DDX_PY_CMPFRIEND(==)
-  DDX_PY_CMPFRIEND(!=)
-#undef DDX_PY_CMPFRIEND
+  // else.  Keyed by opcode rather than by name: the module registers every row
+  // of the opcode table through these, so there is no friend per function.
+  // Whichever operand names a graph, mirroring RTExpression::form: a pending
+  // literal folds against the other rather than materialising into it.
+  friend PyExpression unary(rt::OpCode op, const PyExpression &u) {
+    return {Base::form(op, u.expression_), u.arena_};
+  }
+  friend PyExpression binary(rt::OpCode op, const PyExpression &l,
+                             const PyExpression &r) {
+    return {Base::form(op, l.expression_, r.expression_),
+            l.arena_ ? l.arena_ : r.arena_};
+  }
+  // The base's own composition of two handles, with the arena put back.
+  friend PyExpression combine(const PyExpression &l, const PyExpression &r,
+                              auto &&fn) {
+    return {fn(l.expression_, r.expression_), l.arena_ ? l.arena_ : r.arena_};
+  }
   // The one ternary.
   friend PyExpression select(const PyExpression &, const PyExpression &,
                              const PyExpression &);
-#undef DDX_PY_BINFRIEND
 
   [[nodiscard]] constexpr const Base &base() const noexcept {
     return expression_;
@@ -106,40 +103,33 @@ private:
   Arena arena_;
 };
 
-// The arithmetic surface, off the same three tables the library builds its own
-// from -- so an opcode added there reaches Python without this file changing.
-// Each body calls the hidden friend on the member and puts the arena back on.
-#define DDX_PY_UNFN(fn, Op, label, ...)                                        \
-  [[nodiscard]] inline PyExpression fn(const PyExpression &u) {                \
-    return {fn(u.base()), u.arena()};                                          \
-  }
-DDX_UNARY_MATH_TABLE(DDX_PY_UNFN)
-DDX_RT_UNARY_TABLE(DDX_PY_UNFN)
-#undef DDX_PY_UNFN
-
-// Whichever operand names a graph, mirroring RTExpression::form: a pending
-// literal folds against the other rather than materialising into it.
-#define DDX_PY_BINFN(fn, Op, label, ...)                                       \
-  [[nodiscard]] inline PyExpression fn(const PyExpression &l,                  \
-                                       const PyExpression &r) {                \
-    return {fn(l.base(), r.base()), l.arena() ? l.arena() : r.arena()};        \
-  }
-DDX_RT_BINARY_TABLE(DDX_PY_BINFN)
-DDX_RT_COMPARE_TABLE(DDX_PY_BINFN)
-
-// The comparisons answer an expression, as the base's do.
-#define DDX_PY_CMPFN(op)                                                       \
-  [[nodiscard]] inline PyExpression operator op(const PyExpression &l,         \
-                                                const PyExpression &r) {       \
-    return {l.base() op r.base(), l.arena() ? l.arena() : r.arena()};          \
-  }
-DDX_PY_CMPFN(<)
-DDX_PY_CMPFN(<=)
-DDX_PY_CMPFN(>)
-DDX_PY_CMPFN(>=)
-DDX_PY_CMPFN(==)
-DDX_PY_CMPFN(!=)
-#undef DDX_PY_CMPFN
+// The comparisons answer an expression, as the base's do.  Only `<` and `<=`
+// are nodes; the rest are those two read the other way round, which the base
+// already spells with NaN in mind, so each is one composition.
+[[nodiscard]] inline PyExpression operator<(const PyExpression &l,
+                                            const PyExpression &r) {
+  return combine(l, r, [](const auto &a, const auto &b) { return a < b; });
+}
+[[nodiscard]] inline PyExpression operator<=(const PyExpression &l,
+                                            const PyExpression &r) {
+  return combine(l, r, [](const auto &a, const auto &b) { return a <= b; });
+}
+[[nodiscard]] inline PyExpression operator>(const PyExpression &l,
+                                            const PyExpression &r) {
+  return combine(l, r, [](const auto &a, const auto &b) { return a > b; });
+}
+[[nodiscard]] inline PyExpression operator>=(const PyExpression &l,
+                                            const PyExpression &r) {
+  return combine(l, r, [](const auto &a, const auto &b) { return a >= b; });
+}
+[[nodiscard]] inline PyExpression operator==(const PyExpression &l,
+                                            const PyExpression &r) {
+  return combine(l, r, [](const auto &a, const auto &b) { return a == b; });
+}
+[[nodiscard]] inline PyExpression operator!=(const PyExpression &l,
+                                            const PyExpression &r) {
+  return combine(l, r, [](const auto &a, const auto &b) { return a != b; });
+}
 
 // The ternary: the arena is whichever operand names one, as above.
 [[nodiscard]] inline PyExpression select(const PyExpression &c,
@@ -150,22 +140,21 @@ DDX_PY_CMPFN(!=)
                                  : f.arena();
   return {select(c.base(), t.base(), f.base()), arena};
 }
-#undef DDX_PY_BINFN
 
 [[nodiscard]] inline PyExpression operator+(const PyExpression &l,
                                             const PyExpression &r) {
-  return add(l, r);
+  return binary(rt::OpCode::Add, l, r);
 }
 [[nodiscard]] inline PyExpression operator*(const PyExpression &l,
                                             const PyExpression &r) {
-  return mul(l, r);
+  return binary(rt::OpCode::Mul, l, r);
 }
 [[nodiscard]] inline PyExpression operator/(const PyExpression &l,
                                             const PyExpression &r) {
-  return div(l, r);
+  return binary(rt::OpCode::Div, l, r);
 }
 [[nodiscard]] inline PyExpression operator-(const PyExpression &u) {
-  return neg(u);
+  return unary(rt::OpCode::Neg, u);
 }
 [[nodiscard]] inline PyExpression operator-(const PyExpression &l,
                                             const PyExpression &r) {

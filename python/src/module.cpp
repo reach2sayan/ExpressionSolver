@@ -217,44 +217,53 @@ PYBIND11_MODULE(_ddx, m) {
   // but only a real overload puts `float` in the signature -- and the signature
   // is what reaches the generated stubs, so without it a type checker rejects
   // `x * 2.0` while the interpreter accepts it.
-#define DDX_PY_BINOP(name, body)                                               \
-  def(                                                                         \
-      name, [](const PyExpression &l, const PyExpression &r) { return body; }, \
-      pyb::is_operator())                                                      \
-      .def(                                                                    \
-          name,                                                                \
-          [](const PyExpression &l, double v) {                                \
-            const PyExpression r{v};                                           \
-            return body;                                                       \
-          },                                                                   \
-          pyb::is_operator())
-
-  pyb::class_<PyExpression>(m, "Expression")
-      .def(pyb::init<double>(), pyb::arg("value"))
-      .def("__repr__", &PyExpression::repr)
-      .DDX_PY_BINOP("__add__", l + r)
-      .DDX_PY_BINOP("__radd__", r + l)
-      .DDX_PY_BINOP("__sub__", l - r)
-      .DDX_PY_BINOP("__rsub__", r - l)
-      .DDX_PY_BINOP("__mul__", l * r)
-      .DDX_PY_BINOP("__rmul__", r * l)
-      .DDX_PY_BINOP("__truediv__", l / r)
-      .DDX_PY_BINOP("__rtruediv__", r / l)
-      .DDX_PY_BINOP("__pow__", ddx::py::pow(l, r))
-      .DDX_PY_BINOP("__rpow__", ddx::py::pow(r, l))
-      // `1.0 < x` reaches __gt__ by Python's own reflection.  __ne__ is
-      // spelled out: Python would otherwise derive it as `not (a == b)`.
-      .DDX_PY_BINOP("__lt__", l < r)
-      .DDX_PY_BINOP("__le__", l <= r)
-      .DDX_PY_BINOP("__gt__", l > r)
-      .DDX_PY_BINOP("__ge__", l >= r)
-      .DDX_PY_BINOP("__eq__", l == r)
-      .DDX_PY_BINOP("__ne__", l != r)
+  pyb::class_<PyExpression> expression(m, "Expression");
+  const auto binop = [&expression](const char *name, auto fn) {
+    expression
+        .def(
+            name,
+            [fn](const PyExpression &l, const PyExpression &r) {
+              return fn(l, r);
+            },
+            pyb::is_operator())
+        .def(
+            name,
+            [fn](const PyExpression &l, double v) {
+              return fn(l, PyExpression{v});
+            },
+            pyb::is_operator());
+  };
+  expression.def(pyb::init<double>(), pyb::arg("value"))
+      .def("__repr__", &PyExpression::repr);
+  binop("__add__", [](const auto &l, const auto &r) { return l + r; });
+  binop("__radd__", [](const auto &l, const auto &r) { return r + l; });
+  binop("__sub__", [](const auto &l, const auto &r) { return l - r; });
+  binop("__rsub__", [](const auto &l, const auto &r) { return r - l; });
+  binop("__mul__", [](const auto &l, const auto &r) { return l * r; });
+  binop("__rmul__", [](const auto &l, const auto &r) { return r * l; });
+  binop("__truediv__", [](const auto &l, const auto &r) { return l / r; });
+  binop("__rtruediv__", [](const auto &l, const auto &r) { return r / l; });
+  binop("__pow__", [](const auto &l, const auto &r) {
+    return binary(rt::OpCode::Pow, l, r);
+  });
+  binop("__rpow__", [](const auto &l, const auto &r) {
+    return binary(rt::OpCode::Pow, r, l);
+  });
+  // `1.0 < x` reaches __gt__ by Python's own reflection.  __ne__ is
+  // spelled out: Python would otherwise derive it as `not (a == b)`.
+  binop("__lt__", [](const auto &l, const auto &r) { return l < r; });
+  binop("__le__", [](const auto &l, const auto &r) { return l <= r; });
+  binop("__gt__", [](const auto &l, const auto &r) { return l > r; });
+  binop("__ge__", [](const auto &l, const auto &r) { return l >= r; });
+  binop("__eq__", [](const auto &l, const auto &r) { return l == r; });
+  binop("__ne__", [](const auto &l, const auto &r) { return l != r; });
+  expression
       .def(
           "__neg__", [](const PyExpression &u) { return -u; },
           pyb::is_operator())
       .def(
-          "__abs__", [](const PyExpression &u) { return ddx::py::abs(u); },
+          "__abs__",
+          [](const PyExpression &u) { return unary(rt::OpCode::Abs, u); },
           pyb::is_operator())
       // A comparison is a value with no truth until a point is given, so
       // `if x < 1:` and `a if x < 1 else b` refuse rather than take the first
@@ -263,7 +272,6 @@ PYBIND11_MODULE(_ddx, m) {
         throw pyb::type_error("the truth value of an Expression is ambiguous; "
                               "use select(cond, if_true, if_false)");
       });
-#undef DDX_PY_BINOP
 
   pyb::implicitly_convertible<double, PyExpression>();
 
@@ -291,23 +299,26 @@ PYBIND11_MODULE(_ddx, m) {
   m.def("load", &ddx::py::load_equation, pyb::arg("path"));
   m.def("var", &ddx::py::make_var, pyb::arg("name"));
 
-#define DDX_PY_DEF_UN(fn, Op, label, ...)                                      \
-  m.def(                                                                       \
-      #fn, [](const PyExpression &u) { return ddx::py::fn(u); },               \
-      pyb::arg("x"));
-  DDX_UNARY_MATH_TABLE(DDX_PY_DEF_UN)
-  DDX_RT_UNARY_TABLE(DDX_PY_DEF_UN)
-#undef DDX_PY_DEF_UN
-
-#define DDX_PY_DEF_BIN(fn, Op, label, ...)                                     \
-  m.def(                                                                       \
-      #fn,                                                                     \
-      [](const PyExpression &l, const PyExpression &r) {                       \
-        return ddx::py::fn(l, r);                                              \
-      },                                                                       \
-      pyb::arg("x"), pyb::arg("y"));
-  DDX_RT_BINARY_TABLE(DDX_PY_DEF_BIN)
-#undef DDX_PY_DEF_BIN
+  // Off the opcode table, by each row's factory spelling, so an opcode added
+  // there reaches Python without this file changing.  The comparisons are
+  // operators here, and select is the one ternary, below.
+  for (const auto i : std::views::iota(0uz, rt::op_count)) {
+    const auto op = static_cast<rt::OpCode>(i);
+    const std::string name{rt::name_of(op)};
+    if (rt::arity_of(op) == 1) {
+      m.def(
+          name.c_str(), [op](const PyExpression &u) { return unary(op, u); },
+          pyb::arg("x"));
+    } else if (rt::arity_of(op) == 2 && op != rt::OpCode::Lt &&
+               op != rt::OpCode::Le) {
+      m.def(
+          name.c_str(),
+          [op](const PyExpression &l, const PyExpression &r) {
+            return binary(op, l, r);
+          },
+          pyb::arg("x"), pyb::arg("y"));
+    }
+  }
 
   // Both arms are evaluated and the condition picks one; any nonzero condition
   // is true, as in C.
