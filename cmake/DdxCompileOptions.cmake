@@ -1,46 +1,19 @@
-# The flags our own targets are built with, and the helpers that apply them.
-# Nothing here touches the INTERFACE library: ddx::ddx must not push a flag onto
-# a consumer, so DDX_CODEGEN_FLAGS and DDX_WARNINGS reach a target only through
-# ddx_target_flags().
+# The flags our own targets are built with.  Nothing here touches the INTERFACE
+# libraries: a flag reaches a target only through ddx_target_flags().
 include_guard(GLOBAL)
 
 option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
 option(DDX_FP_FLAGS "Pin FP contraction and drop errno on libm calls" ON)
 
 if (MSVC)
-    # /bigobj: one TU instantiates past the 2^16 COFF section limit.
     set(DDX_CODEGEN_FLAGS /arch:AVX2 /bigobj)
-    # /Wall noise an expression-template library emits by the thousand; C4365
-    # and C5219 are deliberately left on.  C4866 fires on every range-view
-    # subscript, where there is no evaluation order to get wrong, and C4061
-    # wants a case per enumerator even where the switch has a default.
     set(DDX_WARNINGS /Wall /wd4061 /wd4623 /wd4625 /wd4626 /wd5026 /wd5027
                      /wd4710 /wd4711 /wd4868 /wd4820 /wd5045 /wd5246 /wd4514
-                     /wd4324 /wd5266 /wd4866)
-    # C4371 and C4686 report that a layout or a calling convention differs from
-    # what a compiler of the previous decade chose.  Both fire on standard
-    # library templates this tree instantiates -- and, like C4702, from far
-    # enough inside the compiler that /external:W0 no longer knows whose header
-    # it was.  ddx ships no ABI it has to keep, so neither says anything.
-    list(APPEND DDX_WARNINGS /wd4371 /wd4686)
-    # /Wall is for our code and no one else's.  Which code that is by the shape
-    # of the include rather than by CMake's SYSTEM include paths -- those are
-    # /external:I on a command line and something else again in a .vcxproj:
-    # here an angled include is a dependency and a quoted one is ours, and the
-    # CI header check keeps it that way.  Templates stay external too, which is
-    # the default and is what this tree needs -- a warning raised inside a
-    # Boost.Parser template is Boost's whether or not our grammar is what
-    # instantiated it.
+                     /wd4324 /wd5266 /wd4866 /wd4371 /wd4686)
     list(APPEND DDX_WARNINGS /external:anglebrackets /external:W0)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-    # C4577 sits with the flag that causes it, not among the warnings: it
-    # reports `noexcept` under /EHs-c- and fires at /W1, so a consumer applying
-    # the recorded flags without our /Wall set gets it too.
     list(APPEND DDX_CODEGEN_FLAGS /EHs-c- /D_HAS_EXCEPTIONS=0 /wd4577)
 else ()
-    # x86 only: x86-64-v3 is the AVX2 baseline /arch:AVX2 states above.  An
-    # arm64 build takes the compiler's default, which for Apple silicon is
-    # already the M1's set.
     set(DDX_CODEGEN_FLAGS "")
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
         if (ENABLE_NATIVE_ARCH)
@@ -52,14 +25,11 @@ else ()
     if (DDX_FP_FLAGS)
         list(APPEND DDX_CODEGEN_FLAGS -ffp-contract=fast -fno-math-errno)
     endif ()
-    # -funwind-tables with it, matching how LLVM itself is built:
     list(APPEND DDX_CODEGEN_FLAGS -fno-exceptions -funwind-tables)
     set(DDX_WARNINGS -Wall -Wextra -Wpedantic -Wfatal-errors)
 endif ()
 
-# Global rather than through ddx_target_flags(): a sanitizer has to instrument
-# everything, gtest included.  A no-op on MSVC rather than an error, so a preset
-# asking for one still configures on Windows.
+# Global: a sanitizer has to instrument everything, gtest included.
 set(DDX_SANITIZE "off" CACHE STRING "off | thread | address | undefined")
 set_property(CACHE DDX_SANITIZE PROPERTY STRINGS off thread address undefined)
 if (NOT DDX_SANITIZE STREQUAL "off")
@@ -71,22 +41,8 @@ if (NOT DDX_SANITIZE STREQUAL "off")
     endif ()
 endif ()
 
-# Our own targets only -- never the INTERFACE library, which must not push flags
-# onto a consumer.
-#
-#   ddx_target_flags(<target> [EXCEPTIONS])
-#
-# EXCEPTIONS keeps exceptions on for one target, where the rest of the tree
-# compiles without them: pybind11 translates a throw into a Python exception,
-# and Boost.Parser's entry points do not compile without one.  Filtered from the
-# recorded list rather than respelled, so -march and -ffp-contract still reach
-# those targets as they reach every other -- those change arithmetic, and the
-# JIT emits code to match.
-#
-# Warnings are errors, through the property rather than a flag: it spells itself
-# on every compiler, it reaches only what this function is called on -- never a
-# fetched dependency -- and `cmake --compile-no-warning-as-error` is the way past
-# it when a newer compiler invents a warning nobody has fixed yet.
+# ddx_target_flags(<target> [EXCEPTIONS])
+# EXCEPTIONS keeps exceptions on for one target (pybind11, Boost.Parser).
 function(ddx_target_flags target)
     cmake_parse_arguments(PARSE_ARGV 1 arg "EXCEPTIONS" "" "")
     set(flags ${DDX_CODEGEN_FLAGS})
@@ -97,10 +53,7 @@ function(ddx_target_flags target)
     set_property(TARGET ${target} PROPERTY COMPILE_WARNING_AS_ERROR ON)
 endfunction()
 
-# A shared libddx has to be findable at run time.  CMake's build RPATH covers
-# the ELF build tree already; $ORIGIN is what survives the tree being moved, and
-# Windows has no RPATH at all, so there the DLL is copied next to the .exe.
-# Every executable linking ddx::rt needs it.
+# A shared libddx has to be findable at run time by every executable linking it.
 function(ddx_runtime_deps target)
     set_property(TARGET ${target} APPEND PROPERTY BUILD_RPATH "$ORIGIN")
     if (WIN32)

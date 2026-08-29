@@ -1,20 +1,13 @@
-# One target per dependency tier, so the dependency-free suite stays
-# dependency-free: `tests` links nothing but GoogleTest, `tests_rt` adds
-# Boost.Graph, `tests_jit` adds LLVM.
+# One target per dependency tier: `tests` links GoogleTest alone, `tests_rt`
+# adds libddx, `tests_jit` adds the backend.
 ddx_use_googletest()
 include(GoogleTest)
 
-# One TU per anonymous-namespace helper block, so `-j` can build them at once.
-# `tests` is the compile-time suite with forward mode taken out, which is what
-# keeps the core honest about not needing one; the cases that want a dual live
-# in tests/dual/.
 file(GLOB DDX_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 add_executable(tests ${DDX_TEST_SOURCES})
 target_include_directories(tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(tests PRIVATE gtest_main ddx)
 ddx_target_flags(tests)
-# libstdc++ is not instrumented, hence ignore_noninstrumented_modules.  LLVM is
-# not either, but sits inside libddx, which is, so tsan.supp names it by frame.
 set(DDX_TEST_ENV "")
 if (DDX_SANITIZE STREQUAL "thread")
     set(DDX_TEST_ENV PROPERTIES ENVIRONMENT
@@ -31,8 +24,6 @@ target_link_libraries(tests_dual PRIVATE gtest_main ddx)
 ddx_target_flags(tests_dual)
 gtest_discover_tests(tests_dual ${DDX_TEST_ENV})
 
-# The batch tests are written once and must answer the same interpreted or
-# compiled, which one link line gets: ddx::rt is libddx either way.
 file(GLOB DDX_RT_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rt/*.cpp")
 add_executable(tests_rt ${DDX_RT_TEST_SOURCES})
 target_link_libraries(tests_rt PRIVATE gtest_main ddx::rt)
@@ -48,7 +39,7 @@ if (DDX_BUILD_JIT)
     ddx_runtime_deps(tests_jit)
     gtest_discover_tests(tests_jit ${DDX_TEST_ENV})
 
-    # Its own process: the assertion is the exit status, after main returned.
+    # Its own process: the assertion is the exit status.
     add_executable(tests_jit_exit_stress jit/stress/exit_stress.cpp)
     target_link_libraries(tests_jit_exit_stress PRIVATE ddx::jit)
     ddx_target_flags(tests_jit_exit_stress)
@@ -58,8 +49,6 @@ if (DDX_BUILD_JIT)
         set_tests_properties(jit.exit_stress ${DDX_TEST_ENV})
     endif ()
 
-    # What a client loads, held as a test.  Not under a sanitizer, whose runtime
-    # is a dependency the shipped library does not have.
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND DDX_SANITIZE STREQUAL "off")
         add_test(NAME jit.exports
                 COMMAND ${CMAKE_COMMAND} -DNM=${CMAKE_NM} -DREADELF=${CMAKE_READELF}
@@ -69,39 +58,22 @@ if (DDX_BUILD_JIT)
 endif ()
 
 # --- packaging ---------------------------------------------------------------
-# The only consumer of ddx from outside, so the only thing that can catch a
-# broken export set, a config resolving by path, or a component request that
-# succeeds against a build without it.  A nested CMake per case is slow and
-# inherits neither our compiler pick nor our cache, hence everything below.
+# tests/package consumed out of tree, against the build tree and an install prefix.
 option(DDX_TEST_PACKAGE "Build the out-of-tree consumer tests" ${PROJECT_IS_TOP_LEVEL})
-# Not under a sanitizer: these configure and build a consumer out of tree, and
-# an uninstrumented consumer cannot link an instrumented libddx.
 if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
-    # rt and dual are in every build; only the backend is a question.
     set(DDX_PACKAGE_COMPONENTS rt dual)
     if (DDX_BUILD_JIT)
         list(APPEND DDX_PACKAGE_COMPONENTS jit)
     endif ()
-    # A list has to reach the nested cmake as one argument, and an escaped
-    # separator does not survive add_test()'s own expansion -- every component
-    # but the first became a stray positional.  $<SEMICOLON> goes into the
-    # testfile literally and is a list again by the time the cache sees it.
+    # $<SEMICOLON>: an escaped separator does not survive add_test()'s expansion.
     string(JOIN "$<SEMICOLON>" DDX_PACKAGE_COMPONENTS_ARG ${DDX_PACKAGE_COMPONENTS})
 
-    # No Boost is handed down: ddx-config carries its own include path now, so
-    # a consumer needs nothing found.  What the nested project cannot work out
-    # for itself is the compiler and the configuration, having no toolchain file
-    # and no cache -- and install_tree cannot fall back on an inherited
-    # CMAKE_PREFIX_PATH either, since it sets its own.
     set(DDX_PACKAGE_COMMON_OPTIONS
             -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
             -DDDX_CONSUMER_COMPONENTS=${DDX_PACKAGE_COMPONENTS_ARG})
 
-    # A multi-config generator carries the configuration on the command line,
-    # and none of it reaches a nested cmake: left alone the consumer is built
-    # Debug against a Release ddx.  --build-project is the other half -- ctest
-    # names the solution file after the project, and otherwise tries ".slnx".
+    # A multi-config generator's configuration never reaches a nested cmake.
     get_property(DDX_PACKAGE_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     if (DDX_PACKAGE_MULTI_CONFIG)
         set(DDX_PACKAGE_CONFIG -C $<CONFIG>)
@@ -109,8 +81,6 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
     endif ()
     set(DDX_PACKAGE_PROJECT --build-project ddx_package_consumer)
 
-    # 1. The build tree, with nothing installed anywhere.  ddx_DIR is the build
-    #    directory itself, which is what export(EXPORT) makes possible.
     add_test(NAME package.build_tree
             COMMAND ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG}
             --build-and-test "${CMAKE_CURRENT_SOURCE_DIR}/package"
@@ -119,13 +89,7 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
             --build-options -Dddx_DIR=${PROJECT_BINARY_DIR} ${DDX_PACKAGE_COMMON_OPTIONS}
             --test-command ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG} --output-on-failure)
 
-    # 2. An install prefix: the build tree's exported targets point into the
-    #    source and build directories, an installed one's inside the prefix.
-    #    Emptied before it is filled: an install copies into a prefix and takes
-    #    nothing out of one, so a header that is renamed or split leaves its
-    #    former self behind -- and all_headers.cpp globs the prefix, so the
-    #    stale copy is compiled beside the new one and every definition in it
-    #    collides.  A prefix under the build tree is ours to delete.
+    # Emptied first: an install takes nothing out of a prefix, and all_headers globs it.
     set(DDX_PACKAGE_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/package/prefix")
     add_test(NAME package.install_clean
             COMMAND ${CMAKE_COMMAND} -E rm -rf ${DDX_PACKAGE_PREFIX})
@@ -145,8 +109,7 @@ if (DDX_TEST_PACKAGE AND DDX_INSTALL AND DDX_SANITIZE STREQUAL "off")
             --test-command ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG} --output-on-failure)
     set_tests_properties(package.install_tree PROPERTIES FIXTURES_REQUIRED ddx_installed)
 
-    # 3. Asking for a component this build does not have must fail at configure
-    #    time.  Only checkable where something is genuinely absent.
+    # A component this build lacks must fail at configure time.
     if (NOT DDX_BUILD_JIT)
         add_test(NAME package.missing_component
                 COMMAND ${CMAKE_CTEST_COMMAND} ${DDX_PACKAGE_CONFIG}

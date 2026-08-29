@@ -1,13 +1,8 @@
 @PACKAGE_INIT@
 
-# Generated once per tree -- DdxInstall configures this template twice -- so a
-# path substituted in is already the right one and nothing here probes for it.
-# What is shared between the two belongs on the exported targets, which carry
-# the right location for each through BUILD_INTERFACE/INSTALL_INTERFACE.
+# Configured twice: once for the build tree, once for the install prefix.
 include(CMakeFindDependencyMacro)
 
-# Which parts this build has.  LLVM is not found again: libddx carries it, and
-# a consumer's link never names it.
 set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
 
 if (NOT TARGET Boost::headers)
@@ -28,20 +23,16 @@ endif ()
 set(ddx_CODEGEN_FLAGS "@DDX_CODEGEN_FLAGS@")
 set(ddx_FP_CONTRACT @DDX_FP_FLAGS@)
 
-# Without these the check below is a no-op and a component request for a part
-# that was never built succeeds, leaving the consumer to find out at link time.
+# Without these, check_required_components() is a no-op.
 set(ddx_ddx_FOUND TRUE)
 set(ddx_util_FOUND TRUE)
 set(ddx_ops_FOUND TRUE)
 set(ddx_md_FOUND TRUE)
 set(ddx_symbolic_FOUND TRUE)
-# The runtime graph and forward mode are in every build; only the backend is not.
 set(ddx_rt_FOUND TRUE)
 set(ddx_dual_FOUND TRUE)
 set(ddx_jit_FOUND ${DDX_BUILD_JIT})
 
-# check_required_components() reports only that ddx_FOUND went false, which
-# leaves the consumer to guess which component and how to get it.
 set(DDX_jit_OPTION DDX_BUILD_JIT)
 foreach (comp IN LISTS ddx_FIND_COMPONENTS)
     if (NOT ddx_${comp}_FOUND AND DEFINED DDX_${comp}_OPTION)

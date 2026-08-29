@@ -154,6 +154,8 @@ writes `util/version.hpp` from it — `DDX_VERSION_MAJOR`/`MINOR`/`PATCH`,
 `DDX_VERSION` (`100200` for 1.2.0), `DDX_VERSION_STRING`, and the same as
 `ddx::version_major`, `ddx::version_number`, `ddx::version` — the Python module
 carries it as `ddx.__version__`, and a release tag `vX.Y.Z` must name it.
+Every Monday that `main` has moved since the last tag, CI bumps the patch
+number, tags, and publishes the wheels; minor and major bumps are made by hand.
 
 The JIT presets point `LLVM_DIR` at the Debian/Ubuntu `llvm-20` layout;
 override it on the command line, which wins over the preset:

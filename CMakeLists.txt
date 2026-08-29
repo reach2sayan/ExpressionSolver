@@ -18,41 +18,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# This file is the assembly order; the modules under cmake/ are the parts.
-#   DdxToolchainProbes  the floor a compiler must clear
-#   DdxCompileOptions   our own targets' flags     -> ddx_target_flags(), ...
-#   DdxDependencies     every third-party pin      -> ddx_use_boost(), ...
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 include(DdxToolchainProbes)
 include(DdxCompileOptions)
 include(DdxDependencies)
 
 # --- the library ------------------------------------------------------------
-# One interface target per header directory, so what a consumer links and what
-# they can include are one statement.  ddx_util owns the include path and the
-# rest inherit it, which keeps the install interface in one place.
-#
-#   ddx::util      language configuration, errors, fixed strings   (leaf)
-#   ddx::ops       the operation vocabulary and its derivative rules
-#   ddx::md        the multidimensional storage the drivers hand back
-#   ddx::symbolic  the compile-time graph: tree, point, sweeps
-#   ddx::dual      forward mode -- duals, and the Hessian entry points
-#   ddx::ddx       all of the above, which is what most consumers want
-#
-# ops/ and symbolic/ are fully constexpr and stay that way; nothing below may
-# put a run-time dependency in their path.
+# One INTERFACE target per header directory; ddx_util owns the include path.
+# ops/ and symbolic/ are fully constexpr: no run-time dependency in their path.
 ddx_use_boost()
-
-# rt/equation.hpp is a public header that compiles a graph on another thread, so
-# a consumer needs the threading library as much as ddx_rt does.
 find_package(Threads REQUIRED)
 
-# Boost is on the leaf, so every target below inherits it.  ddx fetches Boost
-# at a pinned hash and installs it into its own prefix, so it is as available as
-# the standard library is and there is nothing for a narrower declaration to
-# protect: a header uses the right library rather than the locally permitted one.
-# The version header is written from the project() line above, into the build
-# tree beside the sources' include root, so the number is stated once.
 configure_file(include/util/version.hpp.in
         "${CMAKE_CURRENT_BINARY_DIR}/include/util/version.hpp" @ONLY)
 
@@ -80,7 +56,6 @@ add_library(ddx::symbolic ALIAS ddx_symbolic)
 set_target_properties(ddx_symbolic PROPERTIES EXPORT_NAME symbolic)
 target_link_libraries(ddx_symbolic INTERFACE ddx_ops ddx_md)
 
-# Forward mode
 add_library(ddx_dual INTERFACE)
 add_library(ddx::dual ALIAS ddx_dual)
 set_target_properties(ddx_dual PROPERTIES EXPORT_NAME dual)
@@ -90,8 +65,7 @@ add_library(ddx INTERFACE)
 add_library(ddx::ddx ALIAS ddx)
 target_link_libraries(ddx INTERFACE ddx_util ddx_ops ddx_md ddx_symbolic ddx_dual)
 
-# Each header directory lists its own files onto its own target, for IDE
-# visibility; nothing is compiled from there.
+# Header lists for the IDE; nothing is compiled from there.
 add_subdirectory(include)
 
 # --- libddx -----------------------------------------------------------------
@@ -108,8 +82,7 @@ if (DDX_BUILD_JIT)
         set(DDX_JIT_DEFAULT_CONTRACT 0)
     endif ()
 
-    # No predefined macro carries the optimisation *level*, only __OPTIMIZE__
-    # as a yes/no, so CMake is the one place that knows.  Never 0.
+    # No predefined macro carries the optimisation level, so CMake says.  Never 0.
     string(TOUPPER "${CMAKE_BUILD_TYPE}" DDX_BUILD_TYPE_UPPER)
     if (DDX_BUILD_TYPE_UPPER STREQUAL "DEBUG")
         set(DDX_JIT_DEFAULT_OPT 1)
@@ -129,13 +102,11 @@ if (DDX_INSTALL)
     include(DdxInstall)
 endif ()
 
-# Everything below builds the executables, and only when this is the top-level
-# project.  A consumer that add_subdirectory()s us gets the library and nothing else.
+# A consumer that add_subdirectory()s us gets the library and nothing else.
 if (NOT PROJECT_IS_TOP_LEVEL)
     return ()
 endif ()
 
-# The tour walks every entry point, second derivatives included.
 add_executable(main src/main.cpp)
 target_link_libraries(main PRIVATE ddx)
 ddx_target_flags(main)
@@ -143,8 +114,7 @@ ddx_target_flags(main)
 enable_testing()
 add_subdirectory(tests)
 
-# After enable_testing(), which it registers a pytest run with; below the
-# top-level guard, a consumer add_subdirectory()ing ddx wanting the library.
+# After enable_testing(): python/ registers a pytest run with it.
 option(DDX_BUILD_PYTHON "Build the pybind11 extension module" OFF)
 if (DDX_BUILD_PYTHON)
     ddx_use_pybind11()

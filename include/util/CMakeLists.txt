@@ -1,5 +1,3 @@
-# util/ — language configuration, compile-time strings, and the
-# RAII seed toggle every driver borrows.
 target_sources(ddx_util INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/config.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/fixed_string.hpp>

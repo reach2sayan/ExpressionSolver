@@ -1,6 +1,3 @@
-# Listed on ddx_rt rather than on ddx, graph.hpp and coupling.hpp needing
-# Boost.Graph.  Every header has to be listed, not just those: an IDE resolves
-# include paths from the target naming a header, and one left off gets none.
 target_sources(ddx_rt INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/opcode.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/apply.hpp>

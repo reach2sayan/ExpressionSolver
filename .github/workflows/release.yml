@@ -1,6 +1,8 @@
 # Wheels and an sdist, attached to a GitHub Release.  A tag `vX.Y.Z` builds and
-# publishes; a manual run builds the same artifacts and publishes nothing, which
-# is how a change to the pipeline is tried before a version rides on it.
+# publishes -- pushed by hand, or cut and dispatched on Mondays by
+# weekly-release.yml; a manual run on a branch builds the same artifacts and
+# publishes nothing, which is how a change to the pipeline is tried before a
+# version rides on it.
 #
 # Linux wheels carry the JIT: LLVM is built as archives inside the manylinux
 # container by scripts/build_llvm.py, once, and cached under .deps -- the

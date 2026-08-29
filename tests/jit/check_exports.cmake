@@ -1,6 +1,4 @@
-# What a client of libddx loads, held as a test: no LLVM symbol leaves the
-# library, and nothing past the C runtime is needed to load it.
-#
+# No LLVM symbol leaves libddx, and nothing past the C runtime is needed to load it.
 #   cmake -DNM=<nm> -DREADELF=<readelf> -DLIB=<libddx.so> -P check_exports.cmake
 execute_process(COMMAND "${NM}" -D --defined-only "${LIB}"
         OUTPUT_VARIABLE symbols COMMAND_ERROR_IS_FATAL ANY)

@@ -1,37 +1,23 @@
-# Every third-party dependency, in one place.  LLVM and pybind11 are *found*,
-# being compiled things the machine owns; the rest are fetched against a pinned
-# hash, and declaring one downloads nothing until its macro asks.
+# Every third-party dependency.  LLVM and pybind11 are found; the rest are
+# fetched against a pin, and nothing downloads until its macro asks.
 #
 #   ddx_use_boost()            Boost, header-only, fetched         always
 #   ddx_use_llvm()             LLVM 20, found                      DDX_BUILD_JIT
 #   ddx_use_googletest()       GoogleTest, fetched                 top-level only
 #   ddx_use_googlebenchmark()  Google Benchmark, fetched           DDX_BUILD_BENCHMARKS
 #   ddx_use_pybind11()         pybind11, found in the build env    DDX_BUILD_PYTHON
-#
-# Each is idempotent.  Macros, not functions: FetchContent_MakeAvailable()
-# defines variables the caller's scope is expected to see.
 include_guard(GLOBAL)
 
 include(FetchContent)
 
 # --- versions ---------------------------------------------------------------
-# LLVM is whatever the machine has; the rest are pinned here.
-# A release, and not below 1.17: everything earlier declares a
-# cmake_minimum_required from before 3.10, which CMake 4 reports as a
-# deprecation naming googletest's CMakeLists in the middle of ours.  Renamed
-# from DDX_GOOGLETEST_REF rather than retargeted -- a build tree configured
-# before this remembers the commit it cached, and would go on fetching it.
 set(DDX_GOOGLETEST_VERSION "1.18.0" CACHE STRING "GoogleTest release to fetch")
 set(DDX_GOOGLEBENCHMARK_VERSION "1.9.1" CACHE STRING "Google Benchmark release to fetch")
 
-# Exact, not a floor: the ORC C++ API is not stable across releases and both
-# ends bite.  Below 20, Intrinsic::getOrInsertDeclaration and lookupIntrinsicID
-# do not exist and getHostCPUFeatures() has another signature; above it, 21
-# replaces the `nocapture` attribute codegen.cpp sets.
+# Exact, not a floor: the ORC C++ API is not stable across releases.
 set(DDX_LLVM_VERSION 20)
 
 # --- declarations -----------------------------------------------------------
-# SYSTEM throughout: a fetched dependency's warnings are not ours to fix.
 FetchContent_Declare(googletest
         URL https://github.com/google/googletest/archive/refs/tags/v${DDX_GOOGLETEST_VERSION}.zip
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
@@ -44,34 +30,16 @@ FetchContent_Declare(googlebenchmark
 )
 
 # --- Boost -------------------------------------------------------------------
-# Mp11 for the symbol lists, Graph for the colouring, DynamicBitset for the
-# coupling rows; Describe, Endian and CRC for the saved graph; Parser for the
-# text surface.  All header-only.
-# Boost.Serialization is deliberately absent -- see boost_no_exceptions.cpp.
-#
-# Fetched and pinned, and never found: the machine's Boost is not consulted at
-# all, because a distribution's is a lottery this build loses.  BOOST_ROOT and
-# Boost_DIR are ignored along with the rest.  Nothing here is compiled -- the
-# headers are used where they land -- so SOURCE_SUBDIR names a directory the
-# archive does not have and MakeAvailable stops once it has unpacked.
-#
-# DDX_BOOST_INCLUDEDIR is the one way past that, and it is all or nothing: name
-# a directory holding boost/, and that tree is used with no fetch and no
-# fallback.  A tree without boost/version.hpp is a hard error rather than a
-# quiet download, so a typo in the override cannot be mistaken for the pin.
-#
-# Unpacked beside the source rather than under a build tree: eight presets share
-# this checkout, and each would otherwise keep its own copy of all of Boost.
-set(DDX_BOOST_INCLUDEDIR "" CACHE PATH
-        "A Boost include root to use instead of the pinned fetch; must hold boost/version.hpp")
+# Fetched and pinned, never found; DDX_BOOST_INCLUDEDIR is the only override.
+set(DDX_BOOST_INCLUDEDIR "" CACHE PATH "A Boost include root to use instead of the pinned fetch; must hold boost/version.hpp")
 set(DDX_BOOST_VERSION "1.92.0" CACHE STRING "Boost release to fetch")
 set(DDX_BOOST_SHA256 "ea7b982002cc9dfbe59b0b217b206f470dc75f3de0bb2973d844118934d82411"
         CACHE STRING "SHA256 of the archive DDX_BOOST_VERSION names")
 cmake_path(SET _ddx_deps_default NORMALIZE "${CMAKE_CURRENT_LIST_DIR}/../.deps")
-set(DDX_DEPS_DIR "${_ddx_deps_default}"
-        CACHE PATH "Where fetched Boost is unpacked; shared by every build tree")
+set(DDX_DEPS_DIR "${_ddx_deps_default}" CACHE PATH "Where fetched Boost is unpacked; shared by every build tree")
 unset(_ddx_deps_default)
 
+# SOURCE_SUBDIR names nothing, so MakeAvailable unpacks and stops.
 FetchContent_Declare(boost
         URL https://github.com/boostorg/boost/releases/download/boost-${DDX_BOOST_VERSION}/boost-${DDX_BOOST_VERSION}-b2-nodocs.tar.xz
         URL_HASH SHA256=${DDX_BOOST_SHA256}
@@ -93,12 +61,6 @@ macro(ddx_use_boost)
     endif ()
 endmacro()
 
-# The include root becomes Boost::headers, whichever of the two supplied it.
-# IMPORTED, which is what find_package(Boost CONFIG) would have left: the name
-# every target already links, carrying an include path and belonging to no
-# export set.  DdxInstall copies the libraries ddx names out of this root into
-# ddx's own prefix, so a consumer needs no Boost of their own -- which is the
-# same rule as the build, where the machine's Boost is never consulted.
 macro(_ddx_adopt_boost root)
     if (NOT EXISTS "${root}/boost/version.hpp")
         message(FATAL_ERROR
@@ -108,29 +70,21 @@ macro(_ddx_adopt_boost root)
                 "build against the fetched Boost ${DDX_BOOST_VERSION} instead.")
     endif ()
     add_library(Boost::headers INTERFACE IMPORTED GLOBAL)
-    set_target_properties(Boost::headers PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "${root}")
-    # What ddx-config.cmake reports back when a consumer's Boost differs, read
-    # from the tree rather than assumed: an override is any version at all.
-    file(STRINGS "${root}/boost/version.hpp" _ddx_boost_version_line
-            REGEX "^#define BOOST_LIB_VERSION ")
+    set_target_properties(Boost::headers PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${root}")
+    file(STRINGS "${root}/boost/version.hpp" _ddx_boost_version_line REGEX "^#define BOOST_LIB_VERSION ")
     string(REGEX REPLACE ".*\"([0-9_]+)\".*" "\\1" Boost_VERSION "${_ddx_boost_version_line}")
     string(REPLACE "_" "." Boost_VERSION "${Boost_VERSION}")
     unset(_ddx_boost_version_line)
-    # Where DdxInstall reads the headers it ships.
     set(DDX_BOOST_ROOT "${root}")
     message(STATUS "Boost ${Boost_VERSION} (${root})")
 endmacro()
 
 # --- LLVM -------------------------------------------------------------------
-# Found, then linked as archives: libddx carries LLVM and the zlib and zstd
-# behind it, so a client loads the C runtime and nothing else.  Sets
+# Found, then linked as archives, zlib and zstd included.  Sets
 # LLVM_DEFINITIONS_LIST and DDX_LLVM_LIBS for src/jit.
 macro(ddx_use_llvm)
     if (NOT LLVM_FOUND)
-        # LLVMConfig finds ZLIB itself and FindZLIB honours this -- for a fresh
-        # find_library only, so a libz.so cached by an earlier configure goes
-        # first.
+        # A libz.so cached by an earlier configure would win over ZLIB_USE_STATIC_LIBS.
         foreach (_ddx_zlib_var ZLIB_LIBRARY_RELEASE ZLIB_LIBRARY_DEBUG)
             if (${_ddx_zlib_var} AND NOT ${_ddx_zlib_var} MATCHES "\\${CMAKE_STATIC_LIBRARY_SUFFIX}$")
                 unset(${_ddx_zlib_var} CACHE)
@@ -138,20 +92,17 @@ macro(ddx_use_llvm)
         endforeach ()
         unset(_ddx_zlib_var)
         set(ZLIB_USE_STATIC_LIBS ON)
-        # LLVMConfig also looks for what its other components want.  ddx links
-        # none of these, and FindLibEdit's header check is a C try_compile in
-        # a C++-only project, which is a configure error on a fresh tree.
+        # Components ddx never links; FindLibEdit's C try_compile fails a C++-only tree.
         foreach (_ddx_llvm_extra FFI LibEdit LibXml2 CURL)
             set(CMAKE_DISABLE_FIND_PACKAGE_${_ddx_llvm_extra} ON)
         endforeach ()
-        # LLVMConfig matches only an exact version request, so a find_package
-        # range never does; check the major here.
         find_package(LLVM REQUIRED CONFIG)
         foreach (_ddx_llvm_extra FFI LibEdit LibXml2 CURL)
             unset(CMAKE_DISABLE_FIND_PACKAGE_${_ddx_llvm_extra})
         endforeach ()
         unset(_ddx_llvm_extra)
         unset(ZLIB_USE_STATIC_LIBS)
+        # LLVMConfig matches only an exact version request, so check the major here.
         if (NOT LLVM_VERSION_MAJOR EQUAL DDX_LLVM_VERSION)
             message(FATAL_ERROR
                     "ddx::jit is built against LLVM ${DDX_LLVM_VERSION}; found "
@@ -166,12 +117,8 @@ macro(ddx_use_llvm)
     _ddx_llvm_archives()
 endmacro()
 
-# What libddx swallows has to exist as archives, and a .so slipping in here
-# would surface as a client's missing library rather than a build error.
-# LLVMExports names zstd's shared target on LLVMSupport verbatim and Findzstd
-# has no switch, so that one property is retargeted to the static target
-# Findzstd defines beside it.  Outside the LLVM_FOUND guard: a parent project
-# that found LLVM first still needs this, and it is idempotent.
+# Refuse anything but archives, and retarget LLVMSupport's zstd to the static
+# one Findzstd defines beside it.  Idempotent; runs even when a parent found LLVM.
 function(_ddx_llvm_archives)
     set(missing "")
     if (NOT TARGET LLVMCore)
@@ -201,15 +148,9 @@ function(_ddx_llvm_archives)
 endfunction()
 
 # --- pybind11 ---------------------------------------------------------------
-# Found in the build *environment*, not on the machine: an extension is built
-# against one interpreter's headers and ABI, and scikit-build-core puts the
-# matching wheel's cmake directory on CMAKE_PREFIX_PATH.  Naming a path here
-# would fight that.  3.0 is a hard floor: native_enum.h arrived after 2.13, and
-# the bindings use it to make Backend and VecLib enum.IntEnum.
+# The interpreter's own pybind11, never the machine's.  3.0 for native_enum.
 macro(ddx_use_pybind11)
     if (NOT TARGET pybind11::module)
-        # The interpreter first, so pybind11 is the one *it* has: a preset
-        # build has only a virtualenv, so ask it for its own cmake directory.
         find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
         if (NOT DEFINED pybind11_DIR)
             execute_process(
@@ -248,9 +189,6 @@ macro(ddx_use_googlebenchmark)
     endif ()
 endmacro()
 
-
-# The other half of SYSTEM: the dependency compiling itself.  MSVC only -- the
-# fetched sources build clean under the GCC and Clang warning set.
 function(_ddx_silence_dependency)
     if (NOT MSVC)
         return ()
@@ -262,4 +200,3 @@ function(_ddx_silence_dependency)
         endif ()
     endforeach ()
 endfunction()
-

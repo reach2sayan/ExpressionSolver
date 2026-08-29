@@ -1,14 +1,9 @@
-# The floor the toolchain must clear, asked once.  Compiles nothing of ours;
-# nothing downstream reads a result, because there is no second path to take.
+# The floor the toolchain must clear: <expected> and deducing this.  The macro
+# rather than the syntax -- Clang 18 and 19 compile it but do not advertise it.
 include_guard(GLOBAL)
 
 include(CheckCXXSourceCompiles)
 
-# Both halves of the floor in one probe: <expected>, because every ddx error
-# comes back as a value, and __cpp_explicit_this_parameter, because
-# util/config.hpp writes every accessor as an explicit object parameter.  The
-# macro rather than the syntax -- Clang 18 and 19 compile one but do not
-# advertise it until 20.  MSVC is exempt: the probe's -std= is not its spelling.
 set(CMAKE_REQUIRED_FLAGS "-std=c++23")
 check_cxx_source_compiles(
         "#include <expected>

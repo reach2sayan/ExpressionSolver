@@ -1,7 +1,3 @@
-# symbolic/ — the compile-time expression graph: the tree, the point it is
-# evaluated at, and the symbolic and reverse sweeps that differentiate it.
-# Header-only and fully constexpr, and it stays that way: an expression whose
-# structure is known when the program is compiled should be a type.
 target_sources(ddx_symbolic INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/symbol.hpp>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/expressions.hpp>
