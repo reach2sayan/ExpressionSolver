@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ops/adjoints.hpp"
+#include "ops/algebra.hpp" // RuleOp
 #include "ops/numeric.hpp"
 #include "ops/unary_math.hpp"
 #include "util/fixed_string.hpp"
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <numeric> // std::midpoint
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -37,6 +39,8 @@ struct UnaryOp {
   // False lets fill_cache skip the store for every child.  True is the
   // conservative answer.
   static constexpr bool reads_primals = true;
+  // Which identities the simplifier may apply; none for most ops.
+  static constexpr std::optional<algebra::RuleOp> rule_op = std::nullopt;
   [[nodiscard]] static constexpr auto
   eval(const CExpression auto &lhs) noexcept {
     using VT = typename std::remove_cvref_t<decltype(lhs)>::value_type;
@@ -57,6 +61,7 @@ struct BinaryOp {
   static constexpr int precedence = prec;
 
   static constexpr bool reads_primals = true;
+  static constexpr std::optional<algebra::RuleOp> rule_op = std::nullopt;
   template <CExpression LT, CExpression RT>
   [[nodiscard]] static constexpr auto eval(const LT &lhs,
                                            const RT &rhs) noexcept {
@@ -65,29 +70,47 @@ struct BinaryOp {
   }
 };
 
+namespace detail {
+// The reverse rule, forwarded from adjoints.hpp: the children's cache slots are
+// the pack, so one body serves every arity.
+template <Numeric T, template <Numeric> class Fn> struct Adjoints {
+  template <std::size_t, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    return Fn<T>::adjoints(adj, cache[CB]...);
+  }
+};
+// The chain rule off a unary descriptor's deriv().
+template <Numeric T, template <Numeric> class Fn> struct DerivAdjoint {
+  template <std::size_t, std::size_t... CB>
+  static constexpr std::array<T, sizeof...(CB)>
+  adjoints(T adj, const auto &cache) noexcept {
+    return {adj * Fn<T>::deriv(cache[CB]...)};
+  }
+};
+} // namespace detail
+
 template <Numeric T>
 struct SumOp
-    : BinaryOp<T, std::plus<void>, FixedString{"+"}, Notation::Infix, 10> {
+    : BinaryOp<T, std::plus<void>, FixedString{"+"}, Notation::Infix, 10>,
+      detail::Adjoints<T, detail::SumOpFn> {
   // A sum hands its adjoint to both operands unchanged, and a - b is a + (-b),
   // so this is the biggest source of skippable stores.
   static constexpr bool reads_primals = false;
+  static constexpr std::optional rule_op = algebra::RuleOp::Add;
 
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
     return lhs.derivative() + rhs.derivative();
   }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::SumOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
-  }
 };
 
 template <Numeric T>
-struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"},
-                             Notation::Infix, 20> {
+struct MultiplyOp
+    : BinaryOp<T, std::multiplies<void>, FixedString{"*"}, Notation::Infix, 20>,
+      detail::Adjoints<T, detail::MultiplyOpFn> {
+  static constexpr std::optional rule_op = algebra::RuleOp::Mul;
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -95,29 +118,19 @@ struct MultiplyOp : BinaryOp<T, std::multiplies<void>, FixedString{"*"},
     auto rmul = lhs * rhs.derivative();
     return std::move(lmul) + std::move(rmul);
   }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::MultiplyOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
-  }
 };
 
 template <Numeric T>
 struct NegateOp
-    : UnaryOp<T, std::negate<void>, FixedString{"-"}, Notation::Prefix, 30> {
+    : UnaryOp<T, std::negate<void>, FixedString{"-"}, Notation::Prefix, 30>,
+      detail::Adjoints<T, detail::NegateOpFn> {
   static constexpr bool reads_primals = false;
+  static constexpr std::optional rule_op = algebra::RuleOp::Neg;
 
   // Through operator-, so values.hpp's folding ladder sees it: -0 is a Lit.
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept {
     return -lhs.derivative();
-  }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::NegateOpFn<T>::adjoints(adj, cache[cb[0]]);
   }
 };
 
@@ -131,7 +144,9 @@ inline constexpr bool is_negation_expr_v<Expression<NegateOp<T>, C>> = true;
 
 template <Numeric T>
 struct DivideOp
-    : BinaryOp<T, std::divides<void>, FixedString{"/"}, Notation::Infix, 20> {
+    : BinaryOp<T, std::divides<void>, FixedString{"/"}, Notation::Infix, 20>,
+      detail::Adjoints<T, detail::DivideOpFn> {
+  static constexpr std::optional rule_op = algebra::RuleOp::Div;
   // `a / b` means a * b^-1 -- RIGHT division, which CFieldLike cannot state.
   // Under it dc = da*b^-1 - a*b^-1*db*b^-1, which does not fold into one
   // division by b*b; the familiar quotient rule is that with the factors
@@ -150,12 +165,6 @@ struct DivideOp
       auto db = ((lhs / rhs) * rhs.derivative()) / rhs;
       return std::move(da) - std::move(db);
     }
-  }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::DivideOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
   }
 };
 
@@ -281,16 +290,11 @@ using min_impl = extremum_impl<false>;
   template <Numeric T>                                                         \
     requires(!detail::needs_real_constants_v<detail::NAME##Fn<T>> ||           \
              std::constructible_from<T, double>)                               \
-  struct NAME : UnaryOp<T, detail::NAME##Fn<T>, FixedString{LABEL}> {          \
+  struct NAME : UnaryOp<T, detail::NAME##Fn<T>, FixedString{LABEL}>,           \
+                detail::DerivAdjoint<T, detail::NAME##Fn> {                    \
     [[nodiscard]] static constexpr auto                                        \
     derivative(const CExpression auto &lhs) noexcept {                         \
       return detail::NAME##Fn<T>::deriv(lhs) * lhs.derivative();               \
-    }                                                                          \
-    template <std::size_t Base, std::size_t... CB>                             \
-    static constexpr std::array<T, sizeof...(CB)>                              \
-    adjoints(T adj, const auto &cache) noexcept {                              \
-      constexpr std::size_t cb[]{CB...};                                       \
-      return {adj * detail::NAME##Fn<T>::deriv(cache[cb[0]])};                 \
     }                                                                          \
   };
 
@@ -301,17 +305,12 @@ DDX_UNARY_MATH_TABLE(DDX_UNARY_MATH_OP)
 // finite at the kink, where a u/|u| quotient is 0/0.
 template <Numeric T>
   requires std::totally_ordered<T>
-struct SignOp : UnaryOp<T, detail::sign_impl, FixedString{"sign"}> {
+struct SignOp : UnaryOp<T, detail::sign_impl, FixedString{"sign"}>,
+                detail::Adjoints<T, detail::SignOpFn> {
   static constexpr bool reads_primals = false;
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &) noexcept {
     return Lit<T, 0>{};
-  }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::SignOpFn<T>::adjoints(adj, cache[cb[0]]);
   }
 };
 
@@ -319,60 +318,41 @@ struct SignOp : UnaryOp<T, detail::sign_impl, FixedString{"sign"}> {
 // primal.  totally_ordered because the rule branches on a comparison.
 template <Numeric T>
   requires std::totally_ordered<T>
-struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}> {
+struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}>,
+               detail::Adjoints<T, detail::AbsOpFn> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs) noexcept {
     auto s = MonoExpression<SignOp<T>, std::decay_t<decltype(lhs)>>{lhs};
     return std::move(s) * lhs.derivative();
-  }
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::AbsOpFn<T>::adjoints(adj, cache[cb[0]]);
   }
 };
 
 // pow(a, b) = a^b.  d(a^b) = b' ln(a) a^b + b a^(b-1) a'.
 template <Numeric T>
 struct PowOp
-    : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, Notation::Function> {
+    : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, Notation::Function>,
+      detail::Adjoints<T, detail::PowOpFn> {
+  static constexpr std::optional rule_op = algebra::RuleOp::Pow;
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::PowOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
-  }
 };
 
 // atan2(y, x): lhs is y, rhs is x.  d = (x y' - y x') / (x² + y²).
 template <Numeric T>
-struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"},
-                          Notation::Function> {
+struct Atan2Op
+    : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}, Notation::Function>,
+      detail::Adjoints<T, detail::Atan2OpFn> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::Atan2OpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
-  }
 };
 
 // hypot(x, y) = sqrt(x² + y²).  d = (x x' + y y') / hypot.
 template <Numeric T>
-struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"},
-                          Notation::Function> {
+struct HypotOp
+    : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, Notation::Function>,
+      detail::Adjoints<T, detail::HypotOpFn> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
-  template <std::size_t Base, std::size_t... CB>
-  static constexpr std::array<T, sizeof...(CB)>
-  adjoints(T adj, const auto &cache) noexcept {
-    constexpr std::size_t cb[]{CB...};
-    return detail::HypotOpFn<T>::adjoints(adj, cache[cb[0]], cache[cb[1]]);
-  }
 };
 
 // max(a, b) = (a + b + |a - b|) / 2, so with s = sign(a - b),

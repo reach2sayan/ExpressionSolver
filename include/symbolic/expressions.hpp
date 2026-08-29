@@ -45,6 +45,13 @@ template <FixedString S> [[nodiscard]] consteval auto operator""_s() noexcept {
 
 template <Numeric T, CFixedString auto, bool Frozen = false> class Variable;
 
+template <typename T> inline constexpr bool is_variable_v = false;
+template <Numeric T, CFixedString auto C, bool F>
+inline constexpr bool is_variable_v<Variable<T, C, F>> = true;
+
+template <typename T>
+concept CVariable = is_variable_v<std::remove_cvref_t<T>>;
+
 // Unconstrained, so include/rt can specialise it for a runtime graph; the
 // compile-time definition carries the CExpression constraint itself.
 template <typename... Ts> class Equation;

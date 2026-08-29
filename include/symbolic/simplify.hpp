@@ -17,15 +17,6 @@
 // born folded.  rt/builder.hpp answers the same predicates by node id.
 namespace ddx::impl::detail {
 
-template <typename Op> inline constexpr bool is_sum_op_v = false;
-template <Numeric T> inline constexpr bool is_sum_op_v<SumOp<T>> = true;
-template <typename Op> inline constexpr bool is_mul_op_v = false;
-template <Numeric T> inline constexpr bool is_mul_op_v<MultiplyOp<T>> = true;
-template <typename Op> inline constexpr bool is_div_op_v = false;
-template <Numeric T> inline constexpr bool is_div_op_v<DivideOp<T>> = true;
-template <typename Op> inline constexpr bool is_pow_op_v = false;
-template <Numeric T> inline constexpr bool is_pow_op_v<PowOp<T>> = true;
-
 // Type identity is structural identity only for a stateless tree.  A Lit<T>
 // holds its number at run time and is one type whatever it holds, so x*3.0 and
 // x*5.0 are the same type and must not cancel.
@@ -49,25 +40,6 @@ template <CExpression E> consteval bool lit_equals(int n) {
 template <CExpression E> inline constexpr bool is_zero_v = lit_equals<E>(0);
 template <CExpression E> inline constexpr bool is_one_v = lit_equals<E>(1);
 template <CExpression E> inline constexpr bool is_two_v = lit_equals<E>(2);
-
-// Lit<T, 0> / Lit<T, 1> are the canonical zero and one for every Numeric T.
-// Which RuleOp an operation is, or none for one carrying no identities.
-template <COperation Op>
-[[nodiscard]] consteval std::optional<algebra::RuleOp> rule_op_of() noexcept {
-  if constexpr (is_mul_op_v<Op>) {
-    return algebra::RuleOp::Mul;
-  } else if constexpr (is_sum_op_v<Op>) {
-    return algebra::RuleOp::Add;
-  } else if constexpr (is_div_op_v<Op>) {
-    return algebra::RuleOp::Div;
-  } else if constexpr (is_pow_op_v<Op>) {
-    return algebra::RuleOp::Pow;
-  } else if constexpr (std::same_as<Op, NegateOp<typename Op::value_type>>) {
-    return algebra::RuleOp::Neg;
-  } else {
-    return std::nullopt;
-  }
-}
 
 // The predicates, answered structurally: a stateless tree is an empty type
 // carrying its whole shape, so type identity *is* structural identity -- no
@@ -100,15 +72,15 @@ template <COperation Op, CExpression A, CExpression B>
 // First match wins, as the table is ordered.
 template <COperation Op, CExpression A, CExpression B>
 [[nodiscard]] consteval std::optional<algebra::Rule> match_rule() noexcept {
-  constexpr auto kind = rule_op_of<Op>();
+  constexpr auto kind = Op::rule_op;
   if constexpr (!kind.has_value()) {
     return std::nullopt;
   } else {
     // The enum rather than the optional: read by value it is a constant, so
     // the lambda names it without capturing it.
     constexpr algebra::RuleOp op = *kind;
-    const auto r = std::ranges::find_if(
-        algebra::kRules, [](const algebra::Rule &rule) {
+    const auto r =
+        std::ranges::find_if(algebra::kRules, [](const algebra::Rule &rule) {
           return rule.op == op && !algebra::is_unary(rule) &&
                  (!rule.needs_commutative_multiply ||
                   CCommutativeMultiply<typename Op::value_type>) &&
@@ -147,7 +119,7 @@ template <COperation Op, CExpression A, CExpression B>
 // -(-x) is x; literal cases are folded by the caller in values.hpp.
 template <COperation Op, CExpression A>
 [[nodiscard]] constexpr auto simplify_mono(const A &a) noexcept {
-  constexpr auto kind = rule_op_of<Op>();
+  constexpr auto kind = Op::rule_op;
   constexpr bool negates = kind.has_value() && *kind == algebra::RuleOp::Neg &&
                            is_negation_expr_v<A>;
   if constexpr (negates) {
@@ -161,10 +133,6 @@ template <COperation Op, CExpression A>
 // type.  Sums always reorder, products only under CCommutativeMultiply.  Swaps
 // operands of one node, never reassociates.
 
-template <typename E> inline constexpr bool is_variable_expr_v = false;
-template <Numeric T, CFixedString auto S, bool F>
-inline constexpr bool is_variable_expr_v<Variable<T, S, F>> = true;
-
 // Leaves before branches, symbols by name, branches by size then op; ties
 // compare equal, so the order is stable.
 struct order_key {
@@ -176,7 +144,7 @@ struct order_key {
 };
 
 template <CExpression E> consteval order_key key_of() {
-  if constexpr (is_variable_expr_v<E>) {
+  if constexpr (CVariable<E>) {
     return {1, 1, E::label.view()};
   } else if constexpr (CExpressionNode<E>) {
     return {2, node_count_v<E>, E::op_type::label};
@@ -192,8 +160,8 @@ template <COperation Op, CExpression A>
 
 template <COperation Op, CExpression A, CExpression B>
 [[nodiscard]] constexpr auto ordered_node(const A &a, const B &b) noexcept {
-  if constexpr ((is_sum_op_v<Op> ||
-                 (is_mul_op_v<Op> &&
+  if constexpr ((Op::rule_op == algebra::RuleOp::Add ||
+                 (Op::rule_op == algebra::RuleOp::Mul &&
                   CCommutativeMultiply<typename Op::value_type>)) &&
                 key_of<B>() < key_of<A>()) {
     return simplify_node<Op>(b, a);

@@ -24,20 +24,6 @@
 // nonzero if xi and xj meet under something with curvature.
 namespace ddx::impl {
 
-template <COperation Op> inline constexpr bool is_linear_op_v = false;
-template <Numeric T> inline constexpr bool is_linear_op_v<SumOp<T>> = true;
-template <Numeric T> inline constexpr bool is_linear_op_v<NegateOp<T>> = true;
-
-// a*b: curvature across the operands only.
-template <COperation Op> inline constexpr bool is_product_op_v = false;
-template <Numeric T>
-inline constexpr bool is_product_op_v<MultiplyOp<T>> = true;
-
-// a/b: across the operands, plus within the denominator; linear in the
-// numerator.
-template <COperation Op> inline constexpr bool is_quotient_op_v = false;
-template <Numeric T> inline constexpr bool is_quotient_op_v<DivideOp<T>> = true;
-
 template <std::size_t N> using symbol_set = std::bitset<N>;
 template <std::size_t N> using coupling_rows = std::array<symbol_set<N>, N>;
 
@@ -92,11 +78,14 @@ consteval coupling_info<N> coupling_of() noexcept {
     }
 
     using Op = typename U::op_type;
-    if constexpr (is_linear_op_v<Op>) {
+    // Linear ops couple nothing; a product couples across its operands, a
+    // quotient across them and within the denominator.
+    if constexpr (Op::rule_op == algebra::RuleOp::Add ||
+                  Op::rule_op == algebra::RuleOp::Neg) {
       // No curvature of its own.
-    } else if constexpr (is_product_op_v<Op> && K == 2) {
+    } else if constexpr (Op::rule_op == algebra::RuleOp::Mul && K == 2) {
       couple<N>(info.rows, kids[0].symbols, kids[1].symbols);
-    } else if constexpr (is_quotient_op_v<Op> && K == 2) {
+    } else if constexpr (Op::rule_op == algebra::RuleOp::Div && K == 2) {
       couple<N>(info.rows, kids[0].symbols, kids[1].symbols);
       couple<N>(info.rows, kids[1].symbols, kids[1].symbols);
     } else {

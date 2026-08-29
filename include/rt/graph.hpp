@@ -42,6 +42,20 @@ using Adjacency =
                                        std::uint32_t>;
 using Vertex = boost::graph_traits<Adjacency>::vertex_descriptor;
 
+// What a lane's graph carries; each level is the one below plus a block.
+// Appended rather than inserted, so a saved Object's `want` byte still names
+// the same lane it did.
+enum class Want : std::uint8_t {
+  Values,
+  Jacobian,
+  Hessian,
+  Hvp,
+  Vjp,
+  Jvp,
+  Gradient
+};
+inline constexpr std::size_t want_count = 7;
+
 // A builder frozen into CSR, the form codegen walks.  Operand position rides
 // along as an edge attribute, because a CSR row is a set.
 template <impl::Numeric T = double> class Graph {
@@ -92,17 +106,11 @@ public:
     for (const auto [v, n] : b.nodes() | std::views::enumerate) {
       g.properties_.push_back({.op = n.op, .value = n.value, .slot = n.slot});
       const auto id = static_cast<std::size_t>(v);
-      if (arity_of(n.op) >= 1) {
-        edges.emplace_back(id, n.a);
-        slots.push_back(0);
-      }
-      if (arity_of(n.op) >= 2) {
-        edges.emplace_back(id, n.b);
-        slots.push_back(1);
-      }
-      if (arity_of(n.op) == 3) {
-        edges.emplace_back(id, n.c);
-        slots.push_back(2);
+      for (const auto [slot, u] :
+           std::views::enumerate(std::array{n.a, n.b, n.c}) |
+               std::views::take(arity_of(n.op))) {
+        edges.emplace_back(id, u);
+        slots.push_back(static_cast<std::uint32_t>(slot));
       }
     }
 
@@ -199,11 +207,6 @@ private:
     return std::ranges::subrange(first, last);
   }
 
-  [[nodiscard]] auto live_nodes() const {
-    return std::views::iota(NodeId{0}, static_cast<NodeId>(size())) |
-           std::views::filter([this](NodeId v) { return live_[v]; });
-  }
-
   // Nothing but the outputs and what they reach needs to be emitted.
   void mark_live() {
     live_ = detail::reachable(
@@ -212,7 +215,7 @@ private:
             mark(static_cast<NodeId>(boost::target(edge, children_)));
           }
         });
-    live_order_ = live_nodes() | impl::to<std::vector<NodeId>>();
+    live_order_ = detail::live_ids(live_) | impl::to<std::vector<NodeId>>();
   }
 
   // Liveness under contraction, which is all this freeze settles -- an add
@@ -221,7 +224,8 @@ private:
   void contract(bool on) {
     if (!on) {
       contracted_order_ = live_order_;
-      contractions_ = detail::contraction_table(*this, contracted_order_, false);
+      contractions_ =
+          detail::contraction_table(*this, contracted_order_, false);
       return;
     }
     const std::vector<bool> live = detail::reachable(
@@ -306,10 +310,8 @@ public:
   // The whole sweep rather than its nodes: the pattern is what makes the block
   // readable, so the two must not travel separately.
   constexpr GraphBuilder &jacobian_from(const Jacobian &j) {
-    outputs_.insert(outputs_.end(), j.partial.begin(), j.partial.end());
-    layout_.jacobian = j.partial.size();
     jacobian_ = j.pattern;
-    return *this;
+    return block(&Layout::jacobian, j.partial);
   }
 
   // Every partial, in symbol order.  One reverse sweep per function.
@@ -319,11 +321,7 @@ public:
 
   // Compressed by colour, not n x n: a handful of columns when banded.
   GraphBuilder &build_hessian() {
-    const auto h = rt::build_hessian_impl(*builder_, roots_.front());
-    outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
-    layout_.hessian = h.compressed.size();
-    coloring_ = h.coloring;
-    return *this;
+    return hessian_from(rt::build_hessian_impl(*builder_, roots_.front()));
   }
 
   [[nodiscard]] Graph<T> finish(bool contract = true) const {
@@ -336,40 +334,38 @@ private:
   // rt::build_hessian_impl appends to the builder, and freeze() must not.
   template <typename... Ts> friend class impl::Equation;
   friend class py::PyEquation;
-  constexpr GraphBuilder &hessian_from(const Hessian &h) {
-    outputs_.insert(outputs_.end(), h.compressed.begin(), h.compressed.end());
-    layout_.hessian = h.compressed.size();
-    coloring_ = h.coloring;
+  using Layout = typename Graph<T>::Layout;
+
+  // One block of output columns, and the layout width it fills.
+  constexpr GraphBuilder &block(std::size_t Layout::*width,
+                                std::span<const NodeId> ids) {
+    outputs_.insert(outputs_.end(), ids.begin(), ids.end());
+    layout_.*width = ids.size();
     return *this;
   }
-
+  constexpr GraphBuilder &hessian_from(const Hessian &h) {
+    coloring_ = h.coloring;
+    return block(&Layout::hessian, h.compressed);
+  }
   // H v is a second-order block of one column, so the colouring stays empty
   // and coloring() is not always a way to read that block back.
   constexpr GraphBuilder &hessian_vector_from(const HessianVector &h) {
-    outputs_.insert(outputs_.end(), h.product.begin(), h.product.end());
-    layout_.hessian = h.product.size();
-    return *this;
+    return block(&Layout::hessian, h.product);
   }
-
   // J v is a first-order block of m columns, one per function.
   constexpr GraphBuilder &tangent_from(const Tangent &t) {
-    outputs_.insert(outputs_.end(), t.product.begin(), t.product.end());
-    layout_.jacobian = t.product.size();
-    return *this;
+    return block(&Layout::jacobian, t.product);
   }
-
-  // w'J is a first-order block of n columns and dense, so
-  // jacobian_pattern() stays empty.
+  // w'J is a first-order block of n columns and dense, so jacobian_pattern()
+  // stays empty.
   constexpr GraphBuilder &vector_jacobian_from(const VectorJacobian &j) {
-    outputs_.insert(outputs_.end(), j.product.begin(), j.product.end());
-    layout_.jacobian = j.product.size();
-    return *this;
+    return block(&Layout::jacobian, j.product);
   }
 
   Builder<T> *builder_;
   std::vector<NodeId> roots_;
   std::vector<NodeId> outputs_;
-  typename Graph<T>::Layout layout_;
+  Layout layout_;
   Coloring coloring_;
   Sparsity jacobian_;
 };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ops/adjoints.hpp" // detail::sign
 #include "ops/scalar.hpp"
 #include "ops/unary_math.hpp"
 #include "symbolic/expressions.hpp" // Variable, for dual_var_of
@@ -28,7 +29,7 @@ concept ConstOperand =
     CArithmetic<C> || std::same_as<std::remove_cvref_t<C>, dual_value_t<A>>;
 
 // Ref: Clifford, Proc. LMS s1-4 (1873) 381 -- adjoin ε with ε² = 0.
-template <Numeric T> class Dual {
+template <Numeric T> class Dual : public compound_from_binary {
 private:
   T val_{};
   T deriv_{};
@@ -37,20 +38,6 @@ public:
   constexpr Dual() noexcept = default;
   constexpr explicit Dual(T v, T d = T{}) noexcept : val_(v), deriv_(d) {}
   constexpr Dual(CArithmetic auto s) noexcept : val_(T(s)), deriv_(T{}) {}
-
-  // Gated on the body itself rather than on Numeric: whatever the binary
-  // operators below refuse is refused at this signature, not inside it.
-#define DDX_DUAL_COMPOUND(OP)                                                  \
-  template <typename B>                                                        \
-    requires requires(Dual &d, const B &o) { d = d OP o; }                     \
-  constexpr Dual &operator OP##=(const B &o) noexcept {                        \
-    return *this = *this OP o;                                                 \
-  }
-  DDX_DUAL_COMPOUND(+)
-  DDX_DUAL_COMPOUND(-)
-  DDX_DUAL_COMPOUND(*)
-  DDX_DUAL_COMPOUND(/)
-#undef DDX_DUAL_COMPOUND
 
   constexpr Dual &operator++() noexcept {
     ++val_;
@@ -228,16 +215,12 @@ template <template <Numeric> class Fn> struct unary_dual_combine {
     }
   }
 };
-// The derivative is a sign, 0 at 0.  v - v reaches only ±0 and NaN, so a NaN
-// value carries a NaN derivative.
 struct abs_combine {
   constexpr auto operator()(const DualLike auto &x) const noexcept {
     using std::abs;
     const auto &[v, d] = x;
     using DT = std::remove_cvref_t<decltype(x)>;
-    using T = std::remove_cvref_t<decltype(v)>;
-    const T sign = v > T{} ? T{1} : v < T{} ? T{-1} : T{v - v};
-    return DT{abs(v), sign * d};
+    return DT{abs(v), detail::sign(v) * d};
   }
 };
 // One chain-rule overload per unary math function, from the registry.

@@ -55,10 +55,8 @@ struct Sparsity {
   [[nodiscard]] constexpr std::size_t at(std::size_t i,
                                          std::size_t j) const noexcept {
     const auto present = row(i);
-    const auto found = std::ranges::lower_bound(present, j, {},
-                                                [](std::uint32_t c) -> std::size_t {
-                                                  return c;
-                                                });
+    const auto found =
+        std::ranges::lower_bound(present, static_cast<std::uint32_t>(j));
     return found != present.end() && *found == j
                ? rowptr[i] + static_cast<std::size_t>(found - present.begin())
                : no_column;
@@ -88,6 +86,12 @@ struct Coloring {
   [[nodiscard]] constexpr std::size_t column(std::size_t c,
                                              std::size_t row) const {
     return by_color(cell, count, color.size())[c, row];
+  }
+  // Where H(i, j) is stored, or no_column for a cell the colouring calls zero.
+  [[nodiscard]] constexpr std::size_t cell_of(std::size_t i,
+                                              std::size_t j) const {
+    const std::size_t c = color[j];
+    return target(c, i) == j ? column(c, i) : no_column;
   }
 };
 
@@ -120,19 +124,10 @@ template <impl::Numeric T>
 
   // Only what the root reaches: another expression sharing the builder would
   // otherwise contribute couplings this one does not have.
-  const auto live = detail::reachable(
-      b.size(), std::span{&root, 1}, [&b](NodeId v, auto &&mark) {
-        // The shared walker, not a hand-rolled arity test: one written here
-        // drifted the moment a third operand existed, and an unmarked operand
-        // leaves `support` an unsized bitset for the next `|=` to meet.
-        std::ranges::for_each(detail::operands_of(b, v), mark);
-      });
+  const auto live = detail::reachable(b, std::span{&root, 1});
 
   std::vector<SymbolSet> support(b.size());
-  const auto ids = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size()));
-  const auto is_alive_node = [&live](NodeId u) { return live[u]; };
-
-  for (const NodeId v : ids | std::views::filter(is_alive_node)) {
+  for (const NodeId v : detail::live_ids(live)) {
     const auto &node = b[v];
     switch (arity_of(node.op)) {
     case 0:
@@ -181,10 +176,7 @@ template <impl::Numeric T>
 }
 
 // Columns j and k conflict iff their coupling rows overlap -- the CPR colouring
-// symbolic/coupling.hpp runs at compile time, and carries the citations.  An
-// invalid colouring corrupts the Hessian rather than degrading it: two columns
-// sharing a colour sum into one cell.  In src/rt/coupling.cpp because it
-// carries no `T`.
+// symbolic/coupling.hpp runs at compile time, and carries the citations.
 [[nodiscard]] DDX_API Coloring color_columns(const CouplingRows &rows);
 
 } // namespace ddx::rt

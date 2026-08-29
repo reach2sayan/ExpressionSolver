@@ -23,9 +23,10 @@
 namespace ddx::jit::detail {
 namespace {
 
-// Which intrinsic covers an op; the rest go out as libm calls.  Derived from the
-// label except three: llvm.abs is the *integer* one, and maximum/minimum are the
-// NaN-propagating pair the interpreter matches where maxnum/minnum are not.
+// Which intrinsic covers an op; the rest go out as libm calls.  Derived from
+// the label except three: llvm.abs is the *integer* one, and maximum/minimum
+// are the NaN-propagating pair the interpreter matches where maxnum/minnum are
+// not.
 //
 // One array indexed by the enumerator, filled once, the shape rt::op_info
 // already has: lookupIntrinsicID binary-searches a name table off a Twine that
@@ -141,9 +142,12 @@ public:
     // 1.0 or 0.0 in the lane type, as compare_impl computes.  Ordered, so a
     // NaN operand compares false.
     case rt::OpCode::Lt:
-      return b_.CreateUIToFP(b_.CreateFCmpOLT(l, r), lanes_.ty);
     case rt::OpCode::Le:
-      return b_.CreateUIToFP(b_.CreateFCmpOLE(l, r), lanes_.ty);
+      return b_.CreateUIToFP(b_.CreateFCmp(op == rt::OpCode::Lt
+                                               ? llvm::CmpInst::FCMP_OLT
+                                               : llvm::CmpInst::FCMP_OLE,
+                                           l, r),
+                             lanes_.ty);
     default:
       return call(op, {l, r});
     }
@@ -163,8 +167,9 @@ public:
   }
 
 private:
-  // An intrinsic is declared on the lane type and left to the backend to unroll;
-  // a libm function has only a scalar entry point, so it is unrolled here.
+  // An intrinsic is declared on the lane type and left to the backend to
+  // unroll; a libm function has only a scalar entry point, so it is unrolled
+  // here.
   llvm::Value *call(rt::OpCode op, llvm::ArrayRef<llvm::Value *> args) const {
     const llvm::Intrinsic::ID id = intrinsic_for(op);
     if (id != llvm::Intrinsic::not_intrinsic) {
@@ -287,12 +292,11 @@ emit_nodes(const Emitter &emit, const rt::Graph<double> &g,
     const auto operands = g.operands(v);
     switch (rt::arity_of(p.op)) {
     case 0:
-      value[v] =
-          p.op == rt::OpCode::Const
-              ? emit.constant(p.value)
-              : emit.load(cols.inputs[rt::input_column(g.symbols().size(), p.op,
-                                                       p.slot)],
-                          index, mask, "");
+      value[v] = p.op == rt::OpCode::Const
+                     ? emit.constant(p.value)
+                     : emit.load(cols.inputs[rt::input_column(
+                                     g.symbols().size(), p.op, p.slot)],
+                                 index, mask, "");
       break;
     case 1:
       value[v] = emit.unary(p.op, value[operands[0]]);
@@ -341,8 +345,8 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   llvm::Type *const f64 = llvm::Type::getDoubleTy(ctx);
   llvm::Argument *const count = fn->getArg(4);
   const LaneType lanes{.width = width,
-                    .ty = width > 1 ? llvm::FixedVectorType::get(f64, width)
-                                    : f64};
+                       .ty = width > 1 ? llvm::FixedVectorType::get(f64, width)
+                                       : f64};
 
   auto *const entry = llvm::BasicBlock::Create(ctx, "entry", fn);
   auto *const loop = llvm::BasicBlock::Create(ctx, "loop", fn);

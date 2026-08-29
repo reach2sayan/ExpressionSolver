@@ -29,14 +29,9 @@ template <CEntry... Entries> struct Record;
 namespace detail {
 
 // Lifted to symbol_type so Mp11 answers by type identity: gcc 14 miscounts a
-// fold over `==` between class-type NTTPs, answering 2 for
-// key_count<"n", "n", "x">().
+// fold over `==` between class-type NTTPs.
 template <FixedString... Keys>
 using key_list = mp::mp_list<symbol_type<Keys>...>;
-
-template <FixedString Key, FixedString... Keys>
-inline constexpr std::size_t key_count =
-    mp::mp_count<key_list<Keys...>, symbol_type<Key>>::value;
 
 // Position of Key in Keys..., or sizeof...(Keys) when it is absent -- which is
 // what mp_find answers with.

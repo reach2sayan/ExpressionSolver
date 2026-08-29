@@ -4,9 +4,10 @@
 
 #include <boost/describe.hpp>
 #include <boost/endian/conversion.hpp>
-#include <boost/hash2/fnv1a.hpp>
 #include <boost/hash2/flavor.hpp>
+#include <boost/hash2/fnv1a.hpp>
 #include <boost/hash2/hash_append.hpp>
+#include <boost/integer.hpp>
 #include <boost/mp11/algorithm.hpp>
 
 #include <bit>
@@ -28,39 +29,26 @@ namespace ddx::rt::detail {
 using wire_flavor = boost::hash2::little_endian_flavor;
 
 template <std::size_t N>
-using wire_uint_t = std::conditional_t<
-    N == 1, std::uint8_t,
-    std::conditional_t<
-        N == 2, std::uint16_t,
-        std::conditional_t<N == 4, std::uint32_t, std::uint64_t>>>;
+using wire_uint_t = typename boost::uint_t<8 * N>::exact;
 
 template <typename U>
-concept CWireScalar =
-    std::integral<std::remove_cvref_t<U>> ||
-    std::floating_point<std::remove_cvref_t<U>> ||
-    std::is_enum_v<std::remove_cvref_t<U>>;
+concept CWireScalar = std::integral<std::remove_cvref_t<U>> ||
+                      std::floating_point<std::remove_cvref_t<U>> ||
+                      std::is_enum_v<std::remove_cvref_t<U>>;
 
+// The same bits as an unsigned of the same width, whatever the scalar is.
 template <typename U>
 [[nodiscard]] constexpr auto to_bits(const U &v) noexcept {
-  using S = std::remove_cvref_t<U>;
-  using W = wire_uint_t<sizeof(S)>;
-  if constexpr (std::is_enum_v<S>) {
-    return static_cast<W>(static_cast<std::underlying_type_t<S>>(v));
-  } else if constexpr (std::floating_point<S>) {
-    return std::bit_cast<W>(v);
-  } else {
-    return static_cast<W>(v);
-  }
+  return std::bit_cast<wire_uint_t<sizeof(U)>>(v);
 }
 
+// A forged byte must not become an invalid bool, so that one is a compare.
 template <typename U>
 [[nodiscard]] constexpr U from_bits(wire_uint_t<sizeof(U)> w) noexcept {
-  if constexpr (std::is_enum_v<U>) {
-    return static_cast<U>(static_cast<std::underlying_type_t<U>>(w));
-  } else if constexpr (std::floating_point<U>) {
-    return std::bit_cast<U>(w);
+  if constexpr (std::same_as<U, bool>) {
+    return w != 0;
   } else {
-    return static_cast<U>(w);
+    return std::bit_cast<U>(w);
   }
 }
 
@@ -68,14 +56,13 @@ template <typename V> constexpr bool is_vector_v = false;
 template <typename U, typename A>
 constexpr bool is_vector_v<std::vector<U, A>> = true;
 
-// Whether a vector moves in one memcpy, which the colouring's colours * n tables
-// are what make worth having.
+// Whether a vector moves in one memcpy, which the colouring's colours * n
+// tables are what make worth having.  A wire scalar is exactly its unsigned's
+// width, so the element needs no further test.
 template <typename E>
-constexpr bool bulk_v = CWireScalar<E> && !std::same_as<E, OpCode> &&
-                        !std::same_as<E, bool> &&
-                        std::is_trivially_copyable_v<E> &&
-                        sizeof(E) == sizeof(wire_uint_t<sizeof(E)>) &&
-                        std::endian::native == std::endian::little;
+constexpr bool bulk_v =
+    CWireScalar<E> && !std::same_as<E, OpCode> && !std::same_as<E, bool> &&
+    std::endian::native == std::endian::little;
 
 // The fewest bytes an element can occupy: a string still costs its length.
 template <typename U>
@@ -306,15 +293,14 @@ template <typename V> constexpr void fold_schema(boost::hash2::fnv1a_32 &h) {
   } else {
     static_assert(boost::describe::has_describe_members<U>::value);
     text("{");
-    boost::mp11::mp_for_each<
-        boost::describe::describe_members<U, boost::describe::mod_any_access>>(
-        [&](auto D) {
-          text(D.name);
-          text(":");
-          fold_schema<std::remove_reference_t<
-              decltype(std::declval<U &>().*D.pointer)>>(h);
-          text(";");
-        });
+    boost::mp11::mp_for_each<boost::describe::describe_members<
+        U, boost::describe::mod_any_access>>([&](auto D) {
+      text(D.name);
+      text(":");
+      fold_schema<
+          std::remove_reference_t<decltype(std::declval<U &>().*D.pointer)>>(h);
+      text(";");
+    });
     text("}");
   }
 }
@@ -336,12 +322,11 @@ template <typename V> [[nodiscard]] constexpr std::size_t wire_bytes() {
   } else {
     static_assert(boost::describe::has_describe_members<U>::value);
     std::size_t n = 0;
-    boost::mp11::mp_for_each<
-        boost::describe::describe_members<U, boost::describe::mod_any_access>>(
-        [&](auto D) {
-          n += wire_bytes<std::remove_reference_t<
-              decltype(std::declval<U &>().*D.pointer)>>();
-        });
+    boost::mp11::mp_for_each<boost::describe::describe_members<
+        U, boost::describe::mod_any_access>>([&](auto D) {
+      n += wire_bytes<
+          std::remove_reference_t<decltype(std::declval<U &>().*D.pointer)>>();
+    });
     return n;
   }
 }

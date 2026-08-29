@@ -59,16 +59,15 @@ spine_terms(const Builder<T> &b, NodeId top,
 
 // `blocks` interleaved partial sums, combined pairwise.
 template <impl::Numeric T>
-[[nodiscard]] constexpr NodeId blocked_sum(Builder<T> &b, std::span<const NodeId> terms,
-                                 std::size_t blocks) {
+[[nodiscard]] constexpr NodeId
+blocked_sum(Builder<T> &b, std::span<const NodeId> terms, std::size_t blocks) {
   const auto as_expr = [&b](NodeId t) { return RTExpression<T>{b, t}; };
   auto partials =
-      std::views::iota(0uz, blocks) |
-      std::views::transform([&](std::size_t j) {
-        return std::ranges::fold_left_first(
-            terms | std::views::drop(j) | std::views::stride(blocks) |
-                std::views::transform(as_expr),
-            std::plus<>{});
+      std::views::iota(0uz, blocks) | std::views::transform([&](std::size_t j) {
+        return std::ranges::fold_left_first(terms | std::views::drop(j) |
+                                                std::views::stride(blocks) |
+                                                std::views::transform(as_expr),
+                                            std::plus<>{});
       }) |
       std::views::filter([](const auto &o) { return o.has_value(); }) |
       std::views::transform([](const auto &o) { return *o; }) |
@@ -76,12 +75,11 @@ template <impl::Numeric T>
 
   // Pairwise: the combine is itself a chain.
   while (partials.size() > 1) {
-    partials = partials | std::views::chunk(2) |
-               std::views::transform([](auto pair) {
-                 return std::ranges::fold_left_first(pair, std::plus<>{})
-                     .value();
-               }) |
-               impl::to<std::vector<RTExpression<T>>>();
+    partials =
+        partials | std::views::chunk(2) | std::views::transform([](auto pair) {
+          return std::ranges::fold_left_first(pair, std::plus<>{}).value();
+        }) |
+        impl::to<std::vector<RTExpression<T>>>();
   }
   return partials.front().id(b);
 }
@@ -94,19 +92,14 @@ template <impl::Numeric T>
 // Sixteen: rss/64's scalar kernel is 3958 ns unblocked, 3388 at four, 3245 at
 // eight, 3118 at sixteen.
 template <impl::Numeric T>
-[[nodiscard]] constexpr std::vector<NodeId> rebalance(Builder<T> &b,
-                                            std::span<const NodeId> roots,
-                                            std::size_t blocks = 16,
-                                            std::size_t least = 16) {
+[[nodiscard]] constexpr std::vector<NodeId>
+rebalance(Builder<T> &b, std::span<const NodeId> roots, std::size_t blocks = 16,
+          std::size_t least = 16) {
   const auto size = static_cast<NodeId>(b.size());
-  const std::vector<bool> live =
-      detail::reachable(size, roots, [&b](NodeId v, auto &&mark) {
-        std::ranges::for_each(detail::operands_of(b, v), mark);
-      });
+  const std::vector<bool> live = detail::reachable(b, roots);
 
   std::vector<std::uint32_t> uses(size, 0);
-  for (const NodeId v : std::views::iota(NodeId{0}, size) |
-                           std::views::filter([&live](NodeId v) { return live[v]; })) {
+  for (const NodeId v : detail::live_ids(live)) {
     std::ranges::for_each(detail::operands_of(b, v),
                           [&uses](NodeId u) { ++uses[u]; });
   }
@@ -116,9 +109,7 @@ template <impl::Numeric T>
   }
 
   std::vector<NodeId> remap(size, no_node);
-  for (const NodeId v :
-       std::views::iota(NodeId{0}, size) |
-           std::views::filter([&live](NodeId v) { return live[v]; })) {
+  for (const NodeId v : detail::live_ids(live)) {
 
     // By value: building below may reallocate.
     const Node<T> node = b[v];
@@ -131,7 +122,7 @@ template <impl::Numeric T>
     if (spine_top) {
       auto terms = detail::spine_terms(b, v, uses, is_root);
       if (terms.size() >= least) {
-            std::ranges::transform(terms, terms.begin(),
+        std::ranges::transform(terms, terms.begin(),
                                [&remap](NodeId t) { return remap[t]; });
         remap[v] = detail::blocked_sum(b, terms, blocks);
         continue;
@@ -153,7 +144,8 @@ template <impl::Numeric T>
     }
   }
 
-  return roots | std::views::transform([&remap](NodeId r) { return remap[r]; }) |
+  return roots |
+         std::views::transform([&remap](NodeId r) { return remap[r]; }) |
          impl::to<std::vector<NodeId>>();
 }
 

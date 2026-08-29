@@ -3,7 +3,6 @@
 #include "rt/archive/archive.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
-#include "util/scope_guard.hpp"
 
 #include <boost/hash2/fnv1a.hpp>
 #include <boost/hash2/hash_append.hpp>
@@ -51,8 +50,8 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <vector>
 #include <utility>
+#include <vector>
 
 namespace ddx::jit {
 namespace {
@@ -121,9 +120,8 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
 // 20's libmvec table stops at four doubles, so an AVX-512 host's eight-wide
 // intrinsic has no library form and unrolls to scalar calls.
 [[nodiscard]] unsigned library_lanes(const llvm::Triple &triple) {
-  llvm::TargetLibraryInfoImpl tlii(triple);
-  tlii.addVectorizableFunctionsFromVecLib(
-      llvm::TargetLibraryInfoImpl::LIBMVEC_X86, triple);
+  const auto tlii =
+      target_library_info(triple, Options{.veclib = VecLib::Libmvec}, true);
   llvm::ElementCount fixed;
   llvm::ElementCount scalable;
   tlii.getWidestVF("sin", fixed, scalable);
@@ -147,29 +145,28 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
 constexpr const char *kCodegenFlag = "ddx.codegen";
 constexpr const char *kRetainFlag = "ddx.retain_object";
 
-[[nodiscard]] bool retains_object(const llvm::Module &m) {
-  const auto *const flag = llvm::mdconst::extract_or_null<llvm::ConstantInt>(
-      m.getModuleFlag(kRetainFlag));
-  return flag != nullptr && flag->getZExtValue() != 0;
+[[nodiscard]] std::optional<std::uint64_t> flag_of(const llvm::Module &m,
+                                                   const char *key) {
+  const auto *const flag =
+      llvm::mdconst::extract_or_null<llvm::ConstantInt>(m.getModuleFlag(key));
+  return flag != nullptr ? std::optional{flag->getZExtValue()} : std::nullopt;
 }
 
+[[nodiscard]] bool retains_object(const llvm::Module &m) {
+  return flag_of(m, kRetainFlag).value_or(0) != 0;
+}
+
+// The flag is written from std::to_underlying(Level), which is LLVM's own
+// 0..3 scale.
 llvm::CodeGenOptLevel codegen_level_of(const llvm::Module &m) {
-  const auto *const flag = llvm::mdconst::extract_or_null<llvm::ConstantInt>(
-      m.getModuleFlag(kCodegenFlag));
-  switch (flag != nullptr ? flag->getZExtValue() : 2) {
-  case 0:
-    return llvm::CodeGenOptLevel::None;
-  case 1:
-    return llvm::CodeGenOptLevel::Less;
-  case 3:
-    return llvm::CodeGenOptLevel::Aggressive;
-  default:
-    return llvm::CodeGenOptLevel::Default;
-  }
+  return llvm::CodeGenOpt::getLevel(
+             static_cast<int>(flag_of(m, kCodegenFlag).value_or(2)))
+      .value_or(llvm::CodeGenOptLevel::Default);
 }
 
 // One TargetMachine per module, which is what makes two compiles at once safe:
-// the default SimpleCompiler shares one whose subtarget cache is unsynchronised.
+// the default SimpleCompiler shares one whose subtarget cache is
+// unsynchronised.
 class LevelledCompiler final : public llvm::orc::IRCompileLayer::IRCompiler {
 public:
   LevelledCompiler(llvm::orc::JITTargetMachineBuilder machine,
@@ -194,18 +191,18 @@ private:
   llvm::ObjectCache *objects_;
 };
 
-// The backend's output caught on its way past: notifyObjectCompiled() hands over
-// the buffer the linker is about to get, so nothing is re-serialised.  Keyed by
-// module identifier, all the callback is given.  A hand-off, not a cache: an
-// entry is taken out once, by the compile that put it in.
+// The backend's output caught on its way past: notifyObjectCompiled() hands
+// over the buffer the linker is about to get, so nothing is re-serialised.
+// Keyed by module identifier, all the callback is given.  A hand-off, not a
+// cache: an entry is taken out once, by the compile that put it in.
 class Objects final : public llvm::ObjectCache {
 public:
   void notifyObjectCompiled(const llvm::Module *m,
                             llvm::MemoryBufferRef obj) override {
-    const llvm::StringRef bytes = obj.getBuffer();
-    const auto *const first = reinterpret_cast<const std::byte *>(bytes.data());
-    auto kept = std::make_shared<const std::vector<std::byte>>(
-        first, first + bytes.size());
+    const auto bytes =
+        std::as_bytes(std::span{obj.getBuffer().data(), obj.getBufferSize()});
+    auto kept = std::make_shared<const std::vector<std::byte>>(bytes.begin(),
+                                                               bytes.end());
     const std::lock_guard lock{mutex_};
     kept_[m->getModuleIdentifier()] = std::move(kept);
   }
@@ -236,9 +233,9 @@ private:
   llvm::StringMap<Kernel::object_type> kept_;
 };
 
-// Everything an object file must agree with, as one line.  The feature string is
-// folded, not spelled: detectHost() answers with 1.5 KB of `+avx2,-avx512f,...`
-// and a reader can only act on *that* they differ.
+// Everything an object file must agree with, as one line.  The feature string
+// is folded, not spelled: detectHost() answers with 1.5 KB of
+// `+avx2,-avx512f,...` and a reader can only act on *that* they differ.
 [[nodiscard]] std::string
 host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
   const std::string features = machine.getFeatures().getString();
@@ -308,19 +305,12 @@ host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
   pb.registerLoopAnalyses(lam);
   pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-  const llvm::OptimizationLevel level = [&] {
-    switch (opt.opt_level) {
-    case Level::O0:
-      return llvm::OptimizationLevel::O0;
-    case Level::O1:
-      return llvm::OptimizationLevel::O1;
-    case Level::O2:
-      return llvm::OptimizationLevel::O2;
-    case Level::O3:
-      return llvm::OptimizationLevel::O3;
-    }
-    std::unreachable();
-  }();
+  // Not constexpr in LLVM, so a static table rather than a switch.
+  static const std::array levels{
+      llvm::OptimizationLevel::O0, llvm::OptimizationLevel::O1,
+      llvm::OptimizationLevel::O2, llvm::OptimizationLevel::O3};
+  const llvm::OptimizationLevel level =
+      levels[std::to_underlying(opt.opt_level)];
 
   llvm::ModulePassManager mpm = level == llvm::OptimizationLevel::O0
                                     ? pb.buildO0DefaultPipeline(level)
@@ -348,6 +338,10 @@ struct Host {
   unsigned veclib_lanes; // and under a vector library
   Objects &objects;
   std::shared_ptr<void> code;
+
+  [[nodiscard]] unsigned lanes_for(const Options &opt) const {
+    return emitted_lanes(opt, triple, libmvec, lanes, veclib_lanes);
+  }
 };
 
 // One graph compiled once, filling the report it was handed as it goes.
@@ -375,9 +369,7 @@ private:
     const boost::scope::scope_exit clock{
         [this, start = Clock::now()] { rep_.emit = Clock::now() - start; }};
     auto ctx = std::make_unique<llvm::LLVMContext>();
-    auto m = detail::emit_module(*ctx, g_, name_,
-                                 emitted_lanes(opt_, host_.triple, host_.libmvec,
-                                               host_.lanes, host_.veclib_lanes),
+    auto m = detail::emit_module(*ctx, g_, name_, host_.lanes_for(opt_),
                                  host_.jit.getDataLayout(), host_.triple);
     if (!m) {
       // The emitter has already written the verifier's own diagnosis.
@@ -472,8 +464,9 @@ constexpr std::uint32_t kCacheEpoch = 1;
 
 // What changes the machine code, and nothing else: `backend`, `points`,
 // `time_passes`, `retain_object` and `cache_dir` never reach codegen.
-[[nodiscard]] std::uint64_t cache_key(std::uint64_t graph, std::string_view host,
-                                      const Options &opt, unsigned lanes) {
+[[nodiscard]] std::uint64_t cache_key(std::uint64_t graph,
+                                      std::string_view host, const Options &opt,
+                                      unsigned lanes) {
   boost::hash2::fnv1a_64 h;
   boost::hash2::hash_append(h, rt::detail::wire_flavor{}, host);
   rt::detail::fold(h, graph);
@@ -497,7 +490,8 @@ constexpr std::uint32_t kCacheEpoch = 1;
 
 // Chosen by the compile that produced the bytes, and underivable, so it travels
 // with them.  Described, so the same codec that writes a graph writes this: the
-// length prefix and its bounds are the archive's, not a second hand-rolled pair.
+// length prefix and its bounds are the archive's, not a second hand-rolled
+// pair.
 struct Entry {
   std::string symbol;
   std::vector<std::byte> code;
@@ -548,21 +542,22 @@ void write_entry(std::string_view dir, std::uint64_t key,
   const Entry entry{.symbol = std::string{symbol},
                     .code = {code.begin(), code.end()}};
   const rt::detail::FileHeader h{.magic = kCacheMagic,
-                         .format = kCacheFormat,
-                         .schema = kCacheSchema,
-                         .scalar_size = sizeof(double),
-                         .scalar_kind = 1,
-                         .model_digest = key};
+                                 .format = kCacheFormat,
+                                 .schema = kCacheSchema,
+                                 .scalar_size = sizeof(double),
+                                 .scalar_kind = 1,
+                                 .model_digest = key};
   // Staged inside the cache directory: a rename is only atomic within one
   // filesystem.
   (void)rt::detail::Container::write(
       entry_path(dir, key),
-      rt::detail::Container::pack(kCacheMagic, h, rt::detail::Container::encode(entry)));
+      rt::detail::Container::pack(kCacheMagic, h,
+                                  rt::detail::Container::encode(entry)));
 }
 
-// Where a background compile runs.  Not a member of Impl: a Kernel holds a share
-// of the Impl it came from, so the last share can be dropped on a worker, and a
-// pool joined from its own thread deadlocks.
+// Where a background compile runs.  Not a member of Impl: a Kernel holds a
+// share of the Impl it came from, so the last share can be dropped on a worker,
+// and a pool joined from its own thread deadlocks.
 //
 // `warm_` is a member so the order is a class invariant.  LLVM registers atexit
 // entries lazily *while it compiles*, and anything registered after this object
@@ -627,8 +622,8 @@ struct Compiler::Impl {
   // Folded once at bring-up: the builder it comes from goes to LLJIT and no
   // longer answers for the host.
   std::string host;
-  // The only shared mutable state: LLJIT is synchronised, but two threads naming
-  // a module alike would hand it a duplicate symbol.
+  // The only shared mutable state: LLJIT is synchronised, but two threads
+  // naming a module alike would hand it a duplicate symbol.
   std::atomic<unsigned> counter{0};
   bool libmvec = false;      // Whether the vector forms resolve here
   unsigned lanes = 1;        // The host's vector width in doubles
@@ -720,10 +715,8 @@ struct Compiler::Impl {
 
     // Copied: the linker keeps the buffer as long as the code lives.  Kept as
     // well, so an adopted kernel saves again like any other.
-    const auto *const first =
-        reinterpret_cast<const std::byte *>(object.data());
-    auto kept = std::make_shared<const std::vector<std::byte>>(
-        first, first + object.size());
+    auto kept = std::make_shared<const std::vector<std::byte>>(object.begin(),
+                                                               object.end());
     if (auto e = jit.addObjectFile(
             *jd, llvm::MemoryBuffer::getMemBufferCopy(llvm::StringRef{
                      reinterpret_cast<const char *>(object.data()),
@@ -752,24 +745,29 @@ struct Compiler::Impl {
 
   // On Impl, so a queued compile needs only a share of this and not a Compiler
   // that may have been moved from.
+  // What a Compilation is handed: the process-wide JIT, and a share of this,
+  // so the code outlives any Compiler that goes away mid-compile.
+  [[nodiscard]] static Host host_of(const std::shared_ptr<Impl> &self) {
+    return Host{*self->jit,  *self->machine,     self->triple,  self->libmvec,
+                self->lanes, self->veclib_lanes, self->objects, self};
+  }
+
   [[nodiscard]] static result<Kernel> run(const std::shared_ptr<Impl> &self,
                                           const rt::Graph<double> &g,
                                           const Options &opt,
                                           CompileReport &rep) {
+    Host host = host_of(self);
     const bool caching = !opt.cache_dir.empty();
     const std::uint64_t key =
-        caching ? cache_key(rt::digest(g), self->host, opt,
-                            emitted_lanes(opt, self->triple, self->libmvec,
-                                          self->lanes, self->veclib_lanes))
+        caching ? cache_key(rt::digest(g), self->host, opt, host.lanes_for(opt))
                 : 0;
     if (caching) {
       if (const auto entry = read_entry(opt.cache_dir, key)) {
         // Shapes come from the live graph, never the file: a forged entry
         // supplies code and a symbol, never a column count.
         const auto &layout = g.layout();
-        if (auto adopted =
-                link(self, entry->code, entry->symbol, g.arity(),
-                     layout.values, layout.jacobian, layout.hessian);
+        if (auto adopted = link(self, entry->code, entry->symbol, g.arity(),
+                                layout.values, layout.jacobian, layout.hessian);
             adopted) {
           // The phases are zero because they did not happen.
           rep.nodes = g.live_count();
@@ -784,10 +782,7 @@ struct Compiler::Impl {
     // A compile whose object will be stored has to keep it, whatever was asked.
     effective.retain_object = effective.retain_object || caching;
 
-    Compilation work{Host{*self->jit, *self->machine, self->triple,
-                          self->libmvec, self->lanes, self->veclib_lanes,
-                          self->objects, self},
-                     g, effective,
+    Compilation work{std::move(host), g, effective,
                      "ddx_kernel_" + std::to_string(self->counter++), rep};
     auto kernel = work();
     if (caching && kernel && !kernel->object().empty()) {
@@ -847,10 +842,7 @@ result<Kernel> Compiler::adopt(std::span<const std::byte> object,
 result<std::string> Compiler::render_ir(const rt::Graph<double> &g,
                                         const Options &opt) const {
   CompileReport discard;
-  Compilation run{Host{*impl_->jit, *impl_->machine, impl_->triple,
-                       impl_->libmvec, impl_->lanes, impl_->veclib_lanes,
-                       impl_->objects, impl_},
-                  g, opt, "ddx_kernel_dump", discard};
+  Compilation run{Impl::host_of(impl_), g, opt, "ddx_kernel_dump", discard};
   return run.prepared().transform([](llvm::orc::ThreadSafeModule m) {
     std::string out;
     llvm::raw_string_ostream os(out);

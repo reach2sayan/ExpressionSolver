@@ -64,15 +64,16 @@ namespace {
 }
 
 // The prologue's described fields, between the tag and the reserved tail.
-inline constexpr std::size_t field_bytes =
-    Container::header_bytes - Container::magic_bytes -
-    Container::reserved_bytes;
+inline constexpr std::size_t field_bytes = Container::header_bytes -
+                                           Container::magic_bytes -
+                                           Container::reserved_bytes;
 
 } // namespace
 
-void Store::put_header(const FileHeader &h, std::span<std::byte> into) {
+void Container::put_header(const FileHeader &h, std::span<std::byte> into) {
   assert(into.size() >= Container::header_bytes);
-  std::ranges::fill(into.first(Container::header_bytes), std::byte{}); // the tail included
+  std::ranges::fill(into.first(Container::header_bytes),
+                    std::byte{}); // the tail included
   std::memcpy(into.data(), h.magic.data(),
               std::min(h.magic.size(), Container::magic_bytes));
   // The same Writer the payload uses, over the same described list get_header
@@ -85,8 +86,8 @@ void Store::put_header(const FileHeader &h, std::span<std::byte> into) {
   std::ranges::copy(fields, into.begin() + Container::magic_bytes);
 }
 
-result<FileHeader> Store::get_header(std::span<const std::byte> bytes,
-                                     std::string_view magic) {
+result<FileHeader> Container::get_header(std::span<const std::byte> bytes,
+                                         std::string_view magic) {
   if (bytes.size() < Container::header_bytes) {
     return fail(errc::bad_archive);
   }
@@ -96,9 +97,9 @@ result<FileHeader> Store::get_header(std::span<const std::byte> bytes,
   }
   // Letting a nonzero reserved byte past would make claiming it later a silent
   // format change.
-  if (!std::ranges::all_of(
-          bytes.subspan(Container::magic_bytes + field_bytes, Container::reserved_bytes),
-          [](std::byte b) { return b == std::byte{}; })) {
+  if (!std::ranges::all_of(bytes.subspan(Container::magic_bytes + field_bytes,
+                                         Container::reserved_bytes),
+                           [](std::byte b) { return b == std::byte{}; })) {
     return fail(errc::bad_archive);
   }
 
@@ -111,14 +112,14 @@ result<FileHeader> Store::get_header(std::span<const std::byte> bytes,
   return h;
 }
 
-std::uint32_t Store::checksum(std::span<const std::byte> bytes) {
+std::uint32_t Container::checksum(std::span<const std::byte> bytes) {
   boost::crc_32_type crc;
   crc.process_bytes(bytes.data(), bytes.size());
   return crc.checksum();
 }
 
 result<std::vector<std::byte>>
-Store::read_file(const std::filesystem::path &path) {
+Container::read(const std::filesystem::path &path) {
   std::error_code ec;
   const auto size = std::filesystem::file_size(path, ec);
   if (ec || !std::filesystem::is_regular_file(path, ec)) {
@@ -137,8 +138,8 @@ Store::read_file(const std::filesystem::path &path) {
   return bytes;
 }
 
-result<void> Store::write_file(const std::filesystem::path &path,
-                               std::span<const std::byte> bytes) {
+result<void> Container::write(const std::filesystem::path &path,
+                              std::span<const std::byte> bytes) {
   // Beside the target: rename is only atomic within a filesystem, and one
   // across a mount boundary would silently become a copy.  The suffix is unique
   // per writer -- with a shared ".tmp" two processes truncate each other's
@@ -172,36 +173,27 @@ std::vector<std::byte> Container::pack(std::string_view magic,
                                        std::span<const std::byte> payload) {
   FileHeader stamped = h;
   stamped.magic = magic;
-  stamped.payload_crc = Store::checksum(payload);
+  stamped.payload_crc = Container::checksum(payload);
   std::vector<std::byte> file(Container::header_bytes);
   file.reserve(Container::header_bytes + payload.size());
-  Store::put_header(stamped, file);
+  Container::put_header(stamped, file);
   file.insert(file.end(), payload.begin(), payload.end());
   return file;
 }
 
 result<std::pair<FileHeader, std::span<const std::byte>>>
 Container::unpack(std::span<const std::byte> bytes, std::string_view magic) {
-  const auto h = Store::get_header(bytes, magic);
+  const auto h = Container::get_header(bytes, magic);
   if (!h) {
     return std::unexpected{h.error()};
   }
 
   if (const auto payload = bytes.subspan(Container::header_bytes);
-      Store::checksum(payload) != h->payload_crc) {
+      Container::checksum(payload) != h->payload_crc) {
     return fail(errc::archive_corrupt);
   } else {
     return std::pair{*h, payload};
   }
-}
-
-result<std::vector<std::byte>> Container::read(const std::filesystem::path &p) {
-  return Store::read_file(p);
-}
-
-result<void> Container::write(const std::filesystem::path &p,
-                              std::span<const std::byte> bytes) {
-  return Store::write_file(p, bytes);
 }
 
 } // namespace ddx::rt::detail

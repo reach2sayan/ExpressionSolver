@@ -5,6 +5,10 @@
 #include "symbolic/expressions.hpp" // Numeric
 #include "util/config.hpp"          // DDX_SELF
 
+#include <boost/mp11/algorithm.hpp>
+#include <boost/mp11/integral.hpp>
+#include <boost/mp11/list.hpp>
+
 #include <array>
 #include <concepts>
 #include <cstddef>
@@ -21,32 +25,27 @@ namespace ddx::impl {
 
 namespace detail {
 
-// A pack of Order copies of N, as an md::extents.
-template <std::size_t, std::size_t V> inline constexpr std::size_t always_v = V;
-
-template <std::size_t N, std::size_t... I>
-consteval auto uniform_extents_fn(std::index_sequence<I...>) noexcept {
-  return std::type_identity<md::extents<std::size_t, always_v<I, N>...>>{};
-}
-
-template <std::size_t Lead, std::size_t N, std::size_t... I>
-consteval auto stacked_extents_fn(std::index_sequence<I...>) noexcept {
-  return std::type_identity<
-      md::extents<std::size_t, Lead, always_v<I, N>...>>{};
-}
+template <typename... I>
+using extents_of = md::extents<std::size_t, I::value...>;
+template <std::size_t N, std::size_t Order>
+using repeated =
+    boost::mp11::mp_repeat_c<boost::mp11::mp_list<boost::mp11::mp_size_t<N>>,
+                             Order>;
 
 } // namespace detail
 
 // The shape of a derivative tensor of order Order over N variables.
 template <std::size_t N, std::size_t Order>
-using uniform_extents_t = typename decltype(detail::uniform_extents_fn<N>(
-    std::make_index_sequence<Order>{}))::type;
+using uniform_extents_t =
+    boost::mp11::mp_apply<detail::extents_of, detail::repeated<N, Order>>;
 
 // The same with one leading axis: a per-output stack, as a vector-valued
 // Equation produces.
 template <std::size_t Lead, std::size_t N, std::size_t Order>
-using stacked_extents_t = typename decltype(detail::stacked_extents_fn<Lead, N>(
-    std::make_index_sequence<Order>{}))::type;
+using stacked_extents_t = boost::mp11::mp_apply<
+    detail::extents_of,
+    boost::mp11::mp_push_front<detail::repeated<N, Order>,
+                               boost::mp11::mp_size_t<Lead>>>;
 
 template <Numeric S, md::CStaticExtents Ext, md::CLayoutFor<Ext> Layout>
 class md_tensor;
@@ -121,40 +120,27 @@ public:
     return Ext{}.extent(r);
   }
 
-  [[nodiscard]] constexpr S *data() noexcept { return data_.data(); }
-  [[nodiscard]] constexpr const S *data() const noexcept {
-    return data_.data();
+  // Const-ness rides on self, so one body serves both.
+  [[nodiscard]] constexpr auto *data(DDX_SELF) noexcept {
+    return self.data_.data();
   }
 
   template <std::integral... I>
     requires(sizeof...(I) == Ext::rank())
-  [[nodiscard]] constexpr reference operator[](I... idx) noexcept {
-    return data_[static_cast<std::size_t>(
-        kMapping(static_cast<index_type>(idx)...))];
-  }
-  template <std::integral... I>
-    requires(sizeof...(I) == Ext::rank())
-  [[nodiscard]] constexpr const_reference operator[](I... idx) const noexcept {
-    return data_[static_cast<std::size_t>(
+  [[nodiscard]] constexpr auto &operator[](DDX_SELF, I... idx) noexcept {
+    return self.data_[static_cast<std::size_t>(
         kMapping(static_cast<index_type>(idx)...))];
   }
 
   // t[i][j][k].  Only at rank >= 2; at rank 1 the overload above already takes
   // a single index.
-  [[nodiscard]] constexpr auto operator[](index_type i) noexcept
+  [[nodiscard]] constexpr auto operator[](DDX_SELF, index_type i) noexcept
     requires(Ext::rank() >= 2)
   {
-    return detail::md_index_proxy<md_tensor, 1>(*this,
-                                                std::array<index_type, 1>{i});
-  }
-  [[nodiscard]] constexpr auto operator[](index_type i) const noexcept
-    requires(Ext::rank() >= 2)
-  {
-    return detail::md_index_proxy<const md_tensor, 1>(
-        *this, std::array<index_type, 1>{i});
+    return detail::md_index_proxy<std::remove_reference_t<decltype(self)>, 1>(
+        self, std::array<index_type, 1>{i});
   }
 
-  // Const-ness rides on self, so one body serves both.
   [[nodiscard]] constexpr decltype(auto)
   at_index(DDX_SELF, const std::array<index_type, Ext::rank()> &idx) noexcept {
     return index_apply<Ext::rank()>([&]<std::size_t... K>() -> decltype(auto) {

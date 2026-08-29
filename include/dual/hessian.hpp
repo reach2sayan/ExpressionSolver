@@ -55,13 +55,10 @@ check_graph_point(std::size_t arity, std::span<const double> x) noexcept {
 [[nodiscard]] constexpr bool
 reverse_hessian_applies(std::size_t n, std::span<const double> x,
                         CIndexRange auto &&active) noexcept {
-  return (x.size() == n) && (std::ranges::size(active) == n) &&
+  return x.size() == n &&
          std::ranges::equal(active, std::views::iota(std::size_t{0}, n));
 }
 
-} // namespace detail
-
-namespace detail {
 // The arity a bridged callable advertises; 0 if it advertises none.
 template <CHessianTarget F> constexpr std::size_t declared_arity() noexcept {
   if constexpr (CSeededExprEnergy<F>) {
@@ -70,30 +67,19 @@ template <CHessianTarget F> constexpr std::size_t declared_arity() noexcept {
     return 0;
   }
 }
-} // namespace detail
 
-namespace detail {
 // The point checks both entry points share.  Free to hoist:
 // reverse_hessian_applies is strictly stronger than check_graph_point, and a
 // callable advertising no arity has nothing to check against.
 template <CHessianTarget F>
 [[nodiscard]] constexpr result<void> check_target(std::span<const double> x,
-                                                  CIndexRange auto &&active) {
+                                                  CIndexRange auto &&...active)
+  requires(sizeof...(active) <= 1)
+{
   if constexpr (CExpression<F>) {
-    return check_graph_point(expr_arity_v<F>, x, active);
+    return check_graph_point(expr_arity_v<F>, x, active...);
   } else if constexpr (declared_arity<F>() > 0) {
-    return check_graph_point(declared_arity<F>(), x, active);
-  } else {
-    return {};
-  }
-}
-
-template <CHessianTarget F>
-[[nodiscard]] constexpr result<void> check_target(std::span<const double> x) {
-  if constexpr (CExpression<F>) {
-    return check_graph_point(expr_arity_v<F>, x);
-  } else if constexpr (declared_arity<F>() > 0) {
-    return check_graph_point(declared_arity<F>(), x);
+    return check_graph_point(declared_arity<F>(), x, active...);
   } else {
     return {};
   }

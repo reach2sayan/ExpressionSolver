@@ -5,6 +5,9 @@
 #include "rt/opcode.hpp"
 #include "util/config.hpp"
 
+#include <boost/mp11/algorithm.hpp>
+#include <boost/mp11/list.hpp>
+
 #include <concepts> // std::equality_comparable, std::same_as
 #include <cstddef>
 #include <functional> // std::plus and friends, for the table's eval column
@@ -13,11 +16,11 @@ namespace ddx::rt {
 
 namespace detail {
 
-template <typename Fn> inline constexpr bool is_field_op_v = false;
-template <> inline constexpr bool is_field_op_v<std::plus<>> = true;
-template <> inline constexpr bool is_field_op_v<std::multiplies<>> = true;
-template <> inline constexpr bool is_field_op_v<std::divides<>> = true;
-template <> inline constexpr bool is_field_op_v<std::negate<>> = true;
+template <typename Fn>
+inline constexpr bool is_field_op_v = boost::mp11::mp_set_contains<
+    boost::mp11::mp_list<std::plus<>, std::multiplies<>, std::divides<>,
+                         std::negate<>>,
+    Fn>::value;
 
 #define DDX_RT_PROBE1(fn, Op, label, ...)                                      \
   template <impl::Numeric T>                                                   \

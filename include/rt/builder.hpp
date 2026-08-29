@@ -5,6 +5,8 @@
 #include "rt/opcode.hpp"
 #include "util/ranges.hpp"
 
+#include <boost/describe/class.hpp>
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -20,7 +22,8 @@
 #include <vector>
 
 namespace ddx::impl {
-// Befriended by Builder: making an arena's symbols final is an Equation's alone.
+// Befriended by Builder: making an arena's symbols final is an Equation's
+// alone.
 template <typename... Ts> class Equation;
 } // namespace ddx::impl
 
@@ -39,8 +42,7 @@ template <impl::Numeric T>
 
 // Befriended for symmetry with var(); a seed slot moves nothing.
 template <impl::Numeric T>
-[[nodiscard]] constexpr RTExpression<T> seed(Builder<T> &b,
-                                             std::uint32_t slot);
+[[nodiscard]] constexpr RTExpression<T> seed(Builder<T> &b, std::uint32_t slot);
 
 // A multiply and an add taken as one rounding: x * y + z, with x negated where
 // the multiply reached the add through a Neg, which is what a subtraction
@@ -93,6 +95,7 @@ template <impl::Numeric T> struct Node {
   NodeId c = no_node;     // the third operand, which only a select has
   T value{};              // Const
   std::uint32_t slot = 0; // Var
+  BOOST_DESCRIBE_CLASS(Node, (), (op, a, b, c, value, slot), (), ())
 };
 
 namespace detail {
@@ -109,8 +112,7 @@ template <impl::Numeric T> struct TwoOperandNode {
 // The third operand lands in padding the two-operand layout already carried.
 // Pinned rather than assumed: a member above `value` would silently widen every
 // node in every arena.
-static_assert(sizeof(Node<double>) ==
-              sizeof(detail::TwoOperandNode<double>));
+static_assert(sizeof(Node<double>) == sizeof(detail::TwoOperandNode<double>));
 
 // Nodes are interned as they are formed, so an id *is* the identity of a
 // subexpression -- where the compile-time side compares types.
@@ -320,14 +322,7 @@ private:
   // A scalar with no equality never matches, so ops/algebra.hpp's identity
   // rewrites simply stop firing for it.
   constexpr bool holds(NodeId id, int k) const {
-    if (id == no_node || nodes_[id].op != OpCode::Const) {
-      return false;
-    }
-    if constexpr (std::equality_comparable<T>) {
-      return nodes_[id].value == T(k);
-    } else {
-      return false;
-    }
+    return id != no_node && is_constant(id, T(k));
   }
 
   // Which RuleOp an opcode is, or none for one carrying no identities.
@@ -513,8 +508,8 @@ contraction_at(const CNodeSource auto &nodes, NodeId v) {
 }
 
 // The contraction at every node of `order`, resolved once.  Asking
-// contraction_at() inside a sweep re-derives per point what is a property of the
-// nodes, at two dependent loads a time.  `on` false contracts nothing.
+// contraction_at() inside a sweep re-derives per point what is a property of
+// the nodes, at two dependent loads a time.  `on` false contracts nothing.
 namespace detail {
 template <std::ranges::input_range Order>
   requires std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
@@ -527,6 +522,25 @@ contraction_table(const CNodeSource auto &nodes, Order &&order,
          }) |
          impl::to<std::vector<Contraction>>();
 }
+} // namespace detail
+
+namespace detail {
+
+// The roots' cone in an arena, which every walker below asks for first.
+template <impl::Numeric T>
+[[nodiscard]] constexpr std::vector<bool>
+reachable(const Builder<T> &b, std::span<const NodeId> roots) {
+  return reachable(b.size(), roots, [&b](NodeId v, auto &&mark) {
+    std::ranges::for_each(operands_of(b, v), mark);
+  });
+}
+
+// The ids a liveness pass kept, ascending.
+[[nodiscard]] constexpr auto live_ids(const std::vector<bool> &live) {
+  return std::views::iota(NodeId{0}, static_cast<NodeId>(live.size())) |
+         std::views::filter([&live](NodeId v) { return live[v]; });
+}
+
 } // namespace detail
 
 } // namespace ddx::rt

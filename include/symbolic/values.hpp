@@ -19,11 +19,6 @@ concept CompatibleValueTypes =
     std::convertible_to<typename LHS::value_type, typename RHS::value_type> ||
     std::convertible_to<typename RHS::value_type, typename LHS::value_type>;
 
-template <CFixedString auto S, CSymbolList SymList>
-consteval std::size_t find_index_of_symbol() noexcept {
-  return symbol_index<S, SymList>();
-}
-
 // Promote a bare scalar into value_type as a zero-derivative constant;
 // ConstantEmbedder recurses through every Dual<> nesting level.
 template <Numeric VT, CArithmetic S>
@@ -76,31 +71,30 @@ constexpr auto arithmetic(const A &a, const B &b, auto build) noexcept {
   }
 }
 
+// The node an operator builds once the ladder above has nothing to fold.
+template <template <Numeric> class Op>
+inline constexpr auto node_of =
+    []<CExpression L>(const L &l, const CExpression auto &r) {
+      return simplify_node<Op<typename L::value_type>>(l, r);
+    };
+
 } // namespace detail
 
 template <typename A, typename B>
   requires CBinaryOperands<A, B>
 constexpr auto operator+(const A &a, const B &b) noexcept {
-  return detail::arithmetic<std::plus<>>(
-      a, b, []<CExpression L>(const L &l, const CExpression auto &r) {
-        return detail::simplify_node<SumOp<typename L::value_type>>(l, r);
-      });
+  return detail::arithmetic<std::plus<>>(a, b, detail::node_of<SumOp>);
 }
 template <typename A, typename B>
   requires CBinaryOperands<A, B>
 constexpr auto operator*(const A &a, const B &b) noexcept {
-  return detail::arithmetic<std::multiplies<>>(
-      a, b, []<CExpression L>(const L &l, const CExpression auto &r) {
-        return detail::simplify_node<MultiplyOp<typename L::value_type>>(l, r);
-      });
+  return detail::arithmetic<std::multiplies<>>(a, b,
+                                               detail::node_of<MultiplyOp>);
 }
 template <typename A, typename B>
   requires CBinaryOperands<A, B>
 constexpr auto operator/(const A &a, const B &b) noexcept {
-  return detail::arithmetic<std::divides<>>(
-      a, b, []<CExpression L>(const L &l, const CExpression auto &r) {
-        return detail::simplify_node<DivideOp<typename L::value_type>>(l, r);
-      });
+  return detail::arithmetic<std::divides<>>(a, b, detail::node_of<DivideOp>);
 }
 // a - b is a + (-b): one adjoint rule instead of two, and both operators get to
 // apply their folding rules.
@@ -211,25 +205,14 @@ public:
 } // namespace detail
 
 // Carried in the type, so the object is empty and derivative()'s 0s and 1s are
-// free.
+// free.  V is a T, or an int for a T that could never be a template argument
+// itself.
 template <Numeric T, auto V>
-  requires std::same_as<std::remove_cv_t<decltype(V)>, T>
+  requires std::same_as<std::remove_cv_t<decltype(V)>, T> ||
+           std::same_as<std::remove_cv_t<decltype(V)>, int>
 class Lit<T, V> : public detail::ConstantOps<Lit<T, V>, T> {
   friend detail::ConstantOps<Lit<T, V>, T>;
-  [[nodiscard]] constexpr T read() const noexcept { return V; }
-
-public:
-  static constexpr T value = V;
-};
-
-// Keyed on an int, for a T that could never be a template argument itself.
-// Disjoint from the specialisation above, which requires decltype(V) to be T.
-template <Numeric T, auto V>
-  requires(std::same_as<std::remove_cv_t<decltype(V)>, int> &&
-           !std::same_as<T, int>)
-class Lit<T, V> : public detail::ConstantOps<Lit<T, V>, T> {
-  friend detail::ConstantOps<Lit<T, V>, T>;
-  [[nodiscard]] constexpr T read() const noexcept { return T(V); }
+  [[nodiscard]] constexpr T read() const noexcept { return value; }
 
 public:
   static constexpr T value = T(V);
@@ -257,7 +240,7 @@ public:
   using value_type = T;
 
   [[nodiscard]] constexpr auto derivative() const noexcept {
-    return Lit<T, Frozen ? 0 : 1>{};
+    return Lit < T, Frozen ? 0 : 1 > {};
   }
 
   template <std::size_t Base = 0>
@@ -265,7 +248,7 @@ public:
                           const auto &) const noexcept {
     if constexpr (!Frozen) {
       using Syms = std::decay_t<decltype(syms)>;
-      constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+      constexpr auto idx = symbol_index<symbol, Syms>();
       // `+` and assignment, not `+=`: CFieldLike promises only a + b.  Do not
       // "simplify" this back to `+=`.
       grads[idx] = std::move(grads[idx]) + adj;
@@ -277,7 +260,7 @@ public:
   template <CSymbolList Syms, Numeric U, std::size_t N>
   [[nodiscard]] constexpr U
   eval_seeded(const std::array<U, N> &vals) const noexcept {
-    constexpr auto idx = find_index_of_symbol<symbol, Syms>();
+    constexpr auto idx = symbol_index<symbol, Syms>();
     static_assert(idx < N, "eval: no value supplied for this symbol");
     if constexpr (Frozen) {
       return ConstantEmbedder<U>::embed(

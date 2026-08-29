@@ -145,10 +145,9 @@ template <CExpression Expr>
 [[nodiscard]] consteval auto symbol_order() noexcept {
   using SymList = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   constexpr std::size_t N = mp::mp_size<SymList>::value;
-  std::array<std::string_view, N> out{};
-  static_for<N>(
-      [&]<std::size_t I>() { out[I] = mp::mp_at_c<SymList, I>::name; });
-  return out;
+  return index_apply<N>([]<std::size_t... I>() {
+    return std::array<std::string_view, N>{mp::mp_at_c<SymList, I>::name...};
+  });
 }
 
 // Scalar defaults to what derivative_tensor expects;
@@ -169,7 +168,7 @@ make_values(Entry<Syms, Vs>... nv) noexcept {
   std::array<Scalar, N> out{};
   (
       [&]<FixedString Sy, Numeric Vv>(const Entry<Sy, Vv> &v) {
-        constexpr std::size_t idx = find_index_of_symbol<Sy, SymList>();
+        constexpr std::size_t idx = symbol_index<Sy, SymList>();
         static_assert(idx < N, "make_values: symbol not present in expression");
         out[idx] = static_cast<Scalar>(v.value);
       }(nv),
@@ -194,16 +193,16 @@ strip_seed(const std::array<T, N> &grads) noexcept {
   }
 }
 
-// One reverse-mode Jacobian row.  A dual-valued expression sweeps identically
-// and hands back the value level of each entry.
-template <CExpression Expr, Numeric T = typename Expr::value_type,
-          std::size_t N = detail::expr_arity_v<Expr>>
-[[nodiscard]] constexpr auto
-reverse_mode_jacobian(const Expr &expr, const std::array<T, N> &vals) noexcept {
-  using Syms = detail::expr_symbols_t<Expr>;
-  std::array<T, N> grads{};
-  reverse_sweep<Syms>(expr, vals, grads);
-  return detail::strip_seed(grads);
+// One colour's harvest: (row, column, tangent) for every row whose colour owns
+// a column; at most one per (colour, row), so that entry IS the sum.
+constexpr void scatter(const auto &targets, const auto &grads,
+                       auto &&sink) noexcept {
+  for (const auto [i, target, g] :
+       std::views::zip(std::views::iota(0uz), targets, grads)) {
+    if (target != no_column) {
+      sink(i, target, g.template get<1>());
+    }
+  }
 }
 
 // `Given` names the symbol list `values` is laid out by, as reverse_sweep's
@@ -232,13 +231,8 @@ reverse_mode_hessian(const Expr &expr,
 
   detail::color_sweeps<kColors, Syms>(
       expr, values, [&](std::size_t c, const T &, const auto &grads) {
-        // At most one column per (colour, row), so that entry IS the sum.
-        for (const auto [index, target] : std::views::enumerate(kScatter[c])) {
-          const auto i = static_cast<std::size_t>(index);
-          if (target != no_column) {
-            H[i, target] = grads[i].template get<1>();
-          }
-        }
+        scatter(kScatter[c], grads,
+                [&](std::size_t i, std::size_t j, const S &v) { H[i, j] = v; });
       });
   return H;
 }
@@ -297,11 +291,7 @@ inline constexpr auto simplex_index_table_v = simplex_index_table<N, Order>();
 
 template <std::size_t N, Numeric T>
 constexpr auto extract_nth(const T &x) noexcept {
-  if constexpr (N == 0) {
-    return x;
-  } else {
-    return extract_nth<N - 1>(x.template get<1>());
-  }
+  return component<N, 1>(x);
 }
 
 // Every variable lifted to nth_dual_t, with the tangents `idx` names on.
@@ -416,15 +406,10 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
           });
         }
 
-        // At most one of this colour's columns is structurally nonzero in row
-        // i, so the sum IS that entry.
-        for (auto &&[row, grad, target] : std::views::zip(
-                 res_hessian | std::views::chunk(N), grads, kScatter[c])) {
-          if (target != no_column) {
-            row[static_cast<std::ranges::range_difference_t<decltype(row)>>(
-                target)] = static_cast<double>(grad.template get<1>());
-          }
-        }
+        scatter(kScatter[c], grads,
+                [&](std::size_t i, std::size_t j, const auto &v) {
+                  res_hessian[i * N + j] = static_cast<double>(v);
+                });
       });
 
   // Independent sweeps, so mirrored entries can differ in the last ULP.
@@ -452,11 +437,10 @@ hessian_values_sparse(const Expr &expr, std::span<const double> x) {
   color_sweeps<kColors>(
       expr, x, [&](std::size_t c, const T &, const auto &grads) {
         static constexpr auto kSlots = sparse_slots<E>();
-        for (auto &&[grad, slot] : std::views::zip(grads, kSlots[c])) {
-          if (slot != no_column) {
-            values[slot] = static_cast<double>(grad.template get<1>());
-          }
-        }
+        scatter(kSlots[c], grads,
+                [&](std::size_t, std::size_t slot, const auto &v) {
+                  values[slot] = static_cast<double>(v);
+                });
       });
   return values;
 }

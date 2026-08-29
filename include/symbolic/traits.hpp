@@ -4,16 +4,10 @@
 // include-cleaner does not count as a reference -- hence the pragma.
 #include "symbolic/symbol.hpp"
 #include "util/fixed_string.hpp" // IWYU pragma: keep
+#include <tuple>
 #include <type_traits>
 
 namespace ddx::impl {
-
-template <typename T> inline constexpr bool is_variable_v = false;
-template <Numeric T, CFixedString auto C, bool F>
-inline constexpr bool is_variable_v<Variable<T, C, F>> = true;
-
-template <typename T>
-concept CVariable = is_variable_v<std::remove_cvref_t<T>>;
 
 // Same leaf, same value lookup, zero derivative.  A pure type transform, which
 // keeps the symbolic Jacobian made of empty types.
@@ -27,96 +21,37 @@ using frozen_variable_t = typename frozen_variable<T>::type;
 
 // The two leaf rewrites are complements: one freezes the symbol named, the
 // other freezes every symbol but it.  The rest -- rebuilding a node from
-// rewritten children, leaving any other leaf alone -- is one walk.
+// rewritten children, leaving any other leaf alone -- is one walk, and a pure
+// type transform, so the symbolic Jacobian stays made of empty types.
 template <CFixedString auto symbol, bool FreezeMatch, CExpression T>
-consteval auto transform_leaves() {
+constexpr auto refreeze(const T &e) noexcept {
   if constexpr (CVariable<T>) {
     if constexpr ((T::label == symbol) == FreezeMatch) {
-      return std::type_identity<frozen_variable_t<T>>{};
+      return frozen_variable_t<T>{};
     } else {
-      return std::type_identity<T>{};
+      return e;
     }
   } else if constexpr (CExpressionNode<T>) {
-    return []<COperation Op, CExpression... C>(
-               std::type_identity<Expression<Op, C...>>) {
-      return std::type_identity<
-          Expression<Op, typename decltype(transform_leaves<symbol, FreezeMatch,
-                                                            C>())::type...>>{};
-    }(std::type_identity<T>{});
+    return std::apply(
+        [](const auto &...child) {
+          return Expression<typename T::op_type,
+                            decltype(refreeze<symbol, FreezeMatch>(child))...>{
+              refreeze<symbol, FreezeMatch>(child)...};
+        },
+        e.expressions());
   } else {
-    return std::type_identity<T>{};
+    return e;
   }
 }
 
-template <CFixedString auto symbol, CExpression T>
-using replace_matching_variable_as_const_t =
-    typename decltype(transform_leaves<symbol, true, T>())::type;
-
-template <CFixedString auto symbol, Numeric T, bool F>
-constexpr auto make_const_variable(const Variable<T, symbol, F> &) noexcept {
-  return Variable<T, symbol, true>{};
+template <CFixedString auto symbol, CExpression E>
+constexpr auto make_const_variable(const E &e) noexcept {
+  return refreeze<symbol, true>(e);
 }
 
-template <CFixedString auto symbol, Numeric T, CFixedString auto othersymbol,
-          bool F>
-  requires(symbol != othersymbol)
-constexpr auto
-make_const_variable(const Variable<T, othersymbol, F> &var) noexcept
-    -> Variable<T, othersymbol, F> {
-  return var;
-}
-
-template <CFixedString auto symbol, Numeric T, auto... V>
-constexpr auto make_const_variable(const Lit<T, V...> &c) noexcept {
-  return c;
-}
-
-template <CFixedString auto symbol, COperation Op, CExpression... C>
-constexpr auto make_const_variable(const Expression<Op, C...> &expr) noexcept
-    -> Expression<Op, replace_matching_variable_as_const_t<symbol, C>...> {
-  return std::apply(
-      [](const auto &...child) {
-        return Expression<Op,
-                          replace_matching_variable_as_const_t<symbol, C>...>{
-            make_const_variable<symbol>(child)...};
-      },
-      expr.expressions());
-}
-
-template <CFixedString auto symbol, CExpression Expr>
-using constify_unmatched_var_t =
-    typename decltype(transform_leaves<symbol, false, Expr>())::type;
-
-template <CFixedString auto symbol, Numeric T, bool F>
-constexpr auto
-make_all_constant_except(const Variable<T, symbol, F> &v) noexcept {
-  return v;
-}
-
-template <CFixedString auto symbol, Numeric T, CFixedString auto othersymbol,
-          bool F>
-  requires(symbol != othersymbol)
-constexpr auto
-make_all_constant_except(const Variable<T, othersymbol, F> &) noexcept
-    -> Variable<T, othersymbol, true> {
-  return {};
-}
-
-template <CFixedString auto symbol, Numeric T, auto... V>
-constexpr auto make_all_constant_except(const Lit<T, V...> &c) noexcept {
-  return c;
-}
-
-template <CFixedString auto symbol, COperation Op, CExpression... C>
-constexpr auto
-make_all_constant_except(const Expression<Op, C...> &expr) noexcept
-    -> constify_unmatched_var_t<symbol, Expression<Op, C...>> {
-  return std::apply(
-      [](const auto &...child) {
-        return constify_unmatched_var_t<symbol, Expression<Op, C...>>{
-            make_all_constant_except<symbol>(child)...};
-      },
-      expr.expressions());
+template <CFixedString auto symbol, CExpression E>
+constexpr auto make_all_constant_except(const E &e) noexcept {
+  return refreeze<symbol, false>(e);
 }
 
 // Alphabetical by name; a metafunction because that is what mp_sort takes.
@@ -164,9 +99,7 @@ inline constexpr std::size_t expr_arity_v =
 
 } // namespace detail
 
-template <std::size_t N> struct idx_t {
-  static constexpr std::size_t value = N;
-};
+template <std::size_t N> using idx_t = std::integral_constant<std::size_t, N>;
 
 template <std::size_t N> [[nodiscard]] consteval idx_t<N> idx() noexcept {
   return {};

@@ -22,9 +22,6 @@ template <CSymbolList Syms, CNumericBuffer Vals, CExpression... Es>
 constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
   return std::array{es.template eval_seeded<Syms>(vals)...};
 }
-} // namespace detail
-
-namespace detail {
 
 // The expressions are final by now, so this is where commutative operands get
 // ordered; folding already happened as they were built.
@@ -56,9 +53,8 @@ template <CExpression TFirst, CExpression... TRest>
 class Equation<TFirst, TRest...> {
 public:
   using value_type = typename TFirst::value_type;
-  using symbols =
-      sort_tuple_t<tuple_union_t<extract_symbols_from_expr_t<TFirst>,
-                                 extract_symbols_from_expr_t<TRest>...>>;
+  using symbols = tuple_union_t<extract_symbols_from_expr_t<TFirst>,
+                                extract_symbols_from_expr_t<TRest>...>;
 
   static constexpr std::size_t output_dim = 1 + sizeof...(TRest);
   static constexpr std::size_t input_dim = mp::mp_size<symbols>::value;
@@ -80,6 +76,16 @@ private:
       md_tensor<dual_scalar_t<value_type>,
                 md::extents<std::size_t, output_dim, input_dim>>;
 
+  // One derivative row at a point, the seed stripped.
+  [[nodiscard]] static constexpr auto eval_row(const auto &row,
+                                               const point_t &vals) noexcept {
+    return detail::strip_seed(std::apply(
+        [&](const auto &...ds) {
+          return detail::eval_all<symbols>(vals, ds...);
+        },
+        row));
+  }
+
   [[nodiscard]] constexpr auto
   jacobian_symbolic(const point_t &vals) const noexcept
     requires(output_dim > 1 && input_dim > 0)
@@ -87,12 +93,7 @@ private:
     jacobian_tensor_t J{};
     const auto rows = jacobian_rows();
     static_for<output_dim>([&]<std::size_t I>() {
-      assign_row(J, I,
-                 detail::strip_seed(std::apply(
-                     [&](const auto &...ds) {
-                       return detail::eval_all<symbols>(vals, ds...);
-                     },
-                     std::get<I>(rows))));
+      assign_row(J, I, eval_row(std::get<I>(rows), vals));
     });
     return J;
   }
@@ -111,20 +112,11 @@ private:
     return J;
   }
 
-  // Row 0, without the leading axis.  Reverse has no counterpart:
-  // detail::reverse_mode_jacobian already is one.
+  // Row 0, without the leading axis.
   [[nodiscard]] constexpr auto symbolic_row(const point_t &vals) const noexcept
     requires(output_dim == 1 && input_dim > 0)
   {
-    // By value: jacobian_rows() builds on demand, so a reference into
-    // std::get<0>(...) would outlive the tuple it names.
-    const auto rows = jacobian_rows();
-    const auto &row = std::get<0>(rows);
-    std::array<value_type, input_dim> grads{};
-    static_for<input_dim>([&]<std::size_t I>() {
-      grads[I] = std::get<I>(row).template eval_seeded<symbols>(vals);
-    });
-    return detail::strip_seed(grads);
+    return eval_row(std::get<0>(jacobian_rows()), vals);
   }
 
   // The dual level carries the tangent seed while the sweep carries the

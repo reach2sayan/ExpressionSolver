@@ -43,9 +43,7 @@ class PyCall;
 
 class PyEquation {
 public:
-  // Ordered
-  enum class Want : std::uint8_t { Values, Jacobian, Hessian, Hvp, Vjp,
-                                   Jvp, Gradient };
+  using Want = rt::Want;
 
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
              std::vector<rt::NodeId> roots)
@@ -170,8 +168,8 @@ public:
     // nothing to key on.
     const Point dir{w, outputs()};
     Lane &l = lane(Want::Vjp);
-    Block out{symbol_shape(at),
-              count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Block out{symbol_shape(at), count(l, &rt::Graph<double>::Blocks::jacobian),
+              at.size()};
     Cell cell;
     auto f = values_block(l, at);
     run_seeded(l, at, dir, f ? f->rows() : cell.rows(), out.rows(), {});
@@ -192,8 +190,8 @@ public:
     Scratch partials{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
             at.size()};
-    Block out{symbol_shape(at),
-              count(l, &rt::Graph<double>::Blocks::hessian), at.size()};
+    Block out{symbol_shape(at), count(l, &rt::Graph<double>::Blocks::hessian),
+              at.size()};
     Cell cell;
     auto f = values_block(l, at);
     run_seeded(l, at, dir, f ? f->rows() : cell.rows(), partials.rows(),
@@ -388,18 +386,10 @@ private:
       return;
     }
     // A compile already done, adopted only where graph, host and codegen
-    // options all still agree: adopt() cannot see that an object came from
-    // another graph, and running one that did is silently wrong arithmetic.
-    const auto lane_id = static_cast<std::uint8_t>(want);
-    const auto digest = rt::digest(*l.graph);
-    const auto stored =
-        std::ranges::find_if(objects_, [&](const rt::Object &o) {
-          return o.want == lane_id && o.digest == digest &&
-                 o.host == c->host_identity() &&
-                 jit::same_codegen(o.options, effective_options()) &&
-                 !o.code.empty();
-        });
-    if (stored != objects_.end()) {
+    // options all still agree.
+    if (const rt::Object *const stored =
+            rt::find_object(objects_, want, rt::digest(*l.graph),
+                            c->host_identity(), effective_options())) {
       // Shapes from the graph just frozen, never from the file: a forged entry
       // may supply code and a symbol but cannot claim an arity.
       const auto &layout = l.graph->layout();
@@ -557,8 +547,8 @@ private:
     };
 
     // Tapes are sized by the arena rather than the graph: it may have grown
-    // since the freeze, and live ids index below that.  A short batch sweeps one
-    // point at a time rather than padding out to kLanes.
+    // since the freeze, and live ids index below that.  A short batch sweeps
+    // one point at a time rather than padding out to kLanes.
     //
     // thread_local rather than a member: run() drops the GIL, so two Python
     // threads can be inside one Equation at once and a shared buffer would be a
@@ -628,19 +618,19 @@ private:
 
   // --- the Hessian ---------------------------------------------------------
 
-  // One function: the lane holds it compressed by colour, and the colouring says
-  // which (colour, row) column owns a given (i, j).
+  // One function: the lane holds it compressed by colour, and the colouring
+  // says which (colour, row) column owns a given (i, j).
   [[nodiscard]] pyb::tuple hessian_from_lane(const Point &at) {
     Lane &l = lane(Want::Hessian);
     const std::size_t n = arity();
     Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
             at.size()};
     Scratch partials{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
-    Scratch compressed{count(l, &rt::Graph<double>::Blocks::hessian), at.size()};
+    Scratch compressed{count(l, &rt::Graph<double>::Blocks::hessian),
+                       at.size()};
     Cell cell;
     auto f = values_block(l, at);
-    run(l, at, f ? f->rows() : cell.rows(), partials.rows(),
-        compressed.rows());
+    run(l, at, f ? f->rows() : cell.rows(), partials.rows(), compressed.rows());
     scatter_jacobian(partials, g, at.size());
 
     const rt::Coloring &c = l.graph->coloring();
@@ -665,8 +655,8 @@ private:
   }
 
   // A system: one sweep per root, read off the arena.  A frozen graph carries a
-  // single colouring, so no lane could hold m of these -- which is why this is a
-  // point at a time and says so.
+  // single colouring, so no lane could hold m of these -- which is why this is
+  // a point at a time and says so.
   [[nodiscard]] pyb::tuple hessian_from_arena(const Point &at) {
     if (at.batched() && at.size() != 1) {
       fail_with(errc::wrong_column_count);
@@ -677,12 +667,11 @@ private:
     std::vector<double> point(n);
     std::ranges::transform(at.columns(), point.begin(),
                            [](const double *c) { return *c; });
-    // Values, partials and Hessian::at's compressed cells: what the three blocks
-    // below read, and nothing of the arena beyond it.
+    // Values, partials and Hessian::at's compressed cells: what the three
+    // blocks below read, and nothing of the arena beyond it.
     auto wanted = blocks | std::views::transform(&rt::Hessian::compressed) |
                   std::views::join | impl::to<std::vector<rt::NodeId>>();
-    impl::append(wanted, blocks |
-                             std::views::transform(&rt::Hessian::partial) |
+    impl::append(wanted, blocks | std::views::transform(&rt::Hessian::partial) |
                              std::views::join);
     impl::append(wanted, blocks | std::views::transform(&rt::Hessian::zero));
     impl::append(wanted, roots_);
@@ -799,12 +788,11 @@ private:
   // allocation, and every derivative call serves both.
   [[nodiscard]] std::optional<Block> values_block(const Lane &l,
                                                   const Point &at) {
-    return scalar(at) ? std::nullopt
-                      : std::optional<Block>{
-                            std::in_place,
-                            shape_of({ssize(outputs())}, at),
-                            count(l, &rt::Graph<double>::Blocks::values),
-                            at.size()};
+    return scalar(at)
+               ? std::nullopt
+               : std::optional<Block>{
+                     std::in_place, shape_of({ssize(outputs())}, at),
+                     count(l, &rt::Graph<double>::Blocks::values), at.size()};
   }
 
   [[nodiscard]] static pyb::object value_of(std::optional<Block> &f,
@@ -891,9 +879,8 @@ public:
   [[nodiscard]] pyb::object hessian() const { return read(h_); }
 
   [[nodiscard]] std::string repr() const {
-    static constexpr std::array kWants{"value", "jacobian", "hessian",
-                                       "hvp",   "vjp",      "jvp",
-                                       "gradient"};
+    static constexpr std::array kWants{"value", "jacobian", "hessian", "hvp",
+                                       "vjp",   "jvp",      "gradient"};
     return std::format("<ddx.Call {} at {} point{}>",
                        kWants[static_cast<std::size_t>(want_)], at_.size(),
                        at_.size() == 1 ? "" : "s");
@@ -925,14 +912,13 @@ private:
       fail_with(errc::wrong_column_count);
     }
     const Array &a = b->bound();
-    return a.ndim() == 0 ? pyb::object{pyb::float_(*a.data())}
-                         : pyb::object{a};
+    return a.ndim() == 0 ? pyb::object{pyb::float_(*a.data())} : pyb::object{a};
   }
 
   pyb::object owner_; // the equation, kept alive under the raw pointer below
   PyEquation *eq_;
   PyEquation::Want want_;
-  Array x_;   // declared before at_, which points into it
+  Array x_; // declared before at_, which points into it
   Point at_;
   std::optional<Block> f_;
   std::optional<Scratch> partials_; // the pattern's cells, on their way to g_

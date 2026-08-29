@@ -7,12 +7,13 @@
 #include "rt/graph.hpp"
 
 #include <boost/describe.hpp>
-#include <boost/describe/detail/bases.hpp>
-#include <boost/describe/detail/members.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -25,13 +26,28 @@ namespace ddx::rt {
 // recompile, never an error.
 struct Object {
   std::uint8_t want = 0; // Equation's Want: values, jacobian, hessian
-  std::string symbol; // underivable, so adopt() is handed it back verbatim
+  std::string symbol;    // underivable, so adopt() is handed it back verbatim
   // jit::Compiler::host_identity(): triple, CPU, folded features, LLVM version.
   std::string host;
   std::uint64_t digest = 0; // digest() of the lane's frozen graph
   jit::Options options;
   std::vector<std::byte> code;
 };
+
+// The stored kernel for a lane, if graph, host and codegen options all agree:
+// adopt() cannot see that an object came from another graph, so nothing
+// reaches it unchecked.
+[[nodiscard]] inline const Object *find_object(std::span<const Object> objects,
+                                               Want want, std::uint64_t digest,
+                                               std::string_view host,
+                                               const jit::Options &options) {
+  const auto it = std::ranges::find_if(objects, [&](const Object &o) {
+    return o.want == std::to_underlying(want) && o.digest == digest &&
+           o.host == host && jit::same_codegen(o.options, options) &&
+           !o.code.empty();
+  });
+  return it == objects.end() ? nullptr : &*it;
+}
 
 // All the C++ facade and PyEquation share, and so the only thing serialised.
 template <impl::Numeric T> struct Snapshot {
@@ -49,25 +65,15 @@ template <impl::Numeric T> struct Snapshot {
   // The staleness key: rebuilding the model reproduces this prefix.
   std::uint32_t model_nodes = 0;
   std::vector<Object> objects;
+  BOOST_DESCRIBE_CLASS(Snapshot, (),
+                       (symbols, nodes, roots, jacobian, hessians, hvp, vjp,
+                        jvp, options, model_nodes, objects),
+                       (), ())
 };
 
 } // namespace ddx::rt
 
 namespace ddx::rt {
-
-template <impl::Numeric T> BOOST_DESCRIBE_BASES(Node<T>, )
-template <impl::Numeric T>
-BOOST_DESCRIBE_PUBLIC_MEMBERS(Node<T>, op, a, b, c, value, slot)
-template <impl::Numeric T> BOOST_DESCRIBE_PROTECTED_MEMBERS(Node<T>)
-template <impl::Numeric T> BOOST_DESCRIBE_PRIVATE_MEMBERS(Node<T>)
-
-template <impl::Numeric T> BOOST_DESCRIBE_BASES(Snapshot<T>, )
-template <impl::Numeric T>
-BOOST_DESCRIBE_PUBLIC_MEMBERS(Snapshot<T>, symbols, nodes, roots, jacobian,
-                              hessians, hvp, vjp, jvp, options, model_nodes,
-                              objects)
-template <impl::Numeric T> BOOST_DESCRIBE_PROTECTED_MEMBERS(Snapshot<T>)
-template <impl::Numeric T> BOOST_DESCRIBE_PRIVATE_MEMBERS(Snapshot<T>)
 
 BOOST_DESCRIBE_STRUCT(Sparsity, (), (rowptr, col, rows, columns))
 BOOST_DESCRIBE_STRUCT(Jacobian, (), (value, partial, pattern, zero))

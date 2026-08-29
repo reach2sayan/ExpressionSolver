@@ -1,14 +1,16 @@
 #pragma once
 
 #include "ops/unary_math.hpp" // DDX_UNARY_MATH_TABLE
+#include "util/ranges.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <vector>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // The runtime mirror of the compile-time operation set.  Rows are (factory
 // spelling, enumerator, label), the shape DDX_UNARY_MATH_TABLE already has.
@@ -45,7 +47,7 @@ namespace ddx::rt {
 // Their own table, and so no descriptor: the derivative is zero wherever it
 // exists, which is what rt/derivative.hpp's `default` already answers.
 #define DDX_RT_COMPARE_TABLE(X)                                                \
-  X(lt, Lt, "<", impl::detail::lt_impl)                                  \
+  X(lt, Lt, "<", impl::detail::lt_impl)                                        \
   X(le, Le, "<=", impl::detail::le_impl)
 
 // The one ternary: `c != 0 ? t : f`, both arms evaluated.
@@ -108,7 +110,7 @@ inline constexpr std::array op_info = [] {
   return t;
 }();
 
-// A duplicate would make opcode_of_label() ambiguous, and the compile-time ops
+// A duplicate would make opcode_of() ambiguous, and the compile-time ops
 // pick their enumerator by label.
 static_assert([] {
   auto labels = op_info;
@@ -118,31 +120,30 @@ static_assert([] {
 
 } // namespace detail
 
+namespace detail {
 // An OpCode from outside the builder -- a deserialised graph, a cast byte --
-// need not name a row, so both answer out of range.
+// need not name a row, so out of range answers the unknown row.
+inline constexpr OpInfo unknown{"?", "?", 0};
+[[nodiscard]] constexpr const OpInfo &info(OpCode op) noexcept {
+  const auto i = static_cast<std::size_t>(op);
+  return i < op_count ? op_info[i] : unknown;
+}
+} // namespace detail
+
 [[nodiscard]] constexpr std::string_view label_of(OpCode op) noexcept {
-  const auto i = static_cast<std::size_t>(op);
-  return i < op_count ? detail::op_info[i].label : "?";
+  return detail::info(op).label;
 }
-
 [[nodiscard]] constexpr std::string_view name_of(OpCode op) noexcept {
-  const auto i = static_cast<std::size_t>(op);
-  return i < op_count ? detail::op_info[i].name : "?";
+  return detail::info(op).name;
+}
+[[nodiscard]] constexpr std::uint8_t arity_of(OpCode op) noexcept {
+  return detail::info(op).arity;
 }
 
-[[nodiscard]] consteval std::optional<OpCode>
-opcode_of_label(std::string_view label) noexcept {
-  const auto row =
-      std::ranges::find(detail::op_info, label, &detail::OpInfo::label);
-  return row == detail::op_info.end() ? std::nullopt
-                                      : std::optional{static_cast<OpCode>(
-                                            row - detail::op_info.begin())};
-}
-
-// The same lookup at run time, which is what a loader has: byte values are
-// table-order, so appending a transcendental shifts every enumerator above it,
-// and a file names its opcodes by label and remaps them on load.
-[[nodiscard]] inline std::optional<OpCode>
+// By label, at compile time for the bridge and at run time for a loader: byte
+// values are table-order, so appending a transcendental shifts every enumerator
+// above it, and a file names its opcodes by label and remaps them on load.
+[[nodiscard]] constexpr std::optional<OpCode>
 opcode_of(std::string_view label) noexcept {
   const auto row =
       std::ranges::find(detail::op_info, label, &detail::OpInfo::label);
@@ -152,17 +153,8 @@ opcode_of(std::string_view label) noexcept {
 }
 
 [[nodiscard]] inline std::vector<std::string> opcode_labels() {
-  std::vector<std::string> out;
-  out.reserve(op_count);
-  for (const auto &i : detail::op_info) {
-    out.emplace_back(i.label);
-  }
-  return out;
-}
-
-[[nodiscard]] constexpr std::uint8_t arity_of(OpCode op) noexcept {
-  const auto i = static_cast<std::size_t>(op);
-  return i < op_count ? detail::op_info[i].arity : std::uint8_t{0};
+  return detail::op_info | std::views::transform(&detail::OpInfo::label) |
+         impl::to<std::vector<std::string>>();
 }
 
 template <impl::Numeric T>
@@ -178,8 +170,8 @@ template <impl::Numeric T>
 
 // Which column of `xs` a leaf reads: the symbols first, then the seeds.
 // Written once, because the interpreter, codegen and the ABI have to agree.
-[[nodiscard]] constexpr std::size_t
-input_column(std::size_t symbols, OpCode op, std::uint32_t slot) noexcept {
+[[nodiscard]] constexpr std::size_t input_column(std::size_t symbols, OpCode op,
+                                                 std::uint32_t slot) noexcept {
   return op == OpCode::Var ? slot : symbols + slot;
 }
 

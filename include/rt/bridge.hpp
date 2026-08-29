@@ -28,7 +28,7 @@ to_graph(Builder<T> &b, const impl::CExpression auto &e) {
                static_cast<double>(e.template eval_seeded<impl::mp::mp_list<>>(
                    std::array<double, 1>{})));
   } else {
-    constexpr auto code = opcode_of_label(U::op_type::label);
+    constexpr auto code = opcode_of(U::op_type::label);
     static_assert(code.has_value(), "no OpCode row carries this op's label");
     return std::apply(
         [&](const auto &first, const auto &...rest) {

@@ -42,24 +42,6 @@ BOOST_DESCRIBE_STRUCT(FileHeader, (),
                       (format, schema, scalar_size, scalar_kind, model_nodes,
                        model_digest, payload_crc))
 
-struct Container;
-
-// The file and its prologue:
-class Store {
-  friend struct Container;
-
-  static DDX_API void put_header(const FileHeader &h, std::span<std::byte> into);
-  static DDX_API result<FileHeader> get_header(std::span<const std::byte> bytes,
-                                               std::string_view magic);
-  static DDX_API std::uint32_t checksum(std::span<const std::byte> bytes);
-  static DDX_API result<std::vector<std::byte>>
-  read_file(const std::filesystem::path &path);
-  // Staged beside the target and renamed over it: a reader never sees a
-  // half-written file, and a failed save leaves the old one standing.
-  static DDX_API result<void> write_file(const std::filesystem::path &path,
-                                         std::span<const std::byte> bytes);
-};
-
 struct Container {
   // What a caller slicing a file has to know, and the only sizes anyone does.
   static constexpr std::size_t magic_bytes = 8;
@@ -80,6 +62,8 @@ struct Container {
 
   [[nodiscard]] static DDX_API result<std::vector<std::byte>>
   read(const std::filesystem::path &path);
+  // Staged beside the target and renamed over it: a reader never sees a
+  // half-written file, and a failed save leaves the old one standing.
   [[nodiscard]] static DDX_API result<void>
   write(const std::filesystem::path &path, std::span<const std::byte> bytes);
 
@@ -110,6 +94,13 @@ struct Container {
   template <typename V> [[nodiscard]] static constexpr std::uint32_t stamp() {
     return schema_of<FileHeader, V>();
   }
+
+private:
+  static DDX_API void put_header(const FileHeader &h,
+                                 std::span<std::byte> into);
+  static DDX_API result<FileHeader> get_header(std::span<const std::byte> bytes,
+                                               std::string_view magic);
+  static DDX_API std::uint32_t checksum(std::span<const std::byte> bytes);
 };
 
 } // namespace ddx::rt::detail

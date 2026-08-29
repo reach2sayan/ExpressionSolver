@@ -84,10 +84,6 @@ template <std::size_t N>
           .arity = N};
 }
 
-// Uninitialised: the sweep writes every cell.
-[[nodiscard]] inline std::unique_ptr<double[]> raw_buffer(std::size_t k) {
-  return std::make_unique_for_overwrite<double[]>(k);
-}
 } // namespace detail
 
 // Caller-owned scratch for a sweep's seeded variables, reused across a loop
@@ -105,18 +101,11 @@ template <Numeric D> struct SweepWorkspace {
 
   boost::container::small_vector<D, inline_capacity> dof;
 
+  // Storage valid until the next seed on this workspace.  assign(), not
+  // resize() then transform: the second writes every element twice.
   [[nodiscard]] D *seed(const std::span<const double> x) {
-    return seed_with(x, [](const double v) { return D{v}; });
-  }
-
-private:
-  // Storage valid until the next seed on this workspace.
-  template <std::regular_invocable<double> Make>
-    requires std::convertible_to<std::invoke_result_t<Make &, double>, D>
-  [[nodiscard]] D *seed_with(const std::span<const double> x, Make make) {
-    // assign(), not resize() then transform: the second writes every element
-    // twice, once value-initialised and once with the seed.
-    const auto seeded = x | std::views::transform(make);
+    const auto seeded =
+        x | std::views::transform([](const double v) { return D{v}; });
     dof.assign(std::ranges::begin(seeded), std::ranges::end(seeded));
     return dof.data();
   }

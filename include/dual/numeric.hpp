@@ -123,8 +123,9 @@ HessianOwned hessian(F &&f, const std::span<const double> x,
                      CIndexRange auto &&active) {
   const std::size_t m = std::ranges::size(active);
   HessianWorkspace ws;
-  auto grad = raw_buffer(m);
-  auto hess = raw_buffer(m * m);
+  // Uninitialised: the sweep writes every cell.
+  auto grad = std::make_unique_for_overwrite<double[]>(m);
+  auto hess = std::make_unique_for_overwrite<double[]>(m * m);
   const double value = hessian_into(static_cast<F &&>(f), ws.seed(x),
                                     static_cast<decltype(active) &&>(active),
                                     grad.get(), hess.get());

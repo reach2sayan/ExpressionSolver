@@ -2,6 +2,9 @@
 
 #include "ops/numeric.hpp"
 
+#include <boost/mp11/algorithm.hpp>
+#include <boost/mp11/list.hpp>
+
 #include <concepts>
 #include <cstddef>
 #include <type_traits>
@@ -24,6 +27,8 @@ template <Numeric T> struct dual_scalar_type<Dual<T>> {
 };
 template <Numeric T> using dual_scalar_t = typename dual_scalar_type<T>::type;
 
+// Unconstrained on purpose: through dual_scalar_type it would ask Numeric<Dual>
+// of the very operators Numeric<Dual> is being decided by.
 template <DualLike X> struct dual_value_type;
 template <Numeric T> struct dual_value_type<Dual<T>> {
   using type = T;
@@ -39,17 +44,10 @@ concept DualCompatible = DualLike<A> && DualLike<B> &&
 // component is the Nth derivative -- what extract_nth reads and
 // make_mixed_seed seeds for.  Ref: Fike & Alonso, AIAA 2011-886;
 // docs/hyperdual_nth_order_by_example.md draws the lattice.
-template <Numeric T, std::size_t N> consteval auto nth_dual_impl() noexcept {
-  if constexpr (N == 0) {
-    return std::type_identity<T>{};
-  } else {
-    using Inner = typename decltype(nth_dual_impl<T, N - 1>())::type;
-    return std::type_identity<Dual<Inner>>{};
-  }
-}
-
+template <typename Inner, typename> using wrap_dual = Dual<Inner>;
 template <Numeric T, std::size_t N>
-using nth_dual_t = typename decltype(nth_dual_impl<T, N>())::type;
+using nth_dual_t = boost::mp11::mp_fold<
+    boost::mp11::mp_repeat_c<boost::mp11::mp_list<void>, N>, T, wrap_dual>;
 
 template <Numeric T> inline constexpr std::size_t dual_depth_v = 0;
 template <Numeric T>
@@ -79,14 +77,35 @@ template <Numeric U> struct ConstantEmbedder {
   }
 };
 
-template <std::size_t N, Numeric T>
-constexpr auto get_real_part(const T &x) noexcept {
+// N levels down along component I: 0 is the value chain, 1 the tangent chain.
+template <std::size_t N, std::size_t I, Numeric T>
+constexpr auto component(const T &x) noexcept {
   if constexpr (N == 0) {
     return x;
   } else {
-    return get_real_part<N - 1>(x.template get<0>());
+    return component<N - 1, I>(x.template get<I>());
   }
 }
+template <std::size_t N, Numeric T>
+constexpr auto get_real_part(const T &x) noexcept {
+  return component<N, 0>(x);
+}
+
+// `a op= b` spelled as `a = a op b`: the binary operators are the rule, and the
+// gate is the body itself, so whatever they refuse is refused here.
+struct compound_from_binary {
+#define DDX_COMPOUND_FROM_BINARY(OP)                                           \
+  template <typename Self, typename B>                                         \
+    requires requires(Self &d, const B &o) { d = d OP o; }                     \
+  constexpr Self &operator OP##=(this Self & self, const B & o) noexcept {     \
+    return self = self OP o;                                                   \
+  }
+  DDX_COMPOUND_FROM_BINARY(+)
+  DDX_COMPOUND_FROM_BINARY(-)
+  DDX_COMPOUND_FROM_BINARY(*)
+  DDX_COMPOUND_FROM_BINARY(/)
+#undef DDX_COMPOUND_FROM_BINARY
+};
 
 template <typename X>
 concept DualOrArithmetic = DualLike<X> || CArithmetic<X>;

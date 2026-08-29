@@ -30,7 +30,7 @@ template <Numeric Scalar, CSymbolList SymList> struct ValueMap {
 private:
   template <FixedString S>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
-    constexpr auto idx = find_index_of_symbol<S, SymList>();
+    constexpr auto idx = symbol_index<S, SymList>();
     static_assert(idx < arity, "ValueMap: symbol not present in map");
     if constexpr (std::is_lvalue_reference_v<decltype(self)>) {
       return std::forward<decltype(self)>(self).slots[idx];
@@ -59,7 +59,7 @@ namespace detail {
 template <CSymbolList SymList, std::size_t N, CSymbol... ArgSyms>
 consteval std::array<std::size_t, N> arg_of_canonical() noexcept {
   const std::array<std::size_t, N> canonical_of_arg{
-      find_index_of_symbol<ArgSyms::value, SymList>()...};
+      symbol_index<ArgSyms::value, SymList>()...};
   std::array<std::size_t, N> out{};
   for (const auto [j, slot] : std::views::enumerate(canonical_of_arg)) {
     out[slot] = static_cast<std::size_t>(j);
@@ -72,7 +72,7 @@ template <CSymbolList ExprSyms, CSymbolList MapSyms, std::size_t N>
 consteval std::array<std::size_t, N> symbol_permutation() noexcept {
   std::array<std::size_t, N> p{};
   static_for<N>([&]<std::size_t I>() {
-    p[I] = find_index_of_symbol<mp::mp_at_c<ExprSyms, I>::value, MapSyms>();
+    p[I] = symbol_index<mp::mp_at_c<ExprSyms, I>::value, MapSyms>();
   });
   return p;
 }
@@ -183,6 +183,16 @@ template <typename... Args>
 concept CDynamicPoint =
     sizeof...(Args) == 1 && (std::ranges::input_range<Args> && ...) &&
     !(CTupleLike<Args> && ...);
+// The first N of a range, counted, so a short one can be told from a whole one.
+template <Numeric U, std::size_t N>
+[[nodiscard]] constexpr std::pair<std::array<U, N>, std::size_t>
+take_point(const std::ranges::input_range auto &r) noexcept {
+  std::array<U, N> vals{};
+  std::size_t i = 0;
+  std::ranges::for_each(r | std::views::take(N),
+                        [&](const auto &v) { vals[i++] = static_cast<U>(v); });
+  return {vals, i};
+}
 
 // Every spelling of "a point" reduced to an array of N values in canonical
 // symbol order.  Against a symbol list, since Equation supplies its own.
@@ -222,12 +232,7 @@ make_point(const Args &...args) noexcept {
           std::tuple_size_v<std::remove_cvref_t<decltype(r)>> == N,
           "eval: range size must equal the expression's symbol count "
           "(see symbol_order<Expr>())");
-      std::array<U, N> vals{};
-      std::size_t i = 0;
-      std::ranges::for_each(r | std::views::take(N), [&](const auto &v) {
-        vals[i++] = static_cast<U>(v);
-      });
-      return vals;
+      return take_point<U, N>(r).first;
     }(args...);
   }
 
@@ -248,12 +253,8 @@ template <CSymbolList Syms, Numeric U, std::size_t N, CEvalArg... Args>
 [[nodiscard]] constexpr result<std::array<U, N>>
 make_point(const Args &...args) noexcept {
   return [&](const auto &r) -> result<std::array<U, N>> {
-    std::array<U, N> vals{};
-    std::size_t i = 0;
-    std::ranges::for_each(
-        r | std::views::take(N),
-        [&](const auto &v) { vals[i++] = static_cast<U>(v); });
-    if (i != N) {
+    const auto [vals, got] = take_point<U, N>(r);
+    if (got != N) {
       return fail(errc::short_point);
     }
     return vals;

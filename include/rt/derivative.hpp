@@ -27,11 +27,6 @@ template <typename Fn, impl::Numeric T>
   }
 }
 
-// The rule bodies are written against Numeric, so at T = RTExpression the same
-// descriptors build nodes instead of computing.  They return the adjoint
-// contribution rather than the bare partial, the association of `adj * dU`
-// being what the BitExactness hash records.
-//
 // Nothing here passes `f` to a binary rule: the descriptors recompute it, which
 // is free on a graph since Builder::make interns it back onto the primal.
 template <impl::Numeric S>
@@ -175,9 +170,7 @@ template <impl::Numeric T>
 tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
               std::span<const NodeId> tangent) {
   const auto n = static_cast<NodeId>(b.size());
-  const auto live = detail::reachable(n, roots, [&b](NodeId v, auto &&mark) {
-    std::ranges::for_each(detail::operands_of(b, v), mark);
-  });
+  const auto live = detail::reachable(b, roots);
   std::vector<NodeId> d(n, no_node);
 
   for (NodeId v = 0; v < n; ++v) {
@@ -270,11 +263,10 @@ build_jacobian_impl(Builder<T> &b, std::span<const NodeId> roots) {
     const auto g = build_reverse_jacobian(b, r);
     // The predicate the sweep itself refuses a contribution by, so the two
     // cannot drift -- and it reads -0.0 the same way.
-    auto nonzero =
-        g.partial | std::views::enumerate |
-        std::views::filter([&b](const auto &cell) {
-          return !b.is_constant(std::get<1>(cell), T{0});
-        });
+    auto nonzero = g.partial | std::views::enumerate |
+                   std::views::filter([&b](const auto &cell) {
+                     return !b.is_constant(std::get<1>(cell), T{0});
+                   });
     for (const auto [symbol, node] : nonzero) {
       j.partial.push_back(node);
       j.pattern.col.push_back(static_cast<std::uint32_t>(symbol));
@@ -316,9 +308,8 @@ struct Hessian {
   // Scattered on read, so a caller never sees the compressed form: a cell no
   // column owns has no storage and answers the colouring's structural zero.
   [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
-    const std::size_t c = coloring.color[j];
-    return coloring.target(c, i) == j ? compressed[coloring.column(c, i)]
-                                      : zero;
+    const std::size_t k = coloring.cell_of(i, j);
+    return k == no_column ? zero : compressed[k];
   }
   [[nodiscard]] constexpr std::size_t colors() const { return coloring.count; }
 };
@@ -362,6 +353,22 @@ template <impl::Numeric T>
   return h;
 }
 
+namespace detail {
+// Σ_j seed_j * ids[j], the re-rooting every seeded product sweeps from.  A
+// structurally-zero partial is the literal zero node, so Mul/ZeroB and Add/Zero
+// drop its term before either node exists.
+template <impl::Numeric T>
+[[nodiscard]] constexpr RTExpression<T>
+seeded_sum(Builder<T> &b, std::span<const NodeId> ids) {
+  auto term = [&b, ids](std::size_t j) {
+    return seed(b, static_cast<std::uint32_t>(j)) * RTExpression<T>{b, ids[j]};
+  };
+  return std::ranges::fold_left(std::views::iota(0uz, ids.size()) |
+                                    std::views::transform(std::move(term)),
+                                RTExpression<T>{0}, std::plus<>{});
+}
+} // namespace detail
+
 // H(x)v without ever forming H.  Sweeping from s = Sum_j v_j df/dx_j gives
 // ds/dx_i = Sum_j v_j d2f/dx_i dx_j = (Hv)_i, so the direction goes into the
 // same fold the colouring above sums and one sweep answers.
@@ -377,16 +384,7 @@ template <impl::Numeric T>
 [[nodiscard]] constexpr HessianVector build_hvp_impl(Builder<T> &b,
                                                      NodeId root) {
   const auto g = build_reverse_jacobian(b, root);
-  // A structurally-zero partial is the literal zero node, so Mul/ZeroB and
-  // Add/Zero drop its term before either node exists.
-  auto term = [&b, &g](std::size_t j) {
-    return seed(b, static_cast<std::uint32_t>(j)) *
-           RTExpression<T>{b, g.partial[j]};
-  };
-  const auto along = std::ranges::fold_left(
-      std::views::iota(0uz, g.partial.size()) |
-          std::views::transform(std::move(term)),
-      RTExpression<T>{0}, std::plus<>{});
+  const auto along = detail::seeded_sum(b, g.partial);
   return {.value = g.value,
           .partial = g.partial,
           .product = build_reverse_jacobian(b, along.id(b)).partial};
@@ -404,14 +402,7 @@ struct VectorJacobian {
 template <impl::Numeric T>
 [[nodiscard]] constexpr VectorJacobian
 build_vjp_impl(Builder<T> &b, std::span<const NodeId> roots) {
-  auto term = [&b, roots](std::size_t i) {
-    return seed(b, static_cast<std::uint32_t>(i)) *
-           RTExpression<T>{b, roots[i]};
-  };
-  const auto along = std::ranges::fold_left(
-      std::views::iota(0uz, roots.size()) |
-          std::views::transform(std::move(term)),
-      RTExpression<T>{0}, std::plus<>{});
+  const auto along = detail::seeded_sum(b, roots);
   return {.value = {roots.begin(), roots.end()},
           .product = build_reverse_jacobian(b, along.id(b)).partial};
 }

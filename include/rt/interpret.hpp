@@ -113,18 +113,17 @@ constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
 // evaluate_into; a batch's tail repeats a point, and those lanes are not read.
 //
 // `contractions` is detail::contraction_table() over the same `order` and in
-// step with it: a multiply feeding an add taken as one rounding, resolved at the
-// freeze because it cannot change between points.  A falsy table contracts
+// step with it: a multiply feeding an add taken as one rounding, resolved at
+// the freeze because it cannot change between points.  A falsy table contracts
 // nothing.  Graph::contracted_order() is the order that goes with a contracting
 // one; the whole live order is also correct and computes a multiply for nobody.
 template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
           std::ranges::input_range Order, impl::Numeric U>
   requires impl::Numeric<std::ranges::range_value_t<R>> &&
            std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
-constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
-                              Order order,
-                              std::span<const Contraction> contractions,
-                              std::span<U> tape) {
+constexpr void
+evaluate_block(const Builder<T> &b, const R &point_lanes, Order order,
+               std::span<const Contraction> contractions, std::span<U> tape) {
   const auto at = std::ranges::begin(point_lanes);
   const std::size_t symbols = b.symbols().size();
   const auto lane = [&tape](NodeId v) {
@@ -160,10 +159,7 @@ constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
 template <impl::Numeric U, impl::Numeric T>
 [[nodiscard]] constexpr bool computes_at(const Builder<T> &b,
                                          std::span<const NodeId> roots) {
-  const auto live =
-      detail::reachable(b.size(), roots, [&b](NodeId v, auto &&mark) {
-        std::ranges::for_each(detail::operands_of(b, v), mark);
-      });
+  const auto live = detail::reachable(b, roots);
   return std::ranges::all_of(
       std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())),
       [&](NodeId v) { return !live[v] || supports<U>(b[v].op); });
@@ -201,14 +197,10 @@ template <impl::Numeric T, std::ranges::random_access_range R>
                                                 std::span<const NodeId> roots,
                                                 const R &point) {
   using U = std::ranges::range_value_t<R>;
-  const auto live =
-      detail::reachable(b.size(), roots, [&b](NodeId v, auto &&mark) {
-        std::ranges::for_each(detail::operands_of(b, v), mark);
-      });
+  const auto live = detail::reachable(b, roots);
   std::vector<U> v(b.size());
   // Not const: filter_view caches its begin, so it is not a const range.
-  auto order = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size())) |
-               std::views::filter([&live](NodeId i) { return live[i]; });
+  auto order = detail::live_ids(live);
   const auto contractions = detail::contraction_table(b, order);
   evaluate_into(b, point, order, contractions, std::span<U>{v});
   return v;
