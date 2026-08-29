@@ -62,13 +62,15 @@ jobs:
         run: |
           angled=$(grep -rnE '#[[:space:]]*include[[:space:]]*<[^>]*/' include --include='*.hpp' \
                    | grep -v third_party | grep -v '<boost/' || true)
-          # A quoted include is one of ours and must resolve inside include/;
-          # one that does not is a bundled dependency under another spelling.
+          # A quoted include is one of ours and must resolve inside include/,
+          # as a header or as the .in template CMake configures into the build
+          # tree; one that does not is a bundled dependency under another spelling.
           quoted=$( { grep -rnE '#[[:space:]]*include[[:space:]]*"' include --include='*.hpp' \
                        | grep -v third_party || true; } \
                    | while IFS=: read -r f n rest; do
                        h=${rest#*\"}; h=${h%%\"*}
-                       [ -e "$(dirname "$f")/$h" ] || [ -e "include/$h" ] || echo "$f:$n: $h"
+                       [ -e "$(dirname "$f")/$h" ] || [ -e "include/$h" ] || [ -e "include/$h.in" ] \
+                         || echo "$f:$n: $h"
                      done)
           # The core must never reach into rt/.
           core=$(grep -rnE '#[[:space:]]*include[[:space:]]*"rt/' include --include='*.hpp' \
