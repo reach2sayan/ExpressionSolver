@@ -5,6 +5,7 @@
 // code that implements them -- grep "Ref:".
 #include "symbolic/equation.hpp"
 #include "symbolic/record.hpp"
+#include "util/version.hpp"
 
 namespace ddx {
 

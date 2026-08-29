@@ -83,7 +83,6 @@ LLVM_DEFINES = (
     "-DLLVM_ENABLE_ASSERTIONS=OFF",
 )
 
-
 def native_target() -> str:
     """Name the LLVM target that codegens for this machine."""
     machine = platform.machine().lower()
@@ -93,12 +92,10 @@ def native_target() -> str:
         return "AArch64"
     sys.exit(f"build_llvm: no LLVM target known for {machine}; pass --targets")
 
-
 def run(*args: str) -> None:
     """Echo and run, failing loudly."""
     print("+", " ".join(args), flush=True)
     subprocess.run(args, check=True)
-
 
 def ensure_tools() -> None:
     """CMake and Ninja from PyPI when the PATH has neither, onto this interpreter."""
@@ -109,7 +106,6 @@ def ensure_tools() -> None:
     scripts = sysconfig.get_path("scripts")
     os.environ["PATH"] = scripts + os.pathsep + os.environ["PATH"]
 
-
 def fetch(work: Path, name: str) -> None:
     """Download one pinned source, check its digest, unpack it under work."""
     url, sha256 = SOURCES[name]
@@ -118,15 +114,12 @@ def fetch(work: Path, name: str) -> None:
     with urllib.request.urlopen(url) as response, archive.open("wb") as out:
         shutil.copyfileobj(response, out)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    if digest != sha256:
-        sys.exit(f"build_llvm: {name}: sha256 {digest}, expected {sha256}")
+    if digest != sha256: sys.exit(f"build_llvm: {name}: sha256 {digest}, expected {sha256}")
     with tarfile.open(archive) as tar:
         tar.extractall(work)
 
 
-def cmake_install(
-    source: Path, build: Path, prefix: Path, jobs: int, *defines: str
-) -> None:
+def cmake_install(source: Path, build: Path, prefix: Path, jobs: int, *defines: str) -> None:
     """Configure, build and install one CMake project: Release, PIC."""
     run(
         "cmake",

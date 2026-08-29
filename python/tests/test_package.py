@@ -20,6 +20,16 @@ def test_everything_named_in_all_is_importable() -> None:
         assert hasattr(ddx, name), name
 
 
+def test_the_version_is_the_extensions() -> None:
+    """One number, CMake's: the module says it and the package repeats it."""
+    import re
+
+    from ddx import _ddx
+
+    assert ddx.__version__ == _ddx.__version__
+    assert re.fullmatch(r"\d+\.\d+\.\d+", ddx.__version__), ddx.__version__
+
+
 def test_the_package_is_typed() -> None:
     from importlib.resources import files
 

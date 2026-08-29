@@ -24,7 +24,6 @@ operation, and every free identifier a symbol.
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
 from ._ddx import (Backend, Call, Expression, VecLib, Want, abs,  # noqa: A004  -- the opcode is spelled `abs`, as it is in C++
@@ -73,9 +72,10 @@ if TYPE_CHECKING:
 else:
 	from ._ddx import Equation, Error, equation, load
 
-try: __version__ = version("ddx")
-except PackageNotFoundError:  # an in-tree build that was never installed
-	__version__ = "0+unknown"
+# From the extension, which was built from CMake's project() line: the same
+# number an installed package's metadata carries, and there for an in-tree
+# build that was never installed.
+from ._ddx import __version__
 
 # The two places pydantic sits between a caller and the struct.
 def _get_options(self: Equation) -> Options:

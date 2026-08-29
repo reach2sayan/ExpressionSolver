@@ -149,6 +149,12 @@ cmake --build --preset release_jit
 ctest --preset release_jit
 ```
 
+The version is stated once, in `CMakeLists.txt`'s `project()` line. CMake
+writes `util/version.hpp` from it — `DDX_VERSION_MAJOR`/`MINOR`/`PATCH`,
+`DDX_VERSION` (`100200` for 1.2.0), `DDX_VERSION_STRING`, and the same as
+`ddx::version_major`, `ddx::version_number`, `ddx::version` — the Python module
+carries it as `ddx.__version__`, and a release tag `vX.Y.Z` must name it.
+
 The JIT presets point `LLVM_DIR` at the Debian/Ubuntu `llvm-20` layout;
 override it on the command line, which wins over the preset:
 
@@ -990,7 +996,7 @@ distribution. A wheel needs nothing installed beside it — LLVM is inside the
 library:
 
 ```sh
-uv pip install https://github.com/reach2sayan/ddx/releases/download/v1.2.0/ddx-1.2.0-cp312-cp312-manylinux_2_28_x86_64.whl
+uv pip install https://github.com/reach2sayan/ddx/releases/download/v1.2.1/ddx-1.2.1-cp312-cp312-manylinux_2_28_x86_64.whl
 ```
 
 | Wheel | JIT |

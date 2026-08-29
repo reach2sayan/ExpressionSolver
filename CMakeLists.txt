@@ -9,7 +9,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
     endif ()
 endif ()
 
-project(ddx VERSION 1.2.0 LANGUAGES CXX)
+project(ddx VERSION 1.2.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -51,11 +51,17 @@ find_package(Threads REQUIRED)
 # at a pinned hash and installs it into its own prefix, so it is as available as
 # the standard library is and there is nothing for a narrower declaration to
 # protect: a header uses the right library rather than the locally permitted one.
+# The version header is written from the project() line above, into the build
+# tree beside the sources' include root, so the number is stated once.
+configure_file(include/util/version.hpp.in
+        "${CMAKE_CURRENT_BINARY_DIR}/include/util/version.hpp" @ONLY)
+
 add_library(ddx_util INTERFACE)
 add_library(ddx::util ALIAS ddx_util)
 set_target_properties(ddx_util PROPERTIES EXPORT_NAME util)
 target_include_directories(ddx_util INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(ddx_util INTERFACE Boost::headers)
 

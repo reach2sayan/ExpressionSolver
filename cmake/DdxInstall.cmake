@@ -19,6 +19,9 @@ install(TARGETS ${DDX_EXPORT_TARGETS}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         FILES_MATCHING PATTERN "*.hpp")
+# The generated one, from the build tree.
+install(FILES "${PROJECT_BINARY_DIR}/include/util/version.hpp"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/util")
 
 # Boost travels inside the prefix, so a consumer needs none of their own: the
 # build never consults the machine's Boost and neither should what it installs.

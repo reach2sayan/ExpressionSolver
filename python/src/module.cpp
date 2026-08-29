@@ -9,6 +9,7 @@
 #include "rt/text/lower.hpp"
 #include "util/ranges.hpp"
 #include "util/scope_guard.hpp"
+#include "util/version.hpp"
 
 #include "jit/kernel.hpp"
 
@@ -174,10 +175,8 @@ PYBIND11_MODULE(_ddx, m) {
   using ddx::py::PyExpression;
 
   m.doc() = "ddx's runtime expression graph and LLVM JIT";
+  m.attr("__version__") = DDX_VERSION_STRING;
 
-  // Whether a kernel can ever land.  Not a shape: Options, Backend and
-  // wait_for_kernel are here either way -- what a build without the backend
-  // takes away is the LLJIT, so nothing compiles and the sweep answers.
 #ifdef DDX_HAS_JIT
   m.attr("has_jit") = true;
 #else
