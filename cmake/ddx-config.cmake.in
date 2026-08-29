@@ -10,44 +10,21 @@ include(CMakeFindDependencyMacro)
 # a consumer's link never names it.
 set(DDX_BUILD_JIT @DDX_BUILD_JIT@)
 
-# Boost::headers rather than any component: every Boost library ddx uses is
-# header-only, so what a consumer needs is an include path -- and ddx supplies
-# it rather than asking.  The build never consults the machine's Boost, and an
-# installed ddx does not make its consumer do what the build refused to: the
-# headers ride in the prefix, so there is no version to agree on and no
-# find_dependency(Boost) here at all.
-#
-# Which copy is settled when this file is generated, not here: DdxInstall writes
-# one of these per tree, each naming the Boost that tree actually holds.  An
-# install names its own prefix, a build tree names the Boost the build used, and
-# a build told to use someone else's Boost names theirs -- nothing was copied in
-# that case, so there is only ever one answer to state.
 if (NOT TARGET Boost::headers)
     add_library(Boost::headers INTERFACE IMPORTED)
     set_target_properties(Boost::headers PROPERTIES
             INTERFACE_INCLUDE_DIRECTORIES "@DDX_BOOST_CONFIG_ROOT@")
 endif ()
 
-# ddx_rt links Threads::Threads publicly: rt/equation.hpp compiles on another
-# thread, so the target has to resolve in a consumer's tree too.
 find_dependency(Threads)
 
 include("${CMAKE_CURRENT_LIST_DIR}/ddxTargets.cmake")
 
-# ddx::jit is the same library as ddx::rt -- the backend is compiled into libddx
-# rather than shipped beside it -- and an ALIAS is a build-tree thing that no
-# export set carries.  An INTERFACE target that forwards to it is what survives
-# into an installed package.
 if (DDX_BUILD_JIT AND NOT TARGET ddx::jit)
     add_library(ddx::jit INTERFACE IMPORTED)
     set_target_properties(ddx::jit PROPERTIES INTERFACE_LINK_LIBRARIES ddx::rt)
 endif ()
 
-# How ddx itself was compiled.  Not pushed onto ddx::ddx -- an INTERFACE library
-# must not force a flag on a consumer -- but a consumer whose numbers have to be
-# comparable with ddx's own needs to be able to ask.  FP contraction is the one
-# that changes results rather than speed: ddx::jit emits code contracting to
-# match, so a consumer that differs here can compute different derivatives.
 set(ddx_CODEGEN_FLAGS "@DDX_CODEGEN_FLAGS@")
 set(ddx_FP_CONTRACT @DDX_FP_FLAGS@)
 

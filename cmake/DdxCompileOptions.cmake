@@ -5,13 +5,7 @@
 include_guard(GLOBAL)
 
 option(ENABLE_NATIVE_ARCH "Build optimized for this machine" ON)
-# Pin FP contraction, drop errno.  Neither flag is lossy.  Nothing that trades
-# accuracy for speed belongs here -- in particular never -ffast-math (nor
-# /fp:fast on MSVC, which needs no flags at all).
 option(DDX_FP_FLAGS "Pin FP contraction and drop errno on libm calls" ON)
-# ddx throws nothing -- errors come back as values -- so -fno-exceptions has no
-# configuration to choose.  Our own targets only: what a consumer compiles with
-# is theirs.
 
 if (MSVC)
     # /bigobj: one TU instantiates past the 2^16 COFF section limit.
