@@ -1,0 +1,72 @@
+# Every Monday, main becomes a release: the patch number in project() goes up
+# by one, the bump is committed and tagged, and Release builds and publishes
+# the wheels for that tag.  A week in which main did not move produces nothing
+# -- the test is whether HEAD is already the commit the latest tag names --
+# and a red main is never released: the three compiler workflows must have
+# passed on HEAD.  "Run workflow" is the same thing on demand.
+#
+# GitHub does not let a push made with a workflow's own token start another
+# workflow, so the tag push here does not fire Release's tag trigger; Release
+# is dispatched explicitly on the tag ref, where ref_type is "tag" all the
+# same and it publishes as it would for a pushed tag.
+#
+# Minor and major bumps are written into project() by hand and tagged as
+# before; the next Monday finds HEAD already tagged and does nothing.
+name: Weekly release
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Anything since the last tag?
+        id: since
+        run: |
+          last=$(git describe --tags --abbrev=0 --match 'v*')
+          if [[ $(git rev-parse "$last^{commit}") == $(git rev-parse HEAD) ]]; then
+            echo "main is still $last; nothing to release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Is main green?
+        if: steps.since.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for wf in "GCC 14" "Clang 20" "MSVC 2022"; do
+            c=$(gh run list --workflow "$wf" --commit "$GITHUB_SHA" --branch main \
+                  --json conclusion --jq '.[0].conclusion')
+            [[ "$c" == success ]] || { echo "::error::$wf on $GITHUB_SHA: ${c:-no run}"; exit 1; }
+          done
+
+      - name: Bump, commit, tag, push
+        if: steps.since.outputs.skip != 'true'
+        id: bump
+        run: |
+          cur=$(sed -nE 's/^project\(ddx VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)
+          new="${cur%.*}.$(( ${cur##*.} + 1 ))"
+          sed -i -E "s/^(project\(ddx VERSION )$cur\b/\1$new/" CMakeLists.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $new"
+          git tag "v$new"
+          git push --follow-tags origin HEAD:main
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish
+        if: steps.since.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref "${{ steps.bump.outputs.tag }}"
