@@ -61,7 +61,8 @@ jobs:
         if: runner.os != 'Linux'
         run: pipx install uv
 
-      - uses: pypa/cibuildwheel@v3
+      # A full version: cibuildwheel publishes no floating major tag.
+      - uses: pypa/cibuildwheel@v3.4.1
 
       # Only a prefix that reached its LLVMConfig: a key can be written once,
       # and a partial build saved under it would be restored as if whole.
