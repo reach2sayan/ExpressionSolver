@@ -70,9 +70,11 @@ DDX_INSTALL = "OFF"
 LLVM_DIR = "/usr/lib/llvm-20/lib/cmake/llvm"
 
 # No LLVM archives on Windows yet, so that wheel interprets and ddx.has_jit
-# says so.
+# says so.  `inherit`, or this one define is the whole table on Windows: no
+# extension module, and the headers installed into the wheel instead.
 [[tool.scikit-build.overrides]]
 if.platform-system = "win32"
+inherit.cmake.define = "append"
 cmake.define.DDX_BUILD_JIT = "OFF"
 
 # --- release wheels -----------------------------------------------------------
