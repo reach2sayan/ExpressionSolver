@@ -990,7 +990,7 @@ distribution. A wheel needs nothing installed beside it — LLVM is inside the
 library:
 
 ```sh
-uv pip install https://github.com/reach2sayan/ddx/releases/download/v1.1.0/ddx-1.1.0-cp312-cp312-manylinux_2_28_x86_64.whl
+uv pip install https://github.com/reach2sayan/ddx/releases/download/v1.2.0/ddx-1.2.0-cp312-cp312-manylinux_2_28_x86_64.whl
 ```
 
 | Wheel | JIT |
