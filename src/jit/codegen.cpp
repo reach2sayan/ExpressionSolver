@@ -66,7 +66,7 @@ llvm::Function *libm_decl(llvm::Module &m, std::string_view name,
 // W points per iteration, as a double at W == 1 and <W x double> otherwise.
 // Every IRBuilder operation is typed on `ty`, so only the memory accesses and
 // the calls with no vector intrinsic tell the two apart.
-struct Lanes {
+struct LaneType {
   unsigned width;
   llvm::Type *ty;
   [[nodiscard]] constexpr bool vector() const noexcept { return width > 1; }
@@ -74,7 +74,7 @@ struct Lanes {
 
 class Emitter {
 public:
-  Emitter(llvm::Module &m, llvm::IRBuilder<> &b, Lanes lanes)
+  Emitter(llvm::Module &m, llvm::IRBuilder<> &b, LaneType lanes)
       : m_(m), b_(b), lanes_(lanes) {}
 
   // A splat where the lane type is a vector.
@@ -191,7 +191,7 @@ private:
 
   llvm::Module &m_;
   llvm::IRBuilder<> &b_;
-  Lanes lanes_;
+  LaneType lanes_;
 };
 
 llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name,
@@ -340,7 +340,7 @@ emit_module(llvm::LLVMContext &ctx, const rt::Graph<double> &g,
   llvm::Type *const i64 = llvm::Type::getInt64Ty(ctx);
   llvm::Type *const f64 = llvm::Type::getDoubleTy(ctx);
   llvm::Argument *const count = fn->getArg(4);
-  const Lanes lanes{.width = width,
+  const LaneType lanes{.width = width,
                     .ty = width > 1 ? llvm::FixedVectorType::get(f64, width)
                                     : f64};
 

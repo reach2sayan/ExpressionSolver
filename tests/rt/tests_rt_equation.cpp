@@ -971,14 +971,14 @@ TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
   };
 
   const ddx::jit::Options wide{.backend = ddx::rt::Backend::Compile,
-                               .lanes = 4};
+                               .lanes = ddx::rt::Lanes{4}};
   const ddx::jit::Options scalar{.backend = ddx::rt::Backend::Compile,
-                                 .lanes = 1};
+                                 .lanes = ddx::rt::Lanes::scalar()};
 
   const auto [f0, dx0, dy0, k0] = run(wide);
   const auto [f1, dx1, dy1, k1] = run(scalar);
 
-  EXPECT_EQ(eq.options().lanes, 1u) << "the setter did not take";
+  EXPECT_EQ(eq.options().lanes, ddx::rt::Lanes::scalar()) << "the setter did not take";
   EXPECT_TRUE(k0 && k1) << "an option refused the compile outright";
 
   // Bit-exact: a lane is its own IEEE operation, so the width changes what is
@@ -1061,7 +1061,7 @@ TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
   // *cheap* rung and `blocking` stops being a compile's worth of time, making
   // the margin below a coin flip.  jit.exit_stress covers both rungs at once.
   const ddx::jit::Options one_rung{.backend = ddx::rt::Backend::Compile,
-                                   .codegen_level = 0};
+                                   .codegen_level = ddx::rt::Level::O0};
 
   // Calibrated against this machine: a fixed threshold above the compile would
   // pass whether or not the future joined.
@@ -1383,11 +1383,11 @@ TEST(RtEquation, EveryRungOfTheLadderAgreesToTheBit) {
   swept.options({.backend = ddx::rt::Backend::Interpret});
 
   auto cheap = ladder_model();
-  cheap.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 0});
+  cheap.options({.backend = ddx::rt::Backend::Compile, .codegen_level = ddx::rt::Level::O0});
   ASSERT_TRUE(cheap.wait_for_kernel());
 
   auto top = ladder_model();
-  top.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 1});
+  top.options({.backend = ddx::rt::Backend::Compile, .codegen_level = ddx::rt::Level::O1});
   ASSERT_TRUE(top.wait_for_kernel());
 
   // Rung against rung, still to the bit: both rungs compile the same graph, and
@@ -1414,12 +1414,12 @@ TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
   constexpr std::size_t n = 24;
 
   auto eq = ladder_model();
-  eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 1});
+  eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = ddx::rt::Level::O1});
 
   // wait_for_kernel() waits for the *first* rung, so the cheap one is in hand.
   ASSERT_TRUE(eq.wait_for_kernel());
   ASSERT_TRUE(eq.kernel_level().has_value());
-  EXPECT_EQ(*eq.kernel_level(), 0u)
+  EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0)
       << "wait_for_kernel() waited for the top rung, not the first";
 
   const auto expected = ladder_gradient(eq, n);
@@ -1427,15 +1427,16 @@ TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
   // Bounded: a failure to climb must fail the test, not hang it.
   using namespace std::chrono_literals;
   const auto deadline = std::chrono::steady_clock::now() + 30s;
-  unsigned seen = 0;
+  auto seen = ddx::rt::Level::O0;
   bool climbed = false;
   while (std::chrono::steady_clock::now() < deadline) {
     const auto level = eq.kernel_level();
     ASSERT_TRUE(level.has_value()) << "the ladder gave the kernel back";
     EXPECT_GE(*level, seen) << "a rung that landed late demoted a better one";
     seen = *level;
-    EXPECT_EQ(ladder_gradient(eq, n), expected) << "an answer moved at rung " << seen;
-    if (seen == 1) {
+    EXPECT_EQ(ladder_gradient(eq, n), expected)
+        << "an answer moved at rung " << std::to_underlying(seen);
+    if (seen == ddx::rt::Level::O1) {
       climbed = true;
       break;
     }
@@ -1447,10 +1448,10 @@ TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
 // At codegen 0 there is nothing cheaper underneath, so the ladder is one rung.
 TEST(RtEquation, CodegenZeroIsASingleRung) {
   auto eq = ladder_model();
-  eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = 0});
+  eq.options({.backend = ddx::rt::Backend::Compile, .codegen_level = ddx::rt::Level::O0});
   ASSERT_TRUE(eq.wait_for_kernel());
   ASSERT_TRUE(eq.kernel_level().has_value());
-  EXPECT_EQ(*eq.kernel_level(), 0u);
+  EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0);
 }
 
 // With a warm cache both rungs link instead of compiling.  Each rung keys
@@ -1464,12 +1465,12 @@ TEST(RtEquation, AWarmCacheServesBothRungs) {
   const auto climb = [&dir] {
     auto eq = ladder_model();
     eq.options({.backend = ddx::rt::Backend::Compile,
-                .codegen_level = 1,
+                .codegen_level = ddx::rt::Level::O1,
                 .cache_dir = dir.string()});
     EXPECT_TRUE(eq.wait_for_kernel());
     using namespace std::chrono_literals;
     const auto deadline = std::chrono::steady_clock::now() + 30s;
-    while (eq.kernel_level() != 1 &&
+    while (eq.kernel_level() != ddx::rt::Level::O1 &&
            std::chrono::steady_clock::now() < deadline) {
       std::this_thread::sleep_for(1ms);
     }
@@ -1505,7 +1506,7 @@ TEST(RtEquation, InterpretHasNoRung) {
 TEST(RtEquation, AdaptCompilesNothingUntilTheBatchPaysForIt) {
   auto eq = ladder_model();
   eq.options({.backend = ddx::rt::Backend::Adapt,
-              .codegen_level = 1,
+              .codegen_level = ddx::rt::Level::O1,
               .warm_points = 1000});
 
   for (int i = 0; i < 3; ++i) {
@@ -1543,7 +1544,7 @@ TEST(RtEquation, AdaptBuysTheCheapRungThenTheTop) {
 
   auto eq = ladder_model();
   eq.options({.backend = ddx::rt::Backend::Adapt,
-              .codegen_level = 1,
+              .codegen_level = ddx::rt::Level::O1,
               .warm_points = 1,
               .hot_points = 1});
 
@@ -1551,7 +1552,7 @@ TEST(RtEquation, AdaptBuysTheCheapRungThenTheTop) {
   EXPECT_EQ(ladder_gradient(eq, n), expected);
   ASSERT_TRUE(eq.wait_for_kernel()) << "the first point bought no rung";
   ASSERT_TRUE(eq.kernel_level().has_value());
-  EXPECT_EQ(*eq.kernel_level(), 0u) << "the top rung was bought too early";
+  EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0) << "the top rung was bought too early";
 
   // The next buys the top one.  Bounded: a failure to climb must fail the test
   // rather than hang it.
@@ -1560,7 +1561,7 @@ TEST(RtEquation, AdaptBuysTheCheapRungThenTheTop) {
   bool climbed = false;
   while (std::chrono::steady_clock::now() < deadline) {
     EXPECT_EQ(ladder_gradient(eq, n), expected) << "an answer moved as it climbed";
-    if (eq.kernel_level() == 1u) {
+    if (eq.kernel_level() == ddx::rt::Level::O1) {
       climbed = true;
       break;
     }
@@ -1577,12 +1578,12 @@ TEST(RtEquation, AdaptBuysTheCheapRungThenTheTop) {
 TEST(RtEquation, AdaptAtCodegenZeroBuysOneRung) {
   auto eq = ladder_model();
   eq.options({.backend = ddx::rt::Backend::Adapt,
-              .codegen_level = 0,
+              .codegen_level = ddx::rt::Level::O0,
               .warm_points = 1});
   (void)ladder_gradient(eq, 24);
   ASSERT_TRUE(eq.wait_for_kernel());
   ASSERT_TRUE(eq.kernel_level().has_value());
-  EXPECT_EQ(*eq.kernel_level(), 0u);
+  EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0);
   EXPECT_FALSE(eq.warming().has_value()) << "still counting toward a second rung";
 }
 
@@ -1591,7 +1592,7 @@ TEST(RtEquation, AdaptAtCodegenZeroBuysOneRung) {
 TEST(RtEquation, AdaptWithNoThresholdBuysOnTheFirstCall) {
   auto eq = ladder_model();
   eq.options({.backend = ddx::rt::Backend::Adapt,
-              .codegen_level = 1,
+              .codegen_level = ddx::rt::Level::O1,
               .warm_points = 0,
               .hot_points = 0});
   (void)ladder_gradient(eq, 24);

@@ -17,8 +17,10 @@
 #include <thread>
 #include <cstdint>
 #include <numeric>
+#include <string>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // The interpreter in rt/interpret.hpp is the reference: it and the kernel walk
@@ -37,6 +39,12 @@ ddx::jit::Compiler &compiler() {
 
 // compile() answers with result<Kernel>; name LLVM's reason here rather than
 // meeting an empty Kernel three lines later.
+// For a failure message: the stated width, or that there is none.
+std::string spelled(ddx::jit::Lanes lanes) {
+  const auto w = lanes.stated();
+  return w ? std::to_string(*w) : "derived";
+}
+
 ddx::jit::Kernel must_compile(auto &&...args) {
   auto k = compiler().compile(static_cast<decltype(args) &&>(args)...);
   EXPECT_TRUE(k.has_value()) << (k ? std::string{} : k.error().detail);
@@ -266,7 +274,7 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
   }
   const std::array<const double *, 2> xs{cx.data(), cy.data()};
 
-  const auto run = [&](unsigned lanes) {
+  const auto run = [&](ddx::jit::Lanes lanes) {
     ddx::jit::Options o;
     o.lanes = lanes;
     const auto kernel = must_compile(graph, o);
@@ -277,19 +285,21 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
     return std::tuple{value, dx, dy};
   };
 
-  const auto [v1, dx1, dy1] = run(1);
-  for (const unsigned lanes : {2u, 4u, 8u, 0u}) {
+  const auto [v1, dx1, dy1] = run(ddx::jit::Lanes::scalar());
+  for (const auto lanes : {ddx::jit::Lanes{2}, ddx::jit::Lanes{4},
+                           ddx::jit::Lanes{8}, ddx::jit::Lanes::derived()}) {
     const auto [v, dx, dy] = run(lanes);
+    const std::string width = spelled(lanes);
     for (std::size_t i = 0; i < n; ++i) {
       EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
                 std::bit_cast<std::uint64_t>(v1[i]))
-          << "value, lanes " << lanes << " at " << i;
+          << "value, lanes " << width << " at " << i;
       EXPECT_EQ(std::bit_cast<std::uint64_t>(dx[i]),
                 std::bit_cast<std::uint64_t>(dx1[i]))
-          << "d/dx, lanes " << lanes << " at " << i;
+          << "d/dx, lanes " << width << " at " << i;
       EXPECT_EQ(std::bit_cast<std::uint64_t>(dy[i]),
                 std::bit_cast<std::uint64_t>(dy1[i]))
-          << "d/dy, lanes " << lanes << " at " << i;
+          << "d/dy, lanes " << width << " at " << i;
     }
   }
 }
@@ -311,7 +321,7 @@ TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
   const std::array cy{1.25, 0.5, 2.0, 0.75};
   const std::array<const double *, 2> xs{cx.data(), cy.data()};
 
-  const auto run = [&](unsigned level) {
+  const auto run = [&](ddx::jit::Level level) {
     ddx::jit::Options o;
     o.codegen_level = level;
     const auto kernel = must_compile(graph, o);
@@ -322,19 +332,21 @@ TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
     return std::tuple{value, dx, dy};
   };
 
-  const auto [v1, dx1, dy1] = run(1);
-  for (const unsigned level : {0u, 2u, 3u}) {
+  const auto [v1, dx1, dy1] = run(ddx::jit::Level::O1);
+  for (const auto level :
+       {ddx::jit::Level::O0, ddx::jit::Level::O2, ddx::jit::Level::O3}) {
     const auto [v, dx, dy] = run(level);
+    const auto at = std::to_underlying(level);
     for (std::size_t i = 0; i < cx.size(); ++i) {
       EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
                 std::bit_cast<std::uint64_t>(v1[i]))
-          << "value, codegen " << level << " at " << i;
+          << "value, codegen " << at << " at " << i;
       EXPECT_EQ(std::bit_cast<std::uint64_t>(dx[i]),
                 std::bit_cast<std::uint64_t>(dx1[i]))
-          << "d/dx, codegen " << level << " at " << i;
+          << "d/dx, codegen " << at << " at " << i;
       EXPECT_EQ(std::bit_cast<std::uint64_t>(dy[i]),
                 std::bit_cast<std::uint64_t>(dy1[i]))
-          << "d/dy, codegen " << level << " at " << i;
+          << "d/dy, codegen " << at << " at " << i;
     }
   }
 }
@@ -366,8 +378,9 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
     return std::tuple{value, dx, dy};
   };
 
-  for (const unsigned lanes : {1u, 4u}) {
+  for (const auto lanes : {ddx::jit::Lanes::scalar(), ddx::jit::Lanes{4}}) {
     const auto [v0, dx0, dy0] = run({.lanes = lanes});
+    const std::string width = spelled(lanes);
     for (const auto &[what, o] :
          {std::pair{"slp", ddx::jit::Options{.lanes = lanes, .slp = true}},
           std::pair{
@@ -377,13 +390,13 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
       for (std::size_t i = 0; i < n; ++i) {
         EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
                   std::bit_cast<std::uint64_t>(v0[i]))
-            << what << ", lanes " << lanes << ", value at " << i;
+            << what << ", lanes " << width << ", value at " << i;
         EXPECT_EQ(std::bit_cast<std::uint64_t>(dx[i]),
                   std::bit_cast<std::uint64_t>(dx0[i]))
-            << what << ", lanes " << lanes << ", d/dx at " << i;
+            << what << ", lanes " << width << ", d/dx at " << i;
         EXPECT_EQ(std::bit_cast<std::uint64_t>(dy[i]),
                   std::bit_cast<std::uint64_t>(dy0[i]))
-            << what << ", lanes " << lanes << ", d/dy at " << i;
+            << what << ", lanes " << width << ", d/dy at " << i;
       }
     }
   }

@@ -16,6 +16,7 @@
 #include <expected>
 #include <future>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -44,8 +45,33 @@ template <typename T> using result = std::expected<T, error>;
 #define DDX_JIT_DEFAULT_CONTRACT 1
 #endif
 
-inline constexpr unsigned default_opt_level = DDX_JIT_DEFAULT_OPT;
+// LLVM's -O0 to -O3, for the IR pipeline and for codegen.
+enum class Level : std::uint8_t { O0, O1, O2, O3 };
+
+static_assert(DDX_JIT_DEFAULT_OPT >= 0 && DDX_JIT_DEFAULT_OPT <= 3);
+inline constexpr Level default_opt_level = static_cast<Level>(DDX_JIT_DEFAULT_OPT);
 inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
+
+// Points per loop iteration.  Derived is the host's register width in doubles
+// -- scalar for a batch too short to fill one, and under a vector library the
+// widest it serves.  Every width gives the same bits.
+class Lanes {
+public:
+  constexpr Lanes() = default;
+  constexpr explicit Lanes(unsigned width) noexcept : width_(width) {
+    assert(width > 0);
+  }
+  [[nodiscard]] static constexpr Lanes derived() noexcept { return {}; }
+  [[nodiscard]] static constexpr Lanes scalar() noexcept { return Lanes{1}; }
+  [[nodiscard]] constexpr std::optional<unsigned> stated() const noexcept {
+    return width_ > 0 ? std::optional{width_} : std::nullopt;
+  }
+  friend constexpr bool operator==(Lanes, Lanes) = default;
+
+private:
+  unsigned width_ = 0;
+  BOOST_DESCRIBE_CLASS(Lanes, (), (), (), (width_))
+};
 
 // Compile and Adapt are a ladder: a codegen-0 kernel answers first and one at
 // codegen_level replaces it, bit-identically; calls before the first rung lands
@@ -58,13 +84,11 @@ struct Options {
   // The batch one call will carry.  Stated, not inferred: the kernel is built
   // before any call exists to read an `n` from.  Sets the lane width only.
   std::size_t points = 1;
-  // 0 derives it from `points`, 1 is scalar; every width gives the same bits.
-  unsigned lanes = 0;
-  // 0 to 3.
-  unsigned opt_level = default_opt_level;
-  // 0 to 3; under Backend::Compile the top rung, so 0 asks for a single one.
+  Lanes lanes = Lanes::derived();
+  Level opt_level = default_opt_level;
+  // Under Backend::Compile the top rung, so O0 asks for a single one.
   // Selection and register allocation are ~95% of a compile.
-  unsigned codegen_level = 1;
+  Level codegen_level = Level::O1;
   // Within one point; model-dependent, hence off.
   bool slp = false;
   // Off: the body is already `lanes` wide, and past ~19 columns the alias
@@ -130,9 +154,9 @@ public:
   Kernel(function_type fn, std::size_t arity, std::size_t values,
          std::size_t jacobian, std::size_t hessian, std::shared_ptr<void> code,
          symbol_type symbol = {}, object_type object = {}) noexcept
-      : fn_(fn), code_(std::move(code)), symbol_(std::move(symbol)),
-        object_(std::move(object)), arity_(arity), values_(values),
-        jacobian_(jacobian), hessian_(hessian) {}
+      : fn_{fn}, code_{std::move(code)}, symbol_{std::move(symbol)},
+        object_{std::move(object)}, arity_{arity}, values_{values},
+        jacobian_{jacobian}, hessian_{hessian} {}
 
   // xs[j] is the column for symbol j, g[j] the partial in it, each n long; an
   // unrequested block is `{}`.  noexcept: codegen marks the kernel nounwind.

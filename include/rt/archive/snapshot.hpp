@@ -53,13 +53,6 @@ template <impl::Numeric T> struct Snapshot {
 
 } // namespace ddx::rt
 
-// --- the described field lists ----------------------------------------------
-//
-// Here rather than beside each struct, so builder.hpp and its neighbours need
-// nothing but ddx.  Folded into the schema stamp, so an unlisted field refuses
-// old files.  Class templates cannot take BOOST_DESCRIBE_STRUCT, which is why
-// Node and Snapshot take the four-macro spelling.  jit::Options carries its own,
-// beside the struct in kernel.hpp.
 namespace ddx::rt {
 
 template <impl::Numeric T> BOOST_DESCRIBE_BASES(Node<T>, )

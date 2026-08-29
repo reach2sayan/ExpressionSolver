@@ -30,6 +30,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -310,14 +311,21 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
 //   climb     the marginal question the ladder actually asks: given rung 0 is
 //             already running, how many points before rung 1 repays *its*
 //             compile out of the difference between the two kernels
+// A flag's digit, clamped to the top level.
+[[nodiscard]] ddx::jit::Level level_of(std::string_view digit) {
+  return static_cast<ddx::jit::Level>(
+      std::min(std::strtoul(digit.data(), nullptr, 10), 3ul));
+}
+
 [[nodiscard]] int run_ladder(ddx::jit::Compiler &compiler,
                              ddx::jit::Options options,
                              std::span<const std::size_t> sizes,
                              double budget_s) {
-  const unsigned top = options.codegen_level;
+  const unsigned top = std::to_underlying(options.codegen_level);
   std::printf("tier ladder, codegen 0 under codegen %u, budget %.0fs per cell, "
               "lanes %u (0 = host), opt %u\n\n",
-              top, budget_s, options.lanes, options.opt_level);
+              top, budget_s, options.lanes.stated().value_or(0),
+              std::to_underlying(options.opt_level));
   if (top == 0) {
     std::printf("codegen 0 is the top rung: there is no ladder to measure.\n");
     return 0;
@@ -327,7 +335,7 @@ constexpr std::size_t kSweepLanes = 8; // Equation::kLanes
               "k0 ns", "k1 ns", "be0", "be1", "climb");
 
   ddx::jit::Options low = options;
-  low.codegen_level = 0;
+  low.codegen_level = ddx::jit::Level::O0;
 
   for (const auto &m : kModels) {
     for (const std::size_t n : sizes) {
@@ -383,11 +391,13 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg{argv[i]};
     if (arg.starts_with("--lanes=")) {
-      options.lanes = static_cast<unsigned>(std::strtoul(arg.data() + 8, nullptr, 10));
+      const auto w = std::strtoul(arg.data() + 8, nullptr, 10);
+      options.lanes = w == 0 ? ddx::jit::Lanes::derived()
+                             : ddx::jit::Lanes{static_cast<unsigned>(w)};
     } else if (arg.starts_with("--opt=")) {
-      options.opt_level = static_cast<unsigned>(std::strtoul(arg.data() + 6, nullptr, 10));
+      options.opt_level = level_of(arg.substr(6));
     } else if (arg.starts_with("--codegen=")) {
-      options.codegen_level = static_cast<unsigned>(std::strtoul(arg.data() + 10, nullptr, 10));
+      options.codegen_level = level_of(arg.substr(10));
     } else if (arg == "--slp") {
       options.slp = true;
     } else if (arg == "--loop-vectorize") {
@@ -430,8 +440,9 @@ int main(int argc, char **argv) {
 
   std::printf("compile cost against graph size, budget %.0fs per cell, "
               "lanes %u (0 = host), opt %u, codegen %u\n\n",
-              budget_s, options.lanes, options.opt_level,
-              options.codegen_level);
+              budget_s, options.lanes.stated().value_or(0),
+              std::to_underlying(options.opt_level),
+              std::to_underlying(options.codegen_level));
   std::printf("%-8s %5s %9s %10s %9s %9s %9s %9s %7s %10s\n", "model", "n",
               "nodes", "ir instrs", "emit ms", "opt ms", "codegen ms",
               "total ms", "slope", "kernel ns");

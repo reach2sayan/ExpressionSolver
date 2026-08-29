@@ -144,6 +144,17 @@ class Expression:
     @typing.overload
     def __truediv__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Expression: pass
     
+class Level(enum.IntEnum):
+    """
+    LLVM's -O0 to -O3, for the IR pipeline and for codegen.
+    """
+    O0: typing.ClassVar[Level]  # value = <Level.O0: 0>
+    O1: typing.ClassVar[Level]  # value = <Level.O1: 1>
+    O2: typing.ClassVar[Level]  # value = <Level.O2: 2>
+    O3: typing.ClassVar[Level]  # value = <Level.O3: 3>
+    @classmethod
+    def __new__(cls, value): pass
+    def __format__(self, format_spec): pass
 class VecLib(enum.IntEnum):
     """
     Which vector math library a lane may call.
@@ -179,21 +190,21 @@ class _Options:
     def __eq__(self, arg0: _Options) -> bool: pass
     def __init__(self) -> None: pass
     @property
-    def codegen_level(self) -> int: pass
+    def codegen_level(self) -> Level: pass
     @codegen_level.setter
-    def codegen_level(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
+    def codegen_level(self, arg0: Level) -> None: pass
     @property
-    def lanes(self) -> int: pass
+    def lanes(self) -> int | None: pass
     @lanes.setter
-    def lanes(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
+    def lanes(self, arg0: typing.SupportsInt | typing.SupportsIndex | None) -> None: pass
     @property
     def hot_points(self) -> int: pass
     @hot_points.setter
     def hot_points(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
     @property
-    def opt_level(self) -> int: pass
+    def opt_level(self) -> Level: pass
     @opt_level.setter
-    def opt_level(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: pass
+    def opt_level(self, arg0: Level) -> None: pass
     @property
     def points(self) -> int: pass
     @points.setter

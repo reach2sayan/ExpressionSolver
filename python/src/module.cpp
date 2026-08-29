@@ -342,6 +342,15 @@ PYBIND11_MODULE(_ddx, m) {
       .value("LIBMVEC", jit::VecLib::Libmvec)
       .finalize();
 
+  pyb::native_enum<jit::Level>(m, "Level", "enum.IntEnum",
+                               "LLVM's -O0 to -O3, for the IR pipeline and "
+                               "for codegen.")
+      .value("O0", jit::Level::O0)
+      .value("O1", jit::Level::O1)
+      .value("O2", jit::Level::O2)
+      .value("O3", jit::Level::O3)
+      .finalize();
+
   pyb::native_enum<PyEquation::Want>(m, "Want", "enum.IntEnum",
                                      "Which blocks a bound call fills.")
       .value("VALUE", PyEquation::Want::Values)
@@ -368,7 +377,16 @@ PYBIND11_MODULE(_ddx, m) {
       .def(pyb::init<>())
       .def_readwrite("backend", &jit::Options::backend)
       .def_readwrite("points", &jit::Options::points)
-      .def_readwrite("lanes", &jit::Options::lanes)
+      // None derives the width; a stated one must hold a point.
+      .def_property(
+          "lanes",
+          [](const jit::Options &o) { return o.lanes.stated(); },
+          [](jit::Options &o, std::optional<unsigned> width) {
+            if (width == 0u) {
+              throw pyb::value_error("lanes: a stated width is at least 1");
+            }
+            o.lanes = width ? jit::Lanes{*width} : jit::Lanes::derived();
+          })
       .def_readwrite("opt_level", &jit::Options::opt_level)
       .def_readwrite("codegen_level", &jit::Options::codegen_level)
       .def_readwrite("warm_points", &jit::Options::warm_points)

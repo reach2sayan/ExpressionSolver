@@ -130,19 +130,16 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
   return std::max(1u, static_cast<unsigned>(fixed.getFixedValue()));
 }
 
-// What `lanes == 0` comes to: the host's width, or under a vector library the
-// widest it serves, so a derived width never asks for a call that is not there.
-// A stated width is taken as stated.
+// A derived width is the host's, or under a vector library the widest it
+// serves, so it never asks for a call that is not there.  A stated width is
+// taken as stated.
 [[nodiscard]] unsigned emitted_lanes(const Options &opt,
                                      const std::string &triple,
                                      const bool have_libmvec,
                                      const unsigned host, const unsigned lib) {
-  if (opt.lanes != 0) {
-    return opt.lanes;
-  }
-  return want_veclib(llvm::Triple{triple}, opt, have_libmvec)
-             ? std::min(host, lib)
-             : host;
+  return opt.lanes.stated().value_or(
+      want_veclib(llvm::Triple{triple}, opt, have_libmvec) ? std::min(host, lib)
+                                                           : host);
 }
 
 // On the module rather than the JIT, so one JIT serves compiles at different
@@ -311,20 +308,19 @@ host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
   pb.registerLoopAnalyses(lam);
   pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-  llvm::OptimizationLevel level = llvm::OptimizationLevel::O2;
-  switch (opt.opt_level) {
-  case 0:
-    level = llvm::OptimizationLevel::O0;
-    break;
-  case 1:
-    level = llvm::OptimizationLevel::O1;
-    break;
-  case 3:
-    level = llvm::OptimizationLevel::O3;
-    break;
-  default:
-    break;
-  }
+  const llvm::OptimizationLevel level = [&] {
+    switch (opt.opt_level) {
+    case Level::O0:
+      return llvm::OptimizationLevel::O0;
+    case Level::O1:
+      return llvm::OptimizationLevel::O1;
+    case Level::O2:
+      return llvm::OptimizationLevel::O2;
+    case Level::O3:
+      return llvm::OptimizationLevel::O3;
+    }
+    std::unreachable();
+  }();
 
   llvm::ModulePassManager mpm = level == llvm::OptimizationLevel::O0
                                     ? pb.buildO0DefaultPipeline(level)
@@ -348,7 +344,7 @@ struct Host {
   llvm::orc::JITTargetMachineBuilder machine;
   std::string triple;
   bool libmvec;
-  unsigned lanes;        // What Options::lanes == 0 means here
+  unsigned lanes;        // What a derived Options::lanes means here
   unsigned veclib_lanes; // and under a vector library
   Objects &objects;
   std::shared_ptr<void> code;
@@ -391,7 +387,8 @@ private:
     // The object cache keys on the module and LLVM prints this in diagnostics;
     // the kernel's name is already unique per compile.
     m->setModuleIdentifier(name_);
-    m->addModuleFlag(llvm::Module::Error, kCodegenFlag, opt_.codegen_level);
+    m->addModuleFlag(llvm::Module::Error, kCodegenFlag,
+                     std::to_underlying(opt_.codegen_level));
     m->addModuleFlag(llvm::Module::Error, kRetainFlag,
                      static_cast<unsigned>(opt_.retain_object));
     rep_.nodes = g_.live_count();
@@ -481,7 +478,7 @@ constexpr std::uint32_t kCacheEpoch = 1;
   boost::hash2::hash_append(h, rt::detail::wire_flavor{}, host);
   rt::detail::fold(h, graph);
   rt::detail::fold(h, kCacheEpoch);
-  // The width *emitted*: `lanes == 0` means the host's, so the raw request
+  // The width *emitted*: a derived `Lanes` means the host's, so the raw request
   // would give one graph two keys that never hit each other.
   rt::detail::fold(h, lanes);
   rt::detail::fold(h, opt.opt_level);

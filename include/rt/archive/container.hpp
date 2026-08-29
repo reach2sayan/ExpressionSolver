@@ -14,13 +14,8 @@
 #include <utility>
 #include <vector>
 
-// A ddx file, whatever it carries: an eight-byte tag, a prologue, and one
-// checksummed payload.  The graph archive is one caller and the JIT object
-// cache is the other; neither owns the framing.
-//
-// All of it in detail: a caller saving an equation has no business knowing a
-// file has a prologue, let alone what is in it.  The two that do reach in are
-// this library's own.
+// A ddx file: an eight-byte tag, a prologue, and one
+// checksummed payload.
 namespace ddx::rt::detail {
 
 // Little-endian and fixed-width throughout, so a file is portable; size_t is
@@ -69,24 +64,16 @@ struct Container {
   // What a caller slicing a file has to know, and the only sizes anyone does.
   static constexpr std::size_t magic_bytes = 8;
   static constexpr std::size_t header_bytes = 40;
-  // Reserved rather than trimmed: a nonzero byte here is refused, so claiming
-  // one later cannot be a silent format change.  Derived, not typed -- the
-  // described list decides where the fields end, so adding one takes from the
-  // tail without a constant being touched.
   static constexpr std::size_t reserved_bytes =
       header_bytes - magic_bytes - wire_bytes<FileHeader>();
   static_assert(reserved_bytes == 6);
 
-  // `payload_crc` is computed here and never taken from the caller: it
-  // describes the payload, and nothing else may claim to.
+  // `payload_crc` is computed here
   [[nodiscard]] static DDX_API std::vector<std::byte>
   pack(std::string_view magic, const FileHeader &h,
        std::span<const std::byte> payload);
 
-  // Magic, the zero reserved tail, and the checksum -- all of it before a
-  // caller can reach a payload byte, because corruption in a payload that names
-  // things changes what the rest of it means rather than breaking it.  The
-  // returned span borrows `bytes`.
+  // Magic, the zero reserved tail, and the checksum
   [[nodiscard]] static DDX_API
       result<std::pair<FileHeader, std::span<const std::byte>>>
       unpack(std::span<const std::byte> bytes, std::string_view magic);

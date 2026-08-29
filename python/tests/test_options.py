@@ -32,6 +32,14 @@ def test_a_batch_has_at_least_one_point() -> None:
         ddx.Options(points=0)
 
 
+def test_lanes_are_derived_or_at_least_one() -> None:
+    assert ddx.Options().lanes is None
+    with pytest.raises(ValidationError):
+        ddx.Options(lanes=0)
+    derived = ddx.Options(lanes=None)
+    assert ddx.Options.model_validate_json(derived.model_dump_json()) == derived
+
+
 def test_a_typo_is_an_error_and_not_a_dropped_keyword() -> None:
     with pytest.raises(ValidationError):
         ddx.Options(pionts=8)  # type: ignore[call-arg]  # deliberate typo

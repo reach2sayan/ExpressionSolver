@@ -130,7 +130,7 @@ TEST(JitVectorize, VecLibCapsADerivedWidth) {
   EXPECT_FALSE(std::regex_search(ir, std::regex{R"(<(8|16) x double>)"}))
       << "wider than the library serves";
   // Stated widths are taken as stated, whatever the library has.
-  on.lanes = 8;
+  on.lanes = ddx::jit::Lanes{8};
   const auto wide = ir_for([](auto &v) { return sin(v[0]) + v[1]; }, 2, on);
   EXPECT_NE(wide.find("<8 x double>"), std::string::npos) << wide;
 }
@@ -167,10 +167,10 @@ TEST(JitVectorize, WideTranscendentalJacobianIsVector) {
       << "the batch tail is not masked";
 }
 
-// lanes = 1 is the scalar kernel: no vector type anywhere in it.
+// The scalar kernel has no vector type anywhere in it.
 TEST(JitVectorize, OneLaneIsScalar) {
   ddx::jit::Options scalar;
-  scalar.lanes = 1;
+  scalar.lanes = ddx::jit::Lanes::scalar();
   const auto ir =
       ir_for([](auto &v) { return exp(v[0]) * sin(v[1]) + v[0]; }, 2, scalar);
   EXPECT_FALSE(has_vector_doubles(ir)) << ir;

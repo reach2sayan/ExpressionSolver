@@ -401,7 +401,7 @@ public:
   // Which rung is answering, as its codegen level, and nothing where the sweep
   // is.  Every rung gives the same bits, so this is the only way to see it
   // climb.  Does not wait.
-  [[nodiscard]] std::optional<unsigned> kernel_level() const {
+  [[nodiscard]] std::optional<jit::Level> kernel_level() const {
     if (poisoned()) {
       return std::nullopt;
     }
@@ -938,7 +938,7 @@ private:
     jit::Kernel kernel{};
     // Rungs share one pool and need not land in the order they were asked for,
     // so this is what refuses a late one.
-    unsigned level = 0;
+    jit::Level level = jit::Level::O0;
 #endif
   };
 
@@ -947,7 +947,7 @@ private:
   // other way about.
   struct Rung {
     std::shared_future<jit::result<jit::Kernel>> pending; // set once, then read
-    unsigned level = 0;
+    jit::Level level = jit::Level::O0;
   };
 #endif
 
@@ -1081,10 +1081,11 @@ private:
         return;
       }
       const jit::Options top = effective_options();
-      if (asked == 0 && top.codegen_level > 0) {
+      if (asked == 0 && top.codegen_level > jit::Level::O0) {
         jit::Options low = top;
-        low.codegen_level = 0;
-        lane.rungs[0] = {c->compile_async(lane.ready->graph, low), 0};
+        low.codegen_level = jit::Level::O0;
+        lane.rungs[0] = {c->compile_async(lane.ready->graph, low),
+                         jit::Level::O0};
         lane.asked.store(1, std::memory_order_relaxed);
         return;
       }
@@ -1105,7 +1106,7 @@ private:
   void adopt([[maybe_unused]] Lane &lane) const {
 #ifdef DDX_HAS_JIT
     jit::Kernel best;
-    unsigned level = 0;
+    jit::Level level = jit::Level::O0;
     for (Rung &rung : lane.rungs) {
       if (!ready(rung)) {
         continue;
@@ -1230,7 +1231,7 @@ private:
                                     lane.ready->compile_graph->arity(),
                                     layout.values, layout.jacobian,
                                     layout.hessian)) {
-          const unsigned level = have->options.codegen_level;
+          const jit::Level level = have->options.codegen_level;
           lane.ready = std::make_shared<const Compiled>(
               Compiled{.graph = lane.ready->graph,
                        .compile_graph = lane.ready->compile_graph,
@@ -1263,10 +1264,11 @@ private:
   void launch(Lane &lane, jit::Compiler &c) const {
     const jit::Options top = effective_options();
     std::size_t next = 0;
-    if (top.codegen_level > 0) {
+    if (top.codegen_level > jit::Level::O0) {
       jit::Options low = top;
-      low.codegen_level = 0;
-      lane.rungs[next++] = {c.compile_async(lane.ready->compile_graph, low), 0};
+      low.codegen_level = jit::Level::O0;
+      lane.rungs[next++] = {c.compile_async(lane.ready->compile_graph, low),
+                            jit::Level::O0};
     }
     lane.rungs[next] = {c.compile_async(lane.ready->compile_graph, top),
                         top.codegen_level};
@@ -1277,8 +1279,8 @@ private:
   // threshold the sweep uses.  A stated `lanes` is honoured.
   [[nodiscard]] jit::Options effective_options() const noexcept {
     jit::Options opt = options_;
-    if (opt.lanes == 0 && opt.points < kLanes) {
-      opt.lanes = 1;
+    if (!opt.lanes.stated() && opt.points < kLanes) {
+      opt.lanes = jit::Lanes::scalar();
     }
     return opt;
   }
@@ -1451,6 +1453,8 @@ namespace ddx::rt {
 
 #ifdef DDX_HAS_JIT
 using jit::Backend;
+using jit::Lanes;
+using jit::Level;
 #endif
 
 // Over expressions already built in a caller's own arena.  Partial

@@ -459,8 +459,8 @@ private:
   // does a register's worth of work to answer for a single point.
   [[nodiscard]] constexpr jit::Options effective_options() const noexcept {
     jit::Options opt = options_;
-    if (opt.lanes == 0 && opt.points < kLanes) {
-      opt.lanes = 1;
+    if (!opt.lanes.stated() && opt.points < kLanes) {
+      opt.lanes = jit::Lanes::scalar();
     }
     return opt;
   }

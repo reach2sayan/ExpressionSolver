@@ -16,8 +16,7 @@
 #include <string>
 
 // Two keys over a graph: what a file is stale against, and what a compiled
-// lane was compiled from.  Both overloads live here together -- one name split
-// across two headers is a silent-overload-set hazard.
+// lane was compiled from.
 namespace ddx::rt {
 
 namespace detail {

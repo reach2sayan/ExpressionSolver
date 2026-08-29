@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ._ddx import (Backend, Call, Expression, VecLib, Want, abs,  # noqa: A004  -- the opcode is spelled `abs`, as it is in C++
+from ._ddx import (Backend, Call, Expression, Level, VecLib, Want, abs,  # noqa: A004  -- the opcode is spelled `abs`, as it is in C++
                    acos, acosh, add, asin, asinh, atan, atan2, atanh,
                    cbrt, cos, cosh, div, erf, errc, exp,
                    has_jit, hypot,
@@ -96,8 +96,8 @@ def _compile(self: Equation, **kwargs: Any) -> Equation:  # noqa: ANN401
 Equation.options = property(_get_options, _set_options)  # type: ignore[assignment]
 Equation.compile = _compile  # type: ignore[method-assign]
 
-__all__ = ["Backend", "Call", "Equation", "Error", "Expression", "Options",
-           "VecLib", "Want", "__version__",	"abs", "acos", "acosh",	"add",
+__all__ = ["Backend", "Call", "Equation", "Error", "Expression", "Level",
+           "Options", "VecLib", "Want", "__version__",	"abs", "acos", "acosh",	"add",
            "asin", "asinh",	"atan", "atan2", "atanh", "cbrt", "cos",
            "cosh", "div", "equation", "erf", "errc", "exp",
            "has_jit", "hypot", "load", "log", "log10", "max",

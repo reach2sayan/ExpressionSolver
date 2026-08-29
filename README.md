@@ -791,9 +791,9 @@ if (const auto w = eq.warming()) {
 |---|---|---|
 | `backend` | `Interpret` | `Interpret`, `Compile` or `Adapt` |
 | `points` | `1` | the batch you intend to hand one call — stated, since the kernel is built before any call exists to infer it from |
-| `lanes` | `0` | points per loop iteration; `0` derives it from `points`, `1` is scalar. Every width gives the same bits |
-| `opt_level` | follows the build type | LLVM's IR pipeline, 0–3 — 3 in a Release build, 1 in a Debug one |
-| `codegen_level` | `1` | LLVM's codegen, 0–3 — the knob that trades kernel speed for compile time |
+| `lanes` | `Lanes::derived()` | points per loop iteration; derived is the host's register width, scalar for a batch too short to fill one. `Lanes::scalar()` or `Lanes{w}` states one. Every width gives the same bits |
+| `opt_level` | follows the build type | LLVM's IR pipeline, `Level::O0` to `Level::O3` — `O3` in a Release build, `O1` in a Debug one |
+| `codegen_level` | `Level::O1` | LLVM's codegen, `Level::O0` to `Level::O3` — the knob that trades kernel speed for compile time |
 | `slp` | `false` | pack independent subexpressions within one point; model-dependent, hence off |
 | `loop_vectorize` | `false` | loop vectorisation, on a loop already emitted `lanes` wide |
 | `warm_points` | `65536` | batch points that buy the first step, under `Adapt` |

@@ -25,13 +25,8 @@
 namespace ddx::rt::detail {
 
 // --- wire scalars -----------------------------------------------------------
-
-// Little-endian rather than native: hash2 writes an integer in the flavour's
-// order, and a stamp travels between machines exactly as the payload does.
 using wire_flavor = boost::hash2::little_endian_flavor;
 
-// By size, not by name: uint32_t and unsigned are the same type on one platform
-// and different on another.
 template <std::size_t N>
 using wire_uint_t = std::conditional_t<
     N == 1, std::uint8_t,
@@ -45,8 +40,6 @@ concept CWireScalar =
     std::floating_point<std::remove_cvref_t<U>> ||
     std::is_enum_v<std::remove_cvref_t<U>>;
 
-// The unsigned image of one scalar: an integer as itself, a float by its bits,
-// an enum by its underlying type.
 template <typename U>
 [[nodiscard]] constexpr auto to_bits(const U &v) noexcept {
   using S = std::remove_cvref_t<U>;
@@ -76,8 +69,7 @@ template <typename U, typename A>
 constexpr bool is_vector_v<std::vector<U, A>> = true;
 
 // Whether a vector moves in one memcpy, which the colouring's colours * n tables
-// are what make worth having.  Same bytes either way, so a big-endian host falls
-// through to the loop and reads the same file.
+// are what make worth having.
 template <typename E>
 constexpr bool bulk_v = CWireScalar<E> && !std::same_as<E, OpCode> &&
                         !std::same_as<E, bool> &&
@@ -95,8 +87,6 @@ template <typename U>
   }
 }
 
-// --- the contract -----------------------------------------------------------
-
 // What a Codec's derived half supplies.
 template <typename D>
 concept CWirePort =
@@ -106,8 +96,6 @@ concept CWirePort =
       { d.fit(v, n, n) } -> std::same_as<bool>;
       { d.bytes(v.data(), n) } -> std::same_as<bool>;
     };
-
-// --- the shared framing -----------------------------------------------------
 
 // A length-prefixed field is a count that travels *out* of the container when
 // writing and *into* it when reading, which is what lets one body serve both:
@@ -152,16 +140,13 @@ private:
 class Writer : public Codec<Writer> {
 public:
   explicit Writer(std::vector<std::byte> &into) noexcept : out_(&into) {}
-
-  template <CWireScalar U> bool scalar(const U &v) {
+  bool scalar(const CWireScalar auto &v) {
     const auto w = boost::endian::native_to_little(to_bits(v));
     return bytes(&w, sizeof w);
   }
 
-  // A Writer cannot run short; it answers so one traversal drives both sinks,
-  // and every guard folds away on the writing pass.
+  // A Writer cannot run short;
   [[nodiscard]] static constexpr bool ok() noexcept { return true; }
-
   bool count(std::size_t &n) { return scalar(static_cast<std::uint64_t>(n)); }
 
   // Nothing to make room for: the container already holds what is going out.
@@ -189,7 +174,7 @@ public:
   // file names one this build does not have.
   Reader(std::span<const std::byte> from,
          std::span<const std::uint8_t> remap) noexcept
-      : in_(from), remap_(remap) {}
+      : in_{from}, remap_{remap} {}
 
   bool scalar(CWireScalar auto &v) {
     using S = std::remove_cvref_t<decltype(v)>;
@@ -255,8 +240,6 @@ private:
 };
 static_assert(CWirePort<Reader>);
 
-// --- the one traversal ------------------------------------------------------
-
 // A described aggregate is its fields in order, a vector its length then its
 // elements, a string and a blob their own length, everything else a scalar.
 // Both sinks answer the same calls, so there is no second implementation to
@@ -290,7 +273,7 @@ template <typename Sink, typename V> void wire(Sink &s, V &v) {
     static_assert(boost::describe::has_describe_members<U>::value,
                   "rt::archive: no described field list for this type");
     boost::mp11::mp_for_each<
-        boost::describe::describe_members<U, boost::describe::mod_public>>(
+        boost::describe::describe_members<U, boost::describe::mod_any_access>>(
         [&](auto D) {
           if (s.ok()) {
             wire(s, v.*D.pointer);
@@ -298,8 +281,6 @@ template <typename Sink, typename V> void wire(Sink &s, V &v) {
         });
   }
 }
-
-// --- the schema stamp -------------------------------------------------------
 
 // Field names and leaf widths folded in traversal order and carried in the
 // prologue, so a moved or retyped field refuses old files.
@@ -326,7 +307,7 @@ template <typename V> constexpr void fold_schema(boost::hash2::fnv1a_32 &h) {
     static_assert(boost::describe::has_describe_members<U>::value);
     text("{");
     boost::mp11::mp_for_each<
-        boost::describe::describe_members<U, boost::describe::mod_public>>(
+        boost::describe::describe_members<U, boost::describe::mod_any_access>>(
         [&](auto D) {
           text(D.name);
           text(":");
@@ -356,7 +337,7 @@ template <typename V> [[nodiscard]] constexpr std::size_t wire_bytes() {
     static_assert(boost::describe::has_describe_members<U>::value);
     std::size_t n = 0;
     boost::mp11::mp_for_each<
-        boost::describe::describe_members<U, boost::describe::mod_public>>(
+        boost::describe::describe_members<U, boost::describe::mod_any_access>>(
         [&](auto D) {
           n += wire_bytes<std::remove_reference_t<
               decltype(std::declval<U &>().*D.pointer)>>();
