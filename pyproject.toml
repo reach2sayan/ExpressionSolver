@@ -103,23 +103,8 @@ archs = ["x86_64"]
 before-all = "/opt/python/cp312-cp312/bin/python {project}/scripts/build_llvm.py /project/.deps/llvm-20"
 environment = { CMAKE_PREFIX_PATH = "/project/.deps/llvm-20" }
 
-# Homebrew's llvm@20 keg ships the component archives beside its dylib; zlib
-# and zstd kegs supply the .a files the SDK does not.  The deployment target
-# is the runner's own release, which is what those bottles were built for.
-[tool.cibuildwheel.macos]
-archs = ["arm64"]
-before-all = "brew install llvm@20 zlib zstd ninja"
-
-# The keg's clang as well as its archives: AppleClang -- 17 on the macOS 15
-# runner -- is below the C++23 floor.  Its libc++ with it, as Homebrew's
-# caveat says: LLVM 20's headers assume LLVM 20's dylib, and the SDK's is
-# older.  delocate copies that libc++ into the wheel beside libddx.
-[tool.cibuildwheel.macos.environment]
-MACOSX_DEPLOYMENT_TARGET = "15.0"
-CMAKE_PREFIX_PATH = "$(brew --prefix llvm@20):$(brew --prefix zlib):$(brew --prefix zstd)"
-CC = "$(brew --prefix llvm@20)/bin/clang"
-CXX = "$(brew --prefix llvm@20)/bin/clang++"
-LDFLAGS = "-L$(brew --prefix llvm@20)/lib/c++ -L$(brew --prefix llvm@20)/lib/unwind -lunwind -Wl,-rpath,$(brew --prefix llvm@20)/lib/c++"
+# No macOS section: the tree needs libstdc++'s C++23 ranges, and Homebrew's
+# LLVM archives are libc++-built, so there is no toolchain that links both.
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]

@@ -996,8 +996,12 @@ uv pip install https://github.com/reach2sayan/ddx/releases/download/v1.1.0/ddx-1
 | Wheel | JIT |
 |---|---|
 | Linux x86_64 (glibc 2.28+) | yes |
-| macOS 15+ arm64 | yes |
 | Windows x64 | no — calls interpret |
+
+There is no macOS wheel: the tree uses C++23 ranges that libc++ does not have
+(`views::enumerate`, `cartesian_product`, `chunk`, `stride`, `ranges::fold`),
+so on a Mac it builds from source with a libstdc++ toolchain and without the
+JIT.
 
 Building from source instead — `pip install .`, or a preset — needs a C++23
 compiler and, for the JIT, LLVM 20's archives with a static zlib and zstd;
