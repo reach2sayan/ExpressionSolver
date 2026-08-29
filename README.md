@@ -886,6 +886,61 @@ by compiling, never by running the wrong code.
 
 ---
 
+## Against other libraries
+
+Five functions, a gradient with respect to every variable at one point, the
+point changing every call. Every cell is the time for the gradient divided by
+the time to evaluate the same function once at plain `double` — the overhead
+factor, so lower is better and below `1.00x` means the derivatives came cheaper
+than the function — as the median of 3 interleaved repetitions, with the
+spread `(max − min) / median` beside it. The last column is that one evaluation.
+
+| arm | what it is |
+|---|---|
+| `ddx-rt/r` | `Equation::gradient`, the graph interpreted |
+| `ddx-jit/r` | the same graph compiled through LLVM, one point wide |
+| `casadi/r` | CasADi's `SX` gradient `Function`, interpreted, through `Function.buffer()` |
+| `casadi/j` | the same `Function` with `jit=True`, its generated C compiled by the system compiler |
+| `adept/r` | Adept 2.1.3, `new_recording` and `compute_adjoint` per point |
+
+**Regular solid solution**
+
+| n | ddx-rt/r | ddx-jit/r | casadi/r | casadi/j | adept/r | one evaluation, ns |
+|---|---|---|---|---|---|---|
+| 16 | 3.61x ±5% | **1.03x** ±2% | 11.59x ±7% | 5.79x ±6% | 9.22x ±11% | 195 |
+| 32 | 3.94x ±3% | **1.02x** ±1% | 10.70x ±11% | 2.48x ±6% | 10.19x ±3% | 650 |
+
+**UNIQUAC**
+
+| n | ddx-rt/r | ddx-jit/r | casadi/r | casadi/j | adept/r | one evaluation, ns |
+|---|---|---|---|---|---|---|
+| 16 | 4.57x ±2% | **0.92x** ±1% | 8.96x ±2% | 1.92x ±4% | 6.33x ±5% | 807 |
+| 32 | 4.43x ±3% | **0.93x** ±1% | 7.85x ±3% | 1.55x ±1% | 6.90x ±1% | 2250 |
+
+**Peng-Robinson** — n counts N−1 mole fractions plus Z.
+
+| n | ddx-rt/r | ddx-jit/r | casadi/r | casadi/j | adept/r | one evaluation, ns |
+|---|---|---|---|---|---|---|
+| 17 | 3.10x ±5% | **0.48x** ±2% | 9.28x ±3% | 1.69x ±3% | 4.42x ±3% | 857 |
+| 33 | 2.89x ±6% | **0.45x** ±2% | 7.84x ±17% | 1.03x ±3% | 4.18x ±1% | 3340 |
+
+**Mixed Solvent Electrolyte**
+
+| n | ddx-rt/r | ddx-jit/r | casadi/r | casadi/j | adept/r | one evaluation, ns |
+|---|---|---|---|---|---|---|
+| 16 | 5.16x ±3% | **0.95x** ±1% | 12.94x ±1% | 1.98x ±2% | 7.96x ±2% | 1164 |
+| 32 | 5.20x ±3% | **1.03x** ±2% | 11.33x ±1% | 1.55x ±2% | 8.69x ±2% | 3589 |
+
+**The op-coverage function**
+
+| n | ddx-rt/r | ddx-jit/r | casadi/r | casadi/j | adept/r | one evaluation, ns |
+|---|---|---|---|---|---|---|
+| 16 | 2.62x ±3% | **0.71x** ±1% | 2.96x ±3% | 1.39x ±5% | 2.98x ±6% | 1616 |
+
+`compare/` is the harness — the functions, the arms, the gate that checks every
+arm against every other before anything is timed, and the synthetic families
+behind `--trend` that the interpreter is tuned against.
+
 ## Reference
 
 `ddx::rt::equation(callback)` → `Equation`. All of it is `const` and
