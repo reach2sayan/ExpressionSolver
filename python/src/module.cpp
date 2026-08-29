@@ -337,6 +337,7 @@ PYBIND11_MODULE(_ddx, m) {
       .value("VALUE", PyEquation::Want::Values)
       .value("JACOBIAN", PyEquation::Want::Jacobian)
       .value("HESSIAN", PyEquation::Want::Hessian)
+      .value("GRADIENT", PyEquation::Want::Gradient)
       .finalize();
 
   // Bound once, called repeatedly: `x` is written into and the blocks are read
@@ -378,6 +379,7 @@ PYBIND11_MODULE(_ddx, m) {
       .def("__call__", &PyEquation::evaluate, pyb::arg("x"))
       .def("evaluate", &PyEquation::evaluate, pyb::arg("x"))
       .def("jacobian", &PyEquation::jacobian, pyb::arg("x"))
+      .def("gradient", &PyEquation::gradient, pyb::arg("x"))
       .def("hessian", &PyEquation::hessian, pyb::arg("x"))
       // The direction leads, as it does in C++: a trailing one could not be
       // told from the point.
@@ -394,6 +396,8 @@ PYBIND11_MODULE(_ddx, m) {
           pyb::arg("want") = PyEquation::Want::Jacobian)
       .def("to_dot", &PyEquation::to_dot, pyb::kw_only(),
            pyb::arg("all") = false)
+      .def("nodes", &PyEquation::nodes, pyb::kw_only(),
+           pyb::arg("want") = PyEquation::Want::Jacobian)
       .def("save", &PyEquation::save, pyb::arg("path"))
       .def("verify", &PyEquation::verify, pyb::arg("path"))
       .def_property_readonly("loaded", &PyEquation::loaded)
@@ -402,6 +406,7 @@ PYBIND11_MODULE(_ddx, m) {
       .def_property_readonly("outputs", &PyEquation::outputs)
       .def_property_readonly("uses_kernel", &PyEquation::uses_kernel)
       .def_property_readonly("hessian_colors", &PyEquation::hessian_colors)
-      .def("wait_for_kernel", &PyEquation::wait_for_kernel)
+      .def("wait_for_kernel", &PyEquation::wait_for_kernel, pyb::kw_only(),
+           pyb::arg("want") = PyEquation::Want::Jacobian)
       .def_property("_options", &PyEquation::options, &PyEquation::set_options);
 }

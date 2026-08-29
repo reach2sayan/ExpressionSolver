@@ -1250,6 +1250,39 @@ TEST(RtEquation, EvaluatingUsesAValuesOnlyGraph) {
   EXPECT_EQ(dense[5], cells[pattern.at(2, 1)]);
 }
 
+// The gradient lane sweeps a graph with no value block.  The answers are the
+// Jacobian lane's to the bit -- what changes is which nodes are visited, never
+// the arithmetic at any of them.
+TEST(RtEquation, GradientIsTheJacobianWithoutTheValue) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  // The product is dead for the gradient, and erf's derivative never calls erf.
+  const auto eq = ddx::rt::equation(x * log(x) + 0.3 * (x * y) + erf(y));
+
+  const auto g = *eq.gradient(0.6, 1.4);
+  const auto j = *eq.jacobian(0.6, 1.4);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0], j[0]);
+  EXPECT_EQ(g[1], j[1]);
+  EXPECT_EQ(g, *eq.gradient(std::vector<double>{0.6, 1.4}));
+
+  constexpr std::size_t n = 4;
+  std::vector<double> cx(n), cy(n), gx(n), gy(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    cx[i] = 0.3 + 0.1 * static_cast<double>(i);
+    cy[i] = 1.1 - 0.05 * static_cast<double>(i);
+  }
+  const double *const columns[]{cx.data(), cy.data()};
+  double *const partials[]{gx.data(), gy.data()};
+  ASSERT_TRUE(eq.gradient(columns, partials, n).has_value());
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto at = *eq.jacobian(cx[i], cy[i]);
+    EXPECT_EQ(gx[i], at[0]) << i;
+    EXPECT_EQ(gy[i], at[1]) << i;
+  }
+}
+
 // Scalar and batch Hessians share a lane, with the scalar caller freezing it
 // first.
 TEST(RtEquation, ScalarAndBatchAgreeAtTheSamePoint) {

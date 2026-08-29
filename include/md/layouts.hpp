@@ -110,7 +110,7 @@ template <std::size_t Lead> struct layout_leading_simplex {
     [[nodiscard]] constexpr index_type required_span_size() const noexcept {
       const index_type lead = std::ranges::fold_left(
           std::views::iota(std::size_t{0}, Lead), index_type{1},
-          [this](index_type acc, std::size_t r) {
+          [&](index_type acc, std::size_t r) {
             return acc * this->ext_.extent(r);
           });
       return lead * block_size();
@@ -161,10 +161,9 @@ template <std::size_t Lead> struct layout_leading_simplex {
 // The scalar case: every axis is a derivative axis.
 using layout_simplex_packed = layout_leading_simplex<0>;
 
+// clang-format off
 // md.hpp asserts the standard layouts against the contract; these are ours.
-static_assert(
-    md::CLayoutFor<layout_simplex_packed, md::dextents<std::size_t, 2>>);
-static_assert(
-    md::CLayoutFor<layout_leading_simplex<1>, md::dextents<std::size_t, 3>>);
-
+static_assert(md::CLayoutFor<layout_simplex_packed, md::dextents<std::size_t, 2>>);
+static_assert(md::CLayoutFor<layout_leading_simplex<1>, md::dextents<std::size_t, 3>>);
+// clang-format on
 } // namespace ddx::impl

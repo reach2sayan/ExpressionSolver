@@ -46,15 +46,17 @@ class Equation:
     def __repr__(self) -> str: pass
     def buffer(self, x: typing.Any, *, want: Want = ...) -> Call: pass
     def evaluate(self, x: typing.Any) -> typing.Any: pass
+    def gradient(self, x: typing.Any) -> typing.Any: pass
     def hessian(self, x: typing.Any) -> tuple: pass
     def hvp(self, v: typing.Any, x: typing.Any) -> tuple: pass
     def jacobian(self, x: typing.Any) -> tuple: pass
     def jvp(self, v: typing.Any, x: typing.Any) -> tuple: pass
+    def nodes(self, *, want: Want = ...) -> int: pass
     def save(self, path: str | os.PathLike) -> None: pass
     def to_dot(self, *, all: bool = False) -> str: pass
     def verify(self, path: str | os.PathLike) -> None: pass
     def vjp(self, w: typing.Any, x: typing.Any) -> tuple: pass
-    def wait_for_kernel(self) -> bool: pass
+    def wait_for_kernel(self, *, want: Want = ...) -> bool: pass
     @property
     def arity(self) -> int: pass
     @property
@@ -156,6 +158,7 @@ class Want(enum.IntEnum):
     """
     Which blocks a bound call fills.
     """
+    GRADIENT: typing.ClassVar[Want]  # value = <Want.GRADIENT: 6>
     HESSIAN: typing.ClassVar[Want]  # value = <Want.HESSIAN: 2>
     JACOBIAN: typing.ClassVar[Want]  # value = <Want.JACOBIAN: 1>
     VALUE: typing.ClassVar[Want]  # value = <Want.VALUE: 0>

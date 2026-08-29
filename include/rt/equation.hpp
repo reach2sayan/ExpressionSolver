@@ -86,7 +86,15 @@ class Equation<rt::RTExpression<T>, Rest...> {
   // What a lane's graph carries; each level is the one below plus a block.
   // Appended rather than inserted, so a saved Object's `want` byte still names
   // the same lane it did.
-  enum class Want : std::uint8_t { Values, Jacobian, Hessian, Hvp, Vjp, Jvp };
+  enum class Want : std::uint8_t {
+    Values,
+    Jacobian,
+    Hessian,
+    Hvp,
+    Vjp,
+    Jvp,
+    Gradient
+  };
 
 public:
   using value_type = T;
@@ -211,22 +219,22 @@ public:
   [[nodiscard]] constexpr result<std::vector<T>>
   jacobian(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform([this](const auto &at) {
-      const std::size_t n = symbol_count();
-      const rt::Sparsity &pattern = derivative_.pattern;
       std::array<T, output_dim> f{};
       std::vector<T> cells(derivative_.partial.size());
       gather(Want::Jacobian, at, std::span<T>{f}, cells);
+      return dense(cells);
+    });
+  }
 
-      std::vector<T> out(output_dim * n, T{0});
-      for (const std::size_t i : std::views::iota(0uz, output_dim)) {
-        const auto columns = pattern.row(i);
-        const auto values =
-            std::span{cells}.subspan(pattern.rowptr[i], columns.size());
-        for (const auto [j, v] : std::views::zip(columns, values)) {
-          out[i * n + j] = v;
-        }
-      }
-      return out;
+  // The Jacobian alone, from a graph with no value block: whatever only the
+  // value needs is not swept, which on a model whose derivative is simpler
+  // than its function is most of the graph.
+  [[nodiscard]] constexpr result<std::vector<T>>
+  gradient(const rt_detail::CPointArg<T> auto &...args) const {
+    return point(args...).transform([this](const auto &at) {
+      std::vector<T> cells(derivative_.partial.size());
+      gather(Want::Gradient, at, {}, cells);
+      return dense(cells);
     });
   }
 
@@ -501,6 +509,13 @@ public:
   }
 
   [[nodiscard]] result<void>
+  gradient(const rt_detail::CColumns<const T *> auto &xs,
+           const rt_detail::CColumns<T *> auto &g, std::size_t n) const {
+    return dispatch(*snapshot(Want::Gradient, n), as_columns(xs), {},
+                    as_columns(g), {}, n);
+  }
+
+  [[nodiscard]] result<void>
   hessian(const rt_detail::CColumns<const T *> auto &xs,
           const rt_detail::CColumns<T *> auto &f,
           const rt_detail::CColumns<T *> auto &g,
@@ -678,7 +693,7 @@ private:
     std::vector<rt::Object> out;
     for (const Want want :
          {Want::Values, Want::Jacobian, Want::Hessian, Want::Hvp,
-          Want::Vjp, Want::Jvp}) {
+          Want::Vjp, Want::Jvp, Want::Gradient}) {
       Lane &lane = lane_for(want);
       const std::shared_lock read{lane.mutex};
       if (!lane.ready || !lane.ready->kernel ||
@@ -896,6 +911,21 @@ private:
     pick(g, derivative_.partial);
   }
 
+  // Row-major m x n from the cells the pattern names, the zeros put back.
+  [[nodiscard]] constexpr std::vector<T> dense(std::span<const T> cells) const {
+    const std::size_t n = symbol_count();
+    const rt::Sparsity &pattern = derivative_.pattern;
+    std::vector<T> out(output_dim * n, T{0});
+    for (const std::size_t i : std::views::iota(0uz, output_dim)) {
+      const auto columns = pattern.row(i);
+      const auto values = cells.subspan(pattern.rowptr[i], columns.size());
+      for (const auto [j, v] : std::views::zip(columns, values)) {
+        out[i * n + j] = v;
+      }
+    }
+    return out;
+  }
+
   // Published, never written: a kernel arrives as a *new* Compiled.
   struct Compiled {
     // Shared, so the graph outlives an Equation that went away mid-compile.
@@ -945,6 +975,7 @@ private:
     Lane hvp;          // the value, the gradient and H v
     Lane vjp;          // the values and w'J
     Lane jvp;          // the values and J v
+    Lane gradient;     // the Jacobian alone
   };
 
   [[nodiscard]] Lane &lane_for(Want want) const {
@@ -959,6 +990,8 @@ private:
       return cache_->vjp;
     case Want::Jvp:
       return cache_->jvp;
+    case Want::Gradient:
+      return cache_->gradient;
     default:
       return cache_->with_hessian;
     }
@@ -1128,7 +1161,13 @@ private:
       return;
     }
     rt::GraphBuilder<T> gb{*arena_};
-    gb.values_from(roots_);
+    // The gradient lane differentiates the roots without computing them: the
+    // value is not an output, so the nodes only it needs are not live.
+    if (want == Want::Gradient) {
+      gb.roots_from(roots_);
+    } else {
+      gb.values_from(roots_);
+    }
     // Vjp replaces the Jacobian block rather than adding to it: n columns
     // instead of the pattern's nonzeros is the whole point of asking.
     if (want == Want::Vjp) {
@@ -1156,7 +1195,11 @@ private:
       if (want != Want::Hessian && want != Want::Hvp && want != Want::Vjp &&
           want != Want::Jvp && !compile_roots_.empty()) {
         rt::GraphBuilder<T> cb{*arena_};
-        cb.values_from(compile_roots_);
+        if (want == Want::Gradient) {
+          cb.roots_from(compile_roots_);
+        } else {
+          cb.values_from(compile_roots_);
+        }
         if (want != Want::Values) {
           cb.jacobian_from(compile_derivative_);
         }
@@ -1276,8 +1319,12 @@ private:
     // A short batch sweeps one point at a time rather than padding out to
     // kLanes, which on a batch of one is the whole cost.
     if (n < kLanes) {
-      std::vector<T> at(symbols);
-      std::vector<T> tape(arena_->size());
+      // Grown once and kept: a point at a time is the shape a minimiser asks
+      // in, and two allocations per gradient were most of a small one.
+      static thread_local std::vector<T> at;
+      static thread_local std::vector<T> tape;
+      at.resize(symbols);
+      tape.resize(arena_->size());
       for (const std::size_t i : std::views::iota(0uz, n)) {
         std::ranges::transform(xs, at.begin(),
                                [i](const T *column) { return column[i]; });

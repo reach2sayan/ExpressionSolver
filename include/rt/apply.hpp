@@ -3,6 +3,7 @@
 #include "ops/operations.hpp" // pow_impl, atan2_impl, hypot_impl, max_impl, min_impl, abs_impl
 #include "ops/unary_math.hpp" // the eighteen descriptors
 #include "rt/opcode.hpp"
+#include "util/config.hpp"
 
 #include <concepts> // std::equality_comparable, std::same_as
 #include <cstddef>
@@ -59,16 +60,20 @@ DDX_RT_BINARY_TABLE(DDX_RT_PROBE2)
 template <impl::Numeric T>
 inline constexpr bool probes_Abs =
     impl::CArithmetic<T> || requires(const T &u) { abs(u); };
+
 template <impl::Numeric T> inline constexpr bool probes_Neg = true;
 // Comparisons need ordering and nothing else; select needs to ask whether the
 // condition is zero.
 template <impl::Numeric T>
 inline constexpr bool probes_Lt =
     impl::CArithmetic<T> || std::totally_ordered<T>;
+
 template <impl::Numeric T> inline constexpr bool probes_Le = probes_Lt<T>;
+
 template <impl::Numeric T>
 inline constexpr bool probes_Select =
     impl::CArithmetic<T> || std::equality_comparable<T>;
+
 // sign_impl only compares, so ordering is the whole requirement.
 template <impl::Numeric T>
 inline constexpr bool probes_Sign =
@@ -102,7 +107,8 @@ using row_t = Row<Fn, Probed || is_field_op_v<Fn>, Arity>;
 // Row it names, so the operation set is spelled once here and cannot drift
 // between the askers.
 template <impl::Numeric T>
-[[nodiscard]] constexpr decltype(auto) dispatch(OpCode op, auto &&visit) {
+[[nodiscard]] DDX_ALWAYS_INLINE constexpr decltype(auto)
+dispatch(OpCode op, auto &&visit) {
   switch (op) {
 #define DDX_RT_DISPATCH(fn, Op, label, functor, ...)                           \
   case OpCode::Op:                                                             \

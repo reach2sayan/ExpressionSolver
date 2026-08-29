@@ -34,6 +34,30 @@ TEST(RtGraph, UnaryNodeHasOneOperand) {
   EXPECT_EQ(rhs, ddx::rt::no_node);
 }
 
+// Roots that are not outputs: the value block is empty, and the nodes only the
+// value needs are not live.  x*y is the case -- d/dx wants y, never the product.
+TEST(RtGraph, RootsAloneLeaveTheValueOut) {
+  ddx::rt::Builder<> b;
+  const auto x = var(b, "x");
+  const auto y = var(b, "y");
+  const auto f = x * log(x) + 0.3 * (x * y);
+  const NodeId root = f.id(b);
+  const auto both = ddx::rt::GraphBuilder{b}
+                        .values_from(std::span<const NodeId>{&root, 1})
+                        .build_jacobian()
+                        .finish();
+  const auto alone = ddx::rt::GraphBuilder{b}
+                         .roots_from(std::span<const NodeId>{&root, 1})
+                         .build_jacobian()
+                         .finish();
+  EXPECT_EQ(alone.output_blocks().values.size(), 0u);
+  EXPECT_EQ(alone.output_blocks().jacobian.size(),
+            both.output_blocks().jacobian.size());
+  EXPECT_FALSE(alone.live(root));
+  EXPECT_TRUE(both.live(root));
+  EXPECT_LT(alone.live_count(), both.live_count());
+}
+
 TEST(RtGraph, EverythingTheOutputsReachIsLive) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");

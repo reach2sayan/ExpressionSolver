@@ -40,20 +40,24 @@ constexpr void lanes(T *DDX_RESTRICT out,
 }
 
 // Every op's lane loop, off apply.hpp's one dispatch: the row says how many of
-// the three columns it reads, and an operand a row does not read may be null.
-// Builder forms no op outside the tables, so a leaf row is unreachable here.
-template <std::size_t W, impl::Numeric T>
-constexpr void lanes_apply(OpCode op, T *DDX_RESTRICT out,
-                           const T *DDX_RESTRICT a, const T *DDX_RESTRICT b,
-                           const T *DDX_RESTRICT c) noexcept {
-  dispatch<T>(op, [&]<typename R>(R) {
+// the three columns it reads, and only those are resolved -- an operand a row
+// does not have is no_node, which names no lane.  Builder forms no op outside
+// the tables, so a leaf row is unreachable here.
+//
+// Forced inline, and dispatch with it: left to the compiler this was a call
+// per node, the visitor spilled to the stack around it, and the switch a
+// second jump inside.  In the sweep loop it is one jump table.
+template <std::size_t W, impl::Numeric T, typename U>
+DDX_ALWAYS_INLINE constexpr void
+lanes_apply(const Node<T> &n, U *DDX_RESTRICT out, auto &&lane) noexcept {
+  dispatch<U>(n.op, [&]<typename R>(R) {
     using Fn = typename R::functor;
     if constexpr (R::arity == 1) {
-      lanes<W, Fn, T, R::ok>(out, a);
+      lanes<W, Fn, U, R::ok>(out, lane(n.a));
     } else if constexpr (R::arity == 2) {
-      lanes<W, Fn, T, R::ok>(out, a, b);
+      lanes<W, Fn, U, R::ok>(out, lane(n.a), lane(n.b));
     } else if constexpr (R::arity == 3) {
-      lanes<W, Fn, T, R::ok>(out, a, b, c);
+      lanes<W, Fn, U, R::ok>(out, lane(n.a), lane(n.b), lane(n.c));
     } else {
       std::unreachable();
     }
@@ -122,6 +126,7 @@ constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
                               std::span<const Contraction> contractions,
                               std::span<U> tape) {
   const auto at = std::ranges::begin(point_lanes);
+  const std::size_t symbols = b.symbols().size();
   const auto lane = [&tape](NodeId v) {
     return tape.data() + std::size_t{v} * W;
   };
@@ -138,20 +143,13 @@ constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
         out[k] = static_cast<U>(n.value);
       }
     } else if (is_leaf(n.op)) {
-      const auto src =
-          at + static_cast<std::ptrdiff_t>(
-                   input_column(b.symbols().size(), n.op, n.slot) * W);
+      const auto src = at + static_cast<std::ptrdiff_t>(
+                                input_column(symbols, n.op, n.slot) * W);
       for (std::size_t k = 0; k < W; ++k) {
         out[k] = src[static_cast<std::ptrdiff_t>(k)];
       }
     } else {
-      // Absent operands stay null: lane() on no_node would form a pointer
-      // past the tape, and a row reads only the operands it has.
-      const auto operand = [&lane](NodeId v) {
-        return v == no_node ? nullptr : lane(v);
-      };
-      detail::lanes_apply<W>(n.op, out, operand(n.a), operand(n.b),
-                             operand(n.c));
+      detail::lanes_apply<W>(n, out, lane);
     }
   }
 }

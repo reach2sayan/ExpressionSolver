@@ -26,9 +26,7 @@ template <Numeric T>
 // them, so one forwarder shape serves every op.
 template <Numeric T> struct SumOpFn {
   [[nodiscard]] static constexpr std::array<T, 2>
-  adjoints(const auto &adj, const auto &l, const auto &r) noexcept {
-    (void)l;
-    (void)r;
+  adjoints(const auto &adj, const auto &, const auto &) noexcept {
     return {adj, adj};
   }
 };
@@ -45,8 +43,7 @@ template <Numeric T> struct MultiplyOpFn {
 
 template <Numeric T> struct NegateOpFn {
   [[nodiscard]] static constexpr std::array<T, 1>
-  adjoints(const auto &adj, const auto &u) noexcept {
-    (void)u;
+  adjoints(const auto &adj, const auto &) noexcept {
     return {-adj};
   }
 };
@@ -124,9 +121,7 @@ template <Numeric T> struct AbsOpFn {
 
 template <Numeric T> struct SignOpFn {
   [[nodiscard]] static constexpr std::array<T, 1>
-  adjoints(const auto &adj, const auto &u) noexcept {
-    (void)adj;
-    (void)u;
+  adjoints(const auto &, const auto &) noexcept {
     return {T{}};
   }
 };

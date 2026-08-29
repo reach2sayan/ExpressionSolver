@@ -413,6 +413,7 @@ Every per-point call answers `result<T>` — `std::expected<T, ddx::error>`. The
 |---|---|
 | `evaluate(point)` | `result<T>`, or `result<std::vector<T>>` for a system |
 | `jacobian(point)` | `result<std::vector<T>>`, row-major m × n — so `n` long when m == 1, which is the gradient |
+| `gradient(point)` | the same block from a graph with no value in it: what only the value needs is not computed |
 | `hessian(point)` | `result<std::vector<T>>`, dense row-major m × n × n. Each row is its own sweep, so `H[i*n+j]` and `H[j*n+i]` can differ in the last ULP — symmetrise before a solver that checks |
 | `univariate_derivative<K>(x0)` | `result<T>` — the K-th derivative, one symbol and one output only |
 
@@ -432,6 +433,7 @@ symbols in `symbols()` order and $m$ = `output_dim` functions:
 |---|---|---|
 | `evaluate(x)` | $f(x)$ | $m$ |
 | `jacobian(x)` | $J(x)$, where $J_{ij} = \dfrac{\partial f_i}{\partial x_j}$ | $m \times n$ |
+| `gradient(x)` | $J(x)$ alone, from a graph that does not compute $f$ | $m \times n$ |
 | `hessian(x)` | $H(x)$, where $H_{ij} = \dfrac{\partial^2 f}{\partial x_i \, \partial x_j}$ | $n \times n$ per function |
 | `univariate_derivative<K>(x₀)` | $\dfrac{d^K f}{dx^K}$ at $x_0$ | scalar |
 | `jvp(v, x)` | $J(x)\,v$, so $(Jv)_i = \sum_j \dfrac{\partial f_i}{\partial x_j} v_j$ — the directional derivative of $f$ along $v$ | $m$ |
@@ -897,6 +899,7 @@ thread-safe except `options()`.
 | `point(args…)` | `result<std::vector<T>>` — a point in canonical order, from any of the five spellings |
 | `evaluate(point)` | `result<T>`, or `result<std::vector<T>>` for a system |
 | `jacobian(point)` | `result<std::vector<T>>`, dense row-major m × n |
+| `gradient(point)` | the same, from a graph with no value block |
 | `hessian(point)` | `result<std::vector<T>>`, dense row-major m × n × n |
 | `univariate_derivative<K>(x0)` | `result<T>`, one symbol and one output only |
 | `jvp(v, point)` | `result<std::vector<T>>`, $m$ long — $Jv$ |
@@ -905,6 +908,7 @@ thread-safe except `options()`.
 | `hvp(name, point)` | the same, along the basis vector for that symbol |
 | `evaluate(xs, f, n)` | `result<void>` — a batch of `n` |
 | `jacobian(xs, f, g, n)` | `result<void>` |
+| `gradient(xs, g, n)` | `result<void>` |
 | `hessian(xs, f, g, h, n)` | `result<void>`, one output only |
 | `jvp(xs, vs, f, p, n)` | `result<void>` |
 | `vjp(xs, ws, f, p, n)` | `result<void>` |
@@ -1002,6 +1006,7 @@ never costs a second evaluation:
 |---|---|
 | `evaluate(x)` | `f` |
 | `jacobian(x)` | `(f, J)` |
+| `gradient(x)` | `J` alone, from a graph that does not compute `f` |
 | `hessian(x)` | `(f, J, H)` |
 | `jvp(v, x)` | $(f,\; J v)$ — the directional derivative of $f$ along $v$ |
 | `vjp(w, x)` | $(f,\; w^{\top} J)$ — the gradient of $w \cdot f$ |
@@ -1050,6 +1055,7 @@ computes:
 |---|---|
 | `Want.VALUE` | `value` |
 | `Want.JACOBIAN` *(default)* | `value`, `jacobian` |
+| `Want.GRADIENT` | `jacobian` |
 | `Want.HESSIAN` | `value`, `jacobian`, `hessian` |
 
 Reading a block the call did not ask for raises `errc.wrong_column_count`, and
@@ -1126,14 +1132,16 @@ values, and only the code says which.
 | `arity`, `outputs`, `symbols` | properties — symbol count, output count, canonical names |
 | `evaluate(x)`, `__call__(x)` | `f` at the point or batch |
 | `jacobian(x)` | `(f, J)` |
+| `gradient(x)` | `J` alone |
 | `jvp(v, x)`, `vjp(w, x)`, `hvp(v, x)` | $(f, Jv)$, $(f, w^{\top}J)$, $(f, \nabla f, Hv)$ |
 | `hessian(x)` | `(f, J, H)`, dense |
 | `options` | property — read or assign an `Options` |
 | `compile(**fields)` | set `Options`, block for the kernel, return self |
-| `uses_kernel`, `wait_for_kernel()` | whether a call runs compiled code, and blocking for it |
+| `uses_kernel`, `wait_for_kernel(*, want)` | whether a call runs compiled code, and blocking for it — for the Jacobian lane unless `want` names another |
 | `hessian_colors` | groups in the Hessian's compression |
 | `buffer(x, *, want)` | a `Call` bound to its buffers, for a loop |
 | `to_dot(*, all=False)` | the expression in Graphviz form; `all=True` draws the pruned nodes too |
+| `nodes(*, want)` | how many nodes a call for `want` evaluates |
 | `save(path)`, `verify(path)` | write this equation; raise unless `path` holds it |
 | `loaded` | property — whether this equation was read rather than built |
 

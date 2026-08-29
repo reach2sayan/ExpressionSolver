@@ -33,10 +33,9 @@ namespace ddx::impl::detail {
       DDX_UNARY_MATH_FNS;                                                      \
       return (DERIV);                                                          \
     }                                                                          \
-    static constexpr auto deriv_from_value(const auto &u,                      \
+    static constexpr auto deriv_from_value(const auto &,                       \
                                            const auto &fu) noexcept {          \
       DDX_UNARY_MATH_FNS;                                                      \
-      (void)u;                                                                 \
       return (__VA_ARGS__);                                                    \
     }                                                                          \
   };
@@ -88,24 +87,22 @@ inline constexpr bool has_deriv_from_value_v =
 } // namespace ddx::impl::detail
 
 // `abs` is absent: its derivative is a sign, not a function of the primal.
-// clang-format off
-#define DDX_UNARY_MATH_TABLE(X)                                               \
-  X(sin,   SineOp,   "sin")                                                    \
-  X(cos,   CosineOp, "cos")                                                    \
-  X(exp,   ExpOp,    "exp")                                                    \
-  X(tan,   TanOp,    "tan")                                                    \
-  X(log,   LogOp,    "log")                                                    \
-  X(log10, Log10Op,  "log10")                                                  \
-  X(sqrt,  SqrtOp,   "sqrt")                                                   \
-  X(cbrt,  CbrtOp,   "cbrt")                                                   \
-  X(asin,  AsinOp,   "asin")                                                   \
-  X(acos,  AcosOp,   "acos")                                                   \
-  X(atan,  AtanOp,   "atan")                                                   \
-  X(sinh,  SinhOp,   "sinh")                                                   \
-  X(cosh,  CoshOp,   "cosh")                                                   \
-  X(tanh,  TanhOp,   "tanh")                                                   \
-  X(asinh, AsinhOp,  "asinh")                                                  \
-  X(acosh, AcoshOp,  "acosh")                                                  \
-  X(atanh, AtanhOp,  "atanh")                                                  \
-  X(erf,   ErfOp,    "erf")
-// clang-format on
+#define DDX_UNARY_MATH_TABLE(X)                                                \
+  X(sin, SineOp, "sin")                                                        \
+  X(cos, CosineOp, "cos")                                                      \
+  X(exp, ExpOp, "exp")                                                         \
+  X(tan, TanOp, "tan")                                                         \
+  X(log, LogOp, "log")                                                         \
+  X(log10, Log10Op, "log10")                                                   \
+  X(sqrt, SqrtOp, "sqrt")                                                      \
+  X(cbrt, CbrtOp, "cbrt")                                                      \
+  X(asin, AsinOp, "asin")                                                      \
+  X(acos, AcosOp, "acos")                                                      \
+  X(atan, AtanOp, "atan")                                                      \
+  X(sinh, SinhOp, "sinh")                                                      \
+  X(cosh, CoshOp, "cosh")                                                      \
+  X(tanh, TanhOp, "tanh")                                                      \
+  X(asinh, AsinhOp, "asinh")                                                   \
+  X(acosh, AcoshOp, "acosh")                                                   \
+  X(atanh, AtanhOp, "atanh")                                                   \
+  X(erf, ErfOp, "erf")

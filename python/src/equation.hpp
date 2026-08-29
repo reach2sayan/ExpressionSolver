@@ -45,7 +45,7 @@ class PyEquation {
 public:
   // Ordered
   enum class Want : std::uint8_t { Values, Jacobian, Hessian, Hvp, Vjp,
-                                   Jvp };
+                                   Jvp, Gradient };
 
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
              std::vector<rt::NodeId> roots)
@@ -130,6 +130,18 @@ public:
     return pyb::make_tuple(value_of(f, cell), std::move(g).array());
   }
 
+  // The Jacobian alone, from a lane with no value block.
+  [[nodiscard]] pyb::object gradient(const pyb::handle &x) {
+    const Point at{x, symbols(), names()};
+    Lane &l = lane(Want::Gradient);
+    Scratch cells{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
+            outputs() * arity(), at.size()};
+    run(l, at, {}, cells.rows(), {});
+    scatter_jacobian(cells, g, at.size());
+    return std::move(g).array();
+  }
+
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
     const Point at{x, symbols(), names()};
     return outputs() == 1 ? hessian_from_lane(at) : hessian_from_arena(at);
@@ -212,8 +224,8 @@ public:
 
   // The only thing that waits.  A call does not: until the kernel lands the
   // graph is swept, and the kernel replaces the sweep when it arrives.
-  [[nodiscard]] bool wait_for_kernel() {
-    Lane &l = lane(Want::Jacobian);
+  [[nodiscard]] bool wait_for_kernel(Want want) {
+    Lane &l = lane(want);
     if (l.pending.valid()) {
       // Given up around the wait alone, never around the lane bookkeeping.
       const pyb::gil_scoped_release unlocked;
@@ -231,6 +243,12 @@ public:
   // this is what the compiled lane actually computes per point.
   [[nodiscard]] std::size_t hessian_colors() {
     return sweeps().front().colors();
+  }
+
+  // What one call for `want` evaluates: the contracted live order, which is
+  // the sweep and what the kernel is lowered from.
+  [[nodiscard]] std::size_t nodes(Want want) {
+    return lane(want).graph->contracted_order().size();
   }
 
   // Only what is free to answer: uses_kernel() would freeze a lane, and a repr
@@ -335,7 +353,12 @@ private:
   // find it ready and interpret forever with every answer still right.
   void prepare(Lane &l, Want want) {
     rt::GraphBuilder<double> gb{*arena_};
-    gb.values_from(roots_);
+    // The gradient lane differentiates the roots without computing them.
+    if (want == Want::Gradient) {
+      gb.roots_from(roots_);
+    } else {
+      gb.values_from(roots_);
+    }
     // The seeded lanes replace the Jacobian block rather than adding to it,
     // except Hvp, whose gradient falls out of the same sweep.
     if (want == Want::Vjp) {
@@ -804,7 +827,7 @@ private:
   // roots are in.
   std::uint32_t model_nodes_ = 0;
   bool loaded_ = false;
-  std::array<Lane, 6> lanes_;
+  std::array<Lane, 7> lanes_;
 };
 
 // A call bound to its buffers: the point's columns, the output arrays and the
@@ -825,9 +848,11 @@ public:
     const PyEquation::Lane &l = eq_->lane(want_);
     const auto outputs = ssize(eq_->outputs());
     const auto n = eq_->arity();
-    f_.emplace(eq_->shape_of({outputs}, at_),
-               PyEquation::count(l, &rt::Graph<double>::Blocks::values),
-               at_.size());
+    if (want_ != PyEquation::Want::Gradient) {
+      f_.emplace(eq_->shape_of({outputs}, at_),
+                 PyEquation::count(l, &rt::Graph<double>::Blocks::values),
+                 at_.size());
+    }
     if (want_ != PyEquation::Want::Values) {
       partials_.emplace(
           PyEquation::count(l, &rt::Graph<double>::Blocks::jacobian),
@@ -849,7 +874,7 @@ public:
   // right.
   void operator()() {
     PyEquation::Lane &l = eq_->lane(want_);
-    eq_->run(l, at_, f_->rows(),
+    eq_->run(l, at_, f_ ? f_->rows() : std::span<double *const>{},
              partials_ ? partials_->rows() : std::span<double *const>{},
              compressed_ ? compressed_->rows() : std::span<double *const>{});
     if (g_) {
@@ -866,7 +891,9 @@ public:
   [[nodiscard]] pyb::object hessian() const { return read(h_); }
 
   [[nodiscard]] std::string repr() const {
-    static constexpr std::array kWants{"value", "jacobian", "hessian"};
+    static constexpr std::array kWants{"value", "jacobian", "hessian",
+                                       "hvp",   "vjp",      "jvp",
+                                       "gradient"};
     return std::format("<ddx.Call {} at {} point{}>",
                        kWants[static_cast<std::size_t>(want_)], at_.size(),
                        at_.size() == 1 ? "" : "s");

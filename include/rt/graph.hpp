@@ -294,6 +294,15 @@ public:
     return *this;
   }
 
+  // The functions to differentiate, and not outputs: the graph then carries
+  // no value block, and whatever only the value needs is not live.
+  constexpr GraphBuilder &roots_from(std::span<const NodeId> roots) {
+    roots_.assign(roots.begin(), roots.end());
+    outputs_.clear();
+    layout_.values = 0;
+    return *this;
+  }
+
   // The whole sweep rather than its nodes: the pattern is what makes the block
   // readable, so the two must not travel separately.
   constexpr GraphBuilder &jacobian_from(const Jacobian &j) {

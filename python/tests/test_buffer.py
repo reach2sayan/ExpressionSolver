@@ -24,6 +24,16 @@ def test_matches_the_allocating_call(
     assert call.jacobian == pytest.approx([expected.dx, expected.dy])
 
 
+def test_a_gradient_call_fills_the_jacobian_and_nothing_else(
+    scalar: ddx.Equation, expected: Derivatives
+) -> None:
+    call = scalar.buffer(np.array([2.0, 3.0]), want=ddx.Want.GRADIENT)
+    call()
+    assert call.jacobian == pytest.approx([expected.dx, expected.dy])
+    with pytest.raises(ddx.Error):
+        _ = call.value
+
+
 def test_the_value_is_a_float_where_the_allocating_call_says_so(
     scalar: ddx.Equation,
 ) -> None:
