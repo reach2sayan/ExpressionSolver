@@ -1,0 +1,24 @@
+#pragma once
+
+// Written by CMake from `project(ddx VERSION ...)`, the one place the version
+// is stated; the release tag is checked against the same line.  Boost's
+// spelling: DDX_VERSION is 100200 for 1.2.0.
+
+#include <string_view>
+
+#define DDX_VERSION_MAJOR @ddx_VERSION_MAJOR@
+#define DDX_VERSION_MINOR @ddx_VERSION_MINOR@
+#define DDX_VERSION_PATCH @ddx_VERSION_PATCH@
+#define DDX_VERSION                                                            \
+  (DDX_VERSION_MAJOR * 100000 + DDX_VERSION_MINOR * 100 + DDX_VERSION_PATCH)
+#define DDX_VERSION_STRING "@ddx_VERSION@"
+
+namespace ddx {
+
+inline constexpr int version_major = DDX_VERSION_MAJOR;
+inline constexpr int version_minor = DDX_VERSION_MINOR;
+inline constexpr int version_patch = DDX_VERSION_PATCH;
+inline constexpr int version_number = DDX_VERSION;
+inline constexpr std::string_view version = DDX_VERSION_STRING;
+
+} // namespace ddx
