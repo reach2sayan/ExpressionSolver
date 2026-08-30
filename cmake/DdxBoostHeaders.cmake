@@ -197,6 +197,9 @@ set(DDX_BOOST_HEADER_DIRS
         boost/preprocessor/variadic/detail
         boost/preprocessor/variadic/limits
         boost/property_map
+        boost/range
+        boost/range/algorithm
+        boost/range/detail
         boost/smart_ptr
         boost/smart_ptr/detail
         boost/stl_interfaces

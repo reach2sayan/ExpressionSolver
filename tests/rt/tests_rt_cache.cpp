@@ -15,18 +15,15 @@
 #include <tuple>
 #include <vector>
 
-// What the cache is for is that nothing about an answer changes: every test
-// here is an equation given one against the same equation given none, and the
-// comparison is == on doubles and not a tolerance.  A remembered call that
-// came back nearly right would be a bug this file could not see.
+// Every test here is an equation given a cache against the same equation given
+// none, compared with == and not a tolerance: an answer that came back nearly
+// right is the bug this file exists to catch.
 namespace {
 
 using ddx::rt::var;
 
-// A cache of a caller's own, which is the whole of what the concept asks for:
-// somewhere to put one call per lane.  It counts what the mixin asked it for,
-// so a test can say the path was taken and not merely that the answer was
-// right.
+// A cache of a caller's own, counting what the mixin asked it for so a test can
+// say the path was taken and not merely that the answer was right.
 struct Tally {
   struct Counts {
     std::size_t reads = 0;
@@ -35,7 +32,7 @@ struct Tally {
     std::size_t commits = 0;
   };
 
-  // Shared, so a copy into the equation still counts into the test's own.
+  // Shared, so the copy the equation holds counts into the test's own.
   std::shared_ptr<Counts> counts = std::make_shared<Counts>();
   ddx::rt::LastValue<double> kept;
 
@@ -80,9 +77,8 @@ struct Tally {
 static_assert(ddx::rt::CValueCache<Tally, double>);
 static_assert(ddx::rt::CValueCache<ddx::rt::LastValue<double>, double>);
 
-// Three symbols that reach different parts of the graph, so a point moving one
-// of them leaves most of it alone -- which is the case the amendment exists
-// for and the one most likely to be wrong.
+// Three symbols reaching different parts of the graph, so one moving leaves
+// most of it alone.
 constexpr auto model = [] {
   const auto x = var("x");
   const auto y = var("y");
@@ -90,7 +86,6 @@ constexpr auto model = [] {
   return exp(x * y) + sin(z) * x + z * z * z * y + log(x + 4.0);
 };
 
-// Every per-point spelling at one point, as one comparable value.
 [[nodiscard]] auto everything(const auto &eq, const std::vector<double> &at) {
   const std::vector<double> direction{1.0, -0.5, 0.25};
   const std::vector<double> weights{2.0};
@@ -108,8 +103,7 @@ TEST(RtCache, ARememberedPointAnswersInTheSameBits) {
   std::uniform_real_distribution<double> spread{-2.0, 2.0};
   std::vector<double> at{0.5, 1.25, 2.0};
   for (std::size_t call = 0; call < 200; ++call) {
-    // One symbol, then all of them, then none: an amendment, a fill, and a
-    // point already answered.
+    // One symbol, then all of them, then none.
     if (call % 3 == 1) {
       at[call % at.size()] = spread(rng);
     } else if (call % 3 == 2) {
@@ -241,8 +235,7 @@ TEST(RtCache, NoCacheCostsNothing) {
 }
 
 #ifdef DDX_HAS_JIT
-// codegen decides the arithmetic, so a remembered call is about the graph that
-// answered it and no other.
+// codegen decides the arithmetic, so a remembered call is about one graph only.
 TEST(RtCache, ChangingTheBackendForgets) {
   auto warm = ddx::rt::equation(model, ddx::rt::LastValue{});
   const auto cold = ddx::rt::equation(model);
@@ -259,8 +252,7 @@ TEST(RtCache, ChangingTheBackendForgets) {
   EXPECT_EQ(*compiled.jacobian(at), *warm.jacobian(at));
 }
 
-// A kernel computes its whole graph, so a lane it answers keeps no tape and
-// every moved point is a fresh call -- which must still be the right one.
+// A lane a kernel answers keeps no tape, so a moved point is a fresh call.
 TEST(RtCache, ACompiledLaneIsStillRemembered) {
   auto warm = ddx::rt::equation(model, ddx::rt::LastValue{});
   auto cold = ddx::rt::equation(model);

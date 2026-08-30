@@ -74,10 +74,9 @@ template <typename R, typename Ptr>
 concept CColumns = std::ranges::contiguous_range<R> &&
                    std::convertible_to<std::ranges::range_value_t<R>, Ptr>;
 
-// What an Equation is spelled over: its outputs, and behind them the cache a
-// factory deduced from what it was handed.  Which of the two a trailing type is
-// is asked of the type system, never assumed by position: a cache is whatever
-// models CValueCache, and COutputPack refuses a pack holding anything else.
+// An Equation is spelled over its outputs and, behind them, the cache a factory
+// deduced.  Which a trailing type is is asked of the type system rather than
+// assumed by position.
 template <typename... Rest>
 using tail_of =
     boost::mp11::mp_eval_if_c<sizeof...(Rest) == 0, void, boost::mp11::mp_back,
@@ -132,8 +131,7 @@ public:
   static constexpr std::size_t output_dim =
       1 + boost::mp11::mp_size<rt_detail::outputs_of<T, Rest...>>::value;
 
-  // The outputs as their own pack: the class's holds the cache too, and a
-  // factory hands over functions, never a cache among them.
+  // The outputs as their own pack: the class's holds the cache too.
   template <typename... Es>
   static constexpr bool are_outputs =
       sizeof...(Es) + 1 == output_dim &&
@@ -1408,15 +1406,11 @@ private:
                             })) {
       return fail(errc::wrong_column_count);
     }
-    // A point already answered is answered again from what it left behind; with
-    // no cache this is the call below and nothing else.
     this->through(want, *c.graph, answered(c), xs, out, n,
                   [&] { run(c, xs, out, n); });
     return {};
   }
 
-  // Whether this lane's answer comes from a kernel, which computes its whole
-  // graph, or from a sweep, which leaves a tape an amendment can work from.
   [[nodiscard]] static rt::Answered
   answered([[maybe_unused]] const Compiled &c) noexcept {
 #ifdef DDX_HAS_JIT
@@ -1442,8 +1436,7 @@ private:
     interpret(c, xs, out, n);
   }
 
-  // What the equation holds the ids of, and what it gives up around a sweep:
-  // nothing here, and the GIL on the Python side.
+  // What Caching walks, and what it gives up around a sweep: nothing, here.
   [[nodiscard]] const rt::Builder<T> &arena() const noexcept { return *arena_; }
   struct Nothing {};
   [[nodiscard]] static constexpr Nothing unlocked() noexcept { return {}; }

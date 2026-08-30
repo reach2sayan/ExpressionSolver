@@ -1,9 +1,7 @@
-"""The last call kept, and the answers unchanged by keeping it.
+"""``remember=True``: the last call kept, and the answers unchanged by keeping it.
 
-``remember=True`` is the Python spelling of the C++ ``LastValue`` cache: a point
-already asked comes back off the last call, and a point one symbol away sweeps
-only what that symbol reaches.  Every assertion here is exact -- an answer that
-came back nearly right would be a bug this file could not see.
+Every assertion is exact -- an answer that came back nearly right is the bug
+this file exists to catch.
 """
 
 from __future__ import annotations

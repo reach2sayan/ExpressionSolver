@@ -32,9 +32,7 @@ namespace detail {
 
 // One counted loop for every arity: the operand columns are the pack, and the
 // body is apply()'s per element.  `supported` is what keeps the loop compiling
-// at a scalar the op has no meaning for.  The pack deduces the element type
-// through the pointer rather than naming `const T *` whole: MSVC parses a
-// restrict only after an explicit `*`, and every column is restrict.
+// at a scalar the op has no meaning for.
 template <std::size_t W, typename Fn, impl::Numeric T, bool Ok,
           std::same_as<T>... Ts>
 constexpr void lanes(T *DDX_RESTRICT out,
@@ -48,10 +46,6 @@ constexpr void lanes(T *DDX_RESTRICT out,
 // the three columns it reads, and only those are resolved -- an operand a row
 // does not have is no_node, which names no lane.  Builder forms no op outside
 // the tables, so a leaf row is unreachable here.
-//
-// Forced inline, and dispatch with it: left to the compiler this was a call
-// per node, the visitor spilled to the stack around it, and the switch a
-// second jump inside.  In the sweep loop it is one jump table.
 template <std::size_t W, impl::Numeric T, typename U>
 DDX_ALWAYS_INLINE constexpr void
 lanes_apply(const Node<T> &n, U *DDX_RESTRICT out, auto &&lane) noexcept {
@@ -120,8 +114,7 @@ template <std::size_t W, impl::Numeric U>
   return [tape](NodeId v) { return tape.data() + std::size_t{v} * W; };
 }
 
-// One step of a sweep, W points at once: the only place that turns a Step into
-// numbers.  `at` is the point's first lane and `lane` the tape row an id names.
+// The only place that turns a Step into numbers.
 template <std::size_t W, impl::Numeric T>
 DDX_ALWAYS_INLINE constexpr void sweep_step(const Builder<T> &b,
                                             std::size_t symbols, const Step &s,

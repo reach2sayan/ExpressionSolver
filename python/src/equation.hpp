@@ -59,8 +59,8 @@ inline void scatter_hessian(const rt::Coloring &coloring,
   }
 }
 
-// The one cache a Python caller can be given: they cannot name a C++ type, so
-// the only choice is whether there is one.
+// A Python caller cannot name a C++ type, so the only choice is whether there
+// is one.
 using PyCache = rt::LastValue<double>;
 class PyEquation : public rt::detail::Caching<PyEquation, double, PyCache> {
 public:
@@ -517,8 +517,6 @@ private:
     // Before the GIL goes, and after the shape check: a call that will not run
     // has bought nothing.
     charge(l, n);
-    // A point already answered is answered again from what it left behind;
-    // without ddx.equation(remember=True) this is the call below and no more.
     through(want, *l.graph,
             l.kernel ? rt::Answered::ByKernel : rt::Answered::BySweep, xs, out,
             n, [&] { sweep(l, xs, out, n); });
@@ -536,11 +534,13 @@ private:
     interpret(*l.graph, xs, out, n);
   }
 
-  // What the equation holds the ids of, and what it gives up around a sweep:
-  // the GIL, so an amended point is no more of a stop-the-world than a swept
-  // one.
+  // What Caching walks, and what it gives up around a sweep.
   [[nodiscard]] const rt::Builder<double> &arena() const { return *arena_; }
-  [[nodiscard]] static pyb::gil_scoped_release unlocked() { return {}; }
+  // Named, not `return {}`: gil_scoped_release's bool constructor is explicit,
+  // so a braced return would be reading the empty list as `false`.
+  [[nodiscard]] static pyb::gil_scoped_release unlocked() {
+    return pyb::gil_scoped_release{};
+  }
 
   // The block sweep, within ~1.4x of a kernel and not a sad path.
   void interpret(const rt::Graph<double> &graph,
