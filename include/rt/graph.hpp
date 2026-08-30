@@ -113,8 +113,7 @@ template <std::semiregular Per> struct Blocks {
 };
 
 using OutputBlocks = Blocks<std::vector<NodeId>>; // what a freeze is handed
-using OutputSpans =
-    Blocks<std::span<const NodeId>>; // what a frozen graph lends
+using OutputSpans =  Blocks<std::span<const NodeId>>; // frozen graph view
 // The column counts, read off the blocks so no column can be miscounted:
 // `values` is m, `jacobian` is the pattern's nonzeros row-major by function,
 // and `hessian` is colours * n, compressed.
@@ -125,7 +124,6 @@ using Layout = Blocks<std::size_t>;
 template <impl::Numeric T = double> class Graph {
 public:
   using value_type = T;
-
   struct Property {
     OpCode op = OpCode::Const;
     T value{};

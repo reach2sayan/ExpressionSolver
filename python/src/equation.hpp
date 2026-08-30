@@ -61,23 +61,22 @@ inline void scatter_hessian(const rt::Coloring &coloring,
 class PyEquation {
 public:
   using Want = rt::Want;
-
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
              std::vector<rt::NodeId> roots)
-      : arena_(std::move(arena)), symbols_(arena_->symbols()),
-        roots_(std::move(roots)),
-        model_nodes_(static_cast<std::uint32_t>(arena_->size())) {}
+      : arena_{std::move(arena)}, symbols_{arena_->symbols()},
+        roots_{std::move(roots)},
+        model_nodes_{static_cast<std::uint32_t>(arena_->size())} {}
 
   // From a file: the sweeps arrive filled, so nothing below computes them.
   explicit PyEquation(rt::Verified<double> snap)
       : PyEquation(std::move(snap).rebuild()) {}
   explicit PyEquation(rt::Rebuilt<double> r)
-      : arena_(std::move(r.arena)), symbols_(arena_->symbols()),
-        roots_(std::move(r.rest.roots)),
-        derivative_(std::move(r.rest.jacobian)),
-        sweeps_(std::move(r.rest.hessians)), options_(r.rest.options),
-        objects_(std::move(r.rest.objects)), model_nodes_(r.rest.model_nodes),
-        loaded_(true) {}
+      : arena_{std::move(r.arena)}, symbols_{arena_->symbols()},
+        roots_{std::move(r.rest.roots)},
+        derivative_{std::move(r.rest.jacobian)},
+        sweeps_{std::move(r.rest.hessians)}, options_{r.rest.options},
+        objects_{std::move(r.rest.objects)}, model_nodes_{r.rest.model_nodes},
+        loaded_{true} {}
 
   // The same struct the C++ facade fills: one serialiser, two equations.  Also
   // what the cache path in module.cpp writes, which is why it is not private.
@@ -107,8 +106,6 @@ public:
   [[nodiscard]] const std::vector<std::string> &symbols() const {
     return arena_->symbols();
   }
-
-  // --- the three lanes, as Python sees them --------------------------------
 
   [[nodiscard]] pyb::object evaluate(const pyb::handle &x) {
     const Point at{x, symbols_};
@@ -153,11 +150,6 @@ public:
     const Point at{x, symbols_};
     return outputs() == 1 ? hessian_from_lane(at) : hessian_from_arena(at);
   }
-
-  // --- the seeded products -------------------------------------------------
-  //
-  // The direction rides in its own argument, so it can never be read as part
-  // of the point.
 
   [[nodiscard]] pyb::tuple jvp(const pyb::handle &v, const pyb::handle &x) {
     const Point at{x, symbols_};
@@ -208,8 +200,6 @@ public:
     return pyb::make_tuple(value_of(f, cell), std::move(g).array(),
                            std::move(out).array());
   }
-
-  // --- the JIT -------------------------------------------------------------
 
   [[nodiscard]] constexpr const jit::Options &options() const noexcept {
     return options_;
@@ -267,8 +257,7 @@ public:
                        outputs() == 1 ? "" : "s");
   }
 
-  // --- the equation on disk ------------------------------------------------
-
+  // the equation on disk
   void save(const std::filesystem::path &path) {
     unwrap(rt::save(snapshot(), path));
   }

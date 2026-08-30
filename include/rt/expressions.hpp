@@ -49,10 +49,10 @@ public:
   template <typename V>
     requires(!std::same_as<std::remove_cvref_t<V>, RTExpression> &&
              impl::Numeric<V>)
-  constexpr RTExpression(V v) : lit_(static_cast<T>(std::move(v))) {}
+  constexpr RTExpression(V v) : lit_{static_cast<T>(std::move(v))} {}
 
   constexpr RTExpression(Builder<T> &b, NodeId id) noexcept
-      : builder_(&b), id_(id) {}
+      : builder_{&b}, id_{id} {}
 
   [[nodiscard]] constexpr bool pending() const noexcept {
     return builder_ == nullptr;

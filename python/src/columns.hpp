@@ -182,11 +182,6 @@ private:
 };
 
 // The pointer table the kernel ABI takes: one per output column, `n` apart.
-// Both blocks below build it identically and differ only in what they own.
-//
-// The storage arrives as a constructor argument and is moved into place after,
-// because a base runs before every member a derived class has -- and moving
-// either an ndarray or a vector leaves the buffer these point into where it is.
 class Columns {
 public:
   [[nodiscard]] constexpr std::span<double *const> rows() { return rows_; }
@@ -207,13 +202,12 @@ private:
 
 // The ABI writes (columns, n) row-major, which is the same memory as the shape
 // the caller wants -- so the array is built at that shape once and never
-// reshaped.  Reshaping cost a Python attribute lookup and call per output, and
-// PyObject_GetAttrString does not intern.
+// reshaped.
 class Block : public Columns {
 public:
   Block(const std::vector<pyb::ssize_t> &shape, std::size_t columns,
         std::size_t n)
-      : Block(Array{shape}, columns, n) {}
+      : Block{Array{shape}, columns, n} {}
 
   [[nodiscard]] pyb::object array() && { return std::move(array_); }
   // A bound call reads the same array on every call, where the allocating ones
@@ -222,23 +216,18 @@ public:
 
 private:
   Block(Array a, std::size_t columns, std::size_t n)
-      : Columns(a.mutable_data(), columns, n), array_(std::move(a)) {}
-
+      : Columns{a.mutable_data(), columns, n}, array_{std::move(a)} {}
   Array array_;
 };
 
-// Columns the caller never sees: a compressed block on its way to a dense one.
-// A plain buffer, since an ndarray for a value that is discarded is a Python
-// object and a second heap block bought for nothing.
 class Scratch : public Columns {
 public:
   Scratch(std::size_t columns, std::size_t n)
-      : Scratch(std::vector<double>(columns * n), columns, n) {}
+      : Scratch{std::vector<double>(columns * n), columns, n} {}
 
 private:
   Scratch(std::vector<double> d, std::size_t columns, std::size_t n)
-      : Columns(d.data(), columns, n), data_(std::move(d)) {}
-
+      : Columns{d.data(), columns, n}, data_{std::move(d)} {}
   std::vector<double> data_;
 };
 
