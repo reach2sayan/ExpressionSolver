@@ -125,8 +125,8 @@ public:
                  .jacobian = blocks.jacobian.size(),
                  .hessian = blocks.hessian.size()};
     g.outputs_ = std::move(blocks.values);
-    g.outputs_.append_range(blocks.jacobian);
-    g.outputs_.append_range(blocks.hessian);
+    impl::append(g.outputs_, blocks.jacobian);
+    impl::append(g.outputs_, blocks.hessian);
     g.coloring_ = std::move(coloring);
     g.jacobian_ = std::move(jacobian);
     g.symbols_.assign(b.symbols().begin(), b.symbols().end());
