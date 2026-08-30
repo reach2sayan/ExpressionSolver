@@ -91,8 +91,9 @@ template <CHessianTarget F>
 
 // The point is a span, so its length only arrives with the call: both entry
 // points answer with result<T>.
-template <CHessianTarget F, CIndexRange R>
-auto hessian(F &&f, const std::span<const double> x, R &&active) {
+auto hessian(CHessianTarget auto &&f, const std::span<const double> x,
+             CIndexRange auto &&active) {
+  using F = std::remove_cvref_t<decltype(f)>;
   return detail::check_target<F>(x, active).transform([&] {
     if constexpr (CExpression<F>) {
       if constexpr (detail::CGraphReverseHessian<F>) {
@@ -112,8 +113,9 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
 // Every symbol, in canonical order.  The extent is compile-time for a graph, so
 // this allocates nothing but the result and a constant evaluation can run it;
 // the subset-taking form widens to the owning shape and cannot.
-template <CHessianTarget F>
-constexpr auto hessian(F &&f, const std::span<const double> x) {
+constexpr auto hessian(CHessianTarget auto &&f,
+                       const std::span<const double> x) {
+  using F = std::remove_cvref_t<decltype(f)>;
   return detail::check_target<F>(x).transform([&] {
     if constexpr (CExpression<F>) {
       if constexpr (detail::CGraphReverseHessian<F>) {

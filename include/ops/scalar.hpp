@@ -78,16 +78,16 @@ template <Numeric U> struct ConstantEmbedder {
 };
 
 // N levels down along component I: 0 is the value chain, 1 the tangent chain.
-template <std::size_t N, std::size_t I, Numeric T>
-constexpr auto component(const T &x) noexcept {
+template <std::size_t N, std::size_t I>
+constexpr auto component(const Numeric auto &x) noexcept {
   if constexpr (N == 0) {
     return x;
   } else {
     return component<N - 1, I>(x.template get<I>());
   }
 }
-template <std::size_t N, Numeric T>
-constexpr auto get_real_part(const T &x) noexcept {
+template <std::size_t N>
+constexpr auto get_real_part(const Numeric auto &x) noexcept {
   return component<N, 0>(x);
 }
 
@@ -113,14 +113,14 @@ template <typename X>
 concept DualOrArithmetic = DualLike<X> || CArithmetic<X>;
 
 // The scalar ends of the recursions dual/dual.hpp continues for a Dual.
-template <CArithmetic T> constexpr T val(T x) noexcept { return x; }
+constexpr auto val(CArithmetic auto x) noexcept { return x; }
 
 // Zero in every component; operator== compares val() alone and cannot say this.
-template <CArithmetic T> constexpr bool all_zero(T x) noexcept {
-  return x == T{};
+constexpr bool all_zero(CArithmetic auto x) noexcept {
+  return x == std::remove_cvref_t<decltype(x)>{};
 }
 
-template <Numeric X> constexpr double to_double(const X &x) noexcept {
+constexpr double to_double(const Numeric auto &x) noexcept {
   return static_cast<double>(val(x));
 }
 

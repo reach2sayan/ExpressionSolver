@@ -97,8 +97,8 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a,
 }
 
 template <Numeric T>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a,
-                                             const ConstOperand<Dual<T>> auto &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T>
+dual_add(const Dual<T> &a, const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av + s, ad};
 }
@@ -112,15 +112,15 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a,
 }
 
 template <Numeric T>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a,
-                                             const ConstOperand<Dual<T>> auto &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T>
+dual_sub(const Dual<T> &a, const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av - s, ad};
 }
 
 template <Numeric T>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const ConstOperand<Dual<T>> auto &s,
-                                             const Dual<T> &a) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T>
+dual_sub(const ConstOperand<Dual<T>> auto &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s - a == -(a - s);
   return Dual<T>{-(av - s), -ad};
 }
@@ -134,8 +134,8 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a,
 }
 
 template <Numeric T>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a,
-                                             const ConstOperand<Dual<T>> auto &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T>
+dual_mul(const Dual<T> &a, const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
   return Dual<T>{av * s, ad * s};
 }
@@ -152,16 +152,16 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a,
 }
 
 template <Numeric T>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a,
-                                             const ConstOperand<Dual<T>> auto &s) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T>
+dual_div(const Dual<T> &a, const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a; // s is a zero-derivative constant
   const T inv = T{1} / T(s);
   return Dual<T>{av * inv, ad * inv};
 }
 
 template <Numeric T>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const ConstOperand<Dual<T>> auto &s,
-                                             const Dual<T> &a) noexcept {
+DDX_ALWAYS_INLINE constexpr Dual<T>
+dual_div(const ConstOperand<Dual<T>> auto &s, const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (wide-scalar-safe)
   const T inv = T{1} / av;
   const T q = T{s} * inv; // value = s / a
@@ -172,16 +172,16 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const ConstOperand<Dual<T>> auto &s
 // that differs between operators.  Separate kernels rather than a promotion,
 // which would leave an `ad + 0` IEEE will not let the compiler fold.
 #define DDX_DUAL_BINOP(OP, COMB, LEFT)                                         \
-  template <DualLike A, DualCompatible<A> B>                                   \
-  constexpr auto operator OP(A &&a, B &&b) noexcept {                          \
+  template <DualLike A>                                                        \
+  constexpr auto operator OP(A &&a, DualCompatible<A> auto &&b) noexcept {     \
     return COMB(a, b);                                                         \
   }                                                                            \
-  template <DualLike A, ConstOperand<A> C>                                     \
-  constexpr auto operator OP(A &&a, C &&s) noexcept {                          \
+  template <DualLike A>                                                        \
+  constexpr auto operator OP(A &&a, ConstOperand<A> auto &&s) noexcept {       \
     return COMB(a, s);                                                         \
   }                                                                            \
-  template <DualLike A, ConstOperand<A> C>                                     \
-  constexpr auto operator OP(C &&s, A &&a) noexcept {                          \
+  template <DualLike A>                                                        \
+  constexpr auto operator OP(ConstOperand<A> auto &&s, A &&a) noexcept {       \
     return LEFT;                                                               \
   }
 DDX_DUAL_BINOP(+, dual_add, dual_add(a, s))
@@ -190,10 +190,9 @@ DDX_DUAL_BINOP(*, dual_mul, dual_mul(a, s))
 DDX_DUAL_BINOP(/, dual_div, dual_div(s, a))
 #undef DDX_DUAL_BINOP
 
-// ---- unary minus + math functions (eager) ---------------------------------
-template <DualLike A> constexpr auto operator-(A &&a) noexcept {
+constexpr auto operator-(DualLike auto &&a) noexcept {
   const auto &[v, d] = a;
-  using DT = std::remove_cvref_t<A>;
+  using DT = std::remove_cvref_t<decltype(a)>;
   return DT{-v, -d};
 }
 
@@ -227,15 +226,13 @@ struct abs_combine {
 };
 // One chain-rule overload per unary math function, from the registry.
 #define DDX_DUAL_UNARY(FN, OP, LABEL)                                          \
-  template <DualLike A> constexpr auto FN(A &&a) noexcept {                    \
+  constexpr auto FN(DualLike auto &&a) noexcept {                              \
     return unary_dual_combine<detail::OP##Fn>{}(a);                            \
   }
 DDX_UNARY_MATH_TABLE(DDX_DUAL_UNARY)
 #undef DDX_DUAL_UNARY
 
-template <DualLike A> constexpr auto abs(A &&a) noexcept {
-  return abs_combine{}(a);
-}
+constexpr auto abs(DualLike auto &&a) noexcept { return abs_combine{}(a); }
 
 // ---- comparisons (operate on materialized values) -------------------------
 template <typename A, typename B>
@@ -243,11 +240,13 @@ concept DualComparable =
     DualOrArithmetic<A> && DualOrArithmetic<B> && (DualLike<A> || DualLike<B>);
 
 template <DualOrArithmetic A>
-constexpr auto operator<=>(const A &a, const DualComparable<A> auto &b) noexcept {
+constexpr auto operator<=>(const A &a,
+                           const DualComparable<A> auto &b) noexcept {
   return val(a) <=> val(b);
 }
 template <DualOrArithmetic A>
-constexpr bool operator==(const A &a, const DualComparable<A> auto &b) noexcept {
+constexpr bool operator==(const A &a,
+                          const DualComparable<A> auto &b) noexcept {
   return val(a) == val(b);
 }
 
@@ -255,8 +254,8 @@ constexpr bool operator==(const A &a, const DualComparable<A> auto &b) noexcept 
 // unqualified, so ADL makes these work at any nesting depth.
 
 // pow(a, b) = a^b.  d(a^b) = a^b (b' ln a + b a'/a).
-template <DualLike A, DualCompatible<A> B>
-constexpr auto pow(A &&a, B &&b) noexcept {
+template <DualLike A>
+constexpr auto pow(A &&a, DualCompatible<A> auto &&b) noexcept {
   using std::log, std::pow;
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
@@ -308,7 +307,7 @@ namespace detail {
 // symmetric, hence stable under the builder's commutative reordering.  The dual
 // is always the left operand, so neither depends on which spelling was used.
 template <bool IsMax>
-constexpr auto extremum(DualLike auto&&a, const auto &other) noexcept {
+constexpr auto extremum(DualLike auto &&a, const auto &other) noexcept {
   using DT = std::remove_cvref_t<decltype(a)>;
   if (val(a) == val(other)) {
     return DT{a + (other - a) / 2};
@@ -386,7 +385,8 @@ constexpr auto hypot(A &&a, DualCompatible<A> auto &&b) noexcept {
 
 // 3-argument hypot, all-dual only.
 template <DualLike A>
-constexpr auto hypot(A &&a,  DualCompatible<A> auto &&b, DualCompatible<A>  auto&&c) noexcept {
+constexpr auto hypot(A &&a, DualCompatible<A> auto &&b,
+                     DualCompatible<A> auto &&c) noexcept {
   using std::hypot;
   using T = dual_value_t<A>;
   const Dual<T> x = a, y = b, z = c;
