@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rt/blocks.hpp"
 #include "rt/builder.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
@@ -61,6 +62,23 @@ BOOST_DESCRIBE_ENUM(Want, Value, Jacobian, Hessian, Hvp, Vjp, Jvp, Gradient)
 inline constexpr std::size_t want_count =
     boost::mp11::mp_size<boost::describe::describe_enumerators<Want>>::value;
 
+// The lanes in Cache order, off the same described list `want_count` counts, so
+// a lane zipped against the cache needs no cast back from an index.
+inline constexpr auto want_values = [] {
+  std::array<Want, want_count> out{};
+  std::size_t i = 0;
+  boost::mp11::mp_for_each<boost::describe::describe_enumerators<Want>>(
+      [&out, &i](auto D) { out[i++] = D.value; });
+  return out;
+}();
+// Which is only true while the enumerators are unnumbered and in order; a Want
+// given an explicit value would put the cache and this list out of step.
+static_assert(std::ranges::all_of(std::views::iota(0uz, want_count),
+                                  [](std::size_t i) {
+                                    return std::to_underlying(want_values[i]) ==
+                                           i;
+                                  }));
+
 [[nodiscard]] constexpr std::string_view name_of(Want w) noexcept {
   return boost::describe::enum_to_string(w, "?");
 }
@@ -84,34 +102,21 @@ inline constexpr std::size_t want_count =
   return false;
 }
 
+using OutputBlocks = Blocks<std::vector<NodeId>>; // what a freeze is handed
+using OutputSpans =
+    Blocks<std::span<const NodeId>>; // what a frozen graph lends
+
 // A builder frozen into CSR, the form codegen walks.  Operand position rides
 // along as an edge attribute, because a CSR row is a set.
 template <impl::Numeric T = double> class Graph {
 public:
   using value_type = T;
 
-  // Codegen and the caller agree on a column's meaning from this, not by
-  // positional convention.
-  struct Layout {
-    std::size_t values = 0;   // m
-    std::size_t jacobian = 0; // the pattern's nonzeros, row-major by function
-    std::size_t hessian = 0;  // colours * n, compressed
-    BOOST_DESCRIBE_CLASS(Layout, (), (values, jacobian, hessian), (), ())
-  };
-
   struct Property {
     OpCode op = OpCode::Const;
     T value{};
     std::uint32_t slot = 0;
     BOOST_DESCRIBE_CLASS(Property, (), (op, value, slot), (), ())
-  };
-
-  // The output columns by block, in the order the kernel writes them; the
-  // layout is read off the blocks, so no column can be miscounted.
-  struct OutputBlocks {
-    std::vector<NodeId> values;
-    std::vector<NodeId> jacobian;
-    std::vector<NodeId> hessian;
   };
 
   // `contract` is settled here, not per sweep: it decides the arithmetic, so
@@ -140,9 +145,9 @@ public:
     for (const auto [v, n] : b.nodes() | std::views::enumerate) {
       g.properties_.push_back({.op = n.op, .value = n.value, .slot = n.slot});
       const auto id = static_cast<std::size_t>(v);
-      for (const auto [slot, u] :
-           std::views::enumerate(std::array{n.a, n.b, n.c}) |
-               std::views::take(arity_of(n.op))) {
+      for (const auto [slot, u] : std::array{n.a, n.b, n.c} |
+                                      std::views::enumerate |
+                                      std::views::take(arity_of(n.op))) {
         edges.emplace_back(id, u);
         slots.push_back(static_cast<std::uint32_t>(slot));
       }
@@ -202,13 +207,7 @@ public:
   [[nodiscard]] std::span<const Step> schedule() const { return schedule_; }
 
   // Derived once, for codegen, the interpreter and the ABI size checks.
-  struct Blocks {
-    std::span<const NodeId> values;
-    std::span<const NodeId> jacobian;
-    std::span<const NodeId> hessian;
-  };
-
-  [[nodiscard]] Blocks output_blocks() const {
+  [[nodiscard]] OutputSpans output_blocks() const {
     const std::span<const NodeId> all{outputs_};
     return {.values = all.first(layout_.values),
             .jacobian = all.subspan(layout_.values, layout_.jacobian),
@@ -362,7 +361,6 @@ private:
   // rt::build_hessian_impl appends to the builder, and freeze() must not.
   template <typename... Ts> friend class impl::Equation;
   friend class py::PyEquation;
-  using OutputBlocks = typename Graph<T>::OutputBlocks;
 
   constexpr GraphBuilder &block(std::vector<NodeId> OutputBlocks::*which,
                                 std::span<const NodeId> ids) {

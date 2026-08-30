@@ -31,10 +31,8 @@ public:
   explicit ColumnColoring(const CouplingRows &rows)
       : rows_{rows}, n_{rows.size()}, conflicts_{n_},
         out_{.color = std::vector<std::size_t>(n_, 0),
-             .count = 0,
              .scatter = {},
-             .cell = {},
-             .cells = 0} {}
+             .cell = {}} {}
 
   [[nodiscard]] Coloring run() && {
     link_conflicts();
@@ -65,7 +63,7 @@ private:
     // Greedy colouring is only as good as the order it walks.
     const auto order = boost::smallest_last_vertex_ordering(conflicts_);
     // clang-format off
-    out_.count = static_cast<std::size_t>(
+    count_ = static_cast<std::size_t>(
       boost::sequential_vertex_coloring(
         conflicts_,
         boost::make_iterator_property_map(order.begin(), boost::identity_property_map()),
@@ -76,24 +74,28 @@ private:
   // scatter[colour][row] is the column that row's sweep result belongs to; the
   // colouring guarantees at most one, so the harvest needs no search.
   void map_scatter() {
-    out_.scatter.assign(out_.count * n_, no_column);
-    const auto scatter = by_color(out_.scatter, out_.count, n_);
+    out_.scatter.assign(count_ * n_, no_column);
+    const auto scatter = by_color(out_.scatter, count_, n_);
     for (const auto [index, row] : rows_ | std::views::enumerate) {
       const auto j = static_cast<std::size_t>(index);
-      detail::for_each_set(
-          row, [&](std::size_t i) { scatter[out_.color[j], i] = j; });
+      for (const std::size_t i : set_bits(row)) {
+        scatter[out_.color[j], i] = j;
+      }
     }
   }
 
   // Number the owned cells in (colour, row) order, so the compressed block
-  // stays deterministic and a caller can index it the way it always could.
+  // stays deterministic.  Reads `scatter` directly rather than through the
+  // finished Coloring: the tables are still half-built here.
   void number_cells() {
-    out_.cell.assign(out_.count * n_, no_column);
-    const auto cell = by_color(out_.cell, out_.count, n_);
+    out_.cell.assign(count_ * n_, no_column);
+    const auto scatter = by_color(out_.scatter, count_, n_);
+    const auto cell = by_color(out_.cell, count_, n_);
+    std::size_t next = 0;
     for (const auto [c, i] : std::views::cartesian_product(
-             std::views::iota(0uz, out_.count), std::views::iota(0uz, n_))) {
-      if (out_.target(c, i) != no_column) {
-        cell[c, i] = out_.cells++;
+             std::views::iota(0uz, count_), std::views::iota(0uz, n_))) {
+      if (scatter[c, i] != no_column) {
+        cell[c, i] = next++;
       }
     }
   }
@@ -101,6 +103,7 @@ private:
   const CouplingRows &rows_;
   std::size_t n_;
   ConflictGraph conflicts_;
+  std::size_t count_ = 0;
   Coloring out_;
 };
 

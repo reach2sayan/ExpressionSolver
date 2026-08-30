@@ -480,18 +480,19 @@ TEST(RtArchive, RefusesAForgedColouringCount) {
   auto snap = std::move(*sound).release();
   auto &coloring = snap.hessians.front().coloring;
   const std::size_t nsym = snap.symbols.size();
-  ASSERT_EQ(nsym % 2, 0u) << "an odd symbol count cannot wrap";
 
-  const std::size_t forged = coloring.count + (std::size_t{1} << 62);
-  ASSERT_EQ(forged * nsym, coloring.scatter.size()) << "the wrap must agree";
-  ASSERT_NE(forged, coloring.count);
-  coloring.count = forged;
+  // There is no `count` field to forge: the colour count is scatter.size() /
+  // nsym, so a count that disagrees with its own table cannot be written down.
+  // What is left is the grid, and a table that is not one has no colour count
+  // at all -- by_color would read past the end of it.
+  ASSERT_NE(coloring.scatter.size() % nsym, 1u) << "the forgery must change it";
+  coloring.scatter.push_back(ddx::rt::no_column);
 
   // Through the real serialiser, so the checksum agrees with the lie.
   ASSERT_TRUE(ddx::rt::save(snap, file.path()).has_value());
 
   const auto loaded = ddx::rt::load(file.path());
-  ASSERT_FALSE(loaded.has_value()) << "a wrapped count agreed with a length";
+  ASSERT_FALSE(loaded.has_value()) << "a scatter table that is not a grid";
   EXPECT_EQ(loaded.error().code, ddx::errc::archive_corrupt);
 }
 
@@ -757,7 +758,7 @@ TEST(RtArchive, RefusesAForgedJacobianPattern) {
     ASSERT_TRUE(clean.has_value()) << clean.error().code;
     ASSERT_LT((*clean)->jacobian.pattern.nonzeros(), 9u)
         << "a dense pattern has no hole to forge";
-    ASSERT_EQ((*clean)->jacobian.pattern.row(1).size(), 2u)
+    ASSERT_EQ((*clean)->jacobian.pattern.begin()[1].size(), 2u)
         << "row 1 needs two columns for the ordering cases";
   }
 
@@ -783,8 +784,14 @@ TEST(RtArchive, RefusesAForgedJacobianPattern) {
 
   refuses([](ddx::rt::Jacobian &j) { j.pattern.col.back() = 99; },
           "a column outside the symbol table");
-  refuses([](ddx::rt::Jacobian &j) { ++j.pattern.rows; },
-          "a row count the roots do not agree with");
+  refuses(
+      [](ddx::rt::Jacobian &j) {
+        // There is no row count to forge -- it is rowptr.size() - 1 -- so the
+        // way to claim a row the roots do not have is to carry an offset for
+        // it.
+        j.pattern.rowptr.push_back(j.pattern.rowptr.back());
+      },
+      "a row count the roots do not agree with");
   refuses([](ddx::rt::Jacobian &j) { ++j.pattern.rowptr.back(); },
           "a rowptr running past the block");
   refuses([](ddx::rt::Jacobian &j) { j.pattern.rowptr.pop_back(); },

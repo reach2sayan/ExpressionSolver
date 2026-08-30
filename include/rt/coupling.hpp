@@ -8,12 +8,17 @@
 
 #include <boost/describe/class.hpp>
 #include <boost/dynamic_bitset.hpp>
+#include <boost/stl_interfaces/iterator_interface.hpp>
 
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
+#include <iterator>
 #include <optional>
 #include <ranges>
+#include <span>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 // The runtime analogue of drivers/coupling.hpp; `n` is run-time here, so its
@@ -35,6 +40,45 @@ static_assert(impl::SumOp<double>::curvature == impl::Curvature::None &&
 using SymbolSet = boost::dynamic_bitset<>;
 using CouplingRows = std::vector<SymbolSet>;
 
+// `find_first`/`find_next`/`npos` is `begin`/`++`/`end` and dynamic_bitset
+// ships no iterator for it, so this is the one walk in the tree that has to be
+// written out.  Not `iota | filter`: that tests every clear bit the word skip
+// exists to skip, which is what SymbolSet was chosen over vector<bool> for.
+// Forward only -- there is no find_prev, and nothing walks backwards.
+class SetBits : public boost::stl_interfaces::v3::proxy_iterator_interface<
+                    std::forward_iterator_tag, std::size_t> {
+  using Interface = boost::stl_interfaces::v3::proxy_iterator_interface<
+      std::forward_iterator_tag, std::size_t>;
+
+public:
+  // Declaring the prefix form hides the postfix one the interface derives from
+  // it, and without that this is not even an input_iterator.
+  using Interface::operator++;
+
+  constexpr SetBits() noexcept = default;
+  explicit SetBits(const SymbolSet &s) : bits_{&s}, at_{s.find_first()} {}
+
+  [[nodiscard]] std::size_t operator*() const noexcept { return at_; }
+  SetBits &operator++() {
+    at_ = bits_->find_next(at_);
+    return *this;
+  }
+  // A spent iterator is npos, which is what a default-constructed one holds.
+  [[nodiscard]] bool operator==(const SetBits &other) const noexcept {
+    return at_ == other.at_;
+  }
+
+private:
+  const SymbolSet *bits_ = nullptr;
+  SymbolSet::size_type at_ = SymbolSet::npos;
+};
+static_assert(std::forward_iterator<SetBits>);
+
+// The symbols a row couples, ascending.
+[[nodiscard]] inline auto set_bits(const SymbolSet &s) {
+  return std::ranges::subrange{SetBits{s}, SetBits{}};
+}
+
 // Always colours-major and n wide, said once so `c * n + i` is not respelled.
 [[nodiscard]] constexpr auto by_color(auto &&flat, std::size_t colors,
                                       std::size_t n) {
@@ -42,90 +86,203 @@ using CouplingRows = std::vector<SymbolSet>;
                           impl::md::dextents<std::size_t, 2>{colors, n}};
 }
 
+// A stored cell of a derivative block: where it belongs in the dense matrix,
+// and where it is actually kept.  CSR by row and colour-major are two ways of
+// leaving cells out, and both answer this -- `slot` as the compile-time twin
+// names it (symbolic/coupling.hpp's `compressed_entry`).
+struct Cell {
+  std::size_t row;
+  std::size_t column;
+  std::size_t slot;
+};
+
 // Which cells of a derivative block exist, CSR by row.  Read off a swept row
 // rather than propagated: a partial the sweep folded to the zero constant *is*
 // structurally zero, so this is exact where `coupling_pattern` is conservative.
+//
+// The block is its rows: `for (const Row &r : pattern)`, and `cells(values)`
+// zips those rows against a value block.  Nothing outside reads `rowptr`.
 struct Sparsity {
-  std::vector<std::size_t> rowptr; // rows + 1
+  std::vector<std::size_t> rowptr; // rows() + 1, or empty for no rows
   std::vector<std::uint32_t> col;  // nonzeros(), ascending within a row
-  std::size_t rows = 0;
   std::size_t columns = 0;
 
+  // One row: the columns it holds, and where their values sit in a block laid
+  // out the way `col` is.
+  struct Row : std::ranges::view_interface<Row> {
+    std::span<const std::uint32_t> cols;
+    std::size_t offset = 0; // this row's first cell in the value block
+    std::size_t index = 0;  // i
+    [[nodiscard]] constexpr auto begin() const noexcept { return cols.begin(); }
+    [[nodiscard]] constexpr auto end() const noexcept { return cols.end(); }
+  };
+
+  // Every positional operator is `rowptr`'s, forwarded through
+  // `base_reference`; the dereference is the only one that is ours.  `v3`
+  // explicitly: it is the deducing-this flavour, which drops the CRTP self
+  // parameter, and util/config.hpp already refuses a compiler without P0847 --
+  // so the namespace stl_interfaces makes inline here never varies.
+  class Iterator : public boost::stl_interfaces::v3::proxy_iterator_interface<
+                       std::random_access_iterator_tag, Row> {
+  public:
+    constexpr Iterator() noexcept = default;
+    [[nodiscard]] constexpr Row operator*() const;
+
+  private:
+    friend struct Sparsity;
+    friend struct boost::stl_interfaces::access;
+    using Base = std::vector<std::size_t>::const_iterator;
+    constexpr Iterator(const Sparsity &s, Base at) noexcept
+        : owner_{&s}, at_{at} {}
+    [[nodiscard]] constexpr Base &base_reference() noexcept { return at_; }
+    [[nodiscard]] constexpr const Base &base_reference() const noexcept {
+      return at_;
+    }
+    const Sparsity *owner_ = nullptr;
+    Base at_{};
+  };
+
+  [[nodiscard]] constexpr Iterator begin() const noexcept {
+    return {*this, rowptr.begin()};
+  }
+  // One short of the end: a row needs rowptr[i + 1] as well as rowptr[i].
+  [[nodiscard]] constexpr Iterator end() const noexcept {
+    return {*this, rowptr.end() - static_cast<std::ptrdiff_t>(!rowptr.empty())};
+  }
+  [[nodiscard]] constexpr std::size_t size() const noexcept {
+    return rowptr.empty() ? 0 : rowptr.size() - 1;
+  }
   [[nodiscard]] constexpr std::size_t nonzeros() const noexcept {
     return col.size();
   }
 
-  // What a caller iterates, rather than testing every j.
-  [[nodiscard]] constexpr std::span<const std::uint32_t>
-  row(std::size_t i) const {
-    return std::span{col}.subspan(rowptr[i], rowptr[i + 1] - rowptr[i]);
+  // Every stored cell, row-major -- the walk the call sites used to rebuild
+  // from a count and a subscript.
+  [[nodiscard]] constexpr auto entries() const {
+    const auto stored = [](const Row &r) {
+      return std::views::zip(std::views::iota(r.offset), r.cols) |
+             std::views::transform([i = r.index](const auto &at) {
+               return Cell{.row = i,
+                           .column = std::get<1>(at),
+                           .slot = std::get<0>(at)};
+             });
+    };
+    return *this | std::views::transform(stored) | std::views::join;
+  }
+  // The same walk against a block laid out the way `col` is: (row, column,
+  // value), which is what a caller scattering one back to a dense matrix wants.
+  [[nodiscard]] constexpr auto
+  cells(std::ranges::random_access_range auto &&values) const {
+    return entries() | std::views::transform([&values](const Cell &c) {
+             return std::tuple{c.row, c.column, values[c.slot]};
+           });
   }
 
   // Where (i, j) sits in the compressed block, or nullopt for a cell the
-  // structure says cannot be nonzero.
+  // structure says cannot be nonzero.  A search, not a walk: the one thing the
+  // rows above do not answer.
   [[nodiscard]] constexpr std::optional<std::size_t>
   at(std::size_t i, std::size_t j) const noexcept {
-    const auto present = row(i);
+    const auto present = begin()[static_cast<std::ptrdiff_t>(i)];
     const auto found =
         std::ranges::lower_bound(present, static_cast<std::uint32_t>(j));
     return found != present.end() && *found == j
-               ? std::optional{rowptr[i] + static_cast<std::size_t>(
-                                               found - present.begin())}
+               ? std::optional{present.offset + static_cast<std::size_t>(
+                                                    found - present.begin())}
                : std::nullopt;
   }
 
-  // Every cell present.
-  [[nodiscard]] constexpr bool dense() const noexcept {
-    return nonzeros() == rows * columns;
-  }
-  BOOST_DESCRIBE_CLASS(Sparsity, (), (rowptr, col, rows, columns), (), ())
+  BOOST_DESCRIBE_CLASS(Sparsity, (), (rowptr, col, columns), (), ())
 };
+
+constexpr Sparsity::Row Sparsity::Iterator::operator*() const {
+  const std::size_t first = *at_;
+  return {.cols = std::span{owner_->col}.subspan(first, *(at_ + 1) - first),
+          .offset = first,
+          .index = static_cast<std::size_t>(at_ - owner_->rowptr.begin())};
+}
+static_assert(std::random_access_iterator<Sparsity::Iterator>);
 
 // Two columns share a colour only when no row couples them, so one sweep can
 // seed all of a colour's columns and the results still separate.
+//
+// Neither `count()` nor `width()` is stored: both are readable off the tables,
+// and a shape that is never written is a shape a loaded file cannot forge.
 struct Coloring {
-  std::vector<std::size_t> color; // per symbol
-  std::size_t count = 0;
-  std::vector<std::size_t> scatter; // count * n; column a (colour, row) owns
-  // count * n again, but the other question: *where* (colour, row) is stored,
+  std::vector<std::size_t> color;   // per symbol
+  std::vector<std::size_t> scatter; // count() * n; column a (colour, row) owns
+  // count() * n again, but the other question: *where* (colour, row) is stored,
   // or no_column for a cell no column of that colour owns.  Those are the ones
   // a sweep computes for nobody, so they get no storage and no output column.
   std::vector<std::size_t> cell;
-  std::size_t cells = 0; // how many there are: the compressed block's width
-  [[nodiscard]] constexpr std::size_t target(std::size_t c,
-                                             std::size_t row) const {
-    return by_color(scatter, count, color.size())[c, row];
+
+  [[nodiscard]] constexpr std::size_t count() const noexcept {
+    return color.empty() ? 0 : scatter.size() / color.size();
   }
-  [[nodiscard]] constexpr std::size_t column(std::size_t c,
-                                             std::size_t row) const {
-    return by_color(cell, count, color.size())[c, row];
+  // The compressed block's width: how many cells any column owns.
+  [[nodiscard]] constexpr std::size_t width() const noexcept {
+    return static_cast<std::size_t>(std::ranges::count_if(
+        cell, [](std::size_t k) { return k != no_column; }));
+  }
+  [[nodiscard]] constexpr auto colors() const noexcept {
+    return std::views::iota(0uz, count());
+  }
+  // The symbols one sweep of colour `c` seeds together.
+  [[nodiscard]] constexpr auto columns_of(std::size_t c) const {
+    return std::views::iota(0uz, color.size()) |
+           std::views::filter(
+               [this, c](std::size_t j) { return color[j] == c; });
+  }
+  // The cells colour `c` owns -- what one sweep's result goes into.  A row of
+  // that colour that no column owns is computed for nobody, and is absent.
+  [[nodiscard]] constexpr auto owned_cells(std::size_t c) const {
+    const auto n = color.size();
+    const auto owner = by_color(scatter, count(), n);
+    const auto slot = by_color(cell, count(), n);
+    return std::views::iota(0uz, n) |
+           std::views::transform([c, owner, slot](std::size_t i) {
+             return Cell{.row = i, .column = owner[c, i], .slot = slot[c, i]};
+           }) |
+           std::views::filter(
+               [](const Cell &owned) { return owned.column != no_column; });
+  }
+  // Every stored cell, colour-major.  What a caller scatters a compressed block
+  // back to (i, j) with, rather than asking `cell_of` about every pair.
+  [[nodiscard]] constexpr auto entries() const {
+    return colors() | std::views::transform([this](std::size_t c) {
+             return owned_cells(c);
+           }) |
+           std::views::join;
   }
   // Where H(i, j) is stored, or nullopt for a cell the colouring calls zero.
   [[nodiscard]] constexpr std::optional<std::size_t>
   cell_of(std::size_t i, std::size_t j) const {
+    const auto n = color.size();
+    const auto colors = count();
     const std::size_t c = color[j];
-    return target(c, i) == j ? std::optional{column(c, i)} : std::nullopt;
+    return by_color(scatter, colors, n)[c, i] == j
+               ? std::optional{by_color(cell, colors, n)[c, i]}
+               : std::nullopt;
   }
-  BOOST_DESCRIBE_CLASS(Coloring, (), (color, count, scatter, cell, cells), (),
-                       ())
+  BOOST_DESCRIBE_CLASS(Coloring, (), (color, scatter, cell), (), ())
 };
 
 namespace detail {
 
-inline void for_each_set(const SymbolSet &s,
-                         std::invocable<std::size_t> auto &&f) {
-  for (auto i = s.find_first(); i != SymbolSet::npos; i = s.find_next(i)) {
-    std::invoke(f, i);
-  }
-}
-
+// `rows` is never `a` or `b` -- the supports live in their own vector -- so
+// setting bits as the sets are walked cannot disturb the walk.
+//
+// Nested, not `cartesian_product(set_bits(a), set_bits(b))`: measured on this
+// box, the product view costs 7-21% over 64 to 1024 symbols at every density,
+// where the nested walk is a wash against the callback it replaced.  The
+// composed spelling reads better and this is `coupling_pattern`'s hot loop.
 inline void couple(CouplingRows &rows, const SymbolSet &a, const SymbolSet &b) {
-  for_each_set(a, [&](std::size_t i) {
-    for_each_set(b, [&](std::size_t j) {
+  for (const std::size_t i : set_bits(a)) {
+    for (const std::size_t j : set_bits(b)) {
       rows[i].set(j);
       rows[j].set(i);
-    });
-  });
+    }
+  }
 }
 
 } // namespace detail

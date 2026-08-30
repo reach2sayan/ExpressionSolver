@@ -114,30 +114,26 @@ static_assert(live_from_root() == 2); // x and x * x
 consteval ddx::rt::NodeId scatter_reads() {
   // Not const: the vectors are built during this evaluation, and a constant
   // evaluation may not write through a const object.
-  ddx::rt::Hessian h{.value = 0,
-                     .partial = {},
-                     .compressed = {7, 8},
-                     .coloring = {.color = {0, 0},
-                                  .count = 1,
-                                  .scatter = {0, 1},
-                                  .cell = {0, 1},
-                                  .cells = 2},
-                     .zero = 99};
+  ddx::rt::Hessian h{
+      .value = 0,
+      .partial = {},
+      .compressed = {7, 8},
+      .coloring = {.color = {0, 0}, .scatter = {0, 1}, .cell = {0, 1}},
+      .zero = 99};
   return h.colors() == 1 && h.at(0, 0) == 7 && h.at(1, 1) == 8 ? h.at(0, 1) : 0;
 }
 static_assert(scatter_reads() == 99); // off the pattern: the zero node
 
 // A colour that owns only one of its two rows: the unowned cell gets no
-// storage at all, so `cells` is short of `count * n` and at() still answers.
+// storage at all, so `cells()` is short of `count() * n` and at() still
+// answers.
 consteval ddx::rt::NodeId unowned_cell_reads() {
   ddx::rt::Hessian h{.value = 0,
                      .partial = {},
                      .compressed = {7},
                      .coloring = {.color = {0, 0},
-                                  .count = 1,
                                   .scatter = {0, ddx::rt::no_column},
-                                  .cell = {0, ddx::rt::no_column},
-                                  .cells = 1},
+                                  .cell = {0, ddx::rt::no_column}},
                      .zero = 99};
   return h.at(0, 0) == 7 && h.at(1, 1) == 99 ? h.at(1, 0) : 0;
 }

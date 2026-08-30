@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <ranges>
+
 #include <cmath>
 #include <format>
 #include <numeric>
@@ -122,28 +124,35 @@ TEST(RtEnergy, StableDownToTraceMoleFractions) {
   }
 }
 
+// Every cell of a swept Hessian against central differences of the swept
+// Jacobian row.  Both Hessian tests below are this check; they differ in the
+// model.  Every cell, not only the stored ones -- a cell the colouring dropped
+// still has to read back as the zero it claims to be.
+void expect_matches_differences(const ddx::rt::Hessian &h, Builder<> &b,
+                                std::size_t n) {
+  const auto pt = composition(n);
+  const auto values = ddx::rt::evaluate_all(b, pt);
+  const auto dims = std::views::iota(0uz, n);
+  for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
+    constexpr double step = 1e-5;
+    auto hi = pt, lo = pt;
+    hi[j] += step;
+    lo[j] -= step;
+    const double fd = (ddx::rt::evaluate_all(b, hi)[h.partial[i]] -
+                       ddx::rt::evaluate_all(b, lo)[h.partial[i]]) /
+                      (2 * step);
+    EXPECT_NEAR(values[h.at(i, j)], fd, 1e-4 * std::max(1.0, std::abs(fd)))
+        << "H[" << i << "][" << j << "]";
+  }
+}
+
 TEST(RtEnergy, HessianMatchesDifferencesOfTheJacobian) {
   constexpr std::size_t n = 4;
   Builder<> b;
   const auto x = species(b, n);
   const auto f = models::uniquac(x);
   const auto h = ddx::rt::build_hessian_impl(b, f.id(b));
-  const auto pt = composition(n);
-  const auto values = ddx::rt::evaluate_all(b, pt);
-
-  for (std::size_t i = 0; i < n; ++i) {
-    for (std::size_t j = 0; j < n; ++j) {
-      const double step = 1e-5;
-      auto hi = pt, lo = pt;
-      hi[j] += step;
-      lo[j] -= step;
-      const double fd = (ddx::rt::evaluate_all(b, hi)[h.partial[i]] -
-                         ddx::rt::evaluate_all(b, lo)[h.partial[i]]) /
-                        (2 * step);
-      EXPECT_NEAR(values[h.at(i, j)], fd, 1e-4 * std::max(1.0, std::abs(fd)))
-          << "H[" << i << "][" << j << "]";
-    }
-  }
+  expect_matches_differences(h, b, n);
 }
 
 // Every pair couples, so fewer colours than this would silently sum two second
@@ -155,14 +164,11 @@ TEST(RtEnergy, MixingRulesGiveADenseHessian) {
     const auto f = models::peng_robinson(x, RE{0.9}); // Z pinned: n symbols
     const auto rows = ddx::rt::coupling_pattern(b, f.id(b));
     const auto coloring = ddx::rt::color_columns(rows);
-    EXPECT_EQ(coloring.count, n) << "n=" << n;
+    EXPECT_EQ(coloring.count(), n) << "n=" << n;
 
-    // No two columns may share a colour.
-    for (std::size_t i = 0; i < n; ++i) {
-      for (std::size_t j = 0; j < n; ++j) {
-        EXPECT_TRUE(rows[i].test(j))
-            << "expected " << i << "," << j << " coupled";
-      }
+    // Every column couples every other, so no two may share a colour.
+    for (const auto [i, row] : rows | std::views::enumerate) {
+      EXPECT_EQ(row.count(), n) << "row " << i << " couples fewer than all";
     }
   }
 }
@@ -204,8 +210,8 @@ TEST(RtEnergySparse, FiniteRangeGivesFewColours) {
 
     // Bounded degree, so the colour count must not grow with n.  Measured at
     // 5 with smallest-last ordering, which is worth ~2.4x here.
-    EXPECT_LE(coloring.count, 6u) << "n=" << n;
-    EXPECT_LT(coloring.count, n);
+    EXPECT_LE(coloring.count(), 6u) << "n=" << n;
+    EXPECT_LT(coloring.count(), n);
   }
 }
 
@@ -217,15 +223,14 @@ TEST(RtEnergySparse, BondedChainIsBanded) {
   const auto rows = ddx::rt::coupling_pattern(b, e.id(b));
 
   // A bend term spans three sites, so nothing couples further than two apart.
-  for (std::size_t i = 0; i < n; ++i) {
-    for (std::size_t j = 0; j < n; ++j) {
-      if (rows[i].test(j)) {
-        const auto span = i > j ? i - j : j - i;
-        EXPECT_LE(span, 2u) << "unexpected coupling " << i << "," << j;
-      }
+  for (const auto [index, row] : rows | std::views::enumerate) {
+    const auto i = static_cast<std::size_t>(index);
+    for (const std::size_t j : ddx::rt::set_bits(row)) {
+      const auto span = i > j ? i - j : j - i;
+      EXPECT_LE(span, 2u) << "unexpected coupling " << i << "," << j;
     }
   }
-  EXPECT_LE(ddx::rt::color_columns(rows).count, 5u);
+  EXPECT_LE(ddx::rt::color_columns(rows).count(), 5u);
 }
 
 // Colouring can silently break correctness, so check elementwise.
@@ -238,22 +243,7 @@ TEST(RtEnergySparse, ColouredHessianIsStillCorrect) {
   const auto h = ddx::rt::build_hessian_impl(b, e.id(b));
   EXPECT_LT(h.colors(), n)
       << "a banded pattern should beat one sweep per column";
-
-  const auto pt = composition(n);
-  const auto values = ddx::rt::evaluate_all(b, pt);
-  for (std::size_t i = 0; i < n; ++i) {
-    for (std::size_t j = 0; j < n; ++j) {
-      const double step = 1e-5;
-      auto hi = pt, lo = pt;
-      hi[j] += step;
-      lo[j] -= step;
-      const double fd = (ddx::rt::evaluate_all(b, hi)[h.partial[i]] -
-                         ddx::rt::evaluate_all(b, lo)[h.partial[i]]) /
-                        (2 * step);
-      EXPECT_NEAR(values[h.at(i, j)], fd, 1e-4 * std::max(1.0, std::abs(fd)))
-          << "H[" << i << "][" << j << "]";
-    }
-  }
+  expect_matches_differences(h, b, n);
 }
 
 } // namespace

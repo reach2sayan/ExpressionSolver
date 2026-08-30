@@ -273,22 +273,18 @@ public:
       std::vector<T> out(output_dim * n * n);
       const impl::md::mdspan dense{
           out.data(), impl::md::dextents<std::size_t, 3>{output_dim, n, n}};
-      const auto dims = std::views::iota(0uz, n);
-
       // Only one root's Hessian is frozen into a lane; a system walks the
       // arena.
       if constexpr (output_dim == 1) {
-        const rt::Coloring &c = hessians_.front().coloring;
+        const rt::Coloring &coloring = hessians_.front().coloring;
         std::array<T, 1> f{};
         std::vector<T> g(derivative_.partial.size());
         std::vector<T> h(hessians_.front().compressed.size());
         gather(Want::Hessian, at, std::span<T>{f}, g, h);
-        // Every other column of that colour is structurally zero.
-        for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
-          dense[0uz, i, j] =
-              c.cell_of(i, j)
-                  .transform([&h](std::size_t k) { return h[k]; })
-                  .value_or(T{0});
+        // Only the cells the colouring stores; `out` is already zero, which is
+        // what every other column of that colour is.
+        for (const rt::Cell &cell : coloring.entries()) {
+          dense[0uz, cell.row, cell.column] = h[cell.slot];
         }
       } else {
         // Hessian::at reads only the compressed cells and `zero`.
@@ -299,8 +295,9 @@ public:
                      hessians_ | std::views::transform(&rt::Hessian::zero));
         const auto values = rt::evaluate_reachable(*arena_, wanted, at);
         for (const auto [k, block] : hessians_ | std::views::enumerate) {
-          for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
-            dense[static_cast<std::size_t>(k), i, j] = values[block.at(i, j)];
+          for (const rt::Cell &cell : block.coloring.entries()) {
+            dense[static_cast<std::size_t>(k), cell.row, cell.column] =
+                values[block.compressed[cell.slot]];
           }
         }
       }
@@ -631,14 +628,14 @@ private:
       return {};
     }
     std::vector<rt::Object> out;
-    for (const auto [want, lane] : std::views::enumerate(*cache_)) {
+    for (const auto [want, lane] : std::views::zip(rt::want_values, *cache_)) {
       const std::shared_lock read{lane.mutex};
       if (!lane.ready || !lane.ready->kernel ||
           lane.ready->kernel.object().empty()) {
         continue;
       }
       const auto code = lane.ready->kernel.object();
-      out.push_back({.want = static_cast<Want>(want),
+      out.push_back({.want = want,
                      .symbol = std::string{lane.ready->kernel.symbol()},
                      .host = std::string{c->host_identity()},
                      .digest = rt::digest(*lane.ready->graph),
@@ -900,14 +897,9 @@ private:
   // Row-major m x n from the cells the pattern names, the zeros put back.
   [[nodiscard]] constexpr std::vector<T> dense(std::span<const T> cells) const {
     const std::size_t n = symbol_count();
-    const rt::Sparsity &pattern = derivative_.pattern;
     std::vector<T> out(output_dim * n, T{0});
-    for (const std::size_t i : std::views::iota(0uz, output_dim)) {
-      const auto columns = pattern.row(i);
-      const auto values = cells.subspan(pattern.rowptr[i], columns.size());
-      for (const auto [j, v] : std::views::zip(columns, values)) {
-        out[i * n + j] = v;
-      }
+    for (const auto [i, j, v] : derivative_.pattern.cells(cells)) {
+      out[i * n + j] = v;
     }
     return out;
   }
@@ -1303,15 +1295,14 @@ private:
     std::vector<T> lanes(symbols * rt::block_lanes);
     std::vector<T> tape(arena_->size() * rt::block_lanes);
 
-    for (std::size_t base = 0; base < n; base += rt::block_lanes) {
+    for (const std::size_t base :
+         std::views::iota(0uz, n) | std::views::stride(rt::block_lanes)) {
       const std::size_t width = std::min(rt::block_lanes, n - base);
-      for (const auto [j, column] : xs | std::views::enumerate) {
-        T *const dst =
-            lanes.data() + static_cast<std::size_t>(j) * rt::block_lanes;
-        T *const tail =
-            std::ranges::copy(std::span{column + base, width}, dst).out;
-        std::ranges::fill(tail, dst + rt::block_lanes,
-                          column[base + width - 1]);
+      for (const auto [dst, column] :
+           std::views::zip(lanes | std::views::chunk(rt::block_lanes), xs)) {
+        const auto tail =
+            std::ranges::copy(std::span{column + base, width}, dst.begin()).out;
+        std::ranges::fill(tail, dst.end(), column[base + width - 1]);
       }
       rt::evaluate_block<rt::block_lanes>(*arena_, std::span<const T>{lanes},
                                           schedule, std::span<T>{tape});

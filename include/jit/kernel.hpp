@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rt/blocks.hpp"
 #include "symbolic/expressions.hpp"
 #include "util/error.hpp"
 #include "util/export.hpp"
@@ -158,21 +159,15 @@ struct CompileReport {
 // The column counts a kernel is called with, read off the graph it was
 // compiled from.  One value, so the four cannot be handed over transposed.
 struct KernelShape {
-  std::size_t arity = 0;
-  std::size_t values = 0;
-  std::size_t jacobian = 0;
-  std::size_t hessian = 0;
+  std::size_t arity = 0; // input columns
+  rt::Layout blocks{};   // output columns, which is the graph's layout
 
   template <impl::Numeric T>
   [[nodiscard]] static KernelShape of(const rt::Graph<T> &g) {
-    const auto &layout = g.layout();
-    return {.arity = g.arity(),
-            .values = layout.values,
-            .jacobian = layout.jacobian,
-            .hessian = layout.hessian};
+    return {.arity = g.arity(), .blocks = g.layout()};
   }
   [[nodiscard]] constexpr std::size_t outputs() const noexcept {
-    return values + jacobian + hessian;
+    return blocks.values + blocks.jacobian + blocks.hessian;
   }
   friend constexpr bool operator==(KernelShape, KernelShape) noexcept = default;
 };
@@ -198,8 +193,9 @@ public:
                   std::span<double *const> g, std::span<double *const> h,
                   std::size_t n) const noexcept {
     // A mismatch past here is silent memory corruption.
-    assert(xs.size() == shape_.arity && f.size() == shape_.values &&
-           g.size() == shape_.jacobian && h.size() == shape_.hessian);
+    assert(xs.size() == shape_.arity && f.size() == shape_.blocks.values &&
+           g.size() == shape_.blocks.jacobian &&
+           h.size() == shape_.blocks.hessian);
     fn_(xs.data(), f.data(), g.data(), h.data(), n);
   }
 

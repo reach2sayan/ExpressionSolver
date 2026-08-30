@@ -93,25 +93,28 @@ private:
   }
 
   // The shape is pinned against the roots and the symbols first; `rowptr` is
-  // then walked before any `row()` subspan is taken from it, and the columns
-  // are checked last -- each is an unchecked payload scalar until it is.
+  // then walked whole before a single row is dereferenced off it, and the
+  // columns are checked last -- each is an unchecked payload scalar until it
+  // is.  The `&&` order is the guarantee: sorted, starting at zero and ending
+  // at col.size() is what makes every row's subspan in range.
   [[nodiscard]] bool jacobian() const {
     const auto &j = s_.jacobian;
     const auto &p = j.pattern;
     // Strictly ascending inside a row and inside the symbol count: at() binary
     // searches, so a duplicate or an unsorted row makes a cell unreachable.
-    const auto sound_row = [&p](std::size_t i) {
-      const auto row = p.row(i);
+    const auto sound_row = [&p](const Sparsity::Row &row) {
       return std::ranges::all_of(
                  row, [&p](std::uint32_t c) { return c < p.columns; }) &&
              std::ranges::is_sorted(row) &&
              std::ranges::adjacent_find(row) == row.end();
     };
-    return p.rows == s_.roots.size() && p.columns == s_.symbols.size() &&
-           p.rowptr.size() == p.rows + 1 && p.col.size() == j.partial.size() &&
+    // The row count is `rowptr.size() - 1` rather than a field of its own, so
+    // a file cannot claim one thing and carry another.
+    return !p.rowptr.empty() && p.size() == s_.roots.size() &&
+           p.columns == s_.symbols.size() && p.col.size() == j.partial.size() &&
            p.rowptr.front() == 0 && p.rowptr.back() == p.col.size() &&
            std::ranges::is_sorted(p.rowptr) &&
-           std::ranges::all_of(std::views::iota(0uz, p.rows), sound_row);
+           std::ranges::all_of(p, sound_row);
   }
 
   // One per root, or none: a constant-evaluated equation never swept them.
@@ -151,30 +154,30 @@ private:
     const auto &c = h.coloring;
     const auto nsym = s_.symbols.size();
     const auto in = within();
-    // `count` comes straight off the payload, so `count * nsym` is checked by
-    // division -- the product is where a forged count wraps into agreeing.
-    // Colours over no symbols are no colours; nothing else pins `count`.
-    const auto sized = [nsym, &c](const std::vector<std::size_t> &v) {
-      return nsym == 0
-                 ? v.empty() && c.count == 0
-                 : c.count <= v.size() / nsym && v.size() == c.count * nsym;
+    // The colour count is `scatter.size() / nsym`, not a field, so the only
+    // thing left to check is that the division is exact and that both tables
+    // are the same grid.  A forged count that wraps into agreeing with its own
+    // product is no longer expressible.
+    const auto gridded = [nsym](const std::vector<std::size_t> &v) {
+      return nsym == 0 ? v.empty() : v.size() % nsym == 0;
     };
-    // Every cell must name a slot inside the compressed block: two sharing
-    // one would sum two second derivatives into a single column.  `cells` is
-    // pinned against the cells actually owned before anything trusts it.
-    const auto owned = [&c] {
-      return static_cast<std::size_t>(std::ranges::count_if(
-          c.cell, [](std::size_t k) { return k != no_column; }));
-    };
+    // Every cell must name a slot inside the compressed block: two sharing one
+    // would sum two second derivatives into a single column.  `width()` counts
+    // them, so it agrees with `cell` by construction; what it still has to pin
+    // is the block that is stored against it.
+    const auto width = c.width();
+    const auto colors = c.count();
     return in(h.value) && in(h.zero) && std::ranges::all_of(h.partial, in) &&
            std::ranges::all_of(h.compressed, in) && c.color.size() == nsym &&
-           sized(c.scatter) && sized(c.cell) && h.partial.size() == nsym &&
-           std::ranges::all_of(c.color,
-                               [&c](std::size_t k) { return k < c.count; }) &&
-           c.cells == owned() && h.compressed.size() == c.cells &&
+           gridded(c.scatter) && c.cell.size() == c.scatter.size() &&
+           h.partial.size() == nsym &&
            std::ranges::all_of(
-               c.cell,
-               [&c](std::size_t k) { return k == no_column || k < c.cells; }) &&
+               c.color, [colors](std::size_t k) { return k < colors; }) &&
+           h.compressed.size() == width &&
+           std::ranges::all_of(c.cell,
+                               [width](std::size_t k) {
+                                 return k == no_column || k < width;
+                               }) &&
            std::ranges::all_of(c.scatter, [nsym](std::size_t k) {
              return k == no_column || k < nsym;
            });

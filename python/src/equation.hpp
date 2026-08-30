@@ -42,6 +42,22 @@ namespace ddx::py {
 
 class PyCall;
 
+// The compressed Hessian back into a dense n x n a caller reads, with the zeros
+// the colouring left out put back: one fill, then one copy per cell a column
+// owns.  Indexed through Coloring::entries, never as a dense colours x n grid
+// -- the block holds only the owned cells, so `cells()` is below count() * n
+// wherever the pattern is sparse and the dense reading runs off the end.
+inline void scatter_hessian(const rt::Coloring &coloring,
+                            std::span<double *const> cells, double *dense,
+                            std::size_t n, std::size_t points) {
+  const auto wide = static_cast<std::ptrdiff_t>(points);
+  std::ranges::fill_n(dense, static_cast<std::ptrdiff_t>(n * n) * wide, 0.0);
+  for (const rt::Cell &cell : coloring.entries()) {
+    std::ranges::copy_n(cells[cell.slot], wide,
+                        dense + (cell.row * n + cell.column) * points);
+  }
+}
+
 class PyEquation {
 public:
   using Want = rt::Want;
@@ -103,7 +119,7 @@ public:
       return pyb::float_(f.value);
     }
     Block f{shape_of({ssize(outputs())}, at),
-            count(l, &rt::Graph<double>::Blocks::values), at.size()};
+            count(l, &rt::OutputSpans::values), at.size()};
     run(l, at, f.rows(), {}, {});
     return std::move(f).array();
   }
@@ -111,7 +127,7 @@ public:
   [[nodiscard]] pyb::tuple jacobian(const pyb::handle &x) {
     const Point at{x, symbols_};
     Lane &l = lane(Want::Jacobian);
-    Scratch cells{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Scratch cells{count(l, &rt::OutputSpans::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
             outputs() * arity(), at.size()};
     Cell cell;
@@ -125,7 +141,7 @@ public:
   [[nodiscard]] pyb::object gradient(const pyb::handle &x) {
     const Point at{x, symbols_};
     Lane &l = lane(Want::Gradient);
-    Scratch cells{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Scratch cells{count(l, &rt::OutputSpans::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
             outputs() * arity(), at.size()};
     run(l, at, {}, cells.rows(), {});
@@ -148,7 +164,7 @@ public:
     const Point dir{v, symbols_};
     Lane &l = lane(Want::Jvp);
     Block out{shape_of({ssize(outputs())}, at),
-              count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+              count(l, &rt::OutputSpans::jacobian), at.size()};
     Cell cell;
     auto f = values_block(l, at);
     run_seeded(l, at, dir, f ? f->rows() : cell.rows(), out.rows(), {});
@@ -161,7 +177,7 @@ public:
     // nothing to key on.
     const Point dir{w, outputs()};
     Lane &l = lane(Want::Vjp);
-    Block out{symbol_shape(at), count(l, &rt::Graph<double>::Blocks::jacobian),
+    Block out{symbol_shape(at), count(l, &rt::OutputSpans::jacobian),
               at.size()};
     Cell cell;
     auto f = values_block(l, at);
@@ -180,11 +196,10 @@ public:
     Lane &l = lane(Want::Hvp);
     const std::size_t n = arity();
 
-    Scratch partials{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
+    Scratch partials{count(l, &rt::OutputSpans::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
             at.size()};
-    Block out{symbol_shape(at), count(l, &rt::Graph<double>::Blocks::hessian),
-              at.size()};
+    Block out{symbol_shape(at), count(l, &rt::OutputSpans::hessian), at.size()};
     Cell cell;
     auto f = values_block(l, at);
     run_seeded(l, at, dir, f ? f->rows() : cell.rows(), partials.rows(),
@@ -298,12 +313,12 @@ private:
       return {};
     }
     std::vector<rt::Object> out;
-    for (const auto [i, l] : lanes_ | std::views::enumerate) {
+    for (const auto [want, l] : std::views::zip(rt::want_values, lanes_)) {
       if (!l.graph || !l.kernel || l.kernel.object().empty()) {
         continue;
       }
       const auto code = l.kernel.object();
-      out.push_back({.want = static_cast<Want>(i),
+      out.push_back({.want = want,
                      .symbol = std::string{l.kernel.symbol()},
                      .host = std::string{c->host_identity()},
                      .digest = rt::digest(*l.graph),
@@ -455,7 +470,7 @@ private:
     return options_.codegen.contract;
   }
 
-  using BlockMember = std::span<const rt::NodeId> rt::Graph<double>::Blocks::*;
+  using BlockMember = std::span<const rt::NodeId> rt::OutputSpans::*;
 
   [[nodiscard]] static constexpr std::size_t count(const Lane &l,
                                                    BlockMember which) {
@@ -587,15 +602,9 @@ private:
     }
     std::ranges::fill_n(dense.at(0), static_cast<std::ptrdiff_t>(wide * points),
                         0.0);
-    const auto compressed = cells.rows();
-    const rt::Sparsity &pattern = derivative().pattern;
-    for (const std::size_t i : std::views::iota(0uz, outputs())) {
-      const auto columns = pattern.row(i);
-      const auto cell = compressed.subspan(pattern.rowptr[i], columns.size());
-      for (const auto [j, src] : std::views::zip(columns, cell)) {
-        std::ranges::copy_n(src, static_cast<std::ptrdiff_t>(points),
-                            dense.at(i * n + j));
-      }
+    for (const auto [i, j, src] : derivative().pattern.cells(cells.rows())) {
+      std::ranges::copy_n(src, static_cast<std::ptrdiff_t>(points),
+                          dense.at(i * n + j));
     }
   }
 
@@ -608,31 +617,17 @@ private:
     const std::size_t n = arity();
     Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
             at.size()};
-    Scratch partials{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
-    Scratch compressed{count(l, &rt::Graph<double>::Blocks::hessian),
-                       at.size()};
+    Scratch partials{count(l, &rt::OutputSpans::jacobian), at.size()};
+    Scratch compressed{count(l, &rt::OutputSpans::hessian), at.size()};
     Cell cell;
     auto f = values_block(l, at);
     run(l, at, f ? f->rows() : cell.rows(), partials.rows(), compressed.rows());
     scatter_jacobian(partials, g, at.size());
 
-    const rt::Coloring &c = l.graph->coloring();
-    // Indexed through Coloring::column, never as a dense colours x n grid: the
-    // block holds only the cells a column owns, so `cells` is below count * n
-    // wherever the pattern is sparse and the dense reading runs off the end.
-    const auto cells = compressed.rows();
     Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at), n * n,
                 at.size()};
-    const auto dims = std::views::iota(0uz, n);
-    for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
-      double *const out = dense.at(i * n + j);
-      if (c.target(c.color[j], i) == j) {
-        std::ranges::copy_n(cells[c.column(c.color[j], i)],
-                            static_cast<std::ptrdiff_t>(at.size()), out);
-      } else {
-        std::ranges::fill_n(out, static_cast<std::ptrdiff_t>(at.size()), 0.0);
-      }
-    }
+    scatter_hessian(l.graph->coloring(), compressed.rows(), dense.at(0), n,
+                    at.size());
     return pyb::make_tuple(value_of(f, cell), std::move(g).array(),
                            std::move(dense).array());
   }
@@ -771,11 +766,10 @@ private:
   // allocation, and every derivative call serves both.
   [[nodiscard]] std::optional<Block> values_block(const Lane &l,
                                                   const Point &at) {
-    return scalar(at)
-               ? std::nullopt
-               : std::optional<Block>{
-                     std::in_place, shape_of({ssize(outputs())}, at),
-                     count(l, &rt::Graph<double>::Blocks::values), at.size()};
+    return scalar(at) ? std::nullopt
+                      : std::optional<Block>{
+                            std::in_place, shape_of({ssize(outputs())}, at),
+                            count(l, &rt::OutputSpans::values), at.size()};
   }
 
   [[nodiscard]] static pyb::object value_of(std::optional<Block> &f,
@@ -821,20 +815,17 @@ public:
     const auto n = eq_->arity();
     if (want_ != PyEquation::Want::Gradient) {
       f_.emplace(eq_->shape_of({outputs}, at_),
-                 PyEquation::count(l, &rt::Graph<double>::Blocks::values),
-                 at_.size());
+                 PyEquation::count(l, &rt::OutputSpans::values), at_.size());
     }
     if (want_ != PyEquation::Want::Value) {
-      partials_.emplace(
-          PyEquation::count(l, &rt::Graph<double>::Blocks::jacobian),
-          at_.size());
+      partials_.emplace(PyEquation::count(l, &rt::OutputSpans::jacobian),
+                        at_.size());
       g_.emplace(eq_->shape_of({outputs, ssize(n)}, at_), eq_->outputs() * n,
                  at_.size());
     }
     if (want_ == PyEquation::Want::Hessian) {
-      compressed_.emplace(
-          PyEquation::count(l, &rt::Graph<double>::Blocks::hessian),
-          at_.size());
+      compressed_.emplace(PyEquation::count(l, &rt::OutputSpans::hessian),
+                          at_.size());
       h_.emplace(eq_->shape_of({outputs, ssize(n), ssize(n)}, at_), n * n,
                  at_.size());
     }
@@ -870,22 +861,9 @@ public:
   }
 
 private:
-  // Into the dense block a caller reads; every other column of a colour is
-  // structurally zero.
   void scatter(const PyEquation::Lane &l) {
-    const std::size_t n = eq_->arity();
-    const rt::Coloring &c = l.graph->coloring();
-    const auto cells = compressed_->rows();
-    const auto dims = std::views::iota(0uz, n);
-    for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
-      double *const out = h_->at(i * n + j);
-      if (c.target(c.color[j], i) == j) {
-        std::ranges::copy_n(cells[c.column(c.color[j], i)],
-                            static_cast<std::ptrdiff_t>(at_.size()), out);
-      } else {
-        std::ranges::fill_n(out, static_cast<std::ptrdiff_t>(at_.size()), 0.0);
-      }
-    }
+    scatter_hessian(l.graph->coloring(), compressed_->rows(), h_->at(0),
+                    eq_->arity(), at_.size());
   }
 
   // A rank-0 block is the scalar case, where the allocating calls answer with

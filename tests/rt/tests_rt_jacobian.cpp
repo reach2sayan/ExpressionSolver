@@ -304,7 +304,7 @@ TEST(RtJacobian, ABandedSystemKeepsOnlyTheCellsThatExist) {
   }());
 
   const auto &pattern = j.pattern;
-  EXPECT_EQ(pattern.rows, n);
+  EXPECT_EQ(pattern.size(), n);
   EXPECT_EQ(pattern.columns, n);
   EXPECT_EQ(pattern.nonzeros(), j.partial.size());
   EXPECT_LT(pattern.nonzeros(), n * n) << "a dense pattern tests nothing here";
@@ -380,13 +380,15 @@ TEST(RtJacobian, AFoldedPartialIsAStructuralHole) {
   const auto eq = ddx::rt::equation(a * bb - a * bb + c, d + d, c * 0.0 + 2.0);
 
   const ddx::rt::Sparsity &pattern = eq.jacobian_pattern()->get();
-  EXPECT_EQ(pattern.rows, 3u);
+  EXPECT_EQ(pattern.size(), 3u);
   EXPECT_EQ(pattern.columns, 6u);
   // Row 0 keeps c alone, row 1 keeps d alone, row 2 is a constant.
   EXPECT_EQ(pattern.nonzeros(), 2u);
-  EXPECT_EQ(pattern.row(0).size(), 1u);
-  EXPECT_EQ(pattern.row(1).size(), 1u);
-  EXPECT_EQ(pattern.row(2).size(), 0u);
+  const auto widths =
+      pattern |
+      std::views::transform([](const auto &row) { return row.size(); }) |
+      ddx::impl::to<std::vector<std::size_t>>();
+  EXPECT_EQ(widths, (std::vector<std::size_t>{1, 1, 0}));
   EXPECT_TRUE(pattern.at(0, 2).has_value());  // c
   EXPECT_FALSE(pattern.at(0, 0).has_value()); // a
   EXPECT_FALSE(pattern.at(0, 1).has_value()); // b
@@ -704,11 +706,10 @@ TEST(RtJacobian, SharedArmsThroughTheLoaderStillSum) {
   // What a file carries beside the model: the loader admits nothing less.
   snap.nodes.push_back(
       Node<double>{.op = ddx::rt::OpCode::Const, .value = 0.0});
-  snap.jacobian = {
-      .value = {3},
-      .partial = {},
-      .pattern = {.rowptr = {0, 0}, .col = {}, .rows = 1, .columns = 2},
-      .zero = 4};
+  snap.jacobian = {.value = {3},
+                   .partial = {},
+                   .pattern = {.rowptr = {0, 0}, .col = {}, .columns = 2},
+                   .zero = 4};
 
   auto sound = ddx::rt::verified(std::move(snap));
   ASSERT_TRUE(sound.has_value()) << "a shared arm is a sound file";

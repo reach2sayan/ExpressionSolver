@@ -155,10 +155,10 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
                          .finish();
   const auto kernel = must_compile(graph);
 
-  ASSERT_EQ(kernel.shape().values, 1u);
-  ASSERT_EQ(kernel.shape().jacobian, 2u);
-  ASSERT_EQ(kernel.shape().hessian, graph.layout().hessian);
-  ASSERT_GT(kernel.shape().hessian, 0u);
+  ASSERT_EQ(kernel.shape().blocks.values, 1u);
+  ASSERT_EQ(kernel.shape().blocks.jacobian, 2u);
+  ASSERT_EQ(kernel.shape().blocks.hessian, graph.layout().hessian);
+  ASSERT_GT(kernel.shape().blocks.hessian, 0u);
 
   constexpr std::size_t n = 4;
   std::array<double, n> cx{0.7, 0.8, 0.9, 1.0};
@@ -167,7 +167,7 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
 
   std::array<double, n> value{};
   std::vector<std::vector<double>> jac(2, std::vector<double>(n));
-  std::vector<std::vector<double>> hess(kernel.shape().hessian,
+  std::vector<std::vector<double>> hess(kernel.shape().blocks.hessian,
                                         std::vector<double>(n));
   double *const values[]{value.data()};
   const auto columns_of = [](auto &blocks) {
@@ -190,12 +190,12 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
     for (std::size_t j = 0; j < 2; ++j) {
       EXPECT_NEAR(jac[j][point], reference[outputs[1 + j]], 1e-12);
     }
-    for (std::size_t c = 0; c < kernel.shape().hessian; ++c) {
+    for (std::size_t c = 0; c < kernel.shape().blocks.hessian; ++c) {
       EXPECT_NEAR(hess[c][point], reference[outputs[3 + c]], 1e-12)
           << "compressed Hessian column " << c;
     }
   }
-  EXPECT_EQ(coloring.count * 2, kernel.shape().hessian);
+  EXPECT_EQ(coloring.count() * 2, kernel.shape().blocks.hessian);
 }
 
 } // namespace

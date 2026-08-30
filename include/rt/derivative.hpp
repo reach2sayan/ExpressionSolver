@@ -3,6 +3,7 @@
 #include "ops/mode.hpp" // DiffMode
 #include "rt/coupling.hpp"
 #include "rt/expressions.hpp"
+#include "util/ranges.hpp"
 
 #include <boost/describe/class.hpp>
 
@@ -186,10 +187,7 @@ tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
   const auto live = detail::reachable(b, roots);
   std::vector<NodeId> d(n, no_node);
 
-  for (NodeId v = 0; v < n; ++v) {
-    if (!live[v]) {
-      continue;
-    }
+  for (const NodeId v : detail::live_ids(live)) {
     const auto node = b[v]; // by value: building below may reallocate
     if (is_leaf(node.op)) {
       // A Seed is a direction, not a variable, so it carries no tangent.
@@ -217,12 +215,8 @@ tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
     }
   }
 
-  std::vector<NodeId> out;
-  out.reserve(roots.size());
-  for (const NodeId r : roots) {
-    out.push_back(d[r]);
-  }
-  return out;
+  return roots | std::views::transform([&d](NodeId r) { return d[r]; }) |
+         impl::to<std::vector<NodeId>>();
 }
 
 // One sweep per symbol, with a unit tangent in each.  Here to check Reverse
@@ -235,11 +229,12 @@ template <impl::Numeric T>
   JacobianRow g{.value = root, .partial = std::vector<NodeId>(nsym, no_node)};
   const std::array<NodeId, 1> roots{root};
 
-  for (std::uint32_t s = 0; s < nsym; ++s) {
-    std::vector<NodeId> unit(nsym);
-    for (std::uint32_t j = 0; j < nsym; ++j) {
-      unit[j] = b.constant(j == s ? T{1} : T{0});
-    }
+  for (const std::size_t s : std::views::iota(0uz, nsym)) {
+    const auto unit = std::views::iota(0uz, nsym) |
+                      std::views::transform([&b, s](std::size_t j) {
+                        return b.constant(j == s ? T{1} : T{0});
+                      }) |
+                      impl::to<std::vector<NodeId>>();
     g.partial[s] = tangent_sweep(b, roots, unit).front();
   }
   return g;
@@ -265,13 +260,11 @@ struct Jacobian {
 template <impl::Numeric T>
 [[nodiscard]] constexpr Jacobian
 build_jacobian_impl(Builder<T> &b, std::span<const NodeId> roots) {
-  Jacobian j{.value = {roots.begin(), roots.end()},
-             .partial = {},
-             .pattern = {.rowptr = {0},
-                         .col = {},
-                         .rows = roots.size(),
-                         .columns = b.symbols().size()},
-             .zero = b.constant(T{0})};
+  Jacobian j{
+      .value = {roots.begin(), roots.end()},
+      .partial = {},
+      .pattern = {.rowptr = {0}, .col = {}, .columns = b.symbols().size()},
+      .zero = b.constant(T{0})};
   j.pattern.rowptr.reserve(roots.size() + 1);
   // The previous rows' nodes are unreachable from this root, so the sweep
   // skips them; what they provide is subexpressions to share.
@@ -328,7 +321,9 @@ struct Hessian {
         .transform([this](std::size_t k) { return compressed[k]; })
         .value_or(zero);
   }
-  [[nodiscard]] constexpr std::size_t colors() const { return coloring.count; }
+  [[nodiscard]] constexpr std::size_t colors() const {
+    return coloring.count();
+  }
   BOOST_DESCRIBE_CLASS(Hessian, (),
                        (value, partial, compressed, coloring, zero), (), ())
 };
@@ -343,30 +338,22 @@ template <impl::Numeric T>
             .coloring = color_columns(rows),
             .zero = b.constant(T{0})};
 
-  const std::size_t n = h.partial.size();
   // Only the cells a column owns: the rest cost an output column each and a
   // whole cone of nodes behind it, which on an arrow Hessian is most of it.
-  h.compressed.assign(h.coloring.cells, h.zero);
-  for (const std::size_t c : std::views::iota(0uz, h.coloring.count)) {
+  h.compressed.assign(h.coloring.width(), h.zero);
+  for (const std::size_t c : h.coloring.colors()) {
     // Summing a colour's partials before the sweep is what makes one sweep do
     // the work of |colour| of them.
-    auto match_coloring = [&](std::size_t j) {
-      return h.coloring.color[j] == c;
-    };
     auto make_partial_expression = [&](std::size_t j) {
       return RTExpression<T>{b, h.partial[j]};
     };
     const auto seed = std::ranges::fold_left(
-        std::views::iota(0uz, n) |
-            std::views::filter(std::move(match_coloring)) |
+        h.coloring.columns_of(c) |
             std::views::transform(std::move(make_partial_expression)),
         RTExpression<T>{0}, std::plus<>{});
     const auto row = build_reverse_jacobian(b, seed.id(b));
-    for (const auto [i, p] : row.partial | std::views::enumerate) {
-      const auto k = h.coloring.column(c, static_cast<std::size_t>(i));
-      if (k != no_column) {
-        h.compressed[k] = p;
-      }
+    for (const Cell &owned : h.coloring.owned_cells(c)) {
+      h.compressed[owned.slot] = row.partial[owned.row];
     }
   }
   return h;

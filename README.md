@@ -571,7 +571,10 @@ folded away. `jacobian_pattern()` places them:
 ```cpp
 const rt::Sparsity &pattern = eq.jacobian_pattern()->get();
 pattern.nonzeros();                    // == *eq.jacobian_columns()
-pattern.row(i);                        // the symbols function i depends on
+
+for (const rt::Cell &c : pattern.entries()) {   // every cell that exists
+  use(c.row, c.column, j[c.slot * n + point]);  // ∂f(row)/∂x(column)
+}
 
 const double dfi_dxj =                 // at() is nullopt off the pattern
     pattern.at(i, j)
@@ -588,10 +591,10 @@ one output only. `hessian_cell(i, j)` places those:
 
 ```cpp
 std::vector<double> h(n * *eq.hessian_columns());
-std::vector<double *> hessians;
-for (std::size_t k = 0; k < *eq.hessian_columns(); ++k) {
-  hessians.push_back(h.data() + k * n);
-}
+const auto hessians =
+    std::views::iota(0uz, *eq.hessian_columns()) |
+    std::views::transform([&](std::size_t k) { return h.data() + k * n; }) |
+    std::ranges::to<std::vector>();
 
 const auto ok = eq.hessian(xs, values, partials, hessians, n);
 

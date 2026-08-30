@@ -199,6 +199,7 @@ set(DDX_BOOST_HEADER_DIRS
         boost/property_map
         boost/smart_ptr
         boost/smart_ptr/detail
+        boost/stl_interfaces
         boost/tuple
         boost/tuple/detail
         boost/type_traits

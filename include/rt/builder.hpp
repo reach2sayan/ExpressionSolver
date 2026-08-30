@@ -468,8 +468,7 @@ private:
   std::vector<Node<T>> nodes_;
   // Open-addressed by hand: interning runs inside constant evaluation and no
   // library hash container is constexpr.
-  std::vector<NodeId>
-      table_; // power-of-two capacity; no_node marks a free slot
+  std::vector<NodeId> table_; // power-of-two capacity; no_node == free slot
   std::vector<std::string> symbols_;
   // Slot-addressed, so a renamed slot is a write rather than a rehash: a Var
   // node's hash goes stale as its slot moves.
@@ -487,10 +486,7 @@ concept CNodeSource = requires(const S &s, NodeId v) {
   { s.size() } -> std::convertible_to<std::size_t>;
 };
 
-// fadd(fmul(x, y), z) -> fma(x, y, z), formed here rather than left to the
-// backend so that everything reading the graph forms the same ones.  Nothing
-// else contracts: no reassociation, and a division is left alone.
-//
+// fadd(fmul(x, y), z) -> fma(x, y, z),
 // The rule is structural -- it asks the add what its operands are and nothing
 // about how many readers they have -- which is what lets the arena walk, the
 // frozen graph and the kernel agree to the bit.  The lower-id operand wins

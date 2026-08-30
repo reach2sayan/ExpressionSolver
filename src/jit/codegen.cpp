@@ -249,9 +249,8 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name,
 // Loaded once in the entry block, so they are loop-invariant.
 struct HoistedColumns {
   std::vector<llvm::Value *> inputs;
-  std::vector<llvm::Value *> values;   // f[k]
-  std::vector<llvm::Value *> jacobian; // g[k*n + j]
-  std::vector<llvm::Value *> hessian;  // h[c*n + i]
+  // f[k], g[k*n + j], h[c*n + i]
+  rt::Blocks<std::vector<llvm::Value *>> out;
 };
 
 HoistedColumns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
@@ -271,9 +270,9 @@ HoistedColumns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
 
   const auto &layout = g.layout();
   return {.inputs = load_columns(0, g.arity(), "col"),
-          .values = load_columns(1, layout.values, "f"),
-          .jacobian = load_columns(2, layout.jacobian, "g"),
-          .hessian = load_columns(3, layout.hessian, "h")};
+          .out = {.values = load_columns(1, layout.values, "f"),
+                  .jacobian = load_columns(2, layout.jacobian, "g"),
+                  .hessian = load_columns(3, layout.hessian, "h")}};
 }
 
 // Ids are topological, so one pass needs no worklist.  Under contraction the
@@ -323,9 +322,9 @@ void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
       emit.store(value[o], column, index, mask);
     }
   };
-  store_block(cols.values, blocks.values);
-  store_block(cols.jacobian, blocks.jacobian);
-  store_block(cols.hessian, blocks.hessian);
+  store_block(cols.out.values, blocks.values);
+  store_block(cols.out.jacobian, blocks.jacobian);
+  store_block(cols.out.hessian, blocks.hessian);
 }
 
 } // namespace
