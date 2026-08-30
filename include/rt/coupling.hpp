@@ -4,6 +4,7 @@
 #include "ops/operations.hpp"
 #include "rt/builder.hpp"
 #include "rt/opcode.hpp"
+#include "util/config.hpp" // DDX_FWD
 #include "util/export.hpp"
 
 #include <boost/describe/class.hpp>
@@ -178,9 +179,17 @@ struct Sparsity {
   // value), which is what a caller scattering one back to a dense matrix wants.
   [[nodiscard]] constexpr auto
   cells(std::ranges::random_access_range auto &&values) const {
-    return entries() | std::views::transform([&values](const Cell &c) {
-             return std::tuple{c.row, c.column, values[c.slot]};
-           });
+    // Into the closure by value, never by reference.  A caller hands this a
+    // temporary -- `pattern.cells(scratch.rows())` -- and a captured reference
+    // to one survives the loop only under C++23's P2718, which GCC 15 and
+    // Clang 20 have and the GCC 14 floor does not: it read freed stack there,
+    // and passed everywhere else.  `views::all` copies a view and binds a
+    // container, so both spellings own their way back to the block.
+    return entries() |
+           std::views::transform(
+               [block = std::views::all(DDX_FWD(values))](const Cell &c) {
+                 return std::tuple{c.row, c.column, block[c.slot]};
+               });
   }
 
   // Where (i, j) sits in the compressed block, or nullopt for a cell the

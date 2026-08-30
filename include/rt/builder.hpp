@@ -431,7 +431,7 @@ private:
     const auto r = std::ranges::find_if(
         impl::algebra::kRules, [&](const impl::algebra::Rule &rule) {
           return rule.op == *kind &&
-                 impl::algebra::arity_of(rule.op) == (unary ? 1 : 2) &&
+                 impl::algebra::arity_of(rule.op) == (unary ? 1uz : 2uz) &&
                  (!rule.needs_commutative_multiply ||
                   impl::CCommutativeMultiply<T>) &&
                  holds_pred(rule.when, a, b);
