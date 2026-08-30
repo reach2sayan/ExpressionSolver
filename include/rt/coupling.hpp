@@ -45,10 +45,17 @@ using CouplingRows = std::vector<SymbolSet>;
 // written out.  Not `iota | filter`: that tests every clear bit the word skip
 // exists to skip, which is what SymbolSet was chosen over vector<bool> for.
 // Forward only -- there is no find_prev, and nothing walks backwards.
-class SetBits : public boost::stl_interfaces::v3::proxy_iterator_interface<
-                    std::forward_iterator_tag, std::size_t> {
-  using Interface = boost::stl_interfaces::v3::proxy_iterator_interface<
-      std::forward_iterator_tag, std::size_t>;
+//
+// `v2` -- the CRTP flavour -- and never the unqualified name or `v3`.  Which
+// namespace stl_interfaces makes inline varies by compiler, and the two spell
+// their base differently, so an unqualified name is a different template per
+// toolchain.  `v3` is not merely un-inline on MSVC, it does not exist: Boost
+// gates it on `202002L < __cplusplus`, which MSVC reports as 199711L without
+// /Zc:__cplusplus whatever P0847 it implements.  `v2` needs only concepts.
+class SetBits : public boost::stl_interfaces::v2::proxy_iterator_interface<
+                    SetBits, std::forward_iterator_tag, std::size_t> {
+  using Interface = boost::stl_interfaces::v2::proxy_iterator_interface<
+      SetBits, std::forward_iterator_tag, std::size_t>;
 
 public:
   // Declaring the prefix form hides the postfix one the interface derives from
@@ -118,12 +125,10 @@ struct Sparsity {
   };
 
   // Every positional operator is `rowptr`'s, forwarded through
-  // `base_reference`; the dereference is the only one that is ours.  `v3`
-  // explicitly: it is the deducing-this flavour, which drops the CRTP self
-  // parameter, and util/config.hpp already refuses a compiler without P0847 --
-  // so the namespace stl_interfaces makes inline here never varies.
-  class Iterator : public boost::stl_interfaces::v3::proxy_iterator_interface<
-                       std::random_access_iterator_tag, Row> {
+  // `base_reference`; the dereference is the only one that is ours.  `v2` for
+  // the reason given on SetBits below.
+  class Iterator : public boost::stl_interfaces::v2::proxy_iterator_interface<
+                       Iterator, std::random_access_iterator_tag, Row> {
   public:
     constexpr Iterator() noexcept = default;
     [[nodiscard]] constexpr Row operator*() const;

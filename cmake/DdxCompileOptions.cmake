@@ -50,7 +50,12 @@ function(ddx_target_flags target)
         list(REMOVE_ITEM flags -fno-exceptions /EHs-c- /D_HAS_EXCEPTIONS=0)
     endif ()
     target_compile_options(${target} PRIVATE ${flags} ${DDX_WARNINGS})
-    set_property(TARGET ${target} PROPERTY COMPILE_WARNING_AS_ERROR ON)
+    # Not on MSVC: it reports command-line warnings no source change can
+    # silence -- D9025 for the /EHsc the generator adds and ddx_target_flags
+    # then overrides with /EHs-c- -- and a build cannot fail on those.
+    if (NOT MSVC)
+        set_property(TARGET ${target} PROPERTY COMPILE_WARNING_AS_ERROR ON)
+    endif ()
 endfunction()
 
 # A shared libddx has to be findable at run time by every executable linking it.

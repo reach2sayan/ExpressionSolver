@@ -884,8 +884,9 @@ TEST(JitValue, AdoptingRubbishIsAnErrorNotACrash) {
   const std::array<std::byte, 8> rubbish{
       std::byte{0x7f}, std::byte{'E'}, std::byte{'L'}, std::byte{'F'},
       std::byte{0},    std::byte{0},   std::byte{0},   std::byte{0}};
-  const auto k = compiler().adopt(rubbish, "ddx_kernel_0",
-                                  {.arity = 1, .blocks = {.values = 1}});
+  const auto k =
+      compiler().adopt(rubbish, "ddx_kernel_0",
+                       {.arity = 1, .values = 1, .jacobian = 0, .hessian = 0});
   EXPECT_FALSE(k.has_value()) << "a truncated object linked";
 }
 

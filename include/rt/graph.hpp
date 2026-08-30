@@ -1,6 +1,5 @@
 #pragma once
 
-#include "rt/blocks.hpp"
 #include "rt/builder.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
@@ -102,9 +101,24 @@ static_assert(std::ranges::all_of(std::views::iota(0uz, want_count),
   return false;
 }
 
+// One of a thing per output block, in the order the kernel writes them.  The
+// ids a builder collects, the spans a frozen graph lends, the counts read off
+// them and the columns codegen loads are the same three names, said once.
+// (jit::KernelShape cannot share it: the core may not include rt/.)
+template <std::semiregular Per> struct Blocks {
+  Per values{};
+  Per jacobian{};
+  Per hessian{};
+  BOOST_DESCRIBE_CLASS(Blocks, (), (values, jacobian, hessian), (), ())
+};
+
 using OutputBlocks = Blocks<std::vector<NodeId>>; // what a freeze is handed
 using OutputSpans =
     Blocks<std::span<const NodeId>>; // what a frozen graph lends
+// The column counts, read off the blocks so no column can be miscounted:
+// `values` is m, `jacobian` is the pattern's nonzeros row-major by function,
+// and `hessian` is colours * n, compressed.
+using Layout = Blocks<std::size_t>;
 
 // A builder frozen into CSR, the form codegen walks.  Operand position rides
 // along as an edge attribute, because a CSR row is a set.
