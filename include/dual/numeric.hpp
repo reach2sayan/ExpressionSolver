@@ -14,14 +14,16 @@
 #include <ranges>
 #include <span>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace ddx::impl {
 
 namespace detail {
 // Over storage the caller has already seeded.
-template <CEnergyOf<dual> F, CIndexRange R>
-constexpr void jacobian_into(F &&f, const std::span<dual> dof, R &&active,
+constexpr void jacobian_into(CEnergyOf<dual> auto &&f,
+                             const std::span<dual> dof,
+                             CIndexRange auto &&active,
                              const std::span<double> out) {
   assert(out.size() == std::ranges::size(active));
   const std::span<const dual> point = dof;
@@ -33,28 +35,29 @@ constexpr void jacobian_into(F &&f, const std::span<dual> dof, R &&active,
 } // namespace detail
 
 // Writing form: nothing allocates once `ws` has been used once.
-template <CEnergyOf<dual> F>
-void jacobian(F &&f, const std::span<const double> x, CIndexRange auto &&active,
-              JacobianWorkspace &ws, const std::span<double> out) {
-  detail::jacobian_into(static_cast<F &&>(f), ws.seed(x),
-                        static_cast<decltype(active) &&>(active), out);
+void jacobian(CEnergyOf<dual> auto &&f, const std::span<const double> x,
+              CIndexRange auto &&active, JacobianWorkspace &ws,
+              const std::span<double> out) {
+  detail::jacobian_into(std::forward<decltype(f)>(f), ws.seed(x),
+                        std::forward<decltype(active)>(active), out);
 }
 
 // Owning form: a local workspace.
-template <CEnergyOf<dual> F>
-std::vector<double> jacobian(F &&f, const std::span<const double> x,
+std::vector<double> jacobian(CEnergyOf<dual> auto &&f,
+                             const std::span<const double> x,
                              CIndexRange auto &&active) {
   JacobianWorkspace ws;
   std::vector<double> g(std::ranges::size(active));
-  jacobian(static_cast<F &&>(f), x, static_cast<decltype(active) &&>(active),
-           ws, std::span<double>{g});
+  jacobian(std::forward<decltype(f)>(f), x,
+           std::forward<decltype(active)>(active), ws, std::span<double>{g});
   return g;
 }
 
 // Convenience: differentiate every variable.
-template <CEnergyOf<dual> F>
-std::vector<double> jacobian(F &&f, const std::span<const double> x) {
-  return jacobian(static_cast<F &&>(f), x, detail::all_indices(x.size()));
+std::vector<double> jacobian(CEnergyOf<dual> auto &&f,
+                             const std::span<const double> x) {
+  return jacobian(std::forward<decltype(f)>(f), x,
+                  detail::all_indices(x.size()));
 }
 
 namespace detail {
@@ -64,10 +67,9 @@ namespace detail {
 // returns ((f, df/dx_j), (df/dx_i, d2f/dx_i dx_j)); only those two scalars move
 // per probe.  Each guard holds a bare double, never the enclosing dual2nd: at
 // ai == aj they name two scalars of the same number.
-template <CEnergyOf<dual2nd> F, CIndexRange R>
 constexpr double
-hessian_into(F &&f, const std::span<dual2nd> dof, R &&active,
-             const std::span<double> grad,
+hessian_into(CEnergyOf<dual2nd> auto &&f, const std::span<dual2nd> dof,
+             CIndexRange auto &&active, const std::span<double> grad,
              const md::mdspan<double, md::dextents<std::size_t, 2>> hess) {
   [[maybe_unused]] const std::size_t m = std::ranges::size(active);
   assert(grad.size() == m && hess.extent(0) == m && hess.extent(1) == m);
@@ -77,8 +79,8 @@ hessian_into(F &&f, const std::span<dual2nd> dof, R &&active,
     const auto j = static_cast<std::size_t>(index);
     // Inner seed e_j is constant across the i-loop.
     const auto inner_seed = scoped_seed<1.0>(dof[aj].value().deriv());
-    for (const auto [inner, ai] :
-         std::views::enumerate(active | std::views::take(index + 1))) {
+    for (const auto [inner, ai] : (active | std::views::take(index + 1)) |
+         std::views::enumerate) {
       const auto i = static_cast<std::size_t>(inner);
 
       // When ai == aj this lands in aj's other slot.
@@ -100,34 +102,34 @@ hessian_into(F &&f, const std::span<dual2nd> dof, R &&active,
 }
 
 // Writing form: nothing allocates once the buffers and scratch are warm.
-template <CEnergyOf<dual2nd> F>
 double
-hessian(F &&f, const std::span<const double> x, CIndexRange auto &&active,
-        HessianWorkspace &ws, const std::span<double> grad_out,
+hessian(CEnergyOf<dual2nd> auto &&f, const std::span<const double> x,
+        CIndexRange auto &&active, HessianWorkspace &ws,
+        const std::span<double> grad_out,
         const md::mdspan<double, md::dextents<std::size_t, 2>> hess_out) {
-  return hessian_into(static_cast<F &&>(f), ws.seed(x),
-                      static_cast<decltype(active) &&>(active), grad_out,
+  return hessian_into(std::forward<decltype(f)>(f), ws.seed(x),
+                      std::forward<decltype(active)>(active), grad_out,
                       hess_out);
 }
 
 // std::array throughout, so this is the one Hessian driver a constant
 // evaluation can run.
-template <std::size_t N, CEnergyOf<dual2nd> F>
-constexpr HessianStatic<N> hessian_static(F &&f,
+template <std::size_t N>
+constexpr HessianStatic<N> hessian_static(CEnergyOf<dual2nd> auto &&f,
                                           const std::span<const double> x) {
   std::array<dual2nd, N> dof{};
   std::ranges::transform(x | std::views::take(N), dof.begin(),
                          [](const double v) { return dual2nd{v}; });
   HessianStatic<N> out{};
-  out.value = hessian_into(static_cast<F &&>(f), std::span<dual2nd>{dof},
-                           all_indices(N), std::span<double>{out.jacobian},
-                           out.hessian_view());
+  out.value = hessian_into(std::forward<decltype(f)>(f),
+                           std::span<dual2nd>{dof}, all_indices(N),
+                           std::span<double>{out.jacobian}, out.hessian_view());
   return out;
 }
 
 // Owning form.
-template <CEnergyOf<dual2nd> F>
-HessianOwned hessian(F &&f, const std::span<const double> x,
+HessianOwned hessian(CEnergyOf<dual2nd> auto &&f,
+                     const std::span<const double> x,
                      CIndexRange auto &&active) {
   const std::size_t m = std::ranges::size(active);
   HessianWorkspace ws;
@@ -135,17 +137,17 @@ HessianOwned hessian(F &&f, const std::span<const double> x,
   HessianOwned out{.jacobian = std::make_unique_for_overwrite<double[]>(m),
                    .hessian = std::make_unique_for_overwrite<double[]>(m * m),
                    .arity = m};
-  out.value = hessian_into(static_cast<F &&>(f), ws.seed(x),
-                           static_cast<decltype(active) &&>(active),
+  out.value = hessian_into(std::forward<decltype(f)>(f), ws.seed(x),
+                           std::forward<decltype(active)>(active),
                            std::span<double>{out.jacobian.get(), m},
                            out.hessian_view());
   return out;
 }
 
 // Convenience: differentiate every variable.
-template <CEnergyOf<dual2nd> F>
-HessianOwned hessian(F &&f, const std::span<const double> x) {
-  return hessian(static_cast<F &&>(f), x, all_indices(x.size()));
+HessianOwned hessian(CEnergyOf<dual2nd> auto &&f,
+                     const std::span<const double> x) {
+  return hessian(std::forward<decltype(f)>(f), x, all_indices(x.size()));
 }
 
 } // namespace detail

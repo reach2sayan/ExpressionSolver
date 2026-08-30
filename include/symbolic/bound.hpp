@@ -161,13 +161,13 @@ template <CExpression Expr, CValueMap Map> Bound(Expr, Map) -> Bound<Expr, Map>;
 template <CExpression Expr, CValueMap Map>
 [[nodiscard]] constexpr auto bind(Expr &&e, Map &&m) noexcept {
   return Bound<std::remove_cvref_t<Expr>, std::remove_cvref_t<Map>>{
-      static_cast<Expr &&>(e), static_cast<Map &&>(m)};
+      std::forward<Expr>(e), std::forward<Map>(m)};
 }
 
 // bind(expr, named<"x">(1.0), named<"y">(0.5))
 template <CExpression Expr, FixedString... Syms, Numeric... Vs>
 [[nodiscard]] constexpr auto bind(Expr &&e, Entry<Syms, Vs>... nv) noexcept {
-  return bind(static_cast<Expr &&>(e), values(nv...));
+  return bind(std::forward<Expr>(e), values(nv...));
 }
 
 template <CExpression Expr>
@@ -270,9 +270,9 @@ template <CSymbolList Syms, Numeric U, std::size_t N, typename Body,
                                         const Args &...args) noexcept {
   if constexpr (CDynamicPoint<Args...>) {
     return make_point<Syms, U, N>(args...).transform(
-        static_cast<Body &&>(body));
+        std::forward<Body>(body));
   } else {
-    return static_cast<Body &&>(body)(make_point<Syms, U, N>(args...));
+    return std::forward<Body>(body)(make_point<Syms, U, N>(args...));
   }
 }
 

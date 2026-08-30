@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 #include "symbolic/symbol.hpp" // mp_size
 
@@ -30,7 +31,7 @@ public:
   static constexpr bool kSeededExprEnergy = true;
 
   explicit constexpr SeededExprEnergy(Expr expr) noexcept
-      : expr_(static_cast<Expr &&>(expr)) {}
+      : expr_(std::move(expr)) {}
 
   template <Numeric Dof>
   [[nodiscard]] constexpr auto
@@ -54,7 +55,7 @@ concept CSeededExprEnergy =
 template <CExpression Expr>
 [[nodiscard]] constexpr auto seeded_energy(Expr &&expr) noexcept {
   return SeededExprEnergy<std::remove_cvref_t<Expr>>(
-      static_cast<Expr &&>(expr));
+      std::forward<Expr>(expr));
 }
 
 } // namespace ddx::impl

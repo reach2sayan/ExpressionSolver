@@ -1,23 +1,22 @@
 #pragma once
 
-#include "ops/adjoints.hpp" // detail::sign
+#include "ops/adjoints.hpp"
 #include "ops/scalar.hpp"
 #include "ops/unary_math.hpp"
-#include "symbolic/expressions.hpp" // Variable, for dual_var_of
-#include "util/config.hpp"          // DDX_ALWAYS_INLINE, DDX_SLOT_ACCESSOR
+#include "symbolic/expressions.hpp"
+#include "util/config.hpp"
 #include "util/fmt.hpp"
 #include <array>
 #include <cmath>
 #include <format>
-#include <numeric> // std::midpoint
+#include <numeric>
 #include <tuple>
 #include <type_traits>
-#include <utility> // std::forward, std::move
+#include <utility>
 
 namespace ddx::impl {
 
-// (a+be)(c+de) = ac + (ad+bc)e, so a dual commutes exactly when the scalar
-// underneath it does.
+// (a+be)(c+de) = ac + (ad+bc)e
 template <Numeric T> class Dual;
 template <Numeric T>
 inline constexpr bool is_commutative_multiply_v<Dual<T>> =
@@ -45,9 +44,6 @@ public:
   }
 
 private:
-  // The one place the value category has to be right: the parentheses are what
-  // make decltype(auto) a reference rather than a copy.  forward_like is
-  // libstdc++ 14.
   template <std::size_t Index>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     static_assert(Index < 2, "Dual index out of bounds");
@@ -62,8 +58,7 @@ public:
   DDX_SLOT_ACCESSOR(value, 0)
   DDX_SLOT_ACCESSOR(deriv, 1)
 
-  // get() on an rvalue yields an rvalue, as std::get does.  No subscript
-  // spelling: a dual is a pair with names, not a map.
+  // get() on an rvalue yields an rvalue, as std::get does.
   DDX_KEYED_GET(std::size_t Index, Index)
 };
 
@@ -101,12 +96,13 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a,
   return Dual<T>{av + bv, ad + bd};
 }
 
-template <Numeric T, ConstOperand<Dual<T>> C>
+template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_add(const Dual<T> &a,
-                                             const C &s) noexcept {
+                                             const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av + s, ad};
 }
+
 template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a,
                                              const Dual<T> &b) noexcept {
@@ -114,18 +110,21 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a,
   const auto &[bv, bd] = b;
   return Dual<T>{av - bv, ad - bd};
 }
-template <Numeric T, ConstOperand<Dual<T>> C>
+
+template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const Dual<T> &a,
-                                             const C &s) noexcept {
+                                             const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a;
   return Dual<T>{av - s, ad};
 }
-template <Numeric T, ConstOperand<Dual<T>> C>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const C &s,
+
+template <Numeric T>
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_sub(const ConstOperand<Dual<T>> auto &s,
                                              const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s - a == -(a - s);
   return Dual<T>{-(av - s), -ad};
 }
+
 template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a,
                                              const Dual<T> &b) noexcept {
@@ -133,9 +132,10 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a,
   const auto &[bv, bd] = b;
   return Dual<T>{av * bv, ad * bv + av * bd};
 }
-template <Numeric T, ConstOperand<Dual<T>> C>
+
+template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_mul(const Dual<T> &a,
-                                             const C &s) noexcept {
+                                             const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a; // scalar distributes; no zero-derivative term
   return Dual<T>{av * s, ad * s};
 }
@@ -150,15 +150,17 @@ DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a,
   const T q = av * inv; // value = a / b
   return Dual<T>{q, (ad - q * bd) * inv};
 }
-template <Numeric T, ConstOperand<Dual<T>> C>
+
+template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a,
-                                             const C &s) noexcept {
+                                             const ConstOperand<Dual<T>> auto &s) noexcept {
   const auto &[av, ad] = a; // s is a zero-derivative constant
   const T inv = T{1} / T(s);
   return Dual<T>{av * inv, ad * inv};
 }
-template <Numeric T, ConstOperand<Dual<T>> C>
-DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const C &s,
+
+template <Numeric T>
+DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const ConstOperand<Dual<T>> auto &s,
                                              const Dual<T> &a) noexcept {
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (wide-scalar-safe)
   const T inv = T{1} / av;
@@ -240,12 +242,12 @@ template <typename A, typename B>
 concept DualComparable =
     DualOrArithmetic<A> && DualOrArithmetic<B> && (DualLike<A> || DualLike<B>);
 
-template <DualOrArithmetic A, DualComparable<A> B>
-constexpr auto operator<=>(const A &a, const B &b) noexcept {
+template <DualOrArithmetic A>
+constexpr auto operator<=>(const A &a, const DualComparable<A> auto &b) noexcept {
   return val(a) <=> val(b);
 }
-template <DualOrArithmetic A, DualComparable<A> B>
-constexpr bool operator==(const A &a, const B &b) noexcept {
+template <DualOrArithmetic A>
+constexpr bool operator==(const A &a, const DualComparable<A> auto &b) noexcept {
   return val(a) == val(b);
 }
 
@@ -278,7 +280,7 @@ template <DualLike A, CArithmetic U> constexpr auto pow(A &&a, U s) noexcept {
   using std::pow;
   if constexpr (std::unsigned_integral<std::remove_cvref_t<U>>) {
     // Signed, so the s - 1 below cannot wrap at s == 0.
-    return pow(static_cast<A &&>(a), static_cast<long long>(s));
+    return pow(std::forward<A>(a), static_cast<long long>(s));
   } else {
     const auto &[av, ad] = a;
     using DT = std::remove_cvref_t<A>;
@@ -292,10 +294,10 @@ template <DualLike A, CArithmetic U> constexpr auto pow(A &&a, U s) noexcept {
 
 // pow(s, a), s a constant base.  d(s^a) = s^a ln(s) a'.  ln(s) is a scalar log
 // of a constant, so one libm call however deeply the dual is nested.
-template <DualLike A, CArithmetic U> constexpr auto pow(U s, A &&a) noexcept {
+constexpr auto pow(CArithmetic auto s, DualLike auto &&a) noexcept {
   using std::log, std::pow;
   const auto &[av, ad] = a;
-  using DT = std::remove_cvref_t<A>;
+  using DT = std::remove_cvref_t<decltype(a)>;
   using T = std::remove_cvref_t<decltype(av)>;
   const T p = pow(s, av);
   return DT{p, p * (log(s) * ad)};
@@ -305,9 +307,9 @@ namespace detail {
 // A tie averages and an unordered pair is (a-b)*0, NaN from either side: both
 // symmetric, hence stable under the builder's commutative reordering.  The dual
 // is always the left operand, so neither depends on which spelling was used.
-template <bool IsMax, DualLike A, typename B>
-constexpr auto extremum(A &&a, const B &other) noexcept {
-  using DT = std::remove_cvref_t<A>;
+template <bool IsMax>
+constexpr auto extremum(DualLike auto&&a, const auto &other) noexcept {
+  using DT = std::remove_cvref_t<decltype(a)>;
   if (val(a) == val(other)) {
     return DT{a + (other - a) / 2};
   }
@@ -321,36 +323,36 @@ constexpr auto extremum(A &&a, const B &other) noexcept {
 }
 } // namespace detail
 
-template <DualLike A, DualCompatible<A> B>
-constexpr auto max(A &&a, B &&b) noexcept {
+template <DualLike A>
+constexpr auto max(A &&a, DualCompatible<A> auto &&b) noexcept {
   return detail::extremum<true>(std::forward<A>(a), b);
 }
 
-template <DualLike A, DualCompatible<A> B>
-constexpr auto min(A &&a, B &&b) noexcept {
+template <DualLike A>
+constexpr auto min(A &&a, DualCompatible<A> auto &&b) noexcept {
   return detail::extremum<false>(std::forward<A>(a), b);
 }
 
 // max/min otherwise select an operand whole, so the bound stays a scalar; at
 // a tie against the constant the derivative halves.
-template <DualLike A, CArithmetic U> constexpr auto max(A &&a, U s) noexcept {
-  return detail::extremum<true>(std::forward<A>(a), s);
+constexpr auto max(DualLike auto &&a, CArithmetic auto s) noexcept {
+  return detail::extremum<true>(std::forward<decltype(a)>(a), s);
 }
-template <DualLike A, CArithmetic U> constexpr auto max(U s, A &&a) noexcept {
-  return detail::extremum<true>(std::forward<A>(a), s);
+constexpr auto max(CArithmetic auto s, DualLike auto &&a) noexcept {
+  return detail::extremum<true>(std::forward<decltype(a)>(a), s);
 }
-template <DualLike A, CArithmetic U> constexpr auto min(A &&a, U s) noexcept {
-  return detail::extremum<false>(std::forward<A>(a), s);
+constexpr auto min(DualLike auto &&a, CArithmetic auto s) noexcept {
+  return detail::extremum<false>(std::forward<decltype(a)>(a), s);
 }
-template <DualLike A, CArithmetic U> constexpr auto min(U s, A &&a) noexcept {
-  return detail::extremum<false>(std::forward<A>(a), s);
+constexpr auto min(CArithmetic auto s, DualLike auto &&a) noexcept {
+  return detail::extremum<false>(std::forward<decltype(a)>(a), s);
 }
 
 // atan2(y, x), numerator first:
 //   d atan2 = ((x/h)*dy - (y/h)*dx) / h  with h = hypot(x, y).
 // Scaled by hypot rather than divided by x² + y², which overflows past 1e154.
-template <DualLike A, DualCompatible<A> B>
-constexpr auto atan2(A &&y, B &&x) noexcept {
+template <DualLike A>
+constexpr auto atan2(A &&y, DualCompatible<A> auto &&x) noexcept {
   using std::atan2, std::hypot;
   const auto &[yv, yd] = y;
   const auto &[xv, xd] = x;
@@ -361,8 +363,8 @@ constexpr auto atan2(A &&y, B &&x) noexcept {
 
 // Linear, so it is its own derivative rule.  std::midpoint takes arithmetic
 // types only, which is why max/min go through midpoint_impl instead.
-template <DualLike A, DualCompatible<A> B>
-constexpr auto midpoint(A &&a, B &&b) noexcept {
+template <DualLike A>
+constexpr auto midpoint(A &&a, DualCompatible<A> auto &&b) noexcept {
   using std::midpoint;
   const auto &[xv, xd] = a;
   const auto &[yv, yd] = b;
@@ -372,8 +374,8 @@ constexpr auto midpoint(A &&a, B &&b) noexcept {
 
 // hypot(x, y) = sqrt(x² + y²).  d hypot = (x/h)*dx + (y/h)*dy: the quotients
 // live in [-1, 1], so the derivative cannot overflow where h does not.
-template <DualLike A, DualCompatible<A> B>
-constexpr auto hypot(A &&a, B &&b) noexcept {
+template <DualLike A>
+constexpr auto hypot(A &&a, DualCompatible<A> auto &&b) noexcept {
   using std::hypot;
   const auto &[xv, xd] = a;
   const auto &[yv, yd] = b;
@@ -383,8 +385,8 @@ constexpr auto hypot(A &&a, B &&b) noexcept {
 }
 
 // 3-argument hypot, all-dual only.
-template <DualLike A, DualCompatible<A> B, DualCompatible<A> C>
-constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
+template <DualLike A>
+constexpr auto hypot(A &&a,  DualCompatible<A> auto &&b, DualCompatible<A>  auto&&c) noexcept {
   using std::hypot;
   using T = dual_value_t<A>;
   const Dual<T> x = a, y = b, z = c;
@@ -396,31 +398,34 @@ constexpr auto hypot(A &&a, B &&b, C &&c) noexcept {
 }
 
 // Against a constant: the zero term is absent rather than added.
-template <DualLike A, CArithmetic U> constexpr auto atan2(A &&y, U s) noexcept {
+constexpr auto atan2(DualLike auto &&y, CArithmetic auto s) noexcept {
   using std::atan2, std::hypot;
   const auto &[yv, yd] = y;
-  using DT = std::remove_cvref_t<A>;
+  using DT = std::remove_cvref_t<decltype(y)>;
   const auto h = hypot(yv, s);
   return DT{atan2(yv, s), ((s / h) * yd) / h};
 }
-template <DualLike A, CArithmetic U> constexpr auto atan2(U s, A &&x) noexcept {
+
+constexpr auto atan2(CArithmetic auto s, DualLike auto &&x) noexcept {
   using std::atan2, std::hypot;
   const auto &[xv, xd] = x;
-  using DT = std::remove_cvref_t<A>;
+  using DT = std::remove_cvref_t<decltype(x)>;
   const auto h = hypot(xv, s);
   return DT{atan2(s, xv), -((s / h) * xd) / h};
 }
-template <DualLike A, CArithmetic U> constexpr auto hypot(A &&a, U s) noexcept {
+
+constexpr auto hypot(DualLike auto &&a, CArithmetic auto s) noexcept {
   using std::hypot;
   const auto &[av, ad] = a;
-  using DT = std::remove_cvref_t<A>;
+  using DT = std::remove_cvref_t<decltype(a)>;
   const auto h = hypot(av, s);
   return DT{h, (av / h) * ad};
 }
-template <DualLike A, CArithmetic U> constexpr auto hypot(U s, A &&a) noexcept {
+
+constexpr auto hypot(CArithmetic auto s, DualLike auto &&a) noexcept {
   using std::hypot;
   const auto &[av, ad] = a;
-  using DT = std::remove_cvref_t<A>;
+  using DT = std::remove_cvref_t<decltype(a)>;
   const auto h = hypot(s, av);
   return DT{h, (av / h) * ad};
 }

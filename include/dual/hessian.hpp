@@ -15,6 +15,7 @@
 #include <ranges>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 namespace ddx::impl {
 
@@ -101,9 +102,9 @@ auto hessian(F &&f, const std::span<const double> x, R &&active) {
           return detail::to_owned(detail::hessian_expr_reverse(f, x));
         }
       }
-      return detail::hessian(seeded_energy(static_cast<F &&>(f)), x, active);
+      return detail::hessian(seeded_energy(std::forward<F>(f)), x, active);
     } else {
-      return detail::hessian(static_cast<F &&>(f), x, active);
+      return detail::hessian(std::forward<F>(f), x, active);
     }
   });
 }
@@ -121,12 +122,12 @@ constexpr auto hessian(F &&f, const std::span<const double> x) {
         }
       }
       return detail::hessian_static<detail::expr_arity_v<F>>(
-          seeded_energy(static_cast<F &&>(f)), x);
+          seeded_energy(std::forward<F>(f)), x);
     } else if constexpr (detail::declared_arity<F>().has_value()) {
       return detail::hessian_static<*detail::declared_arity<F>()>(
-          static_cast<F &&>(f), x);
+          std::forward<F>(f), x);
     } else {
-      return detail::hessian(static_cast<F &&>(f), x);
+      return detail::hessian(std::forward<F>(f), x);
     }
   });
 }

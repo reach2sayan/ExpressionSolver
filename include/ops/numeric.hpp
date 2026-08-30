@@ -56,14 +56,14 @@ template <typename F, typename Seq>
 inline constexpr bool index_invocable_v = false;
 template <typename F, std::size_t... Is>
 inline constexpr bool index_invocable_v<F, std::index_sequence<Is...>> =
-    (requires(F &&f) { static_cast<F &&>(f).template operator()<Is>(); } &&
+    (requires(F &&f) { std::forward<F>(f).template operator()<Is>(); } &&
      ...);
 
 template <typename F, typename Seq>
 inline constexpr bool pack_invocable_v = false;
 template <typename F, std::size_t... Is>
 inline constexpr bool pack_invocable_v<F, std::index_sequence<Is...>> =
-    requires(F &&f) { static_cast<F &&>(f).template operator()<Is...>(); };
+    requires(F &&f) { std::forward<F>(f).template operator()<Is...>(); };
 } // namespace detail
 
 // static_for  : hands over one index at a time, for a fold of statements;
@@ -72,7 +72,7 @@ template <std::size_t N, typename F>
   requires detail::index_invocable_v<F, std::make_index_sequence<N>>
 constexpr void static_for(F &&f) noexcept {
   [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-    (static_cast<F &&>(f).template operator()<Is>(), ...);
+    (std::forward<F>(f).template operator()<Is>(), ...);
   }(std::make_index_sequence<N>{});
 }
 
@@ -80,7 +80,7 @@ template <std::size_t N, typename F>
   requires detail::pack_invocable_v<F, std::make_index_sequence<N>>
 [[nodiscard]] constexpr decltype(auto) index_apply(F &&f) {
   return [&]<std::size_t... Is>(std::index_sequence<Is...>) -> decltype(auto) {
-    return static_cast<F &&>(f).template operator()<Is...>();
+    return std::forward<F>(f).template operator()<Is...>();
   }(std::make_index_sequence<N>{});
 }
 
