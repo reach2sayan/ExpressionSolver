@@ -183,15 +183,13 @@ public:
                                            const RTExpression &r) {
     return le(r, l);
   }
-  // Both ways round, so a NaN operand answers 0 -- where `1 - lt - lt` would
-  // have called two NaNs equal.  Sequenced: an operand order left to the
-  // compiler is a node order, and the text parser builds this one.
+
   friend constexpr RTExpression operator==(const RTExpression &l,
                                            const RTExpression &r) {
     const RTExpression forward = le(l, r);
     return forward * le(r, l);
   }
-  // Spelled out: the rewritten `!(l == r)` is ill-formed when `==` is not bool.
+  // rewritten `!(l == r)` is ill-formed when `==` is not bool.
   friend constexpr RTExpression operator!=(const RTExpression &l,
                                            const RTExpression &r) {
     return RTExpression{1} - (l == r);
@@ -225,8 +223,6 @@ private:
     return e;
   }
 
-  // What an Equation reports rather than building over a symbol that is not
-  // there.
   [[nodiscard]] constexpr std::optional<errc> why() const noexcept {
     return why_;
   }
@@ -244,8 +240,7 @@ template <impl::Numeric T>
   return id == no_node ? RTExpression<T>::poison(errc::sealed_arena)
                        : RTExpression<T>{b, id};
 }
-// The direction a seeded product is taken along, as a leaf the sweeps read but
-// never differentiate.  No poison arm: nothing about a slot can be refused.
+// The direction a seeded product is taken along
 template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T> seed(Builder<T> &b,
                                              std::uint32_t slot) {
@@ -286,9 +281,6 @@ template <impl::Numeric T>
 } // namespace ddx::rt
 
 namespace ddx::impl {
-// A node stands for a value in S, so its product commutes exactly when S's
-// does.  Load-bearing: DivideOpFn asks it to pick between the two spellings of
-// the quotient rule.
 template <Numeric S>
 inline constexpr bool is_commutative_multiply_v<rt::RTExpression<S>> =
     is_commutative_multiply_v<S>;

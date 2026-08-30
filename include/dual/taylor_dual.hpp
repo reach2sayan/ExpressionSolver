@@ -26,7 +26,8 @@ template <Numeric S, std::size_t N>
 inline constexpr bool is_commutative_multiply_v<TaylorDual<S, N>> =
     is_commutative_multiply_v<S>;
 
-template <Numeric S, std::size_t N> struct TaylorDual : compound_from_binary {
+template <Numeric S, std::size_t N>
+struct TaylorDual : compound_from_binary<TaylorDual<S, N>> {
   std::array<S, N + 1> c{};
 
   // 1/k, folded once rather than a ~13-cycle vdivsd on the dependency chain.

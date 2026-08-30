@@ -29,7 +29,7 @@ concept ConstOperand =
     CArithmetic<C> || std::same_as<std::remove_cvref_t<C>, dual_value_t<A>>;
 
 // Ref: Clifford, Proc. LMS s1-4 (1873) 381 -- adjoin ε with ε² = 0.
-template <Numeric T> class Dual : public compound_from_binary {
+template <Numeric T> class Dual : public compound_from_binary<Dual<T>> {
 private:
   T val_{};
   T deriv_{};

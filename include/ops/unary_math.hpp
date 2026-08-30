@@ -23,8 +23,7 @@ namespace ddx::impl::detail {
     }                                                                          \
     EXTRA                                                                      \
   };
-// Two spellings rather than a trailing __VA_OPT__ argument: MSVC's default
-// preprocessor has no __VA_OPT__, and this header reaches every consumer.
+// MSVC's default preprocessor has no __VA_OPT__,
 #define DDX_UNARY_MATH_DESC(NAME, VAL, DERIV)                                  \
   DDX_UNARY_MATH_DESC_(NAME, VAL, DERIV, )
 #define DDX_UNARY_MATH_DESC_FV(NAME, VAL, DERIV, FV)                           \
