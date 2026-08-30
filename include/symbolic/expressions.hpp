@@ -24,19 +24,15 @@ template <auto S> struct symbol_type {
 
   // "x"_s = 1.5 -- one entry of a point or a record.  Assignment rather than a
   // call: a symbol carries no state for a real assignment to overwrite.
-  // Defined in entry.hpp, where the thing it returns is.
   template <typename V>
     requires std::is_object_v<V>
   constexpr Entry<S, V> operator=(V v) const;
 };
 
-// The same symbol as a value, for operator[].  FixedString, not
-// `CFixedString auto`: CTAD has to turn the literal into a FixedString rather
-// than decay it to const char*.
+// The same symbol as a value, for operator[].
 template <FixedString S> inline constexpr symbol_type<S> sym{};
 
 namespace literals {
-
 template <FixedString S> [[nodiscard]] consteval auto operator""_s() noexcept {
   return sym<S>;
 }
@@ -266,8 +262,6 @@ struct expression_element<V, I,
 
 } // namespace ddx::impl
 
-// At GLOBAL scope: the body opens namespace ddx::impl.  Variadic, so a
-// template-id with commas survives the preprocessor.
 #define DDX_COMMUTATIVE_MULTIPLY(...)                                          \
   namespace ddx::impl {                                                        \
   template <>                                                                  \

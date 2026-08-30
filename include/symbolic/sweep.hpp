@@ -63,11 +63,12 @@ constexpr auto fill_cache(const E &node, const Vals &vals,
 // adjoint of 1.  Returns the root value; `grads` receives the partials.
 // Ref: Linnainmaa, BIT 16(2) (1976) 146.  docs/reverse_mode_by_example.md
 // walks one of these by hand.
-template <CSymbolList Syms, CExpression Expr, CNumericBuffer Seeds,
-          CNumericBuffer Grads>
+template <CSymbolList Syms>
 DDX_ALWAYS_INLINE constexpr auto
-reverse_sweep(const Expr &expr, const Seeds &seeds, Grads &grads) noexcept {
-  using T = typename std::remove_cvref_t<Expr>::value_type;
+reverse_sweep(const CExpression auto &expr, const CNumericBuffer auto &seeds,
+              CNumericBuffer auto &grads) noexcept {
+  using Expr = std::remove_cvref_t<decltype(expr)>;
+  using T = typename Expr::value_type;
   node_cache_t<Expr> cache{};
   // Store=false: the root's value is the return value, so storing it is dead.
   const T root = fill_cache<0, Syms, false>(expr, seeds, cache);
@@ -497,10 +498,10 @@ public:
 };
 
 // The sparse counterpart of hessian(graph, x).
-template <CExpression Expr>
-[[nodiscard]] constexpr SparseHessian<Expr>
-sparse_hessian(const Expr &expr, std::span<const double> x) {
-  return SparseHessian<Expr>{detail::hessian_values_sparse(expr, x)};
+[[nodiscard]] constexpr auto sparse_hessian(const CExpression auto &expr,
+                                            std::span<const double> x) {
+  return SparseHessian<std::remove_cvref_t<decltype(expr)>>{
+      detail::hessian_values_sparse(expr, x)};
 }
 
 } // namespace ddx::impl

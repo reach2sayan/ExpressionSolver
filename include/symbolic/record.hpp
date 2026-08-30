@@ -10,9 +10,9 @@
 // canonical order, which is what a point of an expression is.
 
 #include "symbolic/entry.hpp"
-#include "symbolic/expressions.hpp" // symbol_type, for operator[]
-#include "symbolic/symbol.hpp"      // mp
-#include "util/config.hpp"          // DDX_KEYED_ACCESSORS
+#include "symbolic/expressions.hpp"
+#include "symbolic/symbol.hpp"
+#include "util/config.hpp"
 #include "util/fixed_string.hpp"
 
 #include <array>

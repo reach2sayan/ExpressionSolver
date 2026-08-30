@@ -18,8 +18,8 @@ namespace ddx::impl {
 
 namespace detail {
 // Evaluate a tuple of expressions at one point, in canonical symbol order.
-template <CSymbolList Syms, CNumericBuffer Vals, CExpression... Es>
-constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
+template <CSymbolList Syms>
+constexpr auto eval_all(const CNumericBuffer auto &vals, const CExpression auto &...es) noexcept {
   return std::array{es.template eval_seeded<Syms>(vals)...};
 }
 
@@ -28,9 +28,9 @@ constexpr auto eval_all(const Vals &vals, const Es &...es) noexcept {
 template <CExpression E>
 using canonical_t = decltype(canonicalise(std::declval<const E &>()));
 
-template <CSymbol... Syms, CExpression Expr>
+template <CSymbol... Syms>
 constexpr auto make_derivatives(mp::mp_list<Syms...>,
-                                const Expr &expr) noexcept {
+                                const CExpression auto &expr) noexcept {
   return std::tuple(canonicalise(
       make_all_constant_except<Syms::value>(expr).derivative())...);
 }

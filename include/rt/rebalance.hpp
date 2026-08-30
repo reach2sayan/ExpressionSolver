@@ -11,6 +11,7 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <stack>
 #include <vector>
 
 namespace ddx::rt {
@@ -33,7 +34,7 @@ namespace detail {
 // A maximal single-use Add spine's terms, left to right: the blocked sum has to
 // reassociate the same sequence, not a different one.
 template <impl::Numeric T>
-[[nodiscard]] constexpr std::vector<NodeId>
+[[nodiscard]] std::vector<NodeId>
 spine_terms(const Builder<T> &b, NodeId top,
             const std::vector<std::uint32_t> &uses,
             const std::vector<bool> &root) {
@@ -42,17 +43,18 @@ spine_terms(const Builder<T> &b, NodeId top,
   const auto links = [&](NodeId u) {
     return b[u].op == OpCode::Add && uses[u] == 1 && !root[u];
   };
-  std::vector<NodeId> terms, stack{top};
+  std::vector<NodeId> terms;
+  std::stack stack{std::vector{top}};
   while (!stack.empty()) {
-    const NodeId u = stack.back();
-    stack.pop_back();
+    const NodeId u = stack.top();
+    stack.pop();
     if (b[u].op != OpCode::Add || (u != top && !links(u))) {
       terms.push_back(u);
       continue;
     }
     const auto [a, c, absent] = b.operands(u); // Add is binary
-    stack.push_back(c); // right pushed first, so the left operand pops first
-    stack.push_back(a);
+    stack.push(c); // right pushed first, so the left operand pops first
+    stack.push(a);
   }
   return terms;
 }
@@ -88,9 +90,6 @@ blocked_sum(Builder<T> &b, std::span<const NodeId> terms, std::size_t blocks) {
 // be edited in place: the arena is rebuilt bottom-up and interning maps every
 // unchanged subtree back to itself.  Run it before differentiating, so the
 // reverse sweep inherits the shape.
-//
-// Sixteen: rss/64's scalar kernel is 3958 ns unblocked, 3388 at four, 3245 at
-// eight, 3118 at sixteen.
 template <impl::Numeric T>
 [[nodiscard]] constexpr std::vector<NodeId>
 rebalance(Builder<T> &b, std::span<const NodeId> roots, std::size_t blocks = 16,

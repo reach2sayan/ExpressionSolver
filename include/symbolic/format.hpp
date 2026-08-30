@@ -55,7 +55,7 @@ template <Numeric V> struct printer {
   void put(char c) const { put(std::string_view{&c, 1}); }
 
   // Through the nested formatter, so a caller's "{::.3f}" reaches every leaf.
-  template <Numeric U> void put_value(const U &v) const {
+  void put_value(const Numeric auto &v) const {
     ctx.advance_to(value_fmt.format(v, ctx));
   }
 };
@@ -63,10 +63,9 @@ template <Numeric V> struct printer {
 // `min_prec` is what the parent demands; anything looser is parenthesised.  A
 // left operand may be as loose as its own operator, a right operand must be one
 // step tighter -- so x / (y / z) and x - (y + z) but not x - y * z.
-template <CExpression E, Numeric V>
-void print_infix(const printer<V> &p, const E &e, int min_prec) {
-  using U = std::remove_cvref_t<E>;
-
+template <Numeric V>
+void print_infix(const printer<V> &p, const CExpression auto &e, int min_prec) {
+  using U = std::remove_cvref_t<decltype(e)>;
   if constexpr (CExpressionNode<U>) {
     using Op = typename U::op_type;
     constexpr int prec = node_precedence<U>();

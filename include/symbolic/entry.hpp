@@ -51,13 +51,13 @@ struct Entry {
 
   // Not explicit: Record<...>{{1}, {2.5}} initialises its entries through this.
   constexpr Entry(V v) noexcept(std::is_nothrow_move_constructible_v<V>)
-      : value(std::move(v)) {}
+      : value{std::move(v)} {}
 
   template <CSymbolTag Tag>
     requires(detail::tag_key_t<Tag>::value == Sym)
   constexpr Entry(const Tag &,
                   V v) noexcept(std::is_nothrow_move_constructible_v<V>)
-      : value(std::move(v)) {}
+      : value{std::move(v)} {}
 
   constexpr bool operator==(const Entry &) const = default;
 };
