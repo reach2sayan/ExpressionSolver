@@ -5,6 +5,7 @@
 #include "expression.hpp"
 
 #include "rt/archive/archive.hpp"
+#include "rt/cache.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/dot.hpp"
@@ -58,25 +59,37 @@ inline void scatter_hessian(const rt::Coloring &coloring,
   }
 }
 
-class PyEquation {
+// The one cache a Python caller can be given: they cannot name a C++ type, so
+// the only choice is whether there is one.
+using PyCache = rt::LastValue<double>;
+
+class PyEquation : public rt::detail::Caching<PyEquation, double, PyCache> {
 public:
   using Want = rt::Want;
+  using Memo = rt::detail::Caching<PyEquation, double, PyCache>;
+  // Reaches arena() and unlocked(); neither is anyone else's business.
+  friend Memo;
+
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
-             std::vector<rt::NodeId> roots)
+             std::vector<rt::NodeId> roots, bool remember = false)
       : arena_{std::move(arena)}, symbols_{arena_->symbols()},
         roots_{std::move(roots)},
-        model_nodes_{static_cast<std::uint32_t>(arena_->size())} {}
+        model_nodes_{static_cast<std::uint32_t>(arena_->size())} {
+    take_cache(PyCache{remember});
+  }
 
   // From a file: the sweeps arrive filled, so nothing below computes them.
-  explicit PyEquation(rt::Verified<double> snap)
-      : PyEquation(std::move(snap).rebuild()) {}
-  explicit PyEquation(rt::Rebuilt<double> r)
+  explicit PyEquation(rt::Verified<double> snap, bool remember = false)
+      : PyEquation(std::move(snap).rebuild(), remember) {}
+  explicit PyEquation(rt::Rebuilt<double> r, bool remember = false)
       : arena_{std::move(r.arena)}, symbols_{arena_->symbols()},
         roots_{std::move(r.rest.roots)},
         derivative_{std::move(r.rest.jacobian)},
         sweeps_{std::move(r.rest.hessians)}, options_{r.rest.options},
         objects_{std::move(r.rest.objects)}, model_nodes_{r.rest.model_nodes},
-        loaded_{true} {}
+        loaded_{true} {
+    take_cache(PyCache{remember});
+  }
 
   // The same struct the C++ facade fills: one serialiser, two equations.  Also
   // what the cache path in module.cpp writes, which is why it is not private.
@@ -112,12 +125,12 @@ public:
     Lane &l = lane(Want::Value);
     if (scalar(at)) {
       Cell f;
-      run(l, at, f.rows(), {}, {});
+      run(Want::Value, at, {.values = f.rows()});
       return pyb::float_(f.value);
     }
     Block f{shape_of({ssize(outputs())}, at),
             count(l, &rt::OutputSpans::values), at.size()};
-    run(l, at, f.rows(), {}, {});
+    run(Want::Value, at, {.values = f.rows()});
     return std::move(f).array();
   }
 
@@ -129,7 +142,8 @@ public:
             outputs() * arity(), at.size()};
     Cell cell;
     auto f = values_block(l, at);
-    run(l, at, f ? f->rows() : cell.rows(), cells.rows(), {});
+    run(Want::Jacobian, at,
+        {.values = f ? f->rows() : cell.rows(), .jacobian = cells.rows()});
     scatter_jacobian(cells, g, at.size());
     return pyb::make_tuple(value_of(f, cell), std::move(g).array());
   }
@@ -141,7 +155,7 @@ public:
     Scratch cells{count(l, &rt::OutputSpans::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
             outputs() * arity(), at.size()};
-    run(l, at, {}, cells.rows(), {});
+    run(Want::Gradient, at, {.jacobian = cells.rows()});
     scatter_jacobian(cells, g, at.size());
     return std::move(g).array();
   }
@@ -159,7 +173,8 @@ public:
               count(l, &rt::OutputSpans::jacobian), at.size()};
     Cell cell;
     auto f = values_block(l, at);
-    run_seeded(l, at, dir, f ? f->rows() : cell.rows(), out.rows(), {});
+    run_seeded(Want::Jvp, at, dir,
+               {.values = f ? f->rows() : cell.rows(), .jacobian = out.rows()});
     return pyb::make_tuple(value_of(f, cell), std::move(out).array());
   }
 
@@ -173,7 +188,8 @@ public:
               at.size()};
     Cell cell;
     auto f = values_block(l, at);
-    run_seeded(l, at, dir, f ? f->rows() : cell.rows(), out.rows(), {});
+    run_seeded(Want::Vjp, at, dir,
+               {.values = f ? f->rows() : cell.rows(), .jacobian = out.rows()});
     return pyb::make_tuple(value_of(f, cell), std::move(out).array());
   }
 
@@ -194,8 +210,10 @@ public:
     Block out{symbol_shape(at), count(l, &rt::OutputSpans::hessian), at.size()};
     Cell cell;
     auto f = values_block(l, at);
-    run_seeded(l, at, dir, f ? f->rows() : cell.rows(), partials.rows(),
-               out.rows());
+    run_seeded(Want::Hvp, at, dir,
+               {.values = f ? f->rows() : cell.rows(),
+                .jacobian = partials.rows(),
+                .hessian = out.rows()});
     scatter_jacobian(partials, g, at.size());
     return pyb::make_tuple(value_of(f, cell), std::move(g).array(),
                            std::move(out).array());
@@ -213,6 +231,9 @@ public:
     }
     options_ = opt;
     lanes_ = {};
+    // codegen decides the arithmetic, so what was remembered was answered by
+    // another graph.
+    cache().clear();
     if (opt.backend != jit::Backend::Interpret) {
       (void)lane(Want::Jacobian);
     }
@@ -462,16 +483,14 @@ private:
 
   // --- running -------------------------------------------------------------
 
-  void run(Lane &l, const Point &at, std::span<double *const> f,
-           std::span<double *const> g, std::span<double *const> h) {
-    run_columns(l, at.columns(), at.size(), f, g, h);
+  void run(Want want, const Point &at, const rt::Columns<double> &out) {
+    run_columns(want, at.columns(), at.size(), out);
   }
 
   // The point's columns and the direction's, in one array: symbols first, then
   // the seeds, which is the order input_column() states.
-  void run_seeded(Lane &l, const Point &at, const Point &dir,
-                  std::span<double *const> f, std::span<double *const> g,
-                  std::span<double *const> h) {
+  void run_seeded(Want want, const Point &at, const Point &dir,
+                  const rt::Columns<double> &out) {
     if (dir.size() != at.size()) {
       fail_with(errc::wrong_direction);
     }
@@ -479,36 +498,52 @@ private:
     xs.reserve(at.columns().size() + dir.columns().size());
     std::ranges::copy(at.columns(), std::back_inserter(xs));
     std::ranges::copy(dir.columns(), std::back_inserter(xs));
-    run_columns(l, xs, at.size(), f, g, h);
+    run_columns(want, xs, at.size(), out);
   }
 
-  void run_columns(Lane &l, std::span<const double *const> xs, std::size_t n,
-                   std::span<double *const> f, std::span<double *const> g,
-                   std::span<double *const> h) {
-    const auto blocks = l.graph->output_blocks();
-    if (xs.size() != l.graph->arity() || f.size() != blocks.values.size() ||
-        g.size() != blocks.jacobian.size() ||
-        h.size() != blocks.hessian.size()) {
+  void run_columns(Want want, std::span<const double *const> xs, std::size_t n,
+                   const rt::Columns<double> &out) {
+    Lane &l = lane(want);
+    if (xs.size() != l.graph->arity() ||
+        std::ranges::any_of(rt::zip_blocks(out, l.graph->output_blocks()),
+                            [](const auto &pair) {
+                              const auto &[columns, block] = pair;
+                              return columns.size() != block.size();
+                            })) {
       fail_with(errc::wrong_column_count);
     }
     // Before the GIL goes, and after the shape check: a call that will not run
     // has bought nothing.
     charge(l, n);
-    // Past here nothing touches Python, so the GIL goes -- which is what lets
+    // A point already answered is answered again from what it left behind;
+    // without ddx.equation(remember=True) this is the call below and no more.
+    through(want, *l.graph, l.kernel ? rt::Answered::ByKernel
+                                     : rt::Answered::BySweep,
+            xs, out, n, [&] { sweep(l, xs, out, n); });
+  }
+
+  void sweep(Lane &l, std::span<const double *const> xs,
+             const rt::Columns<double> &out, std::size_t n) {
+    // Nothing here touches Python, so the GIL goes -- which is what lets
     // another thread call in while a long batch runs.
     const pyb::gil_scoped_release unlocked;
     if (l.kernel) {
-      l.kernel(xs, f, g, h, n);
+      l.kernel(xs, out.values, out.jacobian, out.hessian, n);
       return;
     }
-    interpret(*l.graph, xs, f, g, h, n);
+    interpret(*l.graph, xs, out, n);
   }
+
+  // What the equation holds the ids of, and what it gives up around a sweep:
+  // the GIL, so an amended point is no more of a stop-the-world than a swept
+  // one.
+  [[nodiscard]] const rt::Builder<double> &arena() const { return *arena_; }
+  [[nodiscard]] static pyb::gil_scoped_release unlocked() { return {}; }
 
   // The block sweep, within ~1.4x of a kernel and not a sad path.
   void interpret(const rt::Graph<double> &graph,
-                 std::span<const double *const> xs, std::span<double *const> f,
-                 std::span<double *const> g, std::span<double *const> h,
-                 std::size_t n) const {
+                 std::span<const double *const> xs,
+                 const rt::Columns<double> &out, std::size_t n) const {
     const auto blocks = graph.output_blocks();
     const auto schedule = graph.schedule();
     // The graph's width, not the symbol count: `xs` carries one column per
@@ -516,14 +551,8 @@ private:
     const std::size_t symbols = graph.arity();
     const auto scatter = [&](const auto &tape, std::size_t i,
                              std::size_t stride, std::size_t width) {
-      for (const auto [columns, block] : std::views::zip(
-               std::array{f, g, h},
-               std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
-        for (const auto [column, o] : std::views::zip(columns, block)) {
-          std::ranges::copy_n(tape.data() + std::size_t{o} * stride,
-                              static_cast<std::ptrdiff_t>(width), column + i);
-        }
-      }
+      rt::scatter_blocks(blocks, std::span<const double>{tape}, out, i, stride,
+                         width);
     };
 
     // Tapes are sized by the arena rather than the graph: it may have grown
@@ -604,7 +633,10 @@ private:
     Scratch compressed{count(l, &rt::OutputSpans::hessian), at.size()};
     Cell cell;
     auto f = values_block(l, at);
-    run(l, at, f ? f->rows() : cell.rows(), partials.rows(), compressed.rows());
+    run(Want::Hessian, at,
+        {.values = f ? f->rows() : cell.rows(),
+         .jacobian = partials.rows(),
+         .hessian = compressed.rows()});
     scatter_jacobian(partials, g, at.size());
 
     Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at), n * n,
@@ -819,9 +851,12 @@ public:
   // right.
   void operator()() {
     PyEquation::Lane &l = eq_->lane(want_);
-    eq_->run(l, at_, f_ ? f_->rows() : std::span<double *const>{},
-             partials_ ? partials_->rows() : std::span<double *const>{},
-             compressed_ ? compressed_->rows() : std::span<double *const>{});
+    eq_->run(want_, at_,
+             {.values = f_ ? f_->rows() : std::span<double *const>{},
+              .jacobian =
+                  partials_ ? partials_->rows() : std::span<double *const>{},
+              .hessian = compressed_ ? compressed_->rows()
+                                     : std::span<double *const>{}});
     if (g_) {
       eq_->scatter_jacobian(*partials_, *g_, at_.size());
     }

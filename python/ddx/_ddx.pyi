@@ -273,13 +273,13 @@ def cosh(x: Expression) -> Expression:
 def div(x: Expression, y: Expression) -> Expression:
     ...
 @typing.overload
-def equation(source: str, *, cache: str | os.PathLike | None = None) -> Equation:
+def equation(source: str, *, cache: str | os.PathLike | None = None, remember: bool = False) -> Equation:
     ...
 @typing.overload
-def equation(source: list[str], *, cache: str | os.PathLike | None = None) -> Equation:
+def equation(source: list[str], *, cache: str | os.PathLike | None = None, remember: bool = False) -> Equation:
     ...
 @typing.overload
-def equation(model: typing.Any, *, cache: str | os.PathLike | None = None) -> typing.Any:
+def equation(model: typing.Any, *, cache: str | os.PathLike | None = None, remember: bool = False) -> typing.Any:
     ...
 def erf(x: Expression) -> Expression:
     ...

@@ -502,6 +502,46 @@ zero.
 Values, gradient and Hessian are prepared separately, each the first time it is
 asked for. A caller who only ever evaluates never pays for a gradient.
 
+### Remembering the last call
+
+Hand the factory a cache and an equation keeps its last call per kind. Ask again
+at the same point and the answer comes back off it; move one symbol and only the
+part of the graph that symbol reaches is computed again. Nothing else changes:
+the numbers are the ones the sweep gives, bit for bit, and there is no call to
+make -- a point already answered is simply answered.
+
+```cpp
+const auto eq = ddx::rt::equation(model);                      // off
+const auto eq = ddx::rt::equation(model, ddx::rt::LastValue{}); // on
+```
+
+It is off by default, and it earns its place where points repeat or arrive one
+coordinate at a time -- a line search, a finite difference, a minimiser asking
+for the value and then the gradient at the same `x`:
+
+```cpp
+const auto f = *eq.evaluate(x);   // swept
+const auto g = *eq.gradient(x);   // its own lane, so its own first call
+const auto h = *eq.evaluate(x);   // nothing swept at all
+```
+
+Every spelling that takes a point is covered; a batch is not, being amortised
+already. A lane a kernel answers keeps the point but not the tape, so it serves
+a repeat and computes a moved point whole -- compiled code has no way to run
+part of itself.
+
+`LastValue` holds one slot per kind behind a shared lock: any number of threads
+can be served the same point at once, and one that arrives while another is
+writing sweeps for itself rather than waiting. The object is copied in, so it
+may be a temporary.
+
+To supply your own, model `ddx::rt::CValueCache`: hand out a read lease and a
+write lease per `Want`, each lending the point, the output values and the tape
+of one remembered call. `ddx::rt::Extent` says what a slot has to hold and which
+frozen graph it holds it for; two calls belong to the same entry only where
+their whole `Extent` matches, so a re-freeze or a grown arena parts them without
+the cache having to know why.
+
 ## Batches
 
 The batch calls take columns: one input column per symbol, one output pointer
@@ -1142,6 +1182,23 @@ Shapes are the ones the allocating calls answer with, `value` included: one
 output at one point is a `float`, and everything else is an array. The point is
 bound as an array whatever was passed, so `call.x` is writable even when the
 argument was a list.
+
+### Remembering the last call
+
+`remember=True` gives the equation the same last-call cache the C++ side gets
+from `LastValue`, on the same terms: a repeated point is answered off the last
+one, a point one symbol away sweeps only what that symbol reaches, and the
+numbers are unchanged.
+
+```python
+f = ddx.equation(model, remember=True)
+value = f(x)              # swept
+grad = f.gradient(x)      # its own lane
+again = f(x)              # nothing swept
+```
+
+It applies to a point at a time and not to an array of them, and a lane a kernel
+answers serves a repeat without amending a moved point.
 
 ### Errors
 

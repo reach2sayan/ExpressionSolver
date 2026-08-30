@@ -26,11 +26,14 @@
 // type.
 namespace ddx::rt {
 
-template <impl::Numeric T = double, std::convertible_to<std::string_view>... Ss>
-  requires std::floating_point<T>
-[[nodiscard]] auto equation(const std::string_view first, const Ss &...rest) {
+// A cache leads, as it does over an expression pack and for the same reason.
+template <typename C, impl::Numeric T = double,
+          std::convertible_to<std::string_view>... Ss>
+  requires std::floating_point<T> && CValueCache<C, T>
+[[nodiscard]] auto equation(C memo, const std::string_view first,
+                            const Ss &...rest) {
   return impl::index_apply<sizeof...(Ss)>([&]<std::size_t... I>() {
-    using Eq = impl::Equation<RTExpression<T>, detail::Repeat<I, T>...>;
+    using Eq = impl::Equation<RTExpression<T>, detail::Repeat<I, T>..., C>;
     const std::array<std::string_view, 1 + sizeof...(Ss)> sources{
         first, std::string_view{rest}...};
 
@@ -53,9 +56,16 @@ template <impl::Numeric T = double, std::convertible_to<std::string_view>... Ss>
       });
     }
     return ok.transform([&] {
-      return Eq::create(std::move(arena), roots[0], roots[I + 1]...);
+      return Eq::create(std::move(memo), std::move(arena), roots[0],
+                        roots[I + 1]...);
     });
   });
+}
+
+template <impl::Numeric T = double, std::convertible_to<std::string_view>... Ss>
+  requires std::floating_point<T>
+[[nodiscard]] auto equation(const std::string_view first, const Ss &...rest) {
+  return equation(detail::NoCache<T>{}, first, rest...);
 }
 
 } // namespace ddx::rt

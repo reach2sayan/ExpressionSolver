@@ -13,6 +13,7 @@
 #include <boost/mp11/list.hpp>
 
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <iterator>
 #include <ranges>
@@ -118,6 +119,40 @@ using OutputSpans =  Blocks<std::span<const NodeId>>; // frozen graph view
 // `values` is m, `jacobian` is the pattern's nonzeros row-major by function,
 // and `hessian` is colours * n, compressed.
 using Layout = Blocks<std::size_t>;
+// What a caller hands a sweep to write into: one pointer per column of each
+// block.  A triple rather than three parameters, so a block and the columns it
+// fills cannot be paired by position at one call site and by another somewhere
+// else.
+template <impl::Numeric T> using Columns = Blocks<std::span<T *const>>;
+
+// The three, in the order the ABI writes them.  Said here, and nowhere else.
+template <std::semiregular Per>
+[[nodiscard]] constexpr auto in_order(const Blocks<Per> &b) {
+  return std::array{b.values, b.jacobian, b.hessian};
+}
+
+// One triple against another, block for block.
+template <std::semiregular A, std::semiregular B>
+[[nodiscard]] constexpr auto zip_blocks(const Blocks<A> &a, const Blocks<B> &b) {
+  return std::views::zip(in_order(a), in_order(b));
+}
+
+// A tape's three output blocks into the three column arrays, in the order the
+// ABI writes them: `stride` is the tape's lanes per node, `width` how many of
+// them this sweep filled, and `i` where they start in the caller's columns.
+// Every reader of a tape pairs the blocks with the columns the same way, so
+// they are paired here once.
+template <impl::Numeric T>
+constexpr void scatter_blocks(const OutputSpans &blocks, std::span<const T> tape,
+                              const Columns<T> &out, std::size_t i,
+                              std::size_t stride, std::size_t width) {
+  for (const auto [columns, block] : zip_blocks(out, blocks)) {
+    for (const auto [column, o] : std::views::zip(columns, block)) {
+      std::ranges::copy_n(tape.data() + std::size_t{o} * stride,
+                          static_cast<std::ptrdiff_t>(width), column + i);
+    }
+  }
+}
 
 // A builder frozen into CSR, the form codegen walks.  Operand position rides
 // along as an edge attribute, because a CSR row is a set.

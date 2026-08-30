@@ -4,6 +4,7 @@
 #include "rt/builder.hpp"
 #include "util/config.hpp"
 
+#include <array>
 #include <cmath> // std::fma
 #include <concepts>
 #include <functional>
@@ -111,6 +112,46 @@ constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
 
 } // namespace detail
 
+namespace detail {
+
+// The tape row an id names, W points wide.
+template <std::size_t W, impl::Numeric U>
+[[nodiscard]] constexpr auto lanes_of(std::span<U> tape) {
+  return [tape](NodeId v) { return tape.data() + std::size_t{v} * W; };
+}
+
+// One step of a sweep, W points at once: the only place that turns a Step into
+// numbers.  `at` is the point's first lane and `lane` the tape row an id names.
+template <std::size_t W, impl::Numeric T>
+DDX_ALWAYS_INLINE constexpr void sweep_step(const Builder<T> &b,
+                                            std::size_t symbols, const Step &s,
+                                            auto at, auto &&lane) {
+  const auto &[i, fma] = s;
+  const Node<T> &n = b[i];
+  auto *const out = lane(i);
+  using U = std::remove_cvref_t<decltype(*out)>;
+  if (fma) {
+    detail::lanes_fma<W>(fma.negated, lane(fma.x), lane(fma.y), lane(fma.z),
+                         out);
+    return;
+  }
+  if (n.op == OpCode::Const) {
+    for (std::size_t k = 0; k < W; ++k) {
+      out[k] = static_cast<U>(n.value);
+    }
+  } else if (is_leaf(n.op)) {
+    const auto src = at + static_cast<std::ptrdiff_t>(
+                              input_column(symbols, n.op, n.slot) * W);
+    for (std::size_t k = 0; k < W; ++k) {
+      out[k] = src[static_cast<std::ptrdiff_t>(k)];
+    }
+  } else {
+    detail::lanes_apply<W>(n, out, lane);
+  }
+}
+
+} // namespace detail
+
 // The nodes of `schedule`, for W points at once.  `point_lanes` is
 // symbol-major (symbol s, lane k at s * W + k) and `tape` node-major, so every
 // lane loop is contiguous in both.  Same constraints on the schedule as
@@ -121,32 +162,10 @@ template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
 constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
                               std::span<const Step> schedule,
                               std::span<U> tape) {
-  const auto at = std::ranges::begin(point_lanes);
+  const auto lane = detail::lanes_of<W>(tape);
   const std::size_t symbols = b.symbols().size();
-  const auto lane = [&tape](NodeId v) {
-    return tape.data() + std::size_t{v} * W;
-  };
-  for (const auto &[i, fma] : schedule) {
-    const Node<T> &n = b[i];
-    U *const out = lane(i);
-    if (fma) {
-      detail::lanes_fma<W>(fma.negated, lane(fma.x), lane(fma.y), lane(fma.z),
-                           out);
-      continue;
-    }
-    if (n.op == OpCode::Const) {
-      for (std::size_t k = 0; k < W; ++k) {
-        out[k] = static_cast<U>(n.value);
-      }
-    } else if (is_leaf(n.op)) {
-      const auto src = at + static_cast<std::ptrdiff_t>(
-                                input_column(symbols, n.op, n.slot) * W);
-      for (std::size_t k = 0; k < W; ++k) {
-        out[k] = src[static_cast<std::ptrdiff_t>(k)];
-      }
-    } else {
-      detail::lanes_apply<W>(n, out, lane);
-    }
+  for (const Step &s : schedule) {
+    detail::sweep_step<W>(b, symbols, s, std::ranges::begin(point_lanes), lane);
   }
 }
 

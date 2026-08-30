@@ -4,6 +4,7 @@
 #include "md/md.hpp"
 #include "ops/numeric.hpp" // compile_time_factorial
 #include "rt/archive/archive.hpp"
+#include "rt/cache.hpp"
 #include "rt/coupling.hpp"
 #include "rt/derivative.hpp"
 #include "rt/expressions.hpp"
@@ -15,6 +16,8 @@
 #include "util/ranges.hpp" // to<C>() and append(), ours
 
 #include <boost/container/small_vector.hpp>
+#include <boost/mp11/algorithm.hpp>
+#include <boost/mp11/list.hpp>
 
 // Optional: without it the batch calls interpret, under the same signatures.
 #ifdef DDX_HAS_JIT
@@ -71,6 +74,36 @@ template <typename R, typename Ptr>
 concept CColumns = std::ranges::contiguous_range<R> &&
                    std::convertible_to<std::ranges::range_value_t<R>, Ptr>;
 
+// What an Equation is spelled over: its outputs, and behind them the cache a
+// factory deduced from what it was handed.  Which of the two a trailing type is
+// is asked of the type system, never assumed by position: a cache is whatever
+// models CValueCache, and COutputPack refuses a pack holding anything else.
+template <typename... Rest>
+using tail_of = boost::mp11::mp_eval_if_c<sizeof...(Rest) == 0, void,
+                                          boost::mp11::mp_back,
+                                          boost::mp11::mp_list<Rest...>>;
+
+template <typename T, typename... Rest>
+inline constexpr bool packs_cache = rt::CValueCache<tail_of<Rest...>, T>;
+
+template <typename T, typename... Rest>
+using cache_of = boost::mp11::mp_if_c<packs_cache<T, Rest...>, tail_of<Rest...>,
+                                      rt::detail::NoCache<T>>;
+
+template <typename T, typename... Rest>
+using outputs_of = boost::mp11::mp_eval_if_c<
+    !packs_cache<T, Rest...>, boost::mp11::mp_list<Rest...>,
+    boost::mp11::mp_pop_back, boost::mp11::mp_list<Rest...>>;
+
+template <typename T> struct is_output {
+  template <typename U> using fn = std::is_same<U, rt::RTExpression<T>>;
+};
+
+// Outputs, then at most one cache, and nothing else.
+template <typename T, typename... Rest>
+concept COutputPack =
+    boost::mp11::mp_all_of_q<outputs_of<T, Rest...>, is_output<T>>::value;
+
 #ifdef DDX_HAS_JIT
 // One LLJIT for the process -- a static in a class template would be per
 // specialisation -- reached only from a compiling backend, so an interpret-only
@@ -84,53 +117,80 @@ concept CColumns = std::ranges::contiguous_range<R> &&
 } // namespace rt_detail
 
 template <Numeric T, typename... Rest>
-  requires(std::same_as<Rest, rt::RTExpression<T>> && ...)
-class Equation<rt::RTExpression<T>, Rest...> {
+  requires rt_detail::COutputPack<T, Rest...>
+class Equation<rt::RTExpression<T>, Rest...>
+    : public rt::detail::Caching<Equation<rt::RTExpression<T>, Rest...>, T,
+                                 rt_detail::cache_of<T, Rest...>> {
   using Want = rt::Want;
+  using Cache = rt_detail::cache_of<T, Rest...>;
+  using Memo = rt::detail::Caching<Equation, T, Cache>;
+  // Reaches arena() and unlocked(); neither is anyone else's business.
+  friend Memo;
 
 public:
   using value_type = T;
-  static constexpr std::size_t output_dim = 1 + sizeof...(Rest);
+  static constexpr std::size_t output_dim =
+      1 + boost::mp11::mp_size<rt_detail::outputs_of<T, Rest...>>::value;
+
+  // The outputs as their own pack: the class's holds the cache too, and a
+  // factory hands over functions, never a cache among them.
+  template <typename... Es>
+  static constexpr bool are_outputs =
+      sizeof...(Es) + 1 == output_dim &&
+      (std::same_as<Es, rt::RTExpression<T>> && ...);
 
   // A refusal rides on the Equation rather than a result<Equation> at every
-  // call site; see poisoned().
-  [[nodiscard]] static constexpr Equation create(rt::RTExpression<T> first,
-                                                 Rest... rest) {
+  // call site; see poisoned().  The cache leads, because the functions are a
+  // pack and nothing can be deduced behind one.
+  template <typename... Es>
+    requires are_outputs<Es...>
+  [[nodiscard]] static constexpr Equation create(Cache memo,
+                                                 rt::RTExpression<T> first,
+                                                 Es... rest) {
     if (const auto bad = why_not(first, rest...)) {
       return Equation{*bad};
     }
     first.builder()->seal();
-    return Equation{first, rest...};
+    Equation eq{first, rest...};
+    eq.take_cache(std::move(memo));
+    return eq;
   }
 
   // Owning: the Builder is heap-allocated, so the nodes survive the move.
-  [[nodiscard]] static Equation create(std::unique_ptr<rt::Builder<T>> owned,
-                                       rt::RTExpression<T> first,
-                                       Rest... rest) {
+  template <typename... Es>
+    requires are_outputs<Es...>
+  [[nodiscard]] static Equation create(Cache memo,
+                                       std::unique_ptr<rt::Builder<T>> owned,
+                                       rt::RTExpression<T> first, Es... rest) {
     if (const auto bad = why_not(first, rest...)) {
       return Equation{*bad};
     }
     first.builder()->seal();
-    return Equation{std::move(owned), first, rest...};
+    Equation eq{std::move(owned), first, rest...};
+    eq.take_cache(std::move(memo));
+    return eq;
   }
 
   // Build the model, then take the sweeps off disk if the file still describes
   // it.  An absent or stale file rebuilds rather than refusing; loaded() tells.
-  [[nodiscard]] static Equation cached(const std::filesystem::path &path,
+  template <typename... Es>
+    requires are_outputs<Es...> && std::floating_point<T>
+  [[nodiscard]] static Equation cached(Cache memo,
+                                       const std::filesystem::path &path,
                                        std::unique_ptr<rt::Builder<T>> owned,
-                                       rt::RTExpression<T> first, Rest... rest)
-    requires std::floating_point<T>
-  {
+                                       rt::RTExpression<T> first, Es... rest) {
     if (const auto why = why_not(first, rest...)) {
       return Equation{*why};
     }
     if (auto snap = rt::load_snapshot<T>(path);
         snap && describes(**snap, *owned, roots_of(*owned, first, rest...),
                           owned->size())) {
-      return Equation{std::move(*snap)};
+      Equation eq{std::move(*snap)};
+      eq.take_cache(std::move(memo));
+      return eq;
     }
-    Equation eq = create(std::move(owned), first, rest...);
-    // A cache that cannot be written is still a working equation.
+    Equation eq = create(std::move(memo), std::move(owned), first, rest...);
+    // A file that cannot be written is still a working equation.
     (void)eq.save(path);
     return eq;
   }
@@ -313,7 +373,10 @@ public:
       return *this;
     }
     options_ = opt;
-    cache_ = std::make_unique<Cache>();
+    lanes_ = std::make_unique<Lanes>();
+    // codegen decides the arithmetic, so what was remembered was answered by
+    // another graph.
+    this->cache().clear();
     // Choosing a backend starts the build, so it overlaps whatever the caller
     // does before their first call.
     if (opt.backend != jit::Backend::Interpret && !poisoned()) {
@@ -436,23 +499,24 @@ public:
   [[nodiscard]] result<void>
   evaluate(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f, std::size_t n) const {
-    return dispatch(*snapshot(Want::Value, n), as_columns(xs), as_columns(f),
-                    {}, {}, n);
+    return dispatch(Want::Value, *snapshot(Want::Value, n), as_columns(xs),
+                    {.values = as_columns(f)}, n);
   }
 
   [[nodiscard]] result<void>
   jacobian(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f,
            const rt_detail::CColumns<T *> auto &g, std::size_t n) const {
-    return dispatch(*snapshot(Want::Jacobian, n), as_columns(xs), as_columns(f),
-                    as_columns(g), {}, n);
+    return dispatch(Want::Jacobian, *snapshot(Want::Jacobian, n),
+                    as_columns(xs),
+                    {.values = as_columns(f), .jacobian = as_columns(g)}, n);
   }
 
   [[nodiscard]] result<void>
   gradient(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &g, std::size_t n) const {
-    return dispatch(*snapshot(Want::Gradient, n), as_columns(xs), {},
-                    as_columns(g), {}, n);
+    return dispatch(Want::Gradient, *snapshot(Want::Gradient, n),
+                    as_columns(xs), {.jacobian = as_columns(g)}, n);
   }
 
   [[nodiscard]] result<void>
@@ -462,8 +526,11 @@ public:
           const rt_detail::CColumns<T *> auto &h, std::size_t n) const
     requires(output_dim == 1)
   {
-    return dispatch(*snapshot(Want::Hessian, n), as_columns(xs), as_columns(f),
-                    as_columns(g), as_columns(h), n);
+    return dispatch(Want::Hessian, *snapshot(Want::Hessian, n), as_columns(xs),
+                    {.values = as_columns(f),
+                     .jacobian = as_columns(g),
+                     .hessian = as_columns(h)},
+                    n);
   }
 
   // `v` is a second block of input columns, not a second point: one column per
@@ -476,8 +543,12 @@ public:
                                  std::size_t n) const
     requires(output_dim == 1)
   {
-    return dispatch(*snapshot(Want::Hvp, n), as_columns(widen(xs, v)),
-                    as_columns(f), as_columns(g), as_columns(hv), n);
+    return dispatch(Want::Hvp, *snapshot(Want::Hvp, n),
+                    as_columns(widen(xs, v)),
+                    {.values = as_columns(f),
+                     .jacobian = as_columns(g),
+                     .hessian = as_columns(hv)},
+                    n);
   }
 
   [[nodiscard]] result<void> vjp(const rt_detail::CColumns<const T *> auto &xs,
@@ -485,8 +556,9 @@ public:
                                  const rt_detail::CColumns<T *> auto &f,
                                  const rt_detail::CColumns<T *> auto &out,
                                  std::size_t n) const {
-    return dispatch(*snapshot(Want::Vjp, n), as_columns(widen(xs, w)),
-                    as_columns(f), as_columns(out), {}, n);
+    return dispatch(Want::Vjp, *snapshot(Want::Vjp, n),
+                    as_columns(widen(xs, w)),
+                    {.values = as_columns(f), .jacobian = as_columns(out)}, n);
   }
 
   [[nodiscard]] result<void> jvp(const rt_detail::CColumns<const T *> auto &xs,
@@ -494,8 +566,9 @@ public:
                                  const rt_detail::CColumns<T *> auto &f,
                                  const rt_detail::CColumns<T *> auto &out,
                                  std::size_t n) const {
-    return dispatch(*snapshot(Want::Jvp, n), as_columns(widen(xs, v)),
-                    as_columns(f), as_columns(out), {}, n);
+    return dispatch(Want::Jvp, *snapshot(Want::Jvp, n),
+                    as_columns(widen(xs, v)),
+                    {.values = as_columns(f), .jacobian = as_columns(out)}, n);
   }
 
   // What a caller sizes buffers by, read off the constructor's sweep rather
@@ -574,15 +647,18 @@ public:
 
   // Nothing built and nothing swept; the model need not exist in this program.
   // The output count is in the type, so another number is refused.
-  [[nodiscard]] static result<Equation> load(const std::filesystem::path &path)
+  [[nodiscard]] static result<Equation> load(const std::filesystem::path &path,
+                                             Cache memo = {})
     requires std::floating_point<T>
   {
     return rt::load_snapshot<T>(path).and_then(
-        [](rt::Verified<T> snap) -> result<Equation> {
+        [&memo](rt::Verified<T> snap) -> result<Equation> {
           if (snap->roots.size() != output_dim) {
             return fail(errc::archive_mismatch);
           }
-          return Equation{std::move(snap)};
+          Equation eq{std::move(snap)};
+          eq.take_cache(std::move(memo));
+          return eq;
         });
   }
 
@@ -628,7 +704,7 @@ private:
       return {};
     }
     std::vector<rt::Object> out;
-    for (const auto [want, lane] : std::views::zip(rt::want_values, *cache_)) {
+    for (const auto [want, lane] : std::views::zip(rt::want_values, *lanes_)) {
       const std::shared_lock read{lane.mutex};
       if (!lane.ready || !lane.ready->kernel ||
           lane.ready->kernel.object().empty()) {
@@ -674,8 +750,9 @@ private:
     return describes(snap, *arena_, roots_, model_nodes_);
   }
 
+  template <typename... Es>
   [[nodiscard]] static constexpr std::vector<rt::NodeId>
-  roots_of(rt::Builder<T> &b, rt::RTExpression<T> first, Rest... rest) {
+  roots_of(rt::Builder<T> &b, rt::RTExpression<T> first, Es... rest) {
     return {first.id(b), rest.id(b)...};
   }
 
@@ -725,11 +802,13 @@ private:
   // Poisoned: arena_ null, roots_ empty, every accessor short-circuiting first.
   constexpr explicit Equation(error why) : bad_(why) {
     if !consteval {
-      cache_ = std::make_unique<Cache>();
+      lanes_ = std::make_unique<Lanes>();
     }
   }
 
-  constexpr explicit Equation(rt::RTExpression<T> first, Rest... rest)
+  template <typename... Es>
+    requires are_outputs<Es...>
+  constexpr explicit Equation(rt::RTExpression<T> first, Es... rest)
       : arena_(first.builder(), borrow),
         roots_(roots_of(*arena_, first, rest...)) {
     // Before the sweeps, which append: what a saved file is keyed on.
@@ -755,12 +834,14 @@ private:
       }
       vjp_ = rt::build_vjp_impl(*arena_, roots_);
       jvp_ = rt::build_jvp_impl(*arena_, roots_);
-      cache_ = std::make_unique<Cache>();
+      lanes_ = std::make_unique<Lanes>();
     }
   }
 
+  template <typename... Es>
+    requires are_outputs<Es...>
   Equation(std::unique_ptr<rt::Builder<T>> owned, rt::RTExpression<T> first,
-           Rest... rest)
+           Es... rest)
       : Equation(first, rest...) {
     arena_ = ArenaPtr{owned.release(), reclaim};
   }
@@ -780,13 +861,14 @@ private:
     options_ = r.rest.options;
     objects_ = std::move(r.rest.objects);
 #endif
-    cache_ = std::make_unique<Cache>();
+    lanes_ = std::make_unique<Lanes>();
   }
 
   // Poison first, and by the code it carries: a sealed or absent arena is a
   // different mistake from a literal that reached no graph.
+  template <typename... Es>
   [[nodiscard]] static constexpr std::optional<error>
-  why_not(const rt::RTExpression<T> &first, const Rest &...rest) noexcept {
+  why_not(const rt::RTExpression<T> &first, const Es &...rest) noexcept {
     for (const auto why : {first.why(), rest.why()...}) {
       if (why) {
         return error{*why};
@@ -879,8 +961,11 @@ private:
       const auto fs = single_columns(f);
       const auto gs = single_columns(g);
       const auto hs = single_columns(h);
-      (void)dispatch(*snapshot(want, 1), as_columns(xs), as_columns(fs),
-                     as_columns(gs), as_columns(hs), 1);
+      (void)dispatch(want, *snapshot(want, 1), as_columns(xs),
+                     {.values = as_columns(fs),
+                      .jacobian = as_columns(gs),
+                      .hessian = as_columns(hs)},
+                     1);
       return;
     }
     auto wanted = roots_;
@@ -965,10 +1050,10 @@ private:
   };
 
   // One lane per Want, in its order.
-  using Cache = std::array<Lane, rt::want_count>;
+  using Lanes = std::array<Lane, rt::want_count>;
 
   [[nodiscard]] Lane &lane_for(Want want) const {
-    return (*cache_)[std::to_underlying(want)];
+    return (*lanes_)[std::to_underlying(want)];
   }
 
   // Ownership, not a reference: a reader holds its share for the whole call, so
@@ -1253,8 +1338,7 @@ private:
   }
 
   void interpret(const Compiled &c, std::span<const T *const> xs,
-                 std::span<T *const> f, std::span<T *const> g,
-                 std::span<T *const> h, std::size_t n) const {
+                 const rt::Columns<T> &out, std::size_t n) const {
     const auto blocks = c.graph->output_blocks();
     const auto schedule = c.graph->schedule();
     // The graph's width, not the arena's symbol count: `xs` carries one column
@@ -1277,13 +1361,7 @@ private:
         std::ranges::transform(xs, at.begin(),
                                [i](const T *column) { return column[i]; });
         rt::evaluate_into(*arena_, at, schedule, std::span<T>{tape});
-        for (const auto [columns, block] : std::views::zip(
-                 std::array{f, g, h},
-                 std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
-          for (const auto [column, o] : std::views::zip(columns, block)) {
-            column[i] = tape[o];
-          }
-        }
+        rt::scatter_blocks(blocks, std::span<const T>{tape}, out, i, 1, 1);
       }
       return;
     }
@@ -1306,16 +1384,8 @@ private:
       }
       rt::evaluate_block<rt::block_lanes>(*arena_, std::span<const T>{lanes},
                                           schedule, std::span<T>{tape});
-
-      for (const auto [columns, block] : std::views::zip(
-               std::array{f, g, h},
-               std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
-        for (const auto [column, o] : std::views::zip(columns, block)) {
-          std::ranges::copy(
-              std::span{tape.data() + std::size_t{o} * rt::block_lanes, width},
-              column + base);
-        }
-      }
+      rt::scatter_blocks(blocks, std::span<const T>{tape}, out, base,
+                         rt::block_lanes, width);
     }
   }
 
@@ -1324,36 +1394,60 @@ private:
     return std::span<Ptr const>{std::ranges::data(r), std::ranges::size(r)};
   }
 
-  [[nodiscard]] result<void>
-  dispatch(const Compiled &c, std::span<const T *const> xs,
-           std::span<T *const> f, std::span<T *const> g, std::span<T *const> h,
-           std::size_t n) const {
+  [[nodiscard]] result<void> dispatch(Want want, const Compiled &c,
+                                      std::span<const T *const> xs,
+                                      const rt::Columns<T> &out,
+                                      std::size_t n) const {
     if (bad_) {
       return std::unexpected{*bad_};
     }
-    const auto blocks = c.graph->output_blocks();
-    if (xs.size() != c.graph->arity() || f.size() != blocks.values.size() ||
-        g.size() != blocks.jacobian.size() ||
-        h.size() != blocks.hessian.size()) {
+    if (xs.size() != c.graph->arity() ||
+        std::ranges::any_of(rt::zip_blocks(out, c.graph->output_blocks()),
+                            [](const auto &pair) {
+                              const auto &[columns, block] = pair;
+                              return columns.size() != block.size();
+                            })) {
       return fail(errc::wrong_column_count);
     }
-    run(c, xs, f, g, h, n);
+    // A point already answered is answered again from what it left behind; with
+    // no cache this is the call below and nothing else.
+    this->through(want, *c.graph, answered(c), xs, out, n,
+                  [&] { run(c, xs, out, n); });
     return {};
   }
 
-  void run(const Compiled &c, std::span<const T *const> xs,
-           std::span<T *const> f, std::span<T *const> g, std::span<T *const> h,
-           std::size_t n) const {
+  // Whether this lane's answer comes from a kernel, which computes its whole
+  // graph, or from a sweep, which leaves a tape an amendment can work from.
+  [[nodiscard]] static rt::Answered
+  answered([[maybe_unused]] const Compiled &c) noexcept {
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
       if (c.kernel) {
-        c.kernel(xs, f, g, h, n);
+        return rt::Answered::ByKernel;
+      }
+    }
+#endif
+    return rt::Answered::BySweep;
+  }
+
+  void run(const Compiled &c, std::span<const T *const> xs,
+           const rt::Columns<T> &out, std::size_t n) const {
+#ifdef DDX_HAS_JIT
+    if constexpr (std::same_as<T, double>) {
+      if (c.kernel) {
+        c.kernel(xs, out.values, out.jacobian, out.hessian, n);
         return;
       }
     }
 #endif
-    interpret(c, xs, f, g, h, n);
+    interpret(c, xs, out, n);
   }
+
+  // What the equation holds the ids of, and what it gives up around a sweep:
+  // nothing here, and the GIL on the Python side.
+  [[nodiscard]] const rt::Builder<T> &arena() const noexcept { return *arena_; }
+  struct Nothing {};
+  [[nodiscard]] static constexpr Nothing unlocked() noexcept { return {}; }
 
   // The deleter is the only difference between a borrowed arena and an owned
   // one.
@@ -1390,7 +1484,7 @@ private:
 #endif
   // unique_ptr, not shared: its destructor is constexpr, which is what keeps a
   // constant-evaluated Equation destructible.  Null only there.
-  std::unique_ptr<Cache> cache_;
+  std::unique_ptr<Lanes> lanes_;
   // Set exactly when why_not() refused, so poisoned() <=> arena_ == nullptr.
   std::optional<error> bad_{};
   bool loaded_ = false;
@@ -1408,10 +1502,21 @@ using jit::Level;
 
 // Over expressions already built in a caller's own arena.  Partial
 // specialisations contribute no deduction guides, so this is the whole of CTAD.
+//
+// A cache leads here and trails everywhere else: nothing can be deduced behind
+// a pack, and the functions are the pack.
 template <impl::Numeric T, typename... Ts>
   requires(std::same_as<Ts, RTExpression<T>> && ...)
 [[nodiscard]] constexpr auto equation(RTExpression<T> first, Ts... rest) {
-  return impl::Equation<RTExpression<T>, Ts...>::create(first, rest...);
+  return equation(detail::NoCache<T>{}, first, rest...);
+}
+
+template <typename C, impl::Numeric T, typename... Ts>
+  requires(CValueCache<C, T> && (std::same_as<Ts, RTExpression<T>> && ...))
+[[nodiscard]] constexpr auto equation(C memo, RTExpression<T> first,
+                                      Ts... rest) {
+  return impl::Equation<RTExpression<T>, Ts..., C>::create(std::move(memo),
+                                                           first, rest...);
 }
 
 // Build an Equation:
@@ -1438,30 +1543,32 @@ template <impl::Numeric T>
 // `make(type_identity<Eq>, roots...)` over the Equation type the build's shape
 // names: one root, or a tuple-like of them -- output_dim lives in the type, so
 // the size must too.
-template <impl::Numeric T, typename Built>
+template <impl::Numeric T, typename Cache, typename Built>
 [[nodiscard]] auto over(const Built &built, auto &&make) {
   if constexpr (std::same_as<Built, RTExpression<T>>) {
-    return make(std::type_identity<impl::Equation<RTExpression<T>>>{}, built);
+    return make(std::type_identity<impl::Equation<RTExpression<T>, Cache>>{},
+                built);
   } else {
     constexpr std::size_t outputs = std::tuple_size_v<Built>;
     static_assert(outputs > 0,
                   "equation: a system needs at least one function");
     return impl::index_apply<outputs - 1>([&]<std::size_t... Rest>() {
-      return make(std::type_identity<
-                      impl::Equation<RTExpression<T>, Repeat<Rest, T>...>>{},
-                  built[0], built[Rest + 1]...);
+      return make(
+          std::type_identity<
+              impl::Equation<RTExpression<T>, Repeat<Rest, T>..., Cache>>{},
+          built[0], built[Rest + 1]...);
     });
   }
 }
 
 } // namespace detail
 
-template <impl::Numeric T = double>
-[[nodiscard]] auto equation(std::invocable auto &&assemble) {
+template <impl::Numeric T = double, CValueCache<T> C = detail::NoCache<T>>
+[[nodiscard]] auto equation(std::invocable auto &&assemble, C memo = {}) {
   auto [arena, built] = detail::assemble<T>(DDX_FWD(assemble));
-  return detail::over<T>(
+  return detail::over<T, C>(
       built, [&]<typename Eq>(std::type_identity<Eq>, auto... roots) {
-        return Eq::create(std::move(arena), roots...);
+        return Eq::create(std::move(memo), std::move(arena), roots...);
       });
 }
 
@@ -1471,13 +1578,14 @@ template <impl::Numeric T = double>
 //
 //   const auto eq = ddx::rt::load("f.ddx");        // one function
 //   const auto eq = ddx::rt::load<double, 3>("f.ddx");
-template <impl::Numeric T = double, std::size_t Outputs = 1>
+template <impl::Numeric T = double, std::size_t Outputs = 1,
+          CValueCache<T> C = detail::NoCache<T>>
   requires std::floating_point<T>
-[[nodiscard]] auto load(const std::filesystem::path &path) {
+[[nodiscard]] auto load(const std::filesystem::path &path, C memo = {}) {
   static_assert(Outputs > 0, "load: a system needs at least one function");
   return impl::index_apply<Outputs - 1>([&]<std::size_t... Rest>() {
-    return impl::Equation<RTExpression<T>, detail::Repeat<Rest, T>...>::load(
-        path);
+    return impl::Equation<RTExpression<T>, detail::Repeat<Rest, T>...,
+                          C>::load(path, std::move(memo));
   });
 }
 
@@ -1492,14 +1600,14 @@ template <impl::Numeric T = double, std::size_t Outputs = 1>
 // interning, which is cheap -- and takes the sweeps and the colouring off disk.
 // Editing the model changes the key, so the file is rebuilt, not trusted.  It
 // never refuses; eq.loaded() says which happened.
-template <impl::Numeric T = double>
+template <impl::Numeric T = double, CValueCache<T> C = detail::NoCache<T>>
   requires std::floating_point<T>
 [[nodiscard]] auto equation(const std::filesystem::path &path,
-                            std::invocable auto &&assemble) {
+                            std::invocable auto &&assemble, C memo = {}) {
   auto [arena, built] = detail::assemble<T>(DDX_FWD(assemble));
-  return detail::over<T>(
+  return detail::over<T, C>(
       built, [&]<typename Eq>(std::type_identity<Eq>, auto... roots) {
-        return Eq::cached(path, std::move(arena), roots...);
+        return Eq::cached(std::move(memo), path, std::move(arena), roots...);
       });
 }
 
