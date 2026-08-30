@@ -84,7 +84,7 @@ TEST(SeededExprEnergy, ForwardOverReverseAgreesWithNumericDrivers) {
 
   for (std::size_t i = 0; i < 4; ++i) {
     for (std::size_t j = 0; j < 4; ++j) {
-      EXPECT_NEAR(Hrev[i][j], hess_at(Hscalar, i, j), 1e-9)
+      EXPECT_NEAR((Hrev[i, j]), hess_at(Hscalar, i, j), 1e-9)
           << "scalar H(" << i << "," << j << ")";
     }
   }
@@ -171,8 +171,8 @@ TEST(Ownership, ReverseHessianAcceptsATemporaryExpression) {
       Equation{var<"x", dual> * var<"y", dual>}.hessian(std::array{2.0, 3.0});
   const auto g = Equation{var<"x", dual> * var<"y", dual>}.jacobian(
       std::array{D{2.0}, D{3.0}});
-  EXPECT_DOUBLE_EQ(H[0][1], 1.0);
-  EXPECT_DOUBLE_EQ(H[0][0], 0.0);
+  EXPECT_DOUBLE_EQ((H[0, 1]), 1.0);
+  EXPECT_DOUBLE_EQ((H[0, 0]), 0.0);
   EXPECT_DOUBLE_EQ(g[0], 3.0);
 }
 TEST(HessianCoupling, ChainPatternIsTridiagonalPlusCorner) {

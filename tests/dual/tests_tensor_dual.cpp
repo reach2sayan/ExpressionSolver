@@ -80,7 +80,7 @@ TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
 
   constexpr auto H =
       Equation{x * y}.template derivative_tensor<2>(std::array{3.0, 4.0});
-  static_assert(H[0][1] == 1.0 && H[1][0] == 1.0 && H[0][0] == 0.0,
+  static_assert((H[0, 1]) == 1.0 && (H[1, 0]) == 1.0 && (H[0, 0]) == 0.0,
                 "d2(x*y)/dxdy == 1");
 
   // TaylorDual path: multiply-only, so it stays within the constexpr subset.
@@ -102,7 +102,7 @@ TEST(ConstexprContract, DifferentiationEntryPointsAreConstantEvaluated) {
   constexpr Variable<D, FixedString{"a"}> a;
   constexpr Variable<D, FixedString{"b"}> b;
   constexpr auto Hr = Equation{a * b}.hessian(std::array{3.0, 4.0});
-  static_assert(Hr[0][1] == 1.0 && Hr[0][0] == 0.0,
+  static_assert((Hr[0, 1]) == 1.0 && (Hr[0, 0]) == 0.0,
                 "forward-over-reverse Hessian in constant evaluation");
 
   SUCCEED();

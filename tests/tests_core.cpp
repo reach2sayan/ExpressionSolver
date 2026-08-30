@@ -537,20 +537,20 @@ TEST(EquationTest, JacobianLinear) {
   auto y = var<"y", int>;
   auto ve = Equation(x + y, x * y);
   auto J = ve.template jacobian<ddx::DiffMode::Symbolic>(std::array{3, 4});
-  ASSERT_EQ(J[0][0], 1); // ∂(x+y)/∂x
-  ASSERT_EQ(J[0][1], 1); // ∂(x+y)/∂y
-  ASSERT_EQ(J[1][0], 4); // ∂(x*y)/∂x = y = 4
-  ASSERT_EQ(J[1][1], 3); // ∂(x*y)/∂y = x = 3
+  ASSERT_EQ((J[0, 0]), 1); // ∂(x+y)/∂x
+  ASSERT_EQ((J[0, 1]), 1); // ∂(x+y)/∂y
+  ASSERT_EQ((J[1, 0]), 4); // ∂(x*y)/∂x = y = 4
+  ASSERT_EQ((J[1, 1]), 3); // ∂(x*y)/∂y = x = 3
 }
 TEST(EquationTest, JacobianWithTrig) {
   auto x = var<"x">;
   auto y = var<"y">;
   auto ve = Equation(x * y, sin(x) + y * y);
   auto J = ve.template jacobian<ddx::DiffMode::Symbolic>(std::array{2.0, 3.0});
-  ASSERT_DOUBLE_EQ(J[0][0], 3.0);           // ∂(x*y)/∂x = y
-  ASSERT_DOUBLE_EQ(J[0][1], 2.0);           // ∂(x*y)/∂y = x
-  ASSERT_DOUBLE_EQ(J[1][0], std::cos(2.0)); // ∂(sin(x)+y²)/∂x
-  ASSERT_DOUBLE_EQ(J[1][1], 6.0);           // ∂(sin(x)+y²)/∂y = 2y
+  ASSERT_DOUBLE_EQ((J[0, 0]), 3.0);           // ∂(x*y)/∂x = y
+  ASSERT_DOUBLE_EQ((J[0, 1]), 2.0);           // ∂(x*y)/∂y = x
+  ASSERT_DOUBLE_EQ((J[1, 0]), std::cos(2.0)); // ∂(sin(x)+y²)/∂x
+  ASSERT_DOUBLE_EQ((J[1, 1]), 6.0);           // ∂(sin(x)+y²)/∂y = 2y
 }
 TEST(EquationTest, SingleComponentIsJacobian) {
   auto x = var<"x">;
@@ -566,10 +566,10 @@ TEST(EquationTest, SymbolUnionAcrossComponents) {
   auto ve = Equation(x * x, y * y); // (x², y²)
   static_assert(decltype(ve)::input_dim == 2);
   auto J = ve.template jacobian<ddx::DiffMode::Symbolic>(std::array{4.0, 3.0});
-  ASSERT_DOUBLE_EQ(J[0][0], 8.0); // ∂(x²)/∂x = 2x = 8
-  ASSERT_DOUBLE_EQ(J[0][1], 0.0); // ∂(x²)/∂y = 0
-  ASSERT_DOUBLE_EQ(J[1][0], 0.0); // ∂(y²)/∂x = 0
-  ASSERT_DOUBLE_EQ(J[1][1], 6.0); // ∂(y²)/∂y = 2y = 6
+  ASSERT_DOUBLE_EQ((J[0, 0]), 8.0); // ∂(x²)/∂x = 2x = 8
+  ASSERT_DOUBLE_EQ((J[0, 1]), 0.0); // ∂(x²)/∂y = 0
+  ASSERT_DOUBLE_EQ((J[1, 0]), 0.0); // ∂(y²)/∂x = 0
+  ASSERT_DOUBLE_EQ((J[1, 1]), 6.0); // ∂(y²)/∂y = 2y = 6
 }
 TEST(EquationTest, ThreeOutputs) {
   auto x = var<"x">;
@@ -578,12 +578,12 @@ TEST(EquationTest, ThreeOutputs) {
   static_assert(decltype(ve)::output_dim == 3);
   static_assert(decltype(ve)::input_dim == 2);
   auto J = ve.template jacobian<ddx::DiffMode::Symbolic>(std::array{2.0, 5.0});
-  ASSERT_DOUBLE_EQ(J[0][0], 4.0);  // 2x
-  ASSERT_DOUBLE_EQ(J[0][1], 0.0);  // 0
-  ASSERT_DOUBLE_EQ(J[1][0], 5.0);  // y
-  ASSERT_DOUBLE_EQ(J[1][1], 2.0);  // x
-  ASSERT_DOUBLE_EQ(J[2][0], 0.0);  // 0
-  ASSERT_DOUBLE_EQ(J[2][1], 10.0); // 2y
+  ASSERT_DOUBLE_EQ((J[0, 0]), 4.0);  // 2x
+  ASSERT_DOUBLE_EQ((J[0, 1]), 0.0);  // 0
+  ASSERT_DOUBLE_EQ((J[1, 0]), 5.0);  // y
+  ASSERT_DOUBLE_EQ((J[1, 1]), 2.0);  // x
+  ASSERT_DOUBLE_EQ((J[2, 0]), 0.0);  // 0
+  ASSERT_DOUBLE_EQ((J[2, 1]), 10.0); // 2y
 }
 TEST(EquationTest, ReverseJacobianAgreesWithSymbolic) {
   auto x = var<"x">;
@@ -597,7 +597,7 @@ TEST(EquationTest, ReverseJacobianAgreesWithSymbolic) {
 
   for (std::size_t i = 0; i < decltype(ve)::output_dim; ++i)
     for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
-      ASSERT_DOUBLE_EQ(J_rev[i][j], J_sym[i][j]);
+      ASSERT_DOUBLE_EQ((J_rev[i, j]), (J_sym[i, j]));
 }
 TEST(EquationTest, ParallelReverseJacobian_FourOutputs) {
   auto x = var<"x">;
@@ -613,7 +613,7 @@ TEST(EquationTest, ParallelReverseJacobian_FourOutputs) {
 
   for (std::size_t i = 0; i < decltype(ve)::output_dim; ++i)
     for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
-      ASSERT_DOUBLE_EQ(J_rev[i][j], J_sym[i][j]);
+      ASSERT_DOUBLE_EQ((J_rev[i, j]), (J_sym[i, j]));
 }
 TEST(EquationTest, ParallelReverseJacobian_FiveOutputsTrigExp) {
   auto x = var<"x">;
@@ -630,7 +630,7 @@ TEST(EquationTest, ParallelReverseJacobian_FiveOutputsTrigExp) {
 
   for (std::size_t i = 0; i < decltype(ve)::output_dim; ++i)
     for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
-      ASSERT_NEAR(J_rev[i][j], J_sym[i][j], 1e-12);
+      ASSERT_NEAR((J_rev[i, j]), (J_sym[i, j]), 1e-12);
 }
 TEST(EquationTest, ReverseJacobianSingleOutputMatchesFlatRow) {
   auto x = var<"x">;
@@ -643,7 +643,7 @@ TEST(EquationTest, ReverseJacobianSingleOutputMatchesFlatRow) {
   auto g = Equation{expr}.jacobian(2.0, 5.0);
 
   for (std::size_t j = 0; j < decltype(ve)::input_dim; ++j)
-    ASSERT_DOUBLE_EQ(J_rev[0][j], g[j]);
+    ASSERT_DOUBLE_EQ((J_rev[0, j]), g[j]);
 }
 // canonicalise folds (y*x)/(x*y) to 1, so the tree has one symbol where the
 // Equation has three; the sweep is indexed by the Equation's list, or z's
