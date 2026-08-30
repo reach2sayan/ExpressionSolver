@@ -53,10 +53,9 @@ public:
       }
       // An absent operand is no_node, which names nothing; a contraction's
       // three are all real.
-      for (const NodeId u : operands_of(n, s) |
-                                std::views::filter([](NodeId v) {
-                                  return v != no_node;
-                                })) {
+      for (const NodeId u :
+           operands_of(n, s) |
+               std::views::filter([](NodeId v) { return v != no_node; })) {
         if (const std::uint32_t from = at[u]; from != unscheduled) {
           edges.emplace_back(from, step);
         }
@@ -93,7 +92,8 @@ public:
       if (!moved) {
         continue;
       }
-      for (const std::uint32_t step : seeds_of(static_cast<std::size_t>(column))) {
+      for (const std::uint32_t step :
+           seeds_of(static_cast<std::size_t>(column))) {
         if (!dirty.test_set(step)) {
           stack.push_back(step);
         }
@@ -102,8 +102,7 @@ public:
     while (!stack.empty()) {
       const std::uint32_t step = stack.back();
       stack.pop_back();
-      for (const auto &edge :
-           boost::make_iterator_range(
+      for (const auto &edge : boost::make_iterator_range(
                boost::out_edges(static_cast<Reader>(step), readers_))) {
         const auto reader =
             static_cast<std::uint32_t>(boost::target(edge, readers_));

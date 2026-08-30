@@ -94,8 +94,8 @@ constexpr auto model = [] {
 [[nodiscard]] auto everything(const auto &eq, const std::vector<double> &at) {
   const std::vector<double> direction{1.0, -0.5, 0.25};
   const std::vector<double> weights{2.0};
-  return std::tuple{*eq.evaluate(at),  *eq.jacobian(at),
-                    *eq.gradient(at),  *eq.hessian(at),
+  return std::tuple{*eq.evaluate(at),       *eq.jacobian(at),
+                    *eq.gradient(at),       *eq.hessian(at),
                     *eq.hvp(direction, at), *eq.jvp(direction, at),
                     *eq.vjp(weights, at)};
 }
@@ -217,9 +217,9 @@ TEST(RtCache, ConcurrentCallsAgreeWithTheColdAnswer) {
       // Half at one point, so readers overlap; half at their own, so writers
       // contend and the losers sweep.
       const std::vector<double> at =
-          t % 2 == 0 ? shared
-                     : std::vector<double>{0.5 + static_cast<double>(t), 1.25,
-                                           2.0};
+          t % 2 == 0
+              ? shared
+              : std::vector<double>{0.5 + static_cast<double>(t), 1.25, 2.0};
       start.arrive_and_wait();
       bool same = true;
       for (int i = 0; i < 50; ++i) {

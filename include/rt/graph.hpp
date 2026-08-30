@@ -113,8 +113,8 @@ template <std::semiregular Per> struct Blocks {
   BOOST_DESCRIBE_CLASS(Blocks, (), (values, jacobian, hessian), (), ())
 };
 
-using OutputBlocks = Blocks<std::vector<NodeId>>; // what a freeze is handed
-using OutputSpans =  Blocks<std::span<const NodeId>>; // frozen graph view
+using OutputBlocks = Blocks<std::vector<NodeId>>;    // what a freeze is handed
+using OutputSpans = Blocks<std::span<const NodeId>>; // frozen graph view
 // The column counts, read off the blocks so no column can be miscounted:
 // `values` is m, `jacobian` is the pattern's nonzeros row-major by function,
 // and `hessian` is colours * n, compressed.
@@ -133,7 +133,8 @@ template <std::semiregular Per>
 
 // One triple against another, block for block.
 template <std::semiregular A, std::semiregular B>
-[[nodiscard]] constexpr auto zip_blocks(const Blocks<A> &a, const Blocks<B> &b) {
+[[nodiscard]] constexpr auto zip_blocks(const Blocks<A> &a,
+                                        const Blocks<B> &b) {
   return std::views::zip(in_order(a), in_order(b));
 }
 
@@ -143,9 +144,10 @@ template <std::semiregular A, std::semiregular B>
 // Every reader of a tape pairs the blocks with the columns the same way, so
 // they are paired here once.
 template <impl::Numeric T>
-constexpr void scatter_blocks(const OutputSpans &blocks, std::span<const T> tape,
-                              const Columns<T> &out, std::size_t i,
-                              std::size_t stride, std::size_t width) {
+constexpr void scatter_blocks(const OutputSpans &blocks,
+                              std::span<const T> tape, const Columns<T> &out,
+                              std::size_t i, std::size_t stride,
+                              std::size_t width) {
   for (const auto [columns, block] : zip_blocks(out, blocks)) {
     for (const auto [column, o] : std::views::zip(columns, block)) {
       std::ranges::copy_n(tape.data() + std::size_t{o} * stride,

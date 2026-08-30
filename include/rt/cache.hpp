@@ -112,13 +112,12 @@ concept CWriteLease = requires(L &l, const L &cl) {
 // Copied in by value and never referred to afterwards, so a caller's object may
 // die the moment the equation is built.
 template <typename C, typename T>
-concept CValueCache =
-    std::copy_constructible<C> && std::movable<C> &&
-    requires(const C &c, Want w, Extent e) {
-      { c.read(w, e) } -> CReadLease<T>;
-      { c.write(w, e) } -> CWriteLease<T>;
-      { c.clear() }; // a re-freeze invalidates every lane
-    };
+concept CValueCache = std::copy_constructible<C> && std::movable<C> &&
+                      requires(const C &c, Want w, Extent e) {
+                        { c.read(w, e) } -> CReadLease<T>;
+                        { c.write(w, e) } -> CWriteLease<T>;
+                        { c.clear() }; // a re-freeze invalidates every lane
+                      };
 
 // The built-in: the last call per lane, behind one shared_mutex per lane.  A
 // reader takes a shared lock, so any number of threads can be served the same
@@ -309,14 +308,14 @@ private:
   // What an entry is worth to the point in hand.  Four outcomes, so four types:
   // nothing here is a bool a reader has to remember the meaning of, and which
   // sweep runs is chosen by overload rather than by a flag.
-  struct Served {                    // asked before; the answer is to hand
+  struct Served { // asked before; the answer is to hand
     std::span<const T> values;
   };
-  struct Fill {};                    // nothing to work from: every step
-  struct Amend {                     // only the cone the move reached
+  struct Fill {}; // nothing to work from: every step
+  struct Amend {  // only the cone the move reached
     std::span<const bool> changed;
   };
-  struct Relay {};                   // a kernel answers this lane: all or none
+  struct Relay {}; // a kernel answers this lane: all or none
   using Plan = std::variant<Served, Fill, Amend, Relay>;
 
   void serve(Want want, const Graph<T> &graph, Answered how,

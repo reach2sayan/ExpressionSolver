@@ -79,9 +79,9 @@ concept CColumns = std::ranges::contiguous_range<R> &&
 // is asked of the type system, never assumed by position: a cache is whatever
 // models CValueCache, and COutputPack refuses a pack holding anything else.
 template <typename... Rest>
-using tail_of = boost::mp11::mp_eval_if_c<sizeof...(Rest) == 0, void,
-                                          boost::mp11::mp_back,
-                                          boost::mp11::mp_list<Rest...>>;
+using tail_of =
+    boost::mp11::mp_eval_if_c<sizeof...(Rest) == 0, void, boost::mp11::mp_back,
+                              boost::mp11::mp_list<Rest...>>;
 
 template <typename T, typename... Rest>
 inline constexpr bool packs_cache = rt::CValueCache<tail_of<Rest...>, T>;
@@ -144,9 +144,8 @@ public:
   // pack and nothing can be deduced behind one.
   template <typename... Es>
     requires are_outputs<Es...>
-  [[nodiscard]] static constexpr Equation create(Cache memo,
-                                                 rt::RTExpression<T> first,
-                                                 Es... rest) {
+  [[nodiscard]] static constexpr Equation
+  create(Cache memo, rt::RTExpression<T> first, Es... rest) {
     if (const auto bad = why_not(first, rest...)) {
       return Equation{*bad};
     }
@@ -1584,8 +1583,8 @@ template <impl::Numeric T = double, std::size_t Outputs = 1,
 [[nodiscard]] auto load(const std::filesystem::path &path, C memo = {}) {
   static_assert(Outputs > 0, "load: a system needs at least one function");
   return impl::index_apply<Outputs - 1>([&]<std::size_t... Rest>() {
-    return impl::Equation<RTExpression<T>, detail::Repeat<Rest, T>...,
-                          C>::load(path, std::move(memo));
+    return impl::Equation<RTExpression<T>, detail::Repeat<Rest, T>..., C>::load(
+        path, std::move(memo));
   });
 }
 

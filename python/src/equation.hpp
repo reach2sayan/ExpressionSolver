@@ -62,7 +62,6 @@ inline void scatter_hessian(const rt::Coloring &coloring,
 // The one cache a Python caller can be given: they cannot name a C++ type, so
 // the only choice is whether there is one.
 using PyCache = rt::LastValue<double>;
-
 class PyEquation : public rt::detail::Caching<PyEquation, double, PyCache> {
 public:
   using Want = rt::Want;
@@ -80,7 +79,7 @@ public:
 
   // From a file: the sweeps arrive filled, so nothing below computes them.
   explicit PyEquation(rt::Verified<double> snap, bool remember = false)
-      : PyEquation(std::move(snap).rebuild(), remember) {}
+      : PyEquation{std::move(snap).rebuild(), remember} {}
   explicit PyEquation(rt::Rebuilt<double> r, bool remember = false)
       : arena_{std::move(r.arena)}, symbols_{arena_->symbols()},
         roots_{std::move(r.rest.roots)},
@@ -333,7 +332,10 @@ private:
                      .host = std::string{c->host_identity()},
                      .digest = rt::digest(*l.graph),
                      .codegen = effective_options().codegen,
-                     .code = {code.begin(), code.end()}});
+                     .code = {
+                       code.begin(),
+                       code.end()
+                     }});
     }
     return out;
   }
@@ -517,9 +519,9 @@ private:
     charge(l, n);
     // A point already answered is answered again from what it left behind;
     // without ddx.equation(remember=True) this is the call below and no more.
-    through(want, *l.graph, l.kernel ? rt::Answered::ByKernel
-                                     : rt::Answered::BySweep,
-            xs, out, n, [&] { sweep(l, xs, out, n); });
+    through(want, *l.graph,
+            l.kernel ? rt::Answered::ByKernel : rt::Answered::BySweep, xs, out,
+            n, [&] { sweep(l, xs, out, n); });
   }
 
   void sweep(Lane &l, std::span<const double *const> xs,
@@ -851,12 +853,12 @@ public:
   // right.
   void operator()() {
     PyEquation::Lane &l = eq_->lane(want_);
-    eq_->run(want_, at_,
-             {.values = f_ ? f_->rows() : std::span<double *const>{},
-              .jacobian =
-                  partials_ ? partials_->rows() : std::span<double *const>{},
-              .hessian = compressed_ ? compressed_->rows()
-                                     : std::span<double *const>{}});
+    eq_->run(
+        want_, at_,
+        {.values = f_ ? f_->rows() : std::span<double *const>{},
+         .jacobian = partials_ ? partials_->rows() : std::span<double *const>{},
+         .hessian =
+             compressed_ ? compressed_->rows() : std::span<double *const>{}});
     if (g_) {
       eq_->scatter_jacobian(*partials_, *g_, at_.size());
     }

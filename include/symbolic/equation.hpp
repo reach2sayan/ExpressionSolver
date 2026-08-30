@@ -19,7 +19,8 @@ namespace ddx::impl {
 namespace detail {
 // Evaluate a tuple of expressions at one point, in canonical symbol order.
 template <CSymbolList Syms>
-constexpr auto eval_all(const CNumericBuffer auto &vals, const CExpression auto &...es) noexcept {
+constexpr auto eval_all(const CNumericBuffer auto &vals,
+                        const CExpression auto &...es) noexcept {
   return std::array{es.template eval_seeded<Syms>(vals)...};
 }
 
