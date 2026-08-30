@@ -444,11 +444,6 @@ private:
   }
 
 #ifdef DDX_HAS_JIT
-  // The process's one LLJIT, borrowed rather than founded: making its own would
-  // stand a second one up beside whatever C++ Equations already use.  Null on
-  // a host that cannot bring one up, where the sweep answers everything.
-  // Guarded with every caller: a null-checked call is still a symbol a module
-  // built without the backend would have to import.
   [[nodiscard]] static jit::Compiler *compiler() {
     return impl::rt_detail::shared_compiler();
   }
@@ -460,7 +455,6 @@ private:
   }
 
   using BlockMember = std::span<const rt::NodeId> rt::OutputSpans::*;
-
   [[nodiscard]] static constexpr std::size_t count(const Lane &l,
                                                    BlockMember which) {
     return (l.graph->output_blocks().*which).size();
