@@ -9,10 +9,9 @@ __all__: list[str] = ['Backend', 'Call', 'Equation', 'Error', 'Expression',
                       'VecLib', 'Want', 'abs', 'acos', 'acosh', 'add', 'asin',
                       'asinh', 'atan', 'atan2', 'atanh', 'cbrt', 'cos',
                       'cosh', 'div', 'equation', 'erf', 'errc', 'exp',
-                      'has_jit', 'hypot', 'load', 'log', 'log10', 'max',
-                      'min',
-                      'mul', 'neg', 'pow', 'sign', 'sin', 'sinh',
-                      'sqrt', 'tan', 'tanh', 'var']
+                      'has_jit', 'hypot', 'Level', 'load', 'log', 'log10',
+                      'max', 'min', 'mul', 'neg', 'pow', 'select', 'sign',
+                      'sin', 'sinh', 'sqrt', 'tan', 'tanh', 'var']
 class Backend(enum.IntEnum):
     """
     Whether an equation compiles its graph.
@@ -171,8 +170,11 @@ class Want(enum.IntEnum):
     """
     GRADIENT: typing.ClassVar[Want]  # value = <Want.GRADIENT: 6>
     HESSIAN: typing.ClassVar[Want]  # value = <Want.HESSIAN: 2>
+    HVP: typing.ClassVar[Want]  # value = <Want.HVP: 3>
     JACOBIAN: typing.ClassVar[Want]  # value = <Want.JACOBIAN: 1>
+    JVP: typing.ClassVar[Want]  # value = <Want.JVP: 5>
     VALUE: typing.ClassVar[Want]  # value = <Want.VALUE: 0>
+    VJP: typing.ClassVar[Want]  # value = <Want.VJP: 4>
     @classmethod
     def __new__(cls, value): pass
     def __format__(self, format_spec): pass

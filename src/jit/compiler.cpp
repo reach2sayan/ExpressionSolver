@@ -100,8 +100,8 @@ void init_native_target_once() {
 // sin that cannot be called fails at link.
 [[nodiscard]] bool want_veclib(const llvm::Triple &triple, const Options &opt,
                                const bool have) {
-  return have && (opt.veclib == VecLib::Libmvec ||
-                  (opt.veclib == VecLib::Auto && triple.isOSLinux() &&
+  return have && (opt.codegen.veclib == VecLib::Libmvec ||
+                  (opt.codegen.veclib == VecLib::Auto && triple.isOSLinux() &&
                    triple.getArch() == llvm::Triple::x86_64));
 }
 
@@ -121,7 +121,7 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
 // intrinsic has no library form and unrolls to scalar calls.
 [[nodiscard]] unsigned library_lanes(const llvm::Triple &triple) {
   const auto tlii =
-      target_library_info(triple, Options{.veclib = VecLib::Libmvec}, true);
+      target_library_info(triple, Options{.codegen = {.veclib = VecLib::Libmvec}}, true);
   llvm::ElementCount fixed;
   llvm::ElementCount scalable;
   tlii.getWidestVF("sin", fixed, scalable);
@@ -135,7 +135,7 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
                                      const std::string &triple,
                                      const bool have_libmvec,
                                      const unsigned host, const unsigned lib) {
-  return opt.lanes.stated().value_or(
+  return opt.codegen.lanes.stated().value_or(
       want_veclib(llvm::Triple{triple}, opt, have_libmvec) ? std::min(host, lib)
                                                            : host);
 }
@@ -292,8 +292,8 @@ host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
   // The loop is already emitted `lanes` wide, and the loop vectoriser pays for
   // an alias check between every pair of columns and then declines.
   llvm::PipelineTuningOptions pto;
-  pto.SLPVectorization = opt.slp;
-  pto.LoopVectorization = opt.loop_vectorize;
+  pto.SLPVectorization = opt.codegen.slp;
+  pto.LoopVectorization = opt.codegen.loop_vectorize;
 
   llvm::PassBuilder pb(&tm, pto, std::nullopt, &pic);
   // Before registerFunctionAnalyses, which would otherwise install the default
@@ -310,7 +310,7 @@ host_identity_of(const llvm::orc::JITTargetMachineBuilder &machine) {
       llvm::OptimizationLevel::O0, llvm::OptimizationLevel::O1,
       llvm::OptimizationLevel::O2, llvm::OptimizationLevel::O3};
   const llvm::OptimizationLevel level =
-      levels[std::to_underlying(opt.opt_level)];
+      levels[std::to_underlying(opt.codegen.opt_level)];
 
   llvm::ModulePassManager mpm = level == llvm::OptimizationLevel::O0
                                     ? pb.buildO0DefaultPipeline(level)
@@ -380,7 +380,7 @@ private:
     // the kernel's name is already unique per compile.
     m->setModuleIdentifier(name_);
     m->addModuleFlag(llvm::Module::Error, kCodegenFlag,
-                     std::to_underlying(opt_.codegen_level));
+                     std::to_underlying(opt_.codegen.codegen_level));
     m->addModuleFlag(llvm::Module::Error, kRetainFlag,
                      static_cast<unsigned>(opt_.retain_object));
     rep_.nodes = g_.live_count();
@@ -427,12 +427,7 @@ private:
       return std::unexpected{
           as_error(errc::jit_lookup, "looking up " + name_, sym.takeError())};
     }
-    const auto &layout = g_.layout();
-    return Kernel{sym->toPtr<Kernel::function_type>(),
-                  g_.arity(),
-                  layout.values,
-                  layout.jacobian,
-                  layout.hessian,
+    return Kernel{sym->toPtr<Kernel::function_type>(), KernelShape::of(g_),
                   std::move(host_.code),
                   std::make_shared<const std::string>(name_),
                   host_.objects.take(name_)};
@@ -462,24 +457,17 @@ constexpr std::uint32_t kCacheFormat = 2;
 // rather than refuses.
 constexpr std::uint32_t kCacheEpoch = 1;
 
-// What changes the machine code, and nothing else: `backend`, `points`,
-// `time_passes`, `retain_object` and `cache_dir` never reach codegen.
+// The identity, with the width *emitted* in place of the one asked for: a
+// derived `Lanes` means the host's, so the raw request would give one graph two
+// keys that never hit each other.
 [[nodiscard]] std::uint64_t cache_key(std::uint64_t graph,
-                                      std::string_view host, const Options &opt,
-                                      unsigned lanes) {
+                                      std::string_view host,
+                                      const Codegen &emitted) {
   boost::hash2::fnv1a_64 h;
   boost::hash2::hash_append(h, rt::detail::wire_flavor{}, host);
   rt::detail::fold(h, graph);
   rt::detail::fold(h, kCacheEpoch);
-  // The width *emitted*: a derived `Lanes` means the host's, so the raw request
-  // would give one graph two keys that never hit each other.
-  rt::detail::fold(h, lanes);
-  rt::detail::fold(h, opt.opt_level);
-  rt::detail::fold(h, opt.codegen_level);
-  rt::detail::fold(h, opt.veclib);
-  rt::detail::fold(h, opt.slp);
-  rt::detail::fold(h, opt.loop_vectorize);
-  rt::detail::fold(h, opt.contract);
+  rt::detail::fold(h, emitted);
   return h.result();
 }
 
@@ -518,7 +506,8 @@ constexpr std::uint32_t kCacheSchema = rt::detail::Container::stamp<Entry>();
   }
   const auto &[head, payload] = *opened;
   if (head.format != kCacheFormat || head.schema != kCacheSchema ||
-      head.scalar_size != sizeof(double) || head.scalar_kind != 1 ||
+      head.scalar_size != sizeof(double) ||
+      head.scalar_kind != rt::detail::ScalarKind::Floating ||
       head.model_nodes != 0 || head.model_digest != key) {
     return std::nullopt;
   }
@@ -545,7 +534,7 @@ void write_entry(std::string_view dir, std::uint64_t key,
                                  .format = kCacheFormat,
                                  .schema = kCacheSchema,
                                  .scalar_size = sizeof(double),
-                                 .scalar_kind = 1,
+                                 .scalar_kind = rt::detail::ScalarKind::Floating,
                                  .model_digest = key};
   // Staged inside the cache directory: a rename is only atomic within one
   // filesystem.
@@ -702,8 +691,7 @@ struct Compiler::Impl {
   // The link order keeps libm and the vector-math generators reachable.
   [[nodiscard]] static result<Kernel>
   link(const std::shared_ptr<Impl> &self, std::span<const std::byte> object,
-       std::string_view symbol, std::size_t arity, std::size_t values,
-       std::size_t jacobian, std::size_t hessian) {
+       std::string_view symbol, KernelShape shape) {
     auto &jit = *self->jit;
     auto jd =
         jit.createJITDylib("ddx_adopted_" + std::to_string(self->counter++));
@@ -733,12 +721,7 @@ struct Compiler::Impl {
                                       "looking up " + std::string{symbol},
                                       sym.takeError())};
     }
-    return Kernel{sym->toPtr<Kernel::function_type>(),
-                  arity,
-                  values,
-                  jacobian,
-                  hessian,
-                  self,
+    return Kernel{sym->toPtr<Kernel::function_type>(), shape, self,
                   std::make_shared<const std::string>(symbol),
                   std::move(kept)};
   }
@@ -758,16 +741,16 @@ struct Compiler::Impl {
                                           CompileReport &rep) {
     Host host = host_of(self);
     const bool caching = !opt.cache_dir.empty();
+    Codegen emitted = opt.codegen;
+    emitted.lanes = *Lanes::exactly(host.lanes_for(opt));
     const std::uint64_t key =
-        caching ? cache_key(rt::digest(g), self->host, opt, host.lanes_for(opt))
-                : 0;
+        caching ? cache_key(rt::digest(g), self->host, emitted) : 0;
     if (caching) {
       if (const auto entry = read_entry(opt.cache_dir, key)) {
-        // Shapes come from the live graph, never the file: a forged entry
+        // The shape comes from the live graph, never the file: a forged entry
         // supplies code and a symbol, never a column count.
-        const auto &layout = g.layout();
-        if (auto adopted = link(self, entry->code, entry->symbol, g.arity(),
-                                layout.values, layout.jacobian, layout.hessian);
+        if (auto adopted =
+                link(self, entry->code, entry->symbol, KernelShape::of(g));
             adopted) {
           // The phases are zero because they did not happen.
           rep.nodes = g.live_count();
@@ -833,10 +816,8 @@ Compiler::compile_async(std::shared_ptr<const rt::Graph<double>> g,
 }
 
 result<Kernel> Compiler::adopt(std::span<const std::byte> object,
-                               std::string_view symbol, std::size_t arity,
-                               std::size_t values, std::size_t jacobian,
-                               std::size_t hessian) {
-  return Impl::link(impl_, object, symbol, arity, values, jacobian, hessian);
+                               std::string_view symbol, KernelShape shape) {
+  return Impl::link(impl_, object, symbol, shape);
 }
 
 result<std::string> Compiler::render_ir(const rt::Graph<double> &g,

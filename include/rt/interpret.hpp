@@ -15,6 +15,10 @@
 
 namespace ddx::rt {
 
+// Points per block sweep: two AVX2 registers of doubles.  Also where a batch
+// stops being a batch for the kernel, through jit::for_batch.
+inline constexpr std::size_t block_lanes = 8;
+
 // --- block sweep -----------------------------------------------------------
 // W points per node instead of one, so the switch is paid once per node per
 // block and each operation becomes a counted lane loop the vectoriser can take
@@ -107,29 +111,22 @@ constexpr void lanes_fma(bool negated, const T *DDX_RESTRICT x,
 
 } // namespace detail
 
-// The nodes named by `order`, for W points at once.  `point_lanes` is
+// The nodes of `schedule`, for W points at once.  `point_lanes` is
 // symbol-major (symbol s, lane k at s * W + k) and `tape` node-major, so every
-// lane loop is contiguous in both.  Same constraints on `order` as
+// lane loop is contiguous in both.  Same constraints on the schedule as
 // evaluate_into; a batch's tail repeats a point, and those lanes are not read.
-//
-// `contractions` is detail::contraction_table() over the same `order` and in
-// step with it: a multiply feeding an add taken as one rounding, resolved at
-// the freeze because it cannot change between points.  A falsy table contracts
-// nothing.  Graph::contracted_order() is the order that goes with a contracting
-// one; the whole live order is also correct and computes a multiply for nobody.
 template <std::size_t W, impl::Numeric T, std::ranges::random_access_range R,
-          std::ranges::input_range Order, impl::Numeric U>
-  requires impl::Numeric<std::ranges::range_value_t<R>> &&
-           std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
-constexpr void
-evaluate_block(const Builder<T> &b, const R &point_lanes, Order order,
-               std::span<const Contraction> contractions, std::span<U> tape) {
+          impl::Numeric U>
+  requires impl::Numeric<std::ranges::range_value_t<R>>
+constexpr void evaluate_block(const Builder<T> &b, const R &point_lanes,
+                              std::span<const Step> schedule,
+                              std::span<U> tape) {
   const auto at = std::ranges::begin(point_lanes);
   const std::size_t symbols = b.symbols().size();
   const auto lane = [&tape](NodeId v) {
     return tape.data() + std::size_t{v} * W;
   };
-  for (const auto [i, fma] : std::views::zip(order, contractions)) {
+  for (const auto &[i, fma] : schedule) {
     const Node<T> &n = b[i];
     U *const out = lane(i);
     if (fma) {
@@ -172,19 +169,16 @@ template <impl::Numeric T, std::ranges::random_access_range R>
   return evaluate_all(b, point)[root];
 }
 
-// The nodes named by `order`, one point at a time, into caller-owned scratch
-// indexed by node id.  `order` must be topological and closed under operands;
-// plain id order and Graph::contracted_order() are both.  Entries outside it
-// are left alone.  The width-one block sweep, not a second implementation of
-// it.
-template <impl::Numeric T, std::ranges::random_access_range R,
-          std::ranges::input_range Order, impl::Numeric U>
-  requires impl::Numeric<std::ranges::range_value_t<R>> &&
-           std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
-constexpr void evaluate_into(const Builder<T> &b, const R &point, Order order,
-                             std::span<const Contraction> contractions,
-                             std::span<U> v) {
-  evaluate_block<1>(b, point, order, contractions, v);
+// The nodes of `schedule`, one point at a time, into caller-owned scratch
+// indexed by node id.  The schedule must be topological and closed under
+// operands; detail::schedule_of over id order and Graph::schedule() are both.
+// Entries outside it are left alone.  The width-one block sweep, not a second
+// implementation of it.
+template <impl::Numeric T, std::ranges::random_access_range R, impl::Numeric U>
+  requires impl::Numeric<std::ranges::range_value_t<R>>
+constexpr void evaluate_into(const Builder<T> &b, const R &point,
+                             std::span<const Step> schedule, std::span<U> v) {
+  evaluate_block<1>(b, point, schedule, v);
 }
 
 // evaluate_all narrowed to what `roots` reach.  Still id-indexed and
@@ -199,10 +193,8 @@ template <impl::Numeric T, std::ranges::random_access_range R>
   using U = std::ranges::range_value_t<R>;
   const auto live = detail::reachable(b, roots);
   std::vector<U> v(b.size());
-  // Not const: filter_view caches its begin, so it is not a const range.
-  auto order = detail::live_ids(live);
-  const auto contractions = detail::contraction_table(b, order);
-  evaluate_into(b, point, order, contractions, std::span<U>{v});
+  evaluate_into(b, point, detail::schedule_of(b, detail::live_ids(live)),
+                std::span<U>{v});
   return v;
 }
 
@@ -214,9 +206,11 @@ template <impl::Numeric T, std::ranges::random_access_range R>
 [[nodiscard]] constexpr auto evaluate_all(const Builder<T> &b, const R &point) {
   using U = std::ranges::range_value_t<R>;
   std::vector<U> v(b.size());
-  const auto order = std::views::iota(NodeId{0}, static_cast<NodeId>(b.size()));
-  const auto contractions = detail::contraction_table(b, order);
-  evaluate_into(b, point, order, contractions, std::span<U>{v});
+  evaluate_into(
+      b, point,
+      detail::schedule_of(
+          b, std::views::iota(NodeId{0}, static_cast<NodeId>(b.size()))),
+      std::span<U>{v});
   return v;
 }
 

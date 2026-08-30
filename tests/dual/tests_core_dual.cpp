@@ -974,9 +974,7 @@ TEST(DualScalarContract, ImplicitConstantFromScalarAtDepth) {
   EXPECT_DOUBLE_EQ(b.get<1>().get<1>(), 0.0);
 }
 TEST(ForwardDriver, JacobianAndHessianCrossTerm) {
-  auto f = [](const auto *x) {
-    return x[0] * x[0] * x[1] + x[1] * x[1] * x[1];
-  };
+  auto f = [](auto x) { return x[0] * x[0] * x[1] + x[1] * x[1] * x[1]; };
   const std::array<double, 2> x{2.0, 3.0};
   const std::span<const double> xs{x.data(), x.size()};
 
@@ -998,7 +996,7 @@ TEST(ForwardDriver, IdealMixingHessianMatchesClosedForm) {
   // Mirrors the downstream CALPHAD oracle: G = R T (y0 ln y0 + y1 ln y1).
   const double R = 8.31446261815324;
   const double T = 1000.0;
-  auto f = [R, T](const auto *y) {
+  auto f = [R, T](auto y) {
     using std::log; // ADL still picks ddx::impl::log for the dual argument
     return R * T * (y[0] * log(y[0]) + y[1] * log(y[1]));
   };
@@ -1049,9 +1047,7 @@ TEST(ScopedValue, UsableDuringConstantEvaluation) {
 }
 TEST(ForwardDriver, RepeatedCallsDoNotLeakSeeds) {
   // A seed left behind by one sweep would show up as a wrong second answer.
-  auto f = [](const auto *x) {
-    return x[0] * x[0] * x[1] + x[1] * x[1] * x[1];
-  };
+  auto f = [](auto x) { return x[0] * x[0] * x[1] + x[1] * x[1] * x[1]; };
   const std::array<double, 2> x{2.0, 3.0};
   const std::span<const double> xs{x.data(), x.size()};
 

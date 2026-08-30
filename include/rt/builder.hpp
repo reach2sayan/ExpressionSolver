@@ -34,6 +34,10 @@ inline constexpr NodeId no_node = ~NodeId{0};
 
 template <impl::Numeric T> class RTExpression;
 template <impl::Numeric T = double> class Builder;
+template <impl::Numeric T> class Verified;
+namespace detail {
+struct Sealing;
+}
 
 // Befriended by Builder: naming a symbol is var()'s alone.
 template <impl::Numeric T>
@@ -58,12 +62,18 @@ struct Contraction {
   }
 };
 
+// One node of a sweep and the fma it takes, if any.  Together, so a walker is
+// never handed an order without the contractions resolved over it.
+struct Step {
+  NodeId node = no_node;
+  Contraction fma{};
+};
+
 namespace detail {
 
 // Befriended by Builder: installing a saved node stream verbatim is the
 // loader's alone, every other way in interning and folding.  Defined in
 // rt/archive/snapshot.hpp, its only user.
-struct Restore;
 
 // Ids are topological, so one descending pass settles it.  Not a filtered view:
 // the body marks entries the pass has not reached.
@@ -208,17 +218,19 @@ private:
     return intern({.op = OpCode::Seed, .slot = slot});
   }
 
-  // One caller: the Equation taking this arena over, so the numbering its lanes
-  // freeze against is the one symbols() reports for good.  Building more
+  // Makes the symbol numbering final: the Equation taking this arena over and
+  // every sweep seal on entry, since a partial is positional in symbols() and
+  // a symbol named afterwards would shift the ones above it.  Building more
   // expressions over the symbols already here stays open.
   template <typename... Ts> friend class impl::Equation;
+  friend struct detail::Sealing;
   constexpr void seal() noexcept { sealed_ = true; }
 
   // An arena as it was, not as make() would form it again: make() folds and
   // swaps commutative operands, and the saved sweeps name subexpressions by id.
-  // Sealed on arrival; the one caller is the loader, which has checked what
-  // this cannot.
-  friend struct detail::Restore;
+  // Sealed on arrival; the one caller holds a snapshot Sound has passed, which
+  // is what checks what this cannot.
+  friend class Verified<T>;
   constexpr void restore(std::vector<Node<T>> nodes,
                          std::vector<std::string> symbols) {
     nodes_ = std::move(nodes);
@@ -369,7 +381,7 @@ private:
     case Pred::NegatedA:
       return a != no_node && nodes_[a].op == OpCode::Neg;
     }
-    return false;
+    std::unreachable();
   }
 
   constexpr std::optional<NodeId> apply_rule(const impl::algebra::Rule &r,
@@ -417,7 +429,8 @@ private:
     // First match wins, as ops/algebra.hpp is ordered.
     const auto r = std::ranges::find_if(
         impl::algebra::kRules, [&](const impl::algebra::Rule &rule) {
-          return rule.op == *kind && impl::algebra::is_unary(rule) == unary &&
+          return rule.op == *kind &&
+                 impl::algebra::arity_of(rule.op) == (unary ? 1 : 2) &&
                  (!rule.needs_commutative_multiply ||
                   impl::CCommutativeMultiply<T>) &&
                  holds_pred(rule.when, a, b);
@@ -513,14 +526,14 @@ contraction_at(const CNodeSource auto &nodes, NodeId v) {
 namespace detail {
 template <std::ranges::input_range Order>
   requires std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
-[[nodiscard]] constexpr std::vector<Contraction>
-contraction_table(const CNodeSource auto &nodes, Order &&order,
-                  bool on = true) {
+[[nodiscard]] constexpr std::vector<Step>
+schedule_of(const CNodeSource auto &nodes, Order &&order, bool on = true) {
   return std::forward<Order>(order) |
          std::views::transform([&nodes, on](NodeId v) {
-           return on ? contraction_at(nodes, v) : Contraction{};
+           return Step{.node = v,
+                       .fma = on ? contraction_at(nodes, v) : Contraction{}};
          }) |
-         impl::to<std::vector<Contraction>>();
+         impl::to<std::vector<Step>>();
 }
 } // namespace detail
 

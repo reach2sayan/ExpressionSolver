@@ -22,6 +22,8 @@ namespace ddx::rt::detail {
 // the one host type it leans on.
 static_assert(sizeof(std::size_t) == 8);
 
+enum class ScalarKind : std::uint8_t { Integral, Floating };
+
 struct FileHeader {
   // The tag, not a value: eight raw bytes both sides handle before the
   // described walk, and so deliberately outside it.
@@ -29,7 +31,7 @@ struct FileHeader {
   std::uint32_t format = 0;
   std::uint32_t schema = 0;
   std::uint8_t scalar_size = 0;
-  std::uint8_t scalar_kind = 0; // 1 floating point, 0 otherwise
+  ScalarKind scalar_kind = ScalarKind::Integral;
   std::uint32_t model_nodes = 0;
   std::uint64_t model_digest = 0;
   std::uint32_t payload_crc = 0;

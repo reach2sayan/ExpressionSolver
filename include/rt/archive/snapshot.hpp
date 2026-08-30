@@ -25,13 +25,15 @@ namespace ddx::rt {
 // One lane's machine code, and what must agree before it runs; a mismatch means
 // recompile, never an error.
 struct Object {
-  std::uint8_t want = 0; // Equation's Want: values, jacobian, hessian
-  std::string symbol;    // underivable, so adopt() is handed it back verbatim
+  Want want = Want::Value;
+  std::string symbol; // underivable, so adopt() is handed it back verbatim
   // jit::Compiler::host_identity(): triple, CPU, folded features, LLVM version.
   std::string host;
   std::uint64_t digest = 0; // digest() of the lane's frozen graph
-  jit::Options options;
+  jit::Codegen codegen;     // what the compile was given
   std::vector<std::byte> code;
+  BOOST_DESCRIBE_CLASS(Object, (), (want, symbol, host, digest, codegen, code),
+                       (), ())
 };
 
 // The stored kernel for a lane, if graph, host and codegen options all agree:
@@ -40,11 +42,10 @@ struct Object {
 [[nodiscard]] inline const Object *find_object(std::span<const Object> objects,
                                                Want want, std::uint64_t digest,
                                                std::string_view host,
-                                               const jit::Options &options) {
+                                               const jit::Codegen &codegen) {
   const auto it = std::ranges::find_if(objects, [&](const Object &o) {
-    return o.want == std::to_underlying(want) && o.digest == digest &&
-           o.host == host && jit::same_codegen(o.options, options) &&
-           !o.code.empty();
+    return o.want == want && o.digest == digest && o.host == host &&
+           o.codegen == codegen && !o.code.empty();
   });
   return it == objects.end() ? nullptr : &*it;
 }
@@ -70,40 +71,5 @@ template <impl::Numeric T> struct Snapshot {
                         jvp, options, model_nodes, objects),
                        (), ())
 };
-
-} // namespace ddx::rt
-
-namespace ddx::rt {
-
-BOOST_DESCRIBE_STRUCT(Sparsity, (), (rowptr, col, rows, columns))
-BOOST_DESCRIBE_STRUCT(Jacobian, (), (value, partial, pattern, zero))
-BOOST_DESCRIBE_STRUCT(Hessian, (), (value, partial, compressed, coloring, zero))
-BOOST_DESCRIBE_STRUCT(HessianVector, (), (value, partial, product))
-BOOST_DESCRIBE_STRUCT(VectorJacobian, (), (value, product))
-BOOST_DESCRIBE_STRUCT(Tangent, (), (value, product))
-BOOST_DESCRIBE_STRUCT(Coloring, (), (color, count, scatter, cell, cells))
-BOOST_DESCRIBE_STRUCT(Object, (), (want, symbol, host, digest, options, code))
-
-namespace detail {
-
-// Builder's side of the loader.  A struct, not a friended function template, so
-// builder.hpp forward-declares an empty type and gains no include.
-struct Restore {
-  template <impl::Numeric T>
-  static void into(Builder<T> &b, std::vector<Node<T>> nodes,
-                   std::vector<std::string> symbols) {
-    b.restore(std::move(nodes), std::move(symbols));
-  }
-};
-
-} // namespace detail
-
-// Owning, and it consumes the snapshot: the node array *is* the arena's.
-template <impl::Numeric T>
-[[nodiscard]] std::unique_ptr<Builder<T>> rebuild(Snapshot<T> &snap) {
-  auto arena = std::make_unique<Builder<T>>();
-  detail::Restore::into(*arena, std::move(snap.nodes), std::move(snap.symbols));
-  return arena;
-}
 
 } // namespace ddx::rt

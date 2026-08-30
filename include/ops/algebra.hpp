@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <utility>
 
 // The algebraic identities, written once.
 namespace ddx::impl::algebra {
@@ -73,9 +76,42 @@ inline constexpr std::array kRules{
     // clang-format on
 };
 
-// Neg is the only unary rule; everything else reads two operands.
-[[nodiscard]] constexpr bool is_unary(const Rule &r) noexcept {
-  return r.op == RuleOp::Neg;
+// Operands an op reads.  No default: a new enumerator must be filed here.
+[[nodiscard]] constexpr std::size_t arity_of(RuleOp op) noexcept {
+  switch (op) {
+  case RuleOp::Add:
+  case RuleOp::Mul:
+  case RuleOp::Div:
+  case RuleOp::Pow:
+    return 2;
+  case RuleOp::Neg:
+    return 1;
+  }
+  std::unreachable();
 }
+
+// Operands a predicate reads: the *A predicates only a.
+[[nodiscard]] constexpr std::size_t arity_of(Pred p) noexcept {
+  switch (p) {
+  case Pred::ZeroA:
+  case Pred::OneA:
+  case Pred::NegatedA:
+    return 1;
+  case Pred::ZeroB:
+  case Pred::OneB:
+  case Pred::Same:
+  case Pred::TwoB:
+  case Pred::AOverB:
+  case Pred::BOverA:
+    return 2;
+  }
+  std::unreachable();
+}
+
+static_assert(std::ranges::all_of(kRules,
+                                  [](const Rule &r) {
+                                    return arity_of(r.when) <= arity_of(r.op);
+                                  }),
+              "a rule reads no operand its op lacks");
 
 } // namespace ddx::impl::algebra

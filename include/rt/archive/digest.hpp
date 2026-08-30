@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <type_traits>
 
 // Two keys over a graph: what a file is stale against, and what a compiled
 // lane was compiled from.
@@ -22,9 +23,17 @@ namespace ddx::rt {
 namespace detail {
 // to_bits, never the member itself: hash2 appends a float as
 // bit_cast<uint64_t>(v + 0), which maps -0.0 onto +0.0.  These digests key the
-// object cache, and a graph holding -0.0 must not load +0.0's kernel.
+// object cache, and a graph holding -0.0 must not load +0.0's kernel.  A
+// described type folds member by member, so its field list is its coverage.
 constexpr void fold(boost::hash2::fnv1a_64 &h, const auto &v) {
-  boost::hash2::hash_append(h, wire_flavor{}, to_bits(v));
+  using U = std::remove_cvref_t<decltype(v)>;
+  if constexpr (boost::describe::has_describe_members<U>::value) {
+    boost::mp11::mp_for_each<boost::describe::describe_members<
+        U, boost::describe::mod_any_access>>(
+        [&](auto D) { fold(h, v.*D.pointer); });
+  } else {
+    boost::hash2::hash_append(h, wire_flavor{}, to_bits(v));
+  }
 }
 } // namespace detail
 
@@ -47,34 +56,24 @@ template <impl::Numeric T>
 }
 
 // Keyed on what codegen reads of a lane, so a consumer sees a compile is done
-// *before* emitting a module.  Ids are construction-ordered, making this a
-// within-one-binary key, so a stale one must be a miss.
+// *before* emitting a module: the layout and every node's property, member by
+// member off their described lists, and every operand.  Ids are
+// construction-ordered, making this a within-one-binary key, so a stale one
+// must be a miss.
 template <impl::Numeric T>
 [[nodiscard]] std::uint64_t digest(const Graph<T> &g) {
   boost::hash2::fnv1a_64 h;
-  const auto &layout = g.layout();
+  detail::fold(h, g.symbols().size());
   detail::fold(h, g.arity());
-  detail::fold(h, layout.values);
-  detail::fold(h, layout.jacobian);
-  detail::fold(h, layout.hessian);
-  const auto order = g.contracted_order();
-  detail::fold(h, order.size());
-  for (const NodeId v : order) {
-    const auto &p = g[v];
-    const auto [a, b, c] = g.operands(v);
+  detail::fold(h, g.layout());
+  const auto schedule = g.schedule();
+  detail::fold(h, schedule.size());
+  for (const auto &[v, fma] : schedule) {
     detail::fold(h, v);
-    detail::fold(h, p.op);
-    detail::fold(h, p.slot);
-    detail::fold(h, p.value);
-    detail::fold(h, a);
-    detail::fold(h, b);
-    // The third operand too: a select differing only there is a different
-    // graph, and this digest is what the object cache keys a kernel on.
-    detail::fold(h, c);
+    detail::fold(h, g[v]);
+    std::ranges::for_each(g.operands(v), [&h](NodeId u) { detail::fold(h, u); });
   }
-  for (const NodeId o : g.outputs()) {
-    detail::fold(h, o);
-  }
+  std::ranges::for_each(g.outputs(), [&h](NodeId o) { detail::fold(h, o); });
   return h.result();
 }
 

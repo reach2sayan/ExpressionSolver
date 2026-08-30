@@ -469,10 +469,11 @@ TEST(RtArchive, RefusesAForgedColouringCount) {
   });
   ASSERT_TRUE(four.save(file).has_value());
 
-  auto snap = ddx::rt::load_snapshot<>(file.path());
-  ASSERT_TRUE(snap.has_value());
-  auto &coloring = snap->hessians.front().coloring;
-  const std::size_t nsym = snap->symbols.size();
+  auto sound = ddx::rt::load_snapshot<>(file.path());
+  ASSERT_TRUE(sound.has_value());
+  auto snap = std::move(*sound).release();
+  auto &coloring = snap.hessians.front().coloring;
+  const std::size_t nsym = snap.symbols.size();
   ASSERT_EQ(nsym % 2, 0u) << "an odd symbol count cannot wrap";
 
   const std::size_t forged = coloring.count + (std::size_t{1} << 62);
@@ -481,7 +482,7 @@ TEST(RtArchive, RefusesAForgedColouringCount) {
   coloring.count = forged;
 
   // Through the real serialiser, so the checksum agrees with the lie.
-  ASSERT_TRUE(ddx::rt::save(*snap, file.path()).has_value());
+  ASSERT_TRUE(ddx::rt::save(snap, file.path()).has_value());
 
   const auto loaded = ddx::rt::load(file.path());
   ASSERT_FALSE(loaded.has_value()) << "a wrapped count agreed with a length";
@@ -609,8 +610,8 @@ TEST(RtArchive, LoadedIdsAreTheSavedIds) {
   ASSERT_TRUE(snap.has_value()) << snap.error().code;
 
   // rebuild() consumes the node array, so the comparison keeps its own copy.
-  const auto saved = snap->nodes;
-  const auto arena = ddx::rt::rebuild(*snap);
+  const auto saved = (*snap)->nodes;
+  const auto arena = std::move(*snap).rebuild().arena;
   ASSERT_EQ(arena->size(), saved.size());
   for (const auto [i, node] : saved | std::views::enumerate) {
     const auto &back = (*arena)[static_cast<ddx::rt::NodeId>(i)];
@@ -652,8 +653,8 @@ TEST(RtArchive, CarriesTheCompiledKernel) {
   EXPECT_EQ(*loaded->hessian(kPoint), *want.hessian(kPoint));
 }
 
-// `backend` says whether to compile, never what is emitted, so it is the one
-// described option same_codegen() skips: an Adapt lane links the kernel a
+// `backend` says whether to compile, never what is emitted, so it is policy
+// and not part of an Object's identity: an Adapt lane links the kernel a
 // Compile run stored rather than counting its way to identical machine code.
 TEST(RtArchive, AdaptLinksAKernelStoredUnderCompile) {
   const Scratch file{"adapt_kernel"};
@@ -690,7 +691,7 @@ TEST(RtArchive, SavesNoKernelWithoutRetainObject) {
   // A shortfall in what the file is worth rather than a failure.
   const auto snap = ddx::rt::load_snapshot<>(file.path());
   ASSERT_TRUE(snap.has_value());
-  EXPECT_TRUE(snap->objects.empty());
+  EXPECT_TRUE((*snap)->objects.empty());
   EXPECT_TRUE(ddx::rt::load(file.path()).has_value());
 }
 
@@ -707,13 +708,14 @@ TEST(RtArchive, RefusesAKernelFromAnotherGraph) {
   // serialiser so the checksum still holds: a stored kernel run against a graph
   // it was not emitted from is silently wrong arithmetic, and the digest is what
   // gates it.
-  auto snap = ddx::rt::load_snapshot<>(file.path());
-  ASSERT_TRUE(snap.has_value());
-  ASSERT_FALSE(snap->objects.empty());
-  for (auto &o : snap->objects) {
+  auto sound = ddx::rt::load_snapshot<>(file.path());
+  ASSERT_TRUE(sound.has_value());
+  auto snap = std::move(*sound).release();
+  ASSERT_FALSE(snap.objects.empty());
+  for (auto &o : snap.objects) {
     o.digest ^= 1;
   }
-  ASSERT_TRUE(ddx::rt::save(*snap, file.path()).has_value());
+  ASSERT_TRUE(ddx::rt::save(snap, file.path()).has_value());
 
   const auto loaded = ddx::rt::load(file.path());
   ASSERT_TRUE(loaded.has_value());
@@ -743,9 +745,9 @@ TEST(RtArchive, RefusesAForgedJacobianPattern) {
   {
     const auto clean = ddx::rt::load_snapshot<>(file.path());
     ASSERT_TRUE(clean.has_value()) << clean.error().code;
-    ASSERT_LT(clean->jacobian.pattern.nonzeros(), 9u)
+    ASSERT_LT((*clean)->jacobian.pattern.nonzeros(), 9u)
         << "a dense pattern has no hole to forge";
-    ASSERT_EQ(clean->jacobian.pattern.row(1).size(), 2u)
+    ASSERT_EQ((*clean)->jacobian.pattern.row(1).size(), 2u)
         << "row 1 needs two columns for the ordering cases";
   }
 
@@ -754,13 +756,14 @@ TEST(RtArchive, RefusesAForgedJacobianPattern) {
   // reason.
   const auto refuses = [&file, &built](auto damage, std::string_view what) {
     EXPECT_TRUE(built.save(file).has_value()) << what;
-    auto snap = ddx::rt::load_snapshot<>(file.path());
-    EXPECT_TRUE(snap.has_value()) << what;
-    if (!snap) {
+    auto sound = ddx::rt::load_snapshot<>(file.path());
+    EXPECT_TRUE(sound.has_value()) << what;
+    if (!sound) {
       return;
     }
-    damage(snap->jacobian);
-    EXPECT_TRUE(ddx::rt::save(*snap, file.path()).has_value()) << what;
+    auto snap = std::move(*sound).release();
+    damage(snap.jacobian);
+    EXPECT_TRUE(ddx::rt::save(snap, file.path()).has_value()) << what;
     const auto loaded = ddx::rt::load<double, 3>(file.path());
     EXPECT_FALSE(loaded.has_value()) << what;
     if (!loaded) {
@@ -798,15 +801,15 @@ TEST(RtArchive, RefusesAForgedJacobianPattern) {
     ASSERT_TRUE(built.save(file).has_value());
     auto snap = ddx::rt::load_snapshot<>(file.path());
     ASSERT_TRUE(snap.has_value()) << snap.error().code;
-    ASSERT_TRUE(ddx::rt::save(*snap, file.path()).has_value());
+    ASSERT_TRUE(ddx::rt::save(**snap, file.path()).has_value());
     const auto loaded = ddx::rt::load<double, 3>(file.path());
     ASSERT_TRUE(loaded.has_value()) << loaded.error().code;
     EXPECT_EQ(*built.jacobian(0.6, 1.4, 0.9), *loaded->jacobian(0.6, 1.4, 0.9));
-    EXPECT_EQ(built.jacobian_pattern().nonzeros(),
-              loaded->jacobian_pattern().nonzeros());
-    EXPECT_EQ(built.jacobian_pattern().col, loaded->jacobian_pattern().col);
-    EXPECT_EQ(built.jacobian_pattern().rowptr,
-              loaded->jacobian_pattern().rowptr);
+    EXPECT_EQ(built.jacobian_pattern()->get().nonzeros(),
+              loaded->jacobian_pattern()->get().nonzeros());
+    EXPECT_EQ(built.jacobian_pattern()->get().col, loaded->jacobian_pattern()->get().col);
+    EXPECT_EQ(built.jacobian_pattern()->get().rowptr,
+              loaded->jacobian_pattern()->get().rowptr);
   }
 }
 

@@ -25,6 +25,11 @@ enum class Notation : std::uint8_t { Prefix, Infix, Function };
 // atomic.
 inline constexpr int precedence_atom = 100;
 
+// What an op contributes to the Hessian pattern: nothing, a coupling across
+// its two operands, that plus the denominator with itself, or its whole
+// support with itself.  Self is the conservative answer.
+enum class Curvature : std::uint8_t { None, Bilinear, Quotient, Self };
+
 template <Numeric T, typename func, CFixedString auto symbol,
           Notation note = Notation::Function, int prec = precedence_atom>
   requires std::regular_invocable<func, const T &> &&
@@ -35,10 +40,11 @@ struct UnaryOp {
   static constexpr std::string_view label = symbol.view();
   static constexpr Notation notation = note;
   static constexpr int precedence = prec;
+  static_assert(note == Notation::Function || prec < precedence_atom,
+                "an op printed without its own parentheses must state a "
+                "precedence");
 
-  // False lets fill_cache skip the store for every child.  True is the
-  // conservative answer.
-  static constexpr bool reads_primals = true;
+  static constexpr Curvature curvature = Curvature::Self;
   // Which identities the simplifier may apply; none for most ops.
   static constexpr std::optional<algebra::RuleOp> rule_op = std::nullopt;
   [[nodiscard]] static constexpr auto
@@ -49,7 +55,7 @@ struct UnaryOp {
 };
 
 template <Numeric T, typename func, CFixedString auto symbol,
-          Notation note = Notation::Infix, int prec = precedence_atom>
+          Notation note = Notation::Function, int prec = precedence_atom>
   requires std::regular_invocable<func, const T &, const T &> &&
            std::convertible_to<std::invoke_result_t<func, const T &, const T &>,
                                T>
@@ -59,8 +65,11 @@ struct BinaryOp {
   static constexpr std::string_view label = symbol.view();
   static constexpr Notation notation = note;
   static constexpr int precedence = prec;
+  static_assert(note == Notation::Function || prec < precedence_atom,
+                "an op printed without its own parentheses must state a "
+                "precedence");
 
-  static constexpr bool reads_primals = true;
+  static constexpr Curvature curvature = Curvature::Self;
   static constexpr std::optional<algebra::RuleOp> rule_op = std::nullopt;
   template <CExpression LT, CExpression RT>
   [[nodiscard]] static constexpr auto eval(const LT &lhs,
@@ -72,16 +81,20 @@ struct BinaryOp {
 
 namespace detail {
 // The reverse rule, forwarded from adjoints.hpp: the children's cache slots are
-// the pack, so one body serves every arity.
+// the pack, so one body serves every arity.  `reads_primals` false lets
+// fill_cache skip the store for every child; it is read off the descriptor, so
+// a rule cannot claim less than it reads.
 template <Numeric T, template <Numeric> class Fn> struct Adjoints {
+  static constexpr bool reads_primals = reads_primals_v<Fn, T>;
   template <std::size_t, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
-    return Fn<T>::adjoints(adj, cache[CB]...);
+    return adjoints_of<Fn>(adj, cache[CB]...);
   }
 };
 // The chain rule off a unary descriptor's deriv().
 template <Numeric T, template <Numeric> class Fn> struct DerivAdjoint {
+  static constexpr bool reads_primals = true;
   template <std::size_t, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {
@@ -94,9 +107,7 @@ template <Numeric T>
 struct SumOp
     : BinaryOp<T, std::plus<void>, FixedString{"+"}, Notation::Infix, 10>,
       detail::Adjoints<T, detail::SumOpFn> {
-  // A sum hands its adjoint to both operands unchanged, and a - b is a + (-b),
-  // so this is the biggest source of skippable stores.
-  static constexpr bool reads_primals = false;
+  static constexpr Curvature curvature = Curvature::None;
   static constexpr std::optional rule_op = algebra::RuleOp::Add;
 
   [[nodiscard]] static constexpr auto
@@ -110,6 +121,7 @@ template <Numeric T>
 struct MultiplyOp
     : BinaryOp<T, std::multiplies<void>, FixedString{"*"}, Notation::Infix, 20>,
       detail::Adjoints<T, detail::MultiplyOpFn> {
+  static constexpr Curvature curvature = Curvature::Bilinear;
   static constexpr std::optional rule_op = algebra::RuleOp::Mul;
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
@@ -124,7 +136,7 @@ template <Numeric T>
 struct NegateOp
     : UnaryOp<T, std::negate<void>, FixedString{"-"}, Notation::Prefix, 30>,
       detail::Adjoints<T, detail::NegateOpFn> {
-  static constexpr bool reads_primals = false;
+  static constexpr Curvature curvature = Curvature::None;
   static constexpr std::optional rule_op = algebra::RuleOp::Neg;
 
   // Through operator-, so values.hpp's folding ladder sees it: -0 is a Lit.
@@ -146,6 +158,7 @@ template <Numeric T>
 struct DivideOp
     : BinaryOp<T, std::divides<void>, FixedString{"/"}, Notation::Infix, 20>,
       detail::Adjoints<T, detail::DivideOpFn> {
+  static constexpr Curvature curvature = Curvature::Quotient;
   static constexpr std::optional rule_op = algebra::RuleOp::Div;
   // `a / b` means a * b^-1 -- RIGHT division, which CFieldLike cannot state.
   // Under it dc = da*b^-1 - a*b^-1*db*b^-1, which does not fold into one
@@ -307,7 +320,6 @@ template <Numeric T>
   requires std::totally_ordered<T>
 struct SignOp : UnaryOp<T, detail::sign_impl, FixedString{"sign"}>,
                 detail::Adjoints<T, detail::SignOpFn> {
-  static constexpr bool reads_primals = false;
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &) noexcept {
     return Lit<T, 0>{};
@@ -329,9 +341,8 @@ struct AbsOp : UnaryOp<T, detail::abs_impl, FixedString{"abs"}>,
 
 // pow(a, b) = a^b.  d(a^b) = b' ln(a) a^b + b a^(b-1) a'.
 template <Numeric T>
-struct PowOp
-    : BinaryOp<T, detail::pow_impl, FixedString{"pow"}, Notation::Function>,
-      detail::Adjoints<T, detail::PowOpFn> {
+struct PowOp : BinaryOp<T, detail::pow_impl, FixedString{"pow"}>,
+               detail::Adjoints<T, detail::PowOpFn> {
   static constexpr std::optional rule_op = algebra::RuleOp::Pow;
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
@@ -339,18 +350,16 @@ struct PowOp
 
 // atan2(y, x): lhs is y, rhs is x.  d = (x y' - y x') / (x² + y²).
 template <Numeric T>
-struct Atan2Op
-    : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}, Notation::Function>,
-      detail::Adjoints<T, detail::Atan2OpFn> {
+struct Atan2Op : BinaryOp<T, detail::atan2_impl, FixedString{"atan2"}>,
+                 detail::Adjoints<T, detail::Atan2OpFn> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
 };
 
 // hypot(x, y) = sqrt(x² + y²).  d = (x x' + y y') / hypot.
 template <Numeric T>
-struct HypotOp
-    : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}, Notation::Function>,
-      detail::Adjoints<T, detail::HypotOpFn> {
+struct HypotOp : BinaryOp<T, detail::hypot_impl, FixedString{"hypot"}>,
+                 detail::Adjoints<T, detail::HypotOpFn> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs, const CExpression auto &rhs) noexcept;
 };
@@ -363,7 +372,7 @@ struct HypotOp
 // side.  totally_ordered because both rules branch on a comparison.
 template <Numeric T, bool IsMax, typename func, CFixedString auto symbol>
   requires std::totally_ordered<T>
-struct ExtremumOp : BinaryOp<T, func, symbol, Notation::Function> {
+struct ExtremumOp : BinaryOp<T, func, symbol> {
   [[nodiscard]] static constexpr auto
   derivative(const CExpression auto &lhs,
              const CExpression auto &rhs) noexcept {
@@ -383,6 +392,7 @@ struct ExtremumOp : BinaryOp<T, func, symbol, Notation::Function> {
   // The one op that does not forward to adjoints.hpp: a compare is cheaper than
   // ExtremumOpFn's sign expansion and can halve a tie.  The graph has no
   // comparisons and must use the expansion.
+  static constexpr bool reads_primals = true;
   template <std::size_t Base, std::size_t... CB>
   static constexpr std::array<T, sizeof...(CB)>
   adjoints(T adj, const auto &cache) noexcept {

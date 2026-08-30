@@ -50,7 +50,7 @@ class Format {
   [[nodiscard]] static result<void> compatible(const FileHeader &h) {
     if (h.format != format ||
         h.schema != Container::stamp<Snapshot<T>>() ||
-        h.scalar_size != sizeof(T) || h.scalar_kind != 1) {
+        h.scalar_size != sizeof(T) || h.scalar_kind != ScalarKind::Floating) {
       return fail(errc::bad_archive);
     }
     return {};
@@ -86,7 +86,7 @@ struct SaveFn {
                        .format = Format::format,
                        .schema = Container::stamp<Snapshot<T>>(),
                        .scalar_size = sizeof(T),
-                       .scalar_kind = 1,
+                       .scalar_kind = ScalarKind::Floating,
                        .model_nodes = snap.model_nodes,
                        .model_digest = digest<T>(snap.symbols, snap.nodes,
                                                  snap.model_nodes)};
@@ -95,12 +95,9 @@ struct SaveFn {
 };
 
 template <std::floating_point T> struct LoadSnapshotFn {
-  [[nodiscard]] result<Snapshot<T>>
+  [[nodiscard]] result<Verified<T>>
   operator()(const std::filesystem::path &path) const {
-    return Container::read(path)
-        .and_then(opened)
-        .and_then(trusted)
-        .transform([](Loaded l) { return std::move(l.snap); });
+    return Container::read(path).and_then(opened).and_then(trusted);
   }
 
 private:
@@ -162,12 +159,13 @@ private:
     return out;
   }
 
-  // Only now is any of it believed: the invariants nothing downstream re-tests,
-  // then the prologue fields no checksum could cover.
-  [[nodiscard]] static result<Loaded> trusted(Loaded l) {
-    return Sound<T>{l.snap}()
-        .and_then([&l] { return keyed(l.head, l.snap); })
-        .transform([&l] { return std::move(l); });
+  // Only now is any of it believed: the prologue fields no checksum could
+  // cover, then the invariants nothing downstream re-tests -- which is what
+  // makes it a Verified.
+  [[nodiscard]] static result<Verified<T>> trusted(Loaded l) {
+    return keyed(l.head, l.snap).and_then([&l] {
+      return verified(std::move(l.snap));
+    });
   }
 
   // Every prologue field is verified against what the payload says, and none is
@@ -188,7 +186,7 @@ private:
 // invariants.  *Which* equation it holds is Equation::verify().
 template <std::floating_point T> struct VerifyFn {
   [[nodiscard]] result<void> operator()(const std::filesystem::path &p) const {
-    return LoadSnapshotFn<T>{}(p).transform([](const Snapshot<T> &) {});
+    return LoadSnapshotFn<T>{}(p).transform([](const Verified<T> &) {});
   }
 };
 

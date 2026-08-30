@@ -24,10 +24,11 @@ template <std::size_t N> struct FixedString {
     return {data, size()};
   }
 
-  constexpr bool operator==(const FixedString &) const noexcept = default;
+  // Both by view(), so == and <=> cannot disagree across lengths.
   template <std::size_t M>
-  constexpr bool operator==(const FixedString<M> &) const noexcept {
-    return false;
+  [[nodiscard]] constexpr bool
+  operator==(const FixedString<M> &other) const noexcept {
+    return view() == other.view();
   }
 
   template <std::size_t M>

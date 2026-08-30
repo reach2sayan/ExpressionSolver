@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <optional>
 #include <ranges>
@@ -121,12 +122,12 @@ static_assert([] {
 } // namespace detail
 
 namespace detail {
-// An OpCode from outside the builder -- a deserialised graph, a cast byte --
-// need not name a row, so out of range answers the unknown row.
-inline constexpr OpInfo unknown{"?", "?", 0};
+// An OpCode names a row: a byte from outside -- a file, a Python int -- is
+// range-checked where it is cast, never here.
 [[nodiscard]] constexpr const OpInfo &info(OpCode op) noexcept {
   const auto i = static_cast<std::size_t>(op);
-  return i < op_count ? op_info[i] : unknown;
+  assert(i < op_count);
+  return op_info[i];
 }
 } // namespace detail
 

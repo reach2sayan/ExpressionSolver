@@ -282,8 +282,7 @@ HoistedColumns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
 emit_nodes(const Emitter &emit, const rt::Graph<double> &g,
            const HoistedColumns &cols, llvm::Value *index, llvm::Value *mask) {
   std::vector<llvm::Value *> value(g.size(), nullptr);
-  for (const auto [v, c] :
-       std::views::zip(g.contracted_order(), g.contractions())) {
+  for (const auto &[v, c] : g.schedule()) {
     const auto &p = g[v];
     if (c) {
       value[v] = emit.fma(c, value[c.x], value[c.y], value[c.z]);

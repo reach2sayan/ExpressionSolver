@@ -61,7 +61,7 @@ void row(const std::string &label, double value, double ns) {
 }
 
 // f(x, y, z) = x*log(x) + y^2*z + exp(x*z), as a plain function ...
-template <Numeric T> T energy(const T *v) {
+template <Numeric T> T energy(std::span<const T> v) {
   using std::exp, std::log;
   return v[0] * log(v[0]) + v[1] * v[1] * v[2] + exp(v[0] * v[2]);
 }
@@ -86,8 +86,9 @@ constexpr auto make_graph_plain() {
 
 // An 8-variable chain: neighbour coupling plus one long-range term -- the shape
 // the sparsity pass is built for.
-template <Numeric T> T chain_energy(const T *v, std::size_t n) {
+template <Numeric T> T chain_energy(std::span<const T> v) {
   using std::exp, std::log;
+  const std::size_t n = v.size();
   T acc = T{0};
   for (std::size_t i = 0; i < n; ++i) {
     acc = acc + v[i] * log(v[i]);
@@ -123,7 +124,7 @@ int main() {
   const std::array<double, 3> p{0.4, 0.7, 1.1}; // x, y, z
   const std::span<const double> xs{p.data(), p.size()};
 
-  const auto lambda = [](const auto *dof) { return energy(dof); };
+  const auto lambda = [](auto dof) { return energy(dof); };
   const auto graph = make_graph();
   constexpr auto gplain = make_graph_plain();
 
@@ -145,8 +146,7 @@ int main() {
 
   // ---- VALUE
   println("VALUE");
-  row("lambda  energy(p.data())", energy(p.data()),
-      bench_ns([&] { return energy(p.data()); }));
+  row("lambda  energy(xs)", energy(xs), bench_ns([&] { return energy(xs); }));
   row("graph   expr.eval(x, y, z)", gplain.eval(p[0], p[1], p[2]),
       bench_ns([&] { return gplain.eval(p[0], p[1], p[2]); }));
   row("graph   eval(expr, named<\"x\">(..), ..)",
@@ -251,9 +251,7 @@ int main() {
       q[k] = 0.15 + 0.6 * (static_cast<double>(k) + 1.0) / 9.0;
     }
     const std::span<const double> qs{q.data(), q.size()};
-    const auto chain_lambda = [n = q.size()](const auto *dof) {
-      return chain_energy(dof, n);
-    };
+    const auto chain_lambda = [](auto dof) { return chain_energy(dof); };
     const auto chain_graph = make_chain8();
 
     const double t_lambda = bench_ns(

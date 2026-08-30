@@ -18,6 +18,7 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <variant>
 
 // An Ast into somebody's arena.  Every node goes through RTExpression::form,
 // which interns, folds and carries poison, so nothing here re-implements what
@@ -51,19 +52,25 @@ template <std::floating_point T>
     return i < from.size() ? result<Expr>{from[i]} : fail(errc::bad_syntax);
   };
 
-  switch (t.op) {
-  case OpCode::Var:
-    return at(symbols, t.leaf);
-  // Pending, not lit(): a literal that has not met a symbol yet stays out of
-  // the graph, so "3 + 4" folds without a node and `x * 2` builds exactly what
-  // the same expression written in C++ builds.
-  case OpCode::Const:
-    return (t.leaf < ast.literals.size()
-                ? scalar_of<T>(ast.literals[t.leaf])
-                : result<T>{fail(errc::bad_syntax)})
-        .transform([](const T v) { return Expr{v}; });
-  default:
-    break;
+  if (is_leaf(t.op)) {
+    return std::visit(
+        [&]<typename Index>(const Index &leaf) -> result<Expr> {
+          if constexpr (std::same_as<Index, NameIndex>) {
+            return at(symbols, leaf.i);
+          } else if constexpr (std::same_as<Index, LiteralIndex>) {
+            // Pending, not lit(): a literal that has not met a symbol yet
+            // stays out of the graph, so "3 + 4" folds without a node and
+            // `x * 2` builds exactly what the same expression written in C++
+            // builds.
+            return (leaf.i < ast.literals.size()
+                        ? scalar_of<T>(ast.literals[leaf.i])
+                        : result<T>{fail(errc::bad_syntax)})
+                .transform([](const T v) { return Expr{v}; });
+          } else {
+            return fail(errc::bad_syntax);
+          }
+        },
+        t.leaf);
   }
   if (arity_of(t.op) == 1) {
     return at(built, t.a).transform(

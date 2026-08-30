@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dual/dual.hpp"
+#include "ops/unary_math.hpp" // DDX_UNARY_MATH_TABLE
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -41,6 +42,16 @@ struct TaylorDual : compound_from_binary<TaylorDual<S, N>> {
 
   constexpr TaylorDual() noexcept = default;
   constexpr explicit TaylorDual(S val) noexcept : c{} { c[0] = val; }
+
+  // The independent variable at x0: unit first coefficient, so the sweep's
+  // c[k] come out as f^(k)(x0)/k!.
+  [[nodiscard]] static constexpr TaylorDual variable(S x0) noexcept
+    requires(N >= 1)
+  {
+    TaylorDual r{x0};
+    r.c[1] = S{1};
+    return r;
+  }
 
   constexpr TaylorDual operator+(const TaylorDual &o) const noexcept {
     TaylorDual r;
@@ -422,6 +433,15 @@ midpoint(const TaylorDual<S, N> &a, const TaylorDual<S, N> &b) noexcept {
 
 static_assert(Numeric<TaylorDual<double, 3>>,
               "TaylorDual must satisfy Numeric to nest in an expression");
+
+// A table row without a recurrence above fails here, not in the first sweep
+// that reaches it.
+#define DDX_TAYLOR_HAS(FN, NAME, LABEL)                                        \
+  static_assert(                                                               \
+      requires(const TaylorDual<double, 3> &t) { FN(t); },                     \
+      LABEL " has no TaylorDual overload");
+DDX_UNARY_MATH_TABLE(DDX_TAYLOR_HAS)
+#undef DDX_TAYLOR_HAS
 
 template <Numeric T, std::size_t N>
 auto scalar_base_impl(std::type_identity<TaylorDual<T, N>>) -> T;

@@ -569,13 +569,14 @@ a function does not mention has no column, and neither has one whose partial
 folded away. `jacobian_pattern()` places them:
 
 ```cpp
-const auto &pattern = eq.jacobian_pattern();
+const rt::Sparsity &pattern = eq.jacobian_pattern()->get();
 pattern.nonzeros();                    // == *eq.jacobian_columns()
 pattern.row(i);                        // the symbols function i depends on
 
-const std::size_t cell = pattern.at(i, j);
-const double dfi_dxj =
-    cell == rt::no_column ? 0.0 : j[cell * n + point];
+const double dfi_dxj =                 // at() is nullopt off the pattern
+    pattern.at(i, j)
+        .transform([&](std::size_t cell) { return j[cell * n + point]; })
+        .value_or(0.0);
 ```
 
 For a system whose functions each touch a few symbols that is most of the
@@ -657,7 +658,8 @@ throws.
 
 The accessors that answer no `result` answer `std::optional` instead —
 `arity()`, `symbols()`, `value_columns()`, `jacobian_columns()`,
-`hessian_columns()` and `hessian_colors()` are `nullopt` on a poisoned equation.
+`hessian_columns()`, `hessian_colors()` and `jacobian_pattern()` are `nullopt`
+on a poisoned equation.
 A bare count could not say it: an equation over a literal-only expression
 legitimately has no symbols and no output columns.
 
@@ -791,18 +793,22 @@ if (const auto w = eq.warming()) {
 |---|---|---|
 | `backend` | `Interpret` | `Interpret`, `Compile` or `Adapt` |
 | `points` | `1` | the batch you intend to hand one call — stated, since the kernel is built before any call exists to infer it from |
-| `lanes` | `Lanes::derived()` | points per loop iteration; derived is the host's register width, scalar for a batch too short to fill one. `Lanes::scalar()` or `Lanes{w}` states one. Every width gives the same bits |
-| `opt_level` | follows the build type | LLVM's IR pipeline, `Level::O0` to `Level::O3` — `O3` in a Release build, `O1` in a Debug one |
-| `codegen_level` | `Level::O1` | LLVM's codegen, `Level::O0` to `Level::O3` — the knob that trades kernel speed for compile time |
-| `slp` | `false` | pack independent subexpressions within one point; model-dependent, hence off |
-| `loop_vectorize` | `false` | loop vectorisation, on a loop already emitted `lanes` wide |
+| `codegen.lanes` | `Lanes::derived()` | points per loop iteration; derived is the host's register width, scalar for a batch too short to fill one. `Lanes::scalar()` or `*Lanes::exactly(w)` states one. Every width gives the same bits |
+| `codegen.opt_level` | follows the build type | LLVM's IR pipeline, `Level::O0` to `Level::O3` — `O3` in a Release build, `O1` in a Debug one |
+| `codegen.codegen_level` | `Level::O1` | LLVM's codegen, `Level::O0` to `Level::O3` — the knob that trades kernel speed for compile time |
+| `codegen.slp` | `false` | pack independent subexpressions within one point; model-dependent, hence off |
+| `codegen.loop_vectorize` | `false` | loop vectorisation, on a loop already emitted `lanes` wide |
+| `codegen.veclib` | `None` | vector math library for transcendentals; `Libmvec` trades ~0.5 ULP for ~4, and a derived `lanes` is then the widest it serves (four) |
+| `codegen.contract` | follows `DDX_FP_FLAGS` | fold a multiply feeding an add into one rounding |
 | `warm_points` | `65536` | batch points that buy the first step, under `Adapt` |
 | `hot_points` | `1048576` | further points that buy the top one, under `Adapt` |
-| `veclib` | `None` | vector math library for transcendentals; `Libmvec` trades ~0.5 ULP for ~4, and a derived `lanes` is then the widest it serves (four) |
-| `contract` | follows `DDX_FP_FLAGS` | fold a multiply feeding an add into one rounding |
 | `retain_object` | `true` | keep the compiled object so [`save`](#saving-and-loading) can write it |
 | `cache_dir` | *(empty)* | keep compiled objects here between runs; a second run links instead of compiling |
 | `time_passes` | `false` | per-pass timing to stderr |
+
+`codegen` is everything the emitter reads, and so the identity a stored kernel
+is matched against and the object cache is keyed on; the fields around it are
+policy and change no machine code.
 
 `points` decides the lane width and nothing else: a call carrying some other
 number is answered correctly, just not by the kernel that number would have
@@ -816,8 +822,8 @@ eq.options({.backend = rt::Backend::Compile, .points = 4096});  // a batch at a 
 
 Naming a `cache_dir` is the cheapest thing you can do about compile time: a run
 that finds its object there links it instead of compiling, which is roughly
-three orders of magnitude quicker. Failing that, `codegen_level` — not
-`opt_level` — is the knob that moves a compile time.
+three orders of magnitude quicker. Failing that, `codegen.codegen_level` — not
+`codegen.opt_level` — is the knob that moves a compile time.
 
 ```cpp
 eq.options({.backend = rt::Backend::Compile, .points = 4096, .cache_dir = "/var/cache/ddx"});
@@ -978,7 +984,7 @@ thread-safe except `options()`.
 | `hvp(xs, vs, f, g, p, n)` | `result<void>`, one output only — `g` gets $\nabla f$ |
 | `value_columns()`, `jacobian_columns()`, `hessian_columns()` | `std::optional<std::size_t>` — what sizes the batch buffers |
 | `jvp_columns()`, `vjp_columns()`, `hvp_columns()` | the same, for the seeded products — `m`, `n`, `n` |
-| `jacobian_pattern()` | `const rt::Sparsity &` — which (function, symbol) cell each Jacobian column is |
+| `jacobian_pattern()` | `std::optional<std::reference_wrapper<const rt::Sparsity>>` — which (function, symbol) cell each Jacobian column is |
 | `hessian_cell(i, j)` | `std::optional<std::size_t>` — which Hessian column holds H(i, j), or none |
 | `hessian_colors()` | `std::optional<std::size_t>` — groups in the Hessian's compression |
 | `options(opts)`, `options()` | set or read the compile options; setting returns `*this` |

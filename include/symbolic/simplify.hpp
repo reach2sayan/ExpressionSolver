@@ -79,9 +79,11 @@ template <COperation Op, CExpression A, CExpression B>
     // The enum rather than the optional: read by value it is a constant, so
     // the lambda names it without capturing it.
     constexpr algebra::RuleOp op = *kind;
+    static_assert(algebra::arity_of(op) == 2,
+                  "a binary node's identities read two operands");
     const auto r =
         std::ranges::find_if(algebra::kRules, [](const algebra::Rule &rule) {
-          return rule.op == op && !algebra::is_unary(rule) &&
+          return rule.op == op &&
                  (!rule.needs_commutative_multiply ||
                   CCommutativeMultiply<typename Op::value_type>) &&
                  holds<Op, A, B>(rule.when);
@@ -120,6 +122,8 @@ template <COperation Op, CExpression A, CExpression B>
 template <COperation Op, CExpression A>
 [[nodiscard]] constexpr auto simplify_mono(const A &a) noexcept {
   constexpr auto kind = Op::rule_op;
+  static_assert(!kind.has_value() || algebra::arity_of(*kind) == 1,
+                "a unary node's identities read one operand");
   constexpr bool negates = kind.has_value() && *kind == algebra::RuleOp::Neg &&
                            is_negation_expr_v<A>;
   if constexpr (negates) {

@@ -32,6 +32,7 @@
 #include <concepts>
 #include <limits>
 #include <memory>
+#include <functional>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -123,7 +124,7 @@ public:
       return Equation{*why};
     }
     if (auto snap = rt::load_snapshot<T>(path);
-        snap && describes(*snap, *owned, roots_of(*owned, first, rest...),
+        snap && describes(**snap, *owned, roots_of(*owned, first, rest...),
                           owned->size())) {
       return Equation{std::move(*snap)};
     }
@@ -187,7 +188,7 @@ public:
   evaluate(const rt_detail::CPointArg<T> auto &...args) const {
     return point(args...).transform([this](const auto &at) {
       std::array<T, output_dim> f{};
-      gather(Want::Values, at, std::span<T>{f});
+      gather(Want::Value, at, std::span<T>{f});
       if constexpr (output_dim == 1) {
         return f[0];
       } else {
@@ -283,8 +284,10 @@ public:
         gather(Want::Hessian, at, std::span<T>{f}, g, h);
         // Every other column of that colour is structurally zero.
         for (const auto [i, j] : std::views::cartesian_product(dims, dims)) {
-          const std::size_t k = c.cell_of(i, j);
-          dense[0uz, i, j] = k == rt::no_column ? T{0} : h[k];
+          dense[0uz, i, j] =
+              c.cell_of(i, j)
+                  .transform([&h](std::size_t k) { return h[k]; })
+                  .value_or(T{0});
         }
       } else {
         // Hessian::at reads only the compressed cells and `zero`.
@@ -435,7 +438,7 @@ public:
   [[nodiscard]] result<void>
   evaluate(const rt_detail::CColumns<const T *> auto &xs,
            const rt_detail::CColumns<T *> auto &f, std::size_t n) const {
-    return dispatch(*snapshot(Want::Values, n), as_columns(xs), as_columns(f),
+    return dispatch(*snapshot(Want::Value, n), as_columns(xs), as_columns(f),
                     {}, {}, n);
   }
 
@@ -527,9 +530,10 @@ public:
   // spellings undo the compression, the batch ones cannot, and without these
   // the column counts describe a block nobody can index.
 
-  // `at(i, j)` is `rt::no_column` where d f[i] / d x[j] is structurally zero.
-  [[nodiscard]] constexpr const rt::Sparsity &jacobian_pattern() const {
-    return derivative_.pattern;
+  // `at(i, j)` is nullopt where d f[i] / d x[j] is structurally zero.
+  [[nodiscard]] constexpr std::optional<std::reference_wrapper<const rt::Sparsity>>
+  jacobian_pattern() const {
+    return unless_poisoned([this] { return std::cref(derivative_.pattern); });
   }
 
   // Where H(i, j) sits, or nullopt for a cell the colouring calls zero.
@@ -541,8 +545,7 @@ public:
         j >= symbol_count()) {
       return std::nullopt;
     }
-    const std::size_t k = hessians_.front().coloring.cell_of(i, j);
-    return k == rt::no_column ? std::nullopt : std::optional{k};
+    return hessians_.front().coloring.cell_of(i, j);
   }
 
   // --- the equation on disk --------------------------------------------------
@@ -563,11 +566,11 @@ public:
     if (poisoned()) {
       return std::unexpected{*bad_};
     }
-    const auto snap = rt::load_snapshot<T>(path);
-    if (!snap) {
-      return std::unexpected{snap.error()};
-    }
-    return describes(*snap) ? result<void>{} : fail(errc::archive_mismatch);
+    return rt::load_snapshot<T>(path).and_then(
+        [this](const rt::Verified<T> &snap) {
+          return describes(*snap) ? result<void>{}
+                                  : fail(errc::archive_mismatch);
+        });
   }
 
   // Nothing built and nothing swept; the model need not exist in this program.
@@ -575,14 +578,13 @@ public:
   [[nodiscard]] static result<Equation> load(const std::filesystem::path &path)
     requires std::floating_point<T>
   {
-    auto snap = rt::load_snapshot<T>(path);
-    if (!snap) {
-      return std::unexpected{snap.error()};
-    }
-    if (snap->roots.size() != output_dim) {
-      return fail(errc::archive_mismatch);
-    }
-    return Equation{std::move(*snap)};
+    return rt::load_snapshot<T>(path).and_then(
+        [](rt::Verified<T> snap) -> result<Equation> {
+          if (snap->roots.size() != output_dim) {
+            return fail(errc::archive_mismatch);
+          }
+          return Equation{std::move(snap)};
+        });
   }
 
   // The only way to tell which path rt::equation(path, model) took.
@@ -634,13 +636,11 @@ private:
         continue;
       }
       const auto code = lane.ready->kernel.object();
-      out.push_back({.want = static_cast<std::uint8_t>(want),
+      out.push_back({.want = static_cast<Want>(want),
                      .symbol = std::string{lane.ready->kernel.symbol()},
                      .host = std::string{c->host_identity()},
                      .digest = rt::digest(*lane.ready->graph),
-                     // What the compile was given, not what the caller
-                     // stated: effective_options() settles the lane width.
-                     .options = effective_options(),
+                     .codegen = effective_options().codegen,
                      .code = {
                        code.begin(),
                        code.end()
@@ -656,7 +656,7 @@ private:
       return nullptr;
     }
     return rt::find_object(objects_, want, rt::digest(g), c->host_identity(),
-                           effective_options());
+                           effective_options().codegen);
   }
 #endif
 
@@ -768,15 +768,18 @@ private:
 
   // The snapshot's node array is installed verbatim, not replayed: make() folds
   // and would renumber the ids the saved sweeps name.
-  explicit Equation(rt::Snapshot<T> &&snap)
-      : arena_(rt::rebuild(snap).release(), reclaim),
-        roots_(std::move(snap.roots)), model_nodes_(snap.model_nodes),
-        derivative_(std::move(snap.jacobian)),
-        hessians_(std::move(snap.hessians)), hvp_(std::move(snap.hvp)),
-        vjp_(std::move(snap.vjp)), jvp_(std::move(snap.jvp)), loaded_(true) {
+  explicit Equation(rt::Verified<T> snap)
+      : Equation(std::move(snap).rebuild()) {}
+  explicit Equation(rt::Rebuilt<T> r)
+      : arena_(r.arena.release(), reclaim), roots_(std::move(r.rest.roots)),
+        model_nodes_(r.rest.model_nodes),
+        derivative_(std::move(r.rest.jacobian)),
+        hessians_(std::move(r.rest.hessians)), hvp_(std::move(r.rest.hvp)),
+        vjp_(std::move(r.rest.vjp)), jvp_(std::move(r.rest.jvp)),
+        loaded_(true) {
 #ifdef DDX_HAS_JIT
-    options_ = snap.options;
-    objects_ = std::move(snap.objects);
+    options_ = r.rest.options;
+    objects_ = std::move(r.rest.objects);
 #endif
     cache_ = std::make_unique<Cache>();
   }
@@ -945,7 +948,7 @@ private:
   [[nodiscard]] static Rung rung(jit::Compiler &c,
                                  const std::shared_ptr<const rt::Graph<T>> &g,
                                  jit::Options opt, jit::Level level) {
-    opt.codegen_level = level;
+    opt.codegen.codegen_level = level;
     return {c.compile_async(g, opt), level};
   }
 #endif
@@ -1057,7 +1060,7 @@ private:
         return;
       }
       const jit::Options top = effective_options();
-      if (asked == 0 && top.codegen_level > jit::Level::O0) {
+      if (asked == 0 && top.codegen.codegen_level > jit::Level::O0) {
         lane.rungs[0] = rung(*c, lane.ready->graph, top, jit::Level::O0);
         lane.asked.store(1, std::memory_order_relaxed);
         return;
@@ -1065,7 +1068,7 @@ private:
       // Either the top rung over a cheap one, or -- at codegen 0 -- the only
       // rung there is.
       lane.rungs[asked == 0 ? 0 : 1] =
-          rung(*c, lane.ready->graph, top, top.codegen_level);
+          rung(*c, lane.ready->graph, top, top.codegen.codegen_level);
       lane.asked.store(2, std::memory_order_relaxed);
     }
 #endif
@@ -1145,7 +1148,7 @@ private:
     } else if (want == Want::Jvp) {
       gb.tangent_from(jvp_);
     } else {
-      if (want != Want::Values) {
+      if (want != Want::Value) {
         gb.jacobian_from(derivative_);
       }
       if (want == Want::Hessian) {
@@ -1157,20 +1160,16 @@ private:
     }
     auto swept = std::make_shared<const rt::Graph<T>>(gb.finish(contracts()));
 #ifdef DDX_HAS_JIT
-    // The seeded lanes skip the rebalanced graph: their second-order block is
-    // swept from the unblocked roots, so a rebalanced copy would answer in
-    // different last bits than the sweep it is checked against.
     auto compiled = swept;
     if constexpr (std::same_as<T, double>) {
-      if (want != Want::Hessian && want != Want::Hvp && want != Want::Vjp &&
-          want != Want::Jvp && !compile_roots_.empty()) {
+      if (rebalanceable(want) && !compile_roots_.empty()) {
         rt::GraphBuilder<T> cb{*arena_};
         if (want == Want::Gradient) {
           cb.roots_from(compile_roots_);
         } else {
           cb.values_from(compile_roots_);
         }
-        if (want != Want::Values) {
+        if (want != Want::Value) {
           cb.jacobian_from(compile_derivative_);
         }
         compiled = std::make_shared<const rt::Graph<T>>(cb.finish(contracts()));
@@ -1194,17 +1193,16 @@ private:
       // launched as always and adopt()'s rank dropping what cannot beat it.
       if (const rt::Object *const have =
               stored(want, *lane.ready->compile_graph)) {
-        // Shapes come from the graph just frozen, never the file: a forged
-        // entry supplies code and a symbol, never a column count.
-        const auto &layout = lane.ready->compile_graph->layout();
-        if (auto adopted = c->adopt(
-                have->code, have->symbol, lane.ready->compile_graph->arity(),
-                layout.values, layout.jacobian, layout.hessian)) {
-          const jit::Level level = have->options.codegen_level;
+        // The shape comes from the graph just frozen, never the file: a
+        // forged entry supplies code and a symbol, never a column count.
+        if (auto adopted =
+                c->adopt(have->code, have->symbol,
+                         jit::KernelShape::of(*lane.ready->compile_graph))) {
+          const jit::Level level = have->codegen.codegen_level;
           lane.ready = lane.ready->with(std::move(*adopted), level);
           // Nothing left to climb to, so nothing is launched and, under Adapt,
           // nothing more is counted.
-          if (level >= effective_options().codegen_level) {
+          if (level >= effective_options().codegen.codegen_level) {
             lane.asked.store(2, std::memory_order_relaxed);
             return;
           }
@@ -1229,23 +1227,19 @@ private:
   void launch(Lane &lane, jit::Compiler &c) const {
     const jit::Options top = effective_options();
     std::size_t next = 0;
-    if (top.codegen_level > jit::Level::O0) {
+    if (top.codegen.codegen_level > jit::Level::O0) {
       lane.rungs[next++] =
           rung(c, lane.ready->compile_graph, top, jit::Level::O0);
     }
     lane.rungs[next] =
-        rung(c, lane.ready->compile_graph, top, top.codegen_level);
+        rung(c, lane.ready->compile_graph, top, top.codegen.codegen_level);
   }
 
   // How wide to emit, from the batch the caller stated: a wide kernel computes
   // `w` points to answer for one, so a short batch emits scalar -- the same
   // threshold the sweep uses.  A stated `lanes` is honoured.
   [[nodiscard]] jit::Options effective_options() const noexcept {
-    jit::Options opt = options_;
-    if (!opt.lanes.stated() && opt.points < kLanes) {
-      opt.lanes = jit::Lanes::scalar();
-    }
-    return opt;
+    return jit::for_batch(options_, rt::block_lanes);
   }
 
   // A Kernel does not own its code, so the compiler outlives every kernel.
@@ -1253,15 +1247,12 @@ private:
   static jit::Compiler *compiler() { return rt_detail::shared_compiler(); }
 #endif
 
-  // Points per block sweep: two AVX2 registers of doubles.
-  static constexpr std::size_t kLanes = 8;
-
   // Decided in the *graph*, so sweep and kernel fold the same products.  A
   // JIT-less build contracts too, so an answer does not depend on how the
   // library was configured.
   [[nodiscard]] bool contracts() const noexcept {
 #ifdef DDX_HAS_JIT
-    return options_.contract;
+    return options_.codegen.contract;
 #else
     return true;
 #endif
@@ -1271,9 +1262,7 @@ private:
                  std::span<T *const> f, std::span<T *const> g,
                  std::span<T *const> h, std::size_t n) const {
     const auto blocks = c.graph->output_blocks();
-    // The freeze settled both, so there is no choice left here.
-    const auto order = c.graph->contracted_order();
-    const auto contractions = c.graph->contractions();
+    const auto schedule = c.graph->schedule();
     // The graph's width, not the arena's symbol count: `xs` carries one column
     // per input, and a lane may hold leaves that are not symbols.
     const std::size_t symbols = c.graph->arity();
@@ -1282,8 +1271,8 @@ private:
     // may have grown since the freeze, and live ids index below that.
     //
     // A short batch sweeps one point at a time rather than padding out to
-    // kLanes, which on a batch of one is the whole cost.
-    if (n < kLanes) {
+    // rt::block_lanes, which on a batch of one is the whole cost.
+    if (n < rt::block_lanes) {
       // Grown once and kept: a point at a time is the shape a minimiser asks
       // in, and two allocations per gradient were most of a small one.
       static thread_local std::vector<T> at;
@@ -1293,7 +1282,7 @@ private:
       for (const std::size_t i : std::views::iota(0uz, n)) {
         std::ranges::transform(xs, at.begin(),
                                [i](const T *column) { return column[i]; });
-        rt::evaluate_into(*arena_, at, order, contractions, std::span<T>{tape});
+        rt::evaluate_into(*arena_, at, schedule, std::span<T>{tape});
         for (const auto [columns, block] : std::views::zip(
                  std::array{f, g, h},
                  std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
@@ -1305,29 +1294,29 @@ private:
       return;
     }
 
-    // kLanes points per sweep: the switch is paid once per node per block, and
+    // rt::block_lanes points per sweep: the switch is paid once per node per block, and
     // each operation becomes a lane loop wide enough to vectorise.  A short
     // final block repeats its last point, and those lanes are never read back.
-    std::vector<T> lanes(symbols * kLanes);
-    std::vector<T> tape(arena_->size() * kLanes);
+    std::vector<T> lanes(symbols * rt::block_lanes);
+    std::vector<T> tape(arena_->size() * rt::block_lanes);
 
-    for (std::size_t base = 0; base < n; base += kLanes) {
-      const std::size_t width = std::min(kLanes, n - base);
+    for (std::size_t base = 0; base < n; base += rt::block_lanes) {
+      const std::size_t width = std::min(rt::block_lanes, n - base);
       for (const auto [j, column] : xs | std::views::enumerate) {
-        T *const dst = lanes.data() + static_cast<std::size_t>(j) * kLanes;
+        T *const dst = lanes.data() + static_cast<std::size_t>(j) * rt::block_lanes;
         T *const tail =
             std::ranges::copy(std::span{column + base, width}, dst).out;
-        std::ranges::fill(tail, dst + kLanes, column[base + width - 1]);
+        std::ranges::fill(tail, dst + rt::block_lanes, column[base + width - 1]);
       }
-      rt::evaluate_block<kLanes>(*arena_, std::span<const T>{lanes}, order,
-                                 contractions, std::span<T>{tape});
+      rt::evaluate_block<rt::block_lanes>(*arena_, std::span<const T>{lanes}, schedule,
+                                 std::span<T>{tape});
 
       for (const auto [columns, block] : std::views::zip(
                std::array{f, g, h},
                std::array{blocks.values, blocks.jacobian, blocks.hessian})) {
         for (const auto [column, o] : std::views::zip(columns, block)) {
           std::ranges::copy(
-              std::span{tape.data() + std::size_t{o} * kLanes, width},
+              std::span{tape.data() + std::size_t{o} * rt::block_lanes, width},
               column + base);
         }
       }

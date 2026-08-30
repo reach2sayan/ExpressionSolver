@@ -6,10 +6,13 @@
 #include "rt/opcode.hpp"
 #include "util/ranges.hpp"
 
+#include <boost/describe/class.hpp>
+#include <boost/describe/enum.hpp>
+#include <boost/describe/enum_to_string.hpp>
 #include <boost/graph/compressed_sparse_row_graph.hpp>
+#include <boost/mp11/list.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <initializer_list>
 #include <iterator>
 #include <ranges>
@@ -46,7 +49,7 @@ using Vertex = boost::graph_traits<Adjacency>::vertex_descriptor;
 // Appended rather than inserted, so a saved Object's `want` byte still names
 // the same lane it did.
 enum class Want : std::uint8_t {
-  Values,
+  Value,
   Jacobian,
   Hessian,
   Hvp,
@@ -54,7 +57,32 @@ enum class Want : std::uint8_t {
   Jvp,
   Gradient
 };
-inline constexpr std::size_t want_count = 7;
+BOOST_DESCRIBE_ENUM(Want, Value, Jacobian, Hessian, Hvp, Vjp, Jvp, Gradient)
+inline constexpr std::size_t want_count =
+    boost::mp11::mp_size<boost::describe::describe_enumerators<Want>>::value;
+
+[[nodiscard]] constexpr std::string_view name_of(Want w) noexcept {
+  return boost::describe::enum_to_string(w, "?");
+}
+
+// Whether the lane's kernel may be built over the rebalanced graph.  The
+// seeded and second-order lanes may not: their block is swept from the
+// unblocked roots, so a rebalanced copy would answer in different last bits
+// than the sweep it is checked against.
+[[nodiscard]] constexpr bool rebalanceable(Want w) noexcept {
+  switch (w) {
+  case Want::Value:
+  case Want::Jacobian:
+  case Want::Gradient:
+    return true;
+  case Want::Hessian:
+  case Want::Hvp:
+  case Want::Vjp:
+  case Want::Jvp:
+    return false;
+  }
+  return false;
+}
 
 // A builder frozen into CSR, the form codegen walks.  Operand position rides
 // along as an edge attribute, because a CSR row is a set.
@@ -68,34 +96,40 @@ public:
     std::size_t values = 0;   // m
     std::size_t jacobian = 0; // the pattern's nonzeros, row-major by function
     std::size_t hessian = 0;  // colours * n, compressed
+    BOOST_DESCRIBE_CLASS(Layout, (), (values, jacobian, hessian), (), ())
   };
 
   struct Property {
     OpCode op = OpCode::Const;
     T value{};
     std::uint32_t slot = 0;
+    BOOST_DESCRIBE_CLASS(Property, (), (op, value, slot), (), ())
+  };
+
+  // The output columns by block, in the order the kernel writes them; the
+  // layout is read off the blocks, so no column can be miscounted.
+  struct OutputBlocks {
+    std::vector<NodeId> values;
+    std::vector<NodeId> jacobian;
+    std::vector<NodeId> hessian;
   };
 
   // `contract` is settled here, not per sweep: it decides the arithmetic, so
   // changing it afterwards means freezing again.
-  [[nodiscard]] static Graph freeze(const Builder<T> &b,
-                                    std::span<const NodeId> outputs,
-                                    Layout layout = {}, Coloring coloring = {},
+  [[nodiscard]] static Graph freeze(const Builder<T> &b, OutputBlocks blocks,
+                                    Coloring coloring = {},
                                     Sparsity jacobian = {},
                                     bool contract = true) {
     Graph g;
-    // A default layout means every output is a value; a stated one has to
-    // account for every output, or codegen and the caller disagree on a
-    // column's meaning.
-    const bool unstated =
-        layout.values == 0 && layout.jacobian == 0 && layout.hessian == 0;
-    g.layout_ = unstated ? Layout{.values = outputs.size()} : layout;
-    assert(g.layout_.values + g.layout_.jacobian + g.layout_.hessian ==
-           outputs.size());
+    g.layout_ = {.values = blocks.values.size(),
+                 .jacobian = blocks.jacobian.size(),
+                 .hessian = blocks.hessian.size()};
+    g.outputs_ = std::move(blocks.values);
+    g.outputs_.append_range(blocks.jacobian);
+    g.outputs_.append_range(blocks.hessian);
     g.coloring_ = std::move(coloring);
     g.jacobian_ = std::move(jacobian);
     g.symbols_.assign(b.symbols().begin(), b.symbols().end());
-    g.outputs_.assign(outputs.begin(), outputs.end());
     g.properties_.reserve(b.size());
 
     std::vector<std::pair<std::size_t, std::size_t>> edges;
@@ -121,12 +155,21 @@ public:
     g.contract(contract);
     // Read off what survived rather than taken from the builder, so a lane
     // that kept no seed keeps the kernel and the digest it had.
-    for (const NodeId v : g.contracted_order_) {
+    for (const auto &[v, fma] : g.schedule_) {
       if (g.properties_[v].op == OpCode::Seed) {
         g.seeds_ = std::max(g.seeds_, std::size_t{g.properties_[v].slot} + 1);
       }
     }
     return g;
+  }
+
+  // Every output a value.
+  [[nodiscard]] static Graph freeze(const Builder<T> &b,
+                                    std::span<const NodeId> values,
+                                    bool contract = true) {
+    OutputBlocks blocks;
+    blocks.values.assign(values.begin(), values.end());
+    return freeze(b, std::move(blocks), {}, {}, contract);
   }
 
   [[nodiscard]] std::size_t size() const { return properties_.size(); }
@@ -152,19 +195,11 @@ public:
   [[nodiscard]] std::size_t live_count() const { return live_order_.size(); }
 
   // The ids left to compute, in topological order so a consumer emits them in
-  // one pass.  A multiply every reader swallowed into an fma is computed by
-  // nobody; contraction_at() decides that arithmetic, off the nodes.  The span
-  // must not outlive this graph.
-  [[nodiscard]] std::span<const NodeId> contracted_order() const {
-    return contracted_order_;
-  }
-
-  // The fma at each node of contracted_order(), in step with it.  The freeze
-  // already asks contraction_at() per node to decide the order; keeping the
-  // answer is what stops every sweep re-deriving it per point.
-  [[nodiscard]] std::span<const Contraction> contractions() const {
-    return contractions_;
-  }
+  // one pass, each with its fma.  A multiply every reader swallowed into an fma
+  // is computed by nobody; contraction_at() decides that arithmetic, off the
+  // nodes, and the freeze keeps the answer so no sweep re-derives it per point.
+  // The span must not outlive this graph.
+  [[nodiscard]] std::span<const Step> schedule() const { return schedule_; }
 
   // Derived once, for codegen, the interpreter and the ABI size checks.
   struct Blocks {
@@ -223,9 +258,7 @@ private:
   // nothing else reads drops out with the Neg of a subtraction behind it.
   void contract(bool on) {
     if (!on) {
-      contracted_order_ = live_order_;
-      contractions_ =
-          detail::contraction_table(*this, contracted_order_, false);
+      schedule_ = detail::schedule_of(*this, live_order_, false);
       return;
     }
     const std::vector<bool> live = detail::reachable(
@@ -240,11 +273,9 @@ private:
             mark(static_cast<NodeId>(boost::target(edge, children_)));
           }
         });
-    contracted_order_ =
-        live_order_ |
-        std::views::filter([&live](NodeId v) { return live[v]; }) |
-        impl::to<std::vector<NodeId>>();
-    contractions_ = detail::contraction_table(*this, contracted_order_);
+    schedule_ = detail::schedule_of(
+        *this,
+        live_order_ | std::views::filter([&live](NodeId v) { return live[v]; }));
   }
 
   std::vector<Property> properties_;
@@ -257,8 +288,7 @@ private:
   std::size_t seeds_ = 0;
   std::vector<bool> live_;
   std::vector<NodeId> live_order_;
-  std::vector<NodeId> contracted_order_;
-  std::vector<Contraction> contractions_;
+  std::vector<Step> schedule_;
 };
 
 // Each step names one block of output columns; `finish` is the only thing that
@@ -271,7 +301,9 @@ private:
 // The class template argument is deduced from the builder.
 template <impl::Numeric T = double> class GraphBuilder {
 public:
-  explicit constexpr GraphBuilder(Builder<T> &b) noexcept : builder_(&b) {}
+  explicit constexpr GraphBuilder(Builder<T> &b) noexcept : builder_(&b) {
+    detail::Sealing::seal(b);
+  }
 
   // The function the kernel computes.
   constexpr GraphBuilder &value(const RTExpression<T> &root) {
@@ -284,8 +316,7 @@ public:
         roots |
         std::views::transform([&](const auto &e) { return e.id(*builder_); }) |
         impl::to<std::vector<NodeId>>();
-    outputs_ = roots_;
-    layout_.values = roots_.size();
+    blocks_.values = roots_;
     return *this;
   }
 
@@ -293,8 +324,7 @@ public:
   // constructor and freezes only on a batch call.
   constexpr GraphBuilder &values_from(std::span<const NodeId> roots) {
     roots_.assign(roots.begin(), roots.end());
-    outputs_.assign(roots.begin(), roots.end());
-    layout_.values = roots_.size();
+    blocks_.values = roots_;
     return *this;
   }
 
@@ -302,8 +332,7 @@ public:
   // no value block, and whatever only the value needs is not live.
   constexpr GraphBuilder &roots_from(std::span<const NodeId> roots) {
     roots_.assign(roots.begin(), roots.end());
-    outputs_.clear();
-    layout_.values = 0;
+    blocks_.values.clear();
     return *this;
   }
 
@@ -311,7 +340,7 @@ public:
   // readable, so the two must not travel separately.
   constexpr GraphBuilder &jacobian_from(const Jacobian &j) {
     jacobian_ = j.pattern;
-    return block(&Layout::jacobian, j.partial);
+    return block(&OutputBlocks::jacobian, j.partial);
   }
 
   // Every partial, in symbol order.  One reverse sweep per function.
@@ -325,8 +354,7 @@ public:
   }
 
   [[nodiscard]] Graph<T> finish(bool contract = true) const {
-    return Graph<T>::freeze(*builder_, outputs_, layout_, coloring_, jacobian_,
-                            contract);
+    return Graph<T>::freeze(*builder_, blocks_, coloring_, jacobian_, contract);
   }
 
 private:
@@ -334,38 +362,35 @@ private:
   // rt::build_hessian_impl appends to the builder, and freeze() must not.
   template <typename... Ts> friend class impl::Equation;
   friend class py::PyEquation;
-  using Layout = typename Graph<T>::Layout;
+  using OutputBlocks = typename Graph<T>::OutputBlocks;
 
-  // One block of output columns, and the layout width it fills.
-  constexpr GraphBuilder &block(std::size_t Layout::*width,
+  constexpr GraphBuilder &block(std::vector<NodeId> OutputBlocks::*which,
                                 std::span<const NodeId> ids) {
-    outputs_.insert(outputs_.end(), ids.begin(), ids.end());
-    layout_.*width = ids.size();
+    (blocks_.*which).assign(ids.begin(), ids.end());
     return *this;
   }
   constexpr GraphBuilder &hessian_from(const Hessian &h) {
     coloring_ = h.coloring;
-    return block(&Layout::hessian, h.compressed);
+    return block(&OutputBlocks::hessian, h.compressed);
   }
   // H v is a second-order block of one column, so the colouring stays empty
   // and coloring() is not always a way to read that block back.
   constexpr GraphBuilder &hessian_vector_from(const HessianVector &h) {
-    return block(&Layout::hessian, h.product);
+    return block(&OutputBlocks::hessian, h.product);
   }
   // J v is a first-order block of m columns, one per function.
   constexpr GraphBuilder &tangent_from(const Tangent &t) {
-    return block(&Layout::jacobian, t.product);
+    return block(&OutputBlocks::jacobian, t.product);
   }
   // w'J is a first-order block of n columns and dense, so jacobian_pattern()
   // stays empty.
   constexpr GraphBuilder &vector_jacobian_from(const VectorJacobian &j) {
-    return block(&Layout::jacobian, j.product);
+    return block(&OutputBlocks::jacobian, j.product);
   }
 
   Builder<T> *builder_;
   std::vector<NodeId> roots_;
-  std::vector<NodeId> outputs_;
-  Layout layout_;
+  OutputBlocks blocks_;
   Coloring coloring_;
   Sparsity jacobian_;
 };

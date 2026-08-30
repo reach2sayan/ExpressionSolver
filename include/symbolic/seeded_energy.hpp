@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <span>
 #include <type_traits>
 
 #include "symbolic/symbol.hpp" // mp_size
@@ -32,11 +33,13 @@ public:
       : expr_(static_cast<Expr &&>(expr)) {}
 
   template <Numeric Dof>
-  [[nodiscard]] constexpr auto operator()(const Dof *dof) const noexcept {
-    using T = std::remove_cvref_t<Dof>;
+  [[nodiscard]] constexpr auto
+  operator()(const std::span<const Dof> dof) const noexcept {
+    const auto point = dof.template first<arity>();
     // Built by copy: zeroing first would double the writes per probe.
-    const auto s = index_apply<arity>(
-        [&]<std::size_t... I>() { return std::array<T, arity>{dof[I]...}; });
+    const auto s = index_apply<arity>([&]<std::size_t... I>() {
+      return std::array<Dof, arity>{point[I]...};
+    });
     return expr_.template eval_seeded<symbols>(s);
   }
 };

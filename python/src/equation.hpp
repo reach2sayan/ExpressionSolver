@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -47,15 +48,19 @@ public:
 
   PyEquation(std::shared_ptr<rt::Builder<double>> arena,
              std::vector<rt::NodeId> roots)
-      : arena_(std::move(arena)), roots_(std::move(roots)),
+      : arena_(std::move(arena)), symbols_(arena_->symbols()),
+        roots_(std::move(roots)),
         model_nodes_(static_cast<std::uint32_t>(arena_->size())) {}
 
   // From a file: the sweeps arrive filled, so nothing below computes them.
-  explicit PyEquation(rt::Snapshot<double> &&snap)
-      : arena_(rt::rebuild(snap)), roots_(std::move(snap.roots)),
-        derivative_(std::move(snap.jacobian)),
-        sweeps_(std::move(snap.hessians)), options_(snap.options),
-        objects_(std::move(snap.objects)), model_nodes_(snap.model_nodes),
+  explicit PyEquation(rt::Verified<double> snap)
+      : PyEquation(std::move(snap).rebuild()) {}
+  explicit PyEquation(rt::Rebuilt<double> r)
+      : arena_(std::move(r.arena)), symbols_(arena_->symbols()),
+        roots_(std::move(r.rest.roots)),
+        derivative_(std::move(r.rest.jacobian)),
+        sweeps_(std::move(r.rest.hessians)), options_(r.rest.options),
+        objects_(std::move(r.rest.objects)), model_nodes_(r.rest.model_nodes),
         loaded_(true) {}
 
   // The same struct the C++ facade fills: one serialiser, two equations.  Also
@@ -82,18 +87,6 @@ public:
 
   [[nodiscard]] std::size_t arity() const { return arena_->symbols().size(); }
   [[nodiscard]] constexpr std::size_t outputs() const { return roots_.size(); }
-  // The symbols as interned Python strings, built once.  Lazy and safe: run()
-  // does not drop the GIL until after the Point is built.
-  [[nodiscard]] std::span<const pyb::object> names() {
-    if (names_.size() != symbols().size()) {
-      names_.clear();
-      names_.reserve(symbols().size());
-      for (const std::string &s : symbols()) {
-        names_.emplace_back(pyb::str(s));
-      }
-    }
-    return names_;
-  }
 
   [[nodiscard]] const std::vector<std::string> &symbols() const {
     return arena_->symbols();
@@ -102,8 +95,8 @@ public:
   // --- the three lanes, as Python sees them --------------------------------
 
   [[nodiscard]] pyb::object evaluate(const pyb::handle &x) {
-    const Point at{x, symbols(), names()};
-    Lane &l = lane(Want::Values);
+    const Point at{x, symbols_};
+    Lane &l = lane(Want::Value);
     if (scalar(at)) {
       Cell f;
       run(l, at, f.rows(), {}, {});
@@ -116,7 +109,7 @@ public:
   }
 
   [[nodiscard]] pyb::tuple jacobian(const pyb::handle &x) {
-    const Point at{x, symbols(), names()};
+    const Point at{x, symbols_};
     Lane &l = lane(Want::Jacobian);
     Scratch cells{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
@@ -130,7 +123,7 @@ public:
 
   // The Jacobian alone, from a lane with no value block.
   [[nodiscard]] pyb::object gradient(const pyb::handle &x) {
-    const Point at{x, symbols(), names()};
+    const Point at{x, symbols_};
     Lane &l = lane(Want::Gradient);
     Scratch cells{count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
@@ -141,7 +134,7 @@ public:
   }
 
   [[nodiscard]] pyb::tuple hessian(const pyb::handle &x) {
-    const Point at{x, symbols(), names()};
+    const Point at{x, symbols_};
     return outputs() == 1 ? hessian_from_lane(at) : hessian_from_arena(at);
   }
 
@@ -151,8 +144,8 @@ public:
   // of the point.
 
   [[nodiscard]] pyb::tuple jvp(const pyb::handle &v, const pyb::handle &x) {
-    const Point at{x, symbols(), names()};
-    const Point dir{v, symbols(), names()};
+    const Point at{x, symbols_};
+    const Point dir{v, symbols_};
     Lane &l = lane(Want::Jvp);
     Block out{shape_of({ssize(outputs())}, at),
               count(l, &rt::Graph<double>::Blocks::jacobian), at.size()};
@@ -163,7 +156,7 @@ public:
   }
 
   [[nodiscard]] pyb::tuple vjp(const pyb::handle &w, const pyb::handle &x) {
-    const Point at{x, symbols(), names()};
+    const Point at{x, symbols_};
     // By position: the covector is indexed by function, and a dict would have
     // nothing to key on.
     const Point dir{w, outputs()};
@@ -182,8 +175,8 @@ public:
     if (outputs() != 1) {
       fail_with(errc::not_univariate);
     }
-    const Point at{x, symbols(), names()};
-    const Point dir{v, symbols(), names()};
+    const Point at{x, symbols_};
+    const Point dir{v, symbols_};
     Lane &l = lane(Want::Hvp);
     const std::size_t n = arity();
 
@@ -246,7 +239,7 @@ public:
   // What one call for `want` evaluates: the contracted live order, which is
   // the sweep and what the kernel is lowered from.
   [[nodiscard]] std::size_t nodes(Want want) {
-    return lane(want).graph->contracted_order().size();
+    return lane(want).graph->schedule().size();
   }
 
   // Only what is free to answer: uses_kernel() would freeze a lane, and a repr
@@ -268,11 +261,11 @@ public:
   // Raises rather than answering false: "no" has three reasons -- unreadable,
   // unloadable, a different equation -- and only the errc says which.
   void verify(const std::filesystem::path &path) {
-    auto snap = rt::load_snapshot<double>(path);
+    const auto snap = rt::load_snapshot<double>(path);
     if (!snap) {
       throw PyError{snap.error()};
     }
-    if (!describes(*snap)) {
+    if (!describes(**snap)) {
       fail_with(errc::archive_mismatch);
     }
   }
@@ -310,11 +303,11 @@ private:
         continue;
       }
       const auto code = l.kernel.object();
-      out.push_back({.want = static_cast<std::uint8_t>(i),
+      out.push_back({.want = static_cast<Want>(i),
                      .symbol = std::string{l.kernel.symbol()},
                      .host = std::string{c->host_identity()},
                      .digest = rt::digest(*l.graph),
-                     .options = effective_options(),
+                     .codegen = effective_options().codegen,
                      .code = {code.begin(), code.end()}});
     }
     return out;
@@ -333,9 +326,6 @@ private:
     std::size_t points = 0;
     bool settled = false;
   };
-
-  // Points per block sweep, as in the facade: two AVX2 registers of doubles.
-  static constexpr std::size_t kLanes = 8;
 
   [[nodiscard]] Lane &lane(Want want) {
     Lane &l = lanes_[static_cast<std::size_t>(want)];
@@ -364,7 +354,7 @@ private:
     } else if (want == Want::Jvp) {
       gb.tangent_from(jvp_sweep());
     } else {
-      if (want != Want::Values) {
+      if (want != Want::Value) {
         gb.jacobian_from(derivative());
       }
       if (want == Want::Hessian) {
@@ -389,13 +379,11 @@ private:
     // options all still agree.
     if (const rt::Object *const stored =
             rt::find_object(objects_, want, rt::digest(*l.graph),
-                            c->host_identity(), effective_options())) {
-      // Shapes from the graph just frozen, never from the file: a forged entry
-      // may supply code and a symbol but cannot claim an arity.
-      const auto &layout = l.graph->layout();
-      if (auto adopted =
-              c->adopt(stored->code, stored->symbol, l.graph->arity(),
-                       layout.values, layout.jacobian, layout.hessian)) {
+                            c->host_identity(), effective_options().codegen)) {
+      // The shape from the graph just frozen, never from the file: a forged
+      // entry may supply code and a symbol but cannot claim an arity.
+      if (auto adopted = c->adopt(stored->code, stored->symbol,
+                                  jit::KernelShape::of(*l.graph))) {
         l.kernel = std::move(*adopted);
         l.settled = true;
         return; // nothing left to compile
@@ -448,11 +436,7 @@ private:
   // How wide to emit, from the batch the caller said they have: a wide kernel
   // does a register's worth of work to answer for a single point.
   [[nodiscard]] constexpr jit::Options effective_options() const noexcept {
-    jit::Options opt = options_;
-    if (!opt.lanes.stated() && opt.points < kLanes) {
-      opt.lanes = jit::Lanes::scalar();
-    }
-    return opt;
+    return jit::for_batch(options_, rt::block_lanes);
   }
 
 #ifdef DDX_HAS_JIT
@@ -468,7 +452,7 @@ private:
 
   // Decided in the graph, so a batch answers the same whichever path ran it.
   [[nodiscard]] constexpr bool contracts() const noexcept {
-    return options_.contract;
+    return options_.codegen.contract;
   }
 
   using BlockMember = std::span<const rt::NodeId> rt::Graph<double>::Blocks::*;
@@ -528,9 +512,7 @@ private:
                  std::span<double *const> g, std::span<double *const> h,
                  std::size_t n) const {
     const auto blocks = graph.output_blocks();
-    // The freeze settled both; there is no choice left to make here.
-    const auto order = graph.contracted_order();
-    const auto contractions = graph.contractions();
+    const auto schedule = graph.schedule();
     // The graph's width, not the symbol count: `xs` carries one column per
     // input, and a seeded lane holds leaves that are not symbols.
     const std::size_t symbols = graph.arity();
@@ -548,7 +530,7 @@ private:
 
     // Tapes are sized by the arena rather than the graph: it may have grown
     // since the freeze, and live ids index below that.  A short batch sweeps
-    // one point at a time rather than padding out to kLanes.
+    // one point at a time rather than padding out to rt::block_lanes.
     //
     // thread_local rather than a member: run() drops the GIL, so two Python
     // threads can be inside one Equation at once and a shared buffer would be a
@@ -556,7 +538,7 @@ private:
     //
     // resize() rather than assign(): every id read is written first, so no
     // stale value is ever seen and zeroing the arena per call is waste.
-    if (n < kLanes) {
+    if (n < rt::block_lanes) {
       static thread_local std::vector<double> at;
       static thread_local std::vector<double> tape;
       at.resize(symbols);
@@ -564,33 +546,32 @@ private:
       for (const std::size_t i : std::views::iota(0uz, n)) {
         std::ranges::transform(xs, at.begin(),
                                [i](const double *column) { return column[i]; });
-        rt::evaluate_into(*arena_, at, order, contractions,
-                          std::span<double>{tape});
+        rt::evaluate_into(*arena_, at, schedule, std::span<double>{tape});
         scatter(tape, i, 1, 1);
       }
       return;
     }
 
-    // kLanes points per sweep: the switch is paid once per node per block, and
+    // rt::block_lanes points per sweep: the switch is paid once per node per block, and
     // each operation becomes a lane loop wide enough to vectorise.  A short
     // final block repeats its last point, and those lanes are never read.
     static thread_local std::vector<double> lanes;
     static thread_local std::vector<double> tape;
-    lanes.resize(symbols * kLanes);
-    tape.resize(arena_->size() * kLanes);
+    lanes.resize(symbols * rt::block_lanes);
+    tape.resize(arena_->size() * rt::block_lanes);
 
     for (const std::size_t base :
-         std::views::iota(0uz, n) | std::views::stride(kLanes)) {
-      const std::size_t width = std::min(kLanes, n - base);
+         std::views::iota(0uz, n) | std::views::stride(rt::block_lanes)) {
+      const std::size_t width = std::min(rt::block_lanes, n - base);
       for (const auto [dst, column] :
-           std::views::zip(lanes | std::views::chunk(kLanes), xs)) {
+           std::views::zip(lanes | std::views::chunk(rt::block_lanes), xs)) {
         const auto tail = std::ranges::copy_n(
             column + base, static_cast<std::ptrdiff_t>(width), dst.begin());
         std::ranges::fill(tail.out, dst.end(), column[base + width - 1]);
       }
-      rt::evaluate_block<kLanes>(*arena_, std::span<const double>{lanes}, order,
-                                 contractions, std::span<double>{tape});
-      scatter(tape, base, kLanes, width);
+      rt::evaluate_block<rt::block_lanes>(*arena_, std::span<const double>{lanes},
+                                 schedule, std::span<double>{tape});
+      scatter(tape, base, rt::block_lanes, width);
     }
   }
 
@@ -801,7 +782,7 @@ private:
   }
 
   std::shared_ptr<rt::Builder<double>> arena_;
-  std::vector<pyb::object> names_;
+  Symbols symbols_;
   std::vector<rt::NodeId> roots_;
   std::optional<rt::Jacobian> derivative_;
   std::optional<std::vector<rt::Hessian>> sweeps_;
@@ -815,7 +796,7 @@ private:
   // roots are in.
   std::uint32_t model_nodes_ = 0;
   bool loaded_ = false;
-  std::array<Lane, 7> lanes_;
+  std::array<Lane, rt::want_count> lanes_;
 };
 
 // A call bound to its buffers: the point's columns, the output arrays and the
@@ -827,7 +808,7 @@ public:
   PyCall(pyb::object owner, PyEquation &eq, PyEquation::Want want,
          const pyb::handle &x)
       : owner_(std::move(owner)), eq_(&eq), want_(want),
-        x_(pyb::cast<Array>(x)), at_(x_, eq.symbols(), eq.names()) {
+        x_(pyb::cast<Array>(x)), at_(x_, eq.symbols_) {
     // A system's Hessian is read off the arena a point at a time, so there is
     // no lane to bind.
     if (want_ == PyEquation::Want::Hessian && eq_->outputs() != 1) {
@@ -841,7 +822,7 @@ public:
                  PyEquation::count(l, &rt::Graph<double>::Blocks::values),
                  at_.size());
     }
-    if (want_ != PyEquation::Want::Values) {
+    if (want_ != PyEquation::Want::Value) {
       partials_.emplace(
           PyEquation::count(l, &rt::Graph<double>::Blocks::jacobian),
           at_.size());
@@ -879,10 +860,10 @@ public:
   [[nodiscard]] pyb::object hessian() const { return read(h_); }
 
   [[nodiscard]] std::string repr() const {
-    static constexpr std::array kWants{"value", "jacobian", "hessian", "hvp",
-                                       "vjp",   "jvp",      "gradient"};
-    return std::format("<ddx.Call {} at {} point{}>",
-                       kWants[static_cast<std::size_t>(want_)], at_.size(),
+    std::string want{rt::name_of(want_)};
+    std::ranges::transform(want, want.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+    return std::format("<ddx.Call {} at {} point{}>", want, at_.size(),
                        at_.size() == 1 ? "" : "s");
   }
 

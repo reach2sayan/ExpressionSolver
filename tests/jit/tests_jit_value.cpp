@@ -74,7 +74,7 @@ void expect_matches_interpreter(auto build, std::size_t nvars,
   const auto graph = Graph<>::freeze(b, std::array{root.id(b)});
   const auto kernel = must_compile(graph);
   ASSERT_TRUE(static_cast<bool>(kernel));
-  ASSERT_EQ(kernel.arity(), nvars);
+  ASSERT_EQ(kernel.shape().arity, nvars);
 
   // Spread the sample points over a range every op in the suite accepts.
   std::vector<std::vector<double>> columns(nvars, std::vector<double>(n));
@@ -276,7 +276,7 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
 
   const auto run = [&](ddx::jit::Lanes lanes) {
     ddx::jit::Options o;
-    o.lanes = lanes;
+    o.codegen.lanes = lanes;
     const auto kernel = must_compile(graph, o);
     std::vector<double> value(n), dx(n), dy(n);
     double *const values[]{value.data()};
@@ -286,8 +286,8 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
   };
 
   const auto [v1, dx1, dy1] = run(ddx::jit::Lanes::scalar());
-  for (const auto lanes : {ddx::jit::Lanes{2}, ddx::jit::Lanes{4},
-                           ddx::jit::Lanes{8}, ddx::jit::Lanes::derived()}) {
+  for (const auto lanes : {*ddx::jit::Lanes::exactly(2), *ddx::jit::Lanes::exactly(4),
+                           *ddx::jit::Lanes::exactly(8), ddx::jit::Lanes::derived()}) {
     const auto [v, dx, dy] = run(lanes);
     const std::string width = spelled(lanes);
     for (std::size_t i = 0; i < n; ++i) {
@@ -323,7 +323,7 @@ TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
 
   const auto run = [&](ddx::jit::Level level) {
     ddx::jit::Options o;
-    o.codegen_level = level;
+    o.codegen.codegen_level = level;
     const auto kernel = must_compile(graph, o);
     std::vector<double> value(cx.size()), dx(cx.size()), dy(cx.size());
     double *const values[]{value.data()};
@@ -378,14 +378,15 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
     return std::tuple{value, dx, dy};
   };
 
-  for (const auto lanes : {ddx::jit::Lanes::scalar(), ddx::jit::Lanes{4}}) {
-    const auto [v0, dx0, dy0] = run({.lanes = lanes});
+  for (const auto lanes : {ddx::jit::Lanes::scalar(), *ddx::jit::Lanes::exactly(4)}) {
+    const auto [v0, dx0, dy0] = run({.codegen = {.lanes = lanes}});
     const std::string width = spelled(lanes);
     for (const auto &[what, o] :
-         {std::pair{"slp", ddx::jit::Options{.lanes = lanes, .slp = true}},
-          std::pair{
-              "loop_vectorize",
-              ddx::jit::Options{.lanes = lanes, .loop_vectorize = true}}}) {
+         {std::pair{"slp", ddx::jit::Options{
+                                .codegen = {.lanes = lanes, .slp = true}}},
+          std::pair{"loop_vectorize",
+                    ddx::jit::Options{.codegen = {.lanes = lanes,
+                                                  .loop_vectorize = true}}}}) {
       const auto [v, dx, dy] = run(o);
       for (std::size_t i = 0; i < n; ++i) {
         EXPECT_EQ(std::bit_cast<std::uint64_t>(v[i]),
@@ -452,8 +453,8 @@ TEST(JitValue, AgreesWithDdxThroughTheBridge) {
 TEST(JitValue, AnUnbuiltKernelIsFalsyAndCreateAnswersWithAResult) {
   const ddx::jit::Kernel none;
   EXPECT_FALSE(static_cast<bool>(none));
-  EXPECT_EQ(none.arity(), 0u);
-  EXPECT_EQ(none.outputs(), 0u);
+  EXPECT_EQ(none.shape().arity, 0u);
+  EXPECT_EQ(none.shape().outputs(), 0u);
 
   auto c = ddx::jit::Compiler::create();
   ASSERT_TRUE(c.has_value()) << c.error().detail;
@@ -514,9 +515,8 @@ TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
   // Unguessable, which is why the kernel carries it: whoever stores the bytes
   // stores the symbol beside them.
   ASSERT_FALSE(compiled.symbol().empty());
-  const auto adopted = compiler().adopt(
-      compiled.object(), compiled.symbol(), compiled.arity(), compiled.values(),
-      compiled.jacobian_columns(), compiled.hessian_columns());
+  const auto adopted =
+      compiler().adopt(compiled.object(), compiled.symbol(), compiled.shape());
   ASSERT_TRUE(adopted.has_value()) << adopted.error().detail;
 
   const std::array cx{0.4, 0.9}, cy{1.3, 0.7};
@@ -857,7 +857,7 @@ TEST(JitValue, AForgedSymbolCannotReachThroughTheLinkOrder) {
 
   // Its own symbol links, so the negatives below are not vacuous.
   EXPECT_TRUE(compiler()
-                  .adopt(compiled.object(), compiled.symbol(), 1, 1, 0, 0)
+                  .adopt(compiled.object(), compiled.symbol(), compiled.shape())
                   .has_value());
 
   // Every one resolves in the main dylib -- libm through define_libm, memcpy
@@ -865,7 +865,7 @@ TEST(JitValue, AForgedSymbolCannotReachThroughTheLinkOrder) {
   for (const std::string_view forged :
        {"sin", "exp", "log", "memcpy", "ddx_kernel_999"}) {
     EXPECT_FALSE(
-        compiler().adopt(compiled.object(), forged, 1, 1, 0, 0).has_value())
+        compiler().adopt(compiled.object(), forged, compiled.shape()).has_value())
         << forged << " resolved through the link order";
   }
 }
@@ -876,7 +876,8 @@ TEST(JitValue, AdoptingRubbishIsAnErrorNotACrash) {
                                          std::byte{'L'},  std::byte{'F'},
                                          std::byte{0},    std::byte{0},
                                          std::byte{0},    std::byte{0}};
-  const auto k = compiler().adopt(rubbish, "ddx_kernel_0", 1, 1, 0, 0);
+  const auto k = compiler().adopt(rubbish, "ddx_kernel_0",
+                                  {.arity = 1, .values = 1, .jacobian = 0, .hessian = 0});
   EXPECT_FALSE(k.has_value()) << "a truncated object linked";
 }
 

@@ -58,17 +58,20 @@ inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 class Lanes {
 public:
   constexpr Lanes() = default;
-  constexpr explicit Lanes(unsigned width) noexcept : width_(width) {
-    assert(width > 0);
-  }
   [[nodiscard]] static constexpr Lanes derived() noexcept { return {}; }
   [[nodiscard]] static constexpr Lanes scalar() noexcept { return Lanes{1}; }
+  // A stated width holds at least a point; nullopt otherwise.
+  [[nodiscard]] static constexpr std::optional<Lanes>
+  exactly(unsigned width) noexcept {
+    return width > 0 ? std::optional{Lanes{width}} : std::nullopt;
+  }
   [[nodiscard]] constexpr std::optional<unsigned> stated() const noexcept {
     return width_ > 0 ? std::optional{width_} : std::nullopt;
   }
   friend constexpr bool operator==(Lanes, Lanes) = default;
 
 private:
+  constexpr explicit Lanes(unsigned width) noexcept : width_(width) {}
   unsigned width_ = 0;
   BOOST_DESCRIBE_CLASS(Lanes, (), (), (), (width_))
 };
@@ -78,12 +81,10 @@ private:
 // are swept.  Adapt asks for a rung once the batch has paid for it.
 enum class Backend : std::uint8_t { Interpret, Compile, Adapt };
 
-struct Options {
-  // Read by Equation, never by Compiler::compile().
-  Backend backend = Backend::Interpret;
-  // The batch one call will carry.  Stated, not inferred: the kernel is built
-  // before any call exists to read an `n` from.  Sets the lane width only.
-  std::size_t points = 1;
+// What decides the machine code, and nothing else: the identity a stored
+// object is matched against and the object cache is keyed on, so a field here
+// is a field of both by construction.
+struct Codegen {
   Lanes lanes = Lanes::derived();
   Level opt_level = default_opt_level;
   // Under Backend::Compile the top rung, so O0 asks for a single one.
@@ -94,42 +95,54 @@ struct Options {
   // Off: the body is already `lanes` wide, and past ~19 columns the alias
   // checks exceed their own budget.
   bool loop_vectorize = false;
-  // Points, not points x nodes: a compile costs about what a node costs and a
-  // swept point saves about what a node saves, so the size cancels out.
-  std::size_t warm_points = 1uz << 16;
-  std::size_t hot_points = 1uz << 20;
   // With one, a derived `lanes` is the widest width the library serves -- four
   // doubles for libmvec -- whatever the host's registers hold.
   VecLib veclib = VecLib::None;
   bool contract = default_contract; // Follows DDX_FP_FLAGS
-  bool time_passes = false;         // Per-pass timing to stderr
+
+  friend bool operator==(const Codegen &, const Codegen &) = default;
+  BOOST_DESCRIBE_CLASS(Codegen, (),
+                       (lanes, opt_level, codegen_level, slp, loop_vectorize,
+                        veclib, contract),
+                       (), ())
+};
+
+// The identity, and around it the policy: whether and when to compile, what to
+// keep.  None of the policy reaches the emitter.
+struct Options {
+  // Read by Equation, never by Compiler::compile().
+  Backend backend = Backend::Interpret;
+  // The batch one call will carry.  Stated, not inferred: the kernel is built
+  // before any call exists to read an `n` from.  Sets the lane width only.
+  std::size_t points = 1;
+  Codegen codegen{};
+  // Points, not points x nodes: a compile costs about what a node costs and a
+  // swept point saves about what a node saves, so the size cancels out.
+  std::size_t warm_points = 1uz << 16;
+  std::size_t hot_points = 1uz << 20;
+  bool time_passes = false; // Per-pass timing to stderr
   // On: the object is the one part of a saved equation nothing can reconstruct.
   bool retain_object = true;
   // Object cache directory, empty for none; keyed by graph, options and host.
+  // Not serialised: a path is this machine's.
   std::string cache_dir{};
 
   friend bool operator==(const Options &, const Options &) = default;
+  BOOST_DESCRIBE_CLASS(Options, (),
+                       (backend, points, codegen, warm_points, hot_points,
+                        time_passes, retain_object),
+                       (), ())
 };
 
-// Identity, not policy: `retain_object` and `cache_dir` change no machine code.
-// Also the field list the archive serialises Options by.
-BOOST_DESCRIBE_STRUCT(Options, (),
-                      (backend, points, lanes, opt_level, codegen_level, slp,
-                       loop_vectorize, veclib, contract, time_passes))
-
-// `backend` is described because a saved equation restores it, but says whether
-// to compile, never what is emitted.
-[[nodiscard]] inline bool same_codegen(const Options &a, const Options &b) {
-  bool same = true;
-  boost::mp11::mp_for_each<
-      boost::describe::describe_members<Options, boost::describe::mod_public>>(
-      [&](auto D) {
-        if constexpr (!std::same_as<std::remove_cvref_t<decltype(a.*D.pointer)>,
-                                    Backend>) {
-          same = same && a.*D.pointer == b.*D.pointer;
-        }
-      });
-  return same;
+// The options a lane compiles under: a batch too short to fill one block of
+// the sweep emits scalar, so kernel and sweep agree on where a batch stops
+// being a batch.  A stated width is honoured.
+[[nodiscard]] constexpr Options for_batch(Options opt,
+                                          std::size_t block_lanes) noexcept {
+  if (!opt.codegen.lanes.stated() && opt.points < block_lanes) {
+    opt.codegen.lanes = Lanes::scalar();
+  }
+  return opt;
 }
 
 // `codegen` brackets the symbol lookup: LLJIT compiles lazily.
@@ -139,6 +152,28 @@ struct CompileReport {
   std::chrono::nanoseconds emit{};
   std::chrono::nanoseconds optimize{};
   std::chrono::nanoseconds codegen{};
+};
+
+// The column counts a kernel is called with, read off the graph it was
+// compiled from.  One value, so the four cannot be handed over transposed.
+struct KernelShape {
+  std::size_t arity = 0;
+  std::size_t values = 0;
+  std::size_t jacobian = 0;
+  std::size_t hessian = 0;
+
+  template <impl::Numeric T>
+  [[nodiscard]] static KernelShape of(const rt::Graph<T> &g) {
+    const auto &layout = g.layout();
+    return {.arity = g.arity(),
+            .values = layout.values,
+            .jacobian = layout.jacobian,
+            .hessian = layout.hessian};
+  }
+  [[nodiscard]] constexpr std::size_t outputs() const noexcept {
+    return values + jacobian + hessian;
+  }
+  friend constexpr bool operator==(KernelShape, KernelShape) noexcept = default;
 };
 
 // A copy is one atomic increment; the last Kernel to go frees the code.
@@ -151,12 +186,10 @@ public:
   using symbol_type = std::shared_ptr<const std::string>;
 
   Kernel() = default;
-  Kernel(function_type fn, std::size_t arity, std::size_t values,
-         std::size_t jacobian, std::size_t hessian, std::shared_ptr<void> code,
+  Kernel(function_type fn, KernelShape shape, std::shared_ptr<void> code,
          symbol_type symbol = {}, object_type object = {}) noexcept
       : fn_{fn}, code_{std::move(code)}, symbol_{std::move(symbol)},
-        object_{std::move(object)}, arity_{arity}, values_{values},
-        jacobian_{jacobian}, hessian_{hessian} {}
+        object_{std::move(object)}, shape_{shape} {}
 
   // xs[j] is the column for symbol j, g[j] the partial in it, each n long; an
   // unrequested block is `{}`.  noexcept: codegen marks the kernel nounwind.
@@ -164,25 +197,15 @@ public:
                   std::span<double *const> g, std::span<double *const> h,
                   std::size_t n) const noexcept {
     // A mismatch past here is silent memory corruption.
-    assert(xs.size() == arity_ && f.size() == values_ &&
-           g.size() == jacobian_ && h.size() == hessian_);
+    assert(xs.size() == shape_.arity && f.size() == shape_.values &&
+           g.size() == shape_.jacobian && h.size() == shape_.hessian);
     fn_(xs.data(), f.data(), g.data(), h.data(), n);
   }
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return fn_ != nullptr;
   }
-  [[nodiscard]] std::size_t arity() const noexcept { return arity_; }
-  [[nodiscard]] std::size_t values() const noexcept { return values_; }
-  [[nodiscard]] std::size_t jacobian_columns() const noexcept {
-    return jacobian_;
-  }
-  [[nodiscard]] std::size_t hessian_columns() const noexcept {
-    return hessian_;
-  }
-  [[nodiscard]] std::size_t outputs() const noexcept {
-    return values_ + jacobian_ + hessian_;
-  }
+  [[nodiscard]] const KernelShape &shape() const noexcept { return shape_; }
 
   // Empty only where Options::retain_object was turned off.
   [[nodiscard]] std::span<const std::byte> object() const noexcept {
@@ -200,10 +223,7 @@ private:
   std::shared_ptr<void> code_; // Held, never read
   symbol_type symbol_;
   object_type object_;
-  std::size_t arity_ = 0;
-  std::size_t values_ = 0;
-  std::size_t jacobian_ = 0;
-  std::size_t hessian_ = 0;
+  KernelShape shape_{};
 };
 
 // The LLJIT itself, shared by every Kernel it made.
@@ -229,12 +249,11 @@ public:
 
   // Links an object compiled earlier.  Nothing beyond the link is verified --
   // rt::Object carries the host, Options and graph digest for that -- and a
-  // corrupt object is an error, not an abort.  The counts are stated because
-  // the object has no graph to read them off.
+  // corrupt object is an error, not an abort.  The shape is stated because
+  // the object has no graph to read it off.
   [[nodiscard]] DDX_JIT_API result<Kernel>
   adopt(std::span<const std::byte> object, std::string_view symbol,
-        std::size_t arity, std::size_t values, std::size_t jacobian,
-        std::size_t hessian);
+        KernelShape shape);
 
 private:
   struct Impl;

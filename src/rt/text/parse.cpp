@@ -129,7 +129,8 @@ constexpr auto unequal = [](auto &ctx) {
   equal(ctx);
   Ast &ast = _globals(ctx).ast;
   const auto one =
-      append(ast, {.op = OpCode::Const, .leaf = intern(ast.literals, "1")});
+      append(ast, {.op = OpCode::Const,
+                   .leaf = LiteralIndex{intern(ast.literals, "1")}});
   const auto negated = append(ast, {.op = OpCode::Neg, .a = _val(ctx)});
   _val(ctx) = append(ast, {.op = OpCode::Add, .a = one, .b = negated});
 };
@@ -142,10 +143,12 @@ constexpr auto subtract = [](auto &ctx) {
   _val(ctx) = append(ast, {.op = OpCode::Add, .a = _val(ctx), .b = negated});
 };
 
-template <OpCode Op, std::vector<std::string> Ast::*Table>
+template <typename Index>
 constexpr auto leaf = [](auto &ctx) {
   Ast &ast = _globals(ctx).ast;
-  _val(ctx) = append(ast, {.op = Op, .leaf = intern(ast.*Table, _attr(ctx))});
+  _val(ctx) = append(
+      ast, {.op = Index::op,
+            .leaf = Index{intern(ast.template table<Index>(), _attr(ctx))}});
 };
 
 constexpr auto assign = [](auto &ctx) { _val(ctx) = _attr(ctx); };
@@ -231,8 +234,8 @@ constexpr auto identifier_def =
     bp::raw[bp::lexeme[letter >> *(letter | bp::char_('0', '9'))]][act::capture];
 constexpr auto literal_def = bp::raw[bp::lexeme[mantissa >> -exponent]][act::capture];
 
-constexpr auto number_def = literal[act::leaf<OpCode::Const, &Ast::literals>];
-constexpr auto symbol_def = identifier[act::leaf<OpCode::Var, &Ast::names>];
+constexpr auto number_def = literal[act::leaf<LiteralIndex>];
+constexpr auto symbol_def = identifier[act::leaf<NameIndex>];
 // One argument at least; the action below checks the count against
 // arity_of, which is 1, 2 or -- for select -- 3.
 constexpr auto call_text_def = identifier >> '(' >> (expression % ',') >> ')';

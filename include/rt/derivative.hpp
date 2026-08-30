@@ -4,6 +4,8 @@
 #include "rt/coupling.hpp"
 #include "rt/expressions.hpp"
 
+#include <boost/describe/class.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <functional>
@@ -14,6 +16,15 @@
 namespace ddx::rt {
 
 namespace detail {
+
+// The sweeps' side of Builder::seal(): a struct, not a friended function
+// template per sweep, so builder.hpp forward-declares an empty type.
+struct Sealing {
+  template <impl::Numeric T>
+  static constexpr void seal(Builder<T> &b) noexcept {
+    b.seal();
+  }
+};
 
 // A template, so `if constexpr` actually discards: deriv_from_value reuses the
 // primal node, and d(exp)/du becomes the exp node itself.
@@ -37,7 +48,7 @@ contribution(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &u,
   switch (op) {
 #define DDX_RT_CONTRIB(fn, Op, label, functor, Desc)                           \
   case OpCode::Op:                                                             \
-    return impl::detail::Desc<T>::adjoints(adj, u)[0];
+    return impl::detail::adjoints_of<impl::detail::Desc>(adj, u)[0];
     DDX_RT_UNARY_TABLE(DDX_RT_CONTRIB)
 #undef DDX_RT_CONTRIB
     // `adj * f'(u)` is already the association DDX_UNARY_MATH_OP's generated
@@ -61,7 +72,7 @@ contributions(OpCode op, const RTExpression<S> &adj, const RTExpression<S> &l,
   switch (op) {
 #define DDX_RT_CONTRIB(fn, Op, label, functor, Desc)                           \
   case OpCode::Op: {                                                           \
-    const auto c = impl::detail::Desc<T>::adjoints(adj, l, r);                 \
+    const auto c = impl::detail::adjoints_of<impl::detail::Desc>(adj, l, r);   \
     return {c[0], c[1]};                                                       \
   }
     DDX_RT_BINARY_TABLE(DDX_RT_CONTRIB)
@@ -99,6 +110,7 @@ struct JacobianRow {
 template <impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow build_reverse_jacobian(Builder<T> &b,
                                                            NodeId root) {
+  detail::Sealing::seal(b);
   const auto n = static_cast<NodeId>(b.size());
   std::vector<NodeId> adj(n, no_node);
   adj[root] = b.constant(T{1});
@@ -169,6 +181,7 @@ template <impl::Numeric T>
 [[nodiscard]] constexpr std::vector<NodeId>
 tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
               std::span<const NodeId> tangent) {
+  detail::Sealing::seal(b);
   const auto n = static_cast<NodeId>(b.size());
   const auto live = detail::reachable(b, roots);
   std::vector<NodeId> d(n, no_node);
@@ -217,6 +230,7 @@ tangent_sweep(Builder<T> &b, std::span<const NodeId> roots,
 template <impl::Numeric T>
 [[nodiscard]] constexpr JacobianRow build_symbolic_jacobian(Builder<T> &b,
                                                             NodeId root) {
+  detail::Sealing::seal(b);
   const auto nsym = b.symbols().size();
   JacobianRow g{.value = root, .partial = std::vector<NodeId>(nsym, no_node)};
   const std::array<NodeId, 1> roots{root};
@@ -241,9 +255,11 @@ struct Jacobian {
   NodeId zero = no_node; // what a cell outside the pattern reads
 
   [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
-    const std::size_t k = pattern.at(i, j);
-    return k == no_column ? zero : partial[k];
+    return pattern.at(i, j).transform([this](std::size_t k) {
+      return partial[k];
+    }).value_or(zero);
   }
+  BOOST_DESCRIBE_CLASS(Jacobian, (), (value, partial, pattern, zero), (), ())
 };
 
 template <impl::Numeric T>
@@ -308,10 +324,13 @@ struct Hessian {
   // Scattered on read, so a caller never sees the compressed form: a cell no
   // column owns has no storage and answers the colouring's structural zero.
   [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
-    const std::size_t k = coloring.cell_of(i, j);
-    return k == no_column ? zero : compressed[k];
+    return coloring.cell_of(i, j)
+        .transform([this](std::size_t k) { return compressed[k]; })
+        .value_or(zero);
   }
   [[nodiscard]] constexpr std::size_t colors() const { return coloring.count; }
+  BOOST_DESCRIBE_CLASS(Hessian, (),
+                       (value, partial, compressed, coloring, zero), (), ())
 };
 
 template <impl::Numeric T>
@@ -360,6 +379,7 @@ namespace detail {
 template <impl::Numeric T>
 [[nodiscard]] constexpr RTExpression<T>
 seeded_sum(Builder<T> &b, std::span<const NodeId> ids) {
+  detail::Sealing::seal(b);
   auto term = [&b, ids](std::size_t j) {
     return seed(b, static_cast<std::uint32_t>(j)) * RTExpression<T>{b, ids[j]};
   };
@@ -378,6 +398,7 @@ struct HessianVector {
   NodeId value = no_node;
   std::vector<NodeId> partial; // n -- the gradient, which comes free
   std::vector<NodeId> product; // n -- H v
+  BOOST_DESCRIBE_CLASS(HessianVector, (), (value, partial, product), (), ())
 };
 
 template <impl::Numeric T>
@@ -397,6 +418,7 @@ template <impl::Numeric T>
 struct VectorJacobian {
   std::vector<NodeId> value;   // m
   std::vector<NodeId> product; // n -- w'J
+  BOOST_DESCRIBE_CLASS(VectorJacobian, (), (value, product), (), ())
 };
 
 template <impl::Numeric T>
@@ -412,6 +434,7 @@ build_vjp_impl(Builder<T> &b, std::span<const NodeId> roots) {
 struct Tangent {
   std::vector<NodeId> value;   // m
   std::vector<NodeId> product; // m -- J v
+  BOOST_DESCRIBE_CLASS(Tangent, (), (value, product), (), ())
 };
 
 template <impl::Numeric T>

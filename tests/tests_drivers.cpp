@@ -10,7 +10,7 @@ TEST(Ownership, EquationSubtreeAccessorsWorkOnTemporaries) {
 // A plain arithmetic lambda is not a CExpression, so it must keep routing to
 // the raw-callable branch.
 TEST(SeededExprEnergy, RawLambdaIsNotMistakenForAGraph) {
-  auto f = [](const auto *y) {
+  auto f = [](auto y) {
     using std::log;
     return y[0] * log(y[0]) + y[1] * log(y[1]);
   };

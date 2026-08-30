@@ -156,6 +156,7 @@ static_assert(CWirePort<Writer>);
 class Reader : public Codec<Reader> {
 public:
   static constexpr std::uint8_t no_op = 0xFF;
+  static_assert(op_count < no_op);
 
   // `remap` turns the file's opcode byte into this build's, or no_op where the
   // file names one this build does not have.

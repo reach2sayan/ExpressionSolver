@@ -5,8 +5,9 @@
 
 // Energy exercising +,-,*,/,log,exp and scalar*dual.
 namespace {
-template <Numeric T> T vf_sample(const T *y, std::size_t n) {
+template <Numeric T> T vf_sample(const std::span<const T> y) {
   using std::exp, std::log; // ADL selects the dual overloads
+  const std::size_t n = y.size();
   T g = T{0};
   for (std::size_t i = 0; i < n; ++i) {
     g = g + y[i] * log(y[i]);
@@ -49,7 +50,7 @@ std::vector<double> densify(const Sparse &h) {
 namespace {
 // Not separable and not symmetric, so a stale cell cannot coincidentally be
 // the right answer.
-auto reuse_energy = [](const auto *q) {
+auto reuse_energy = [](auto q) {
   using std::exp, std::log;
   return q[0] * q[0] * q[1] + exp(q[0] * q[2]) + q[1] * log(q[1] + 2.0);
 };

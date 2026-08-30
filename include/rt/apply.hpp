@@ -11,6 +11,7 @@
 #include <concepts> // std::equality_comparable, std::same_as
 #include <cstddef>
 #include <functional> // std::plus and friends, for the table's eval column
+#include <utility>
 
 namespace ddx::rt {
 
@@ -126,9 +127,13 @@ dispatch(OpCode op, auto &&visit) {
     return visit(Row<impl::detail::Op##Fn<T>, probes_##Op<T>, 1>{});
     DDX_UNARY_MATH_TABLE(DDX_RT_DISPATCH)
 #undef DDX_RT_DISPATCH
-  default:
+#define DDX_RT_DISPATCH(fn, Op, label)                                         \
+  case OpCode::Op:                                                             \
     return visit(Row<void, true, 0>{});
+    DDX_RT_LEAF_TABLE(DDX_RT_DISPATCH)
+#undef DDX_RT_DISPATCH
   }
+  std::unreachable();
 }
 
 } // namespace detail

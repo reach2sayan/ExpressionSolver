@@ -18,12 +18,12 @@
 
 namespace ddx::impl {
 
-// An energy called with a pointer into the driver's seed buffer.  D is `dual`
-// for the first-derivative sweep and `dual2nd` for the Hessian.
+// An energy called on the driver's seed buffer.  D is `dual` for the
+// first-derivative sweep and `dual2nd` for the Hessian.
 template <typename F, typename D>
 concept CEnergyOf =
-    std::invocable<F &, const D *> &&
-    std::convertible_to<std::invoke_result_t<F &, const D *>, D>;
+    std::invocable<F &, std::span<const D>> &&
+    std::convertible_to<std::invoke_result_t<F &, std::span<const D>>, D>;
 
 // Indexed and sized, nothing else -- so views::iota models it too.
 template <typename R>
@@ -38,14 +38,22 @@ namespace detail {
 }
 } // namespace detail
 
-// f(x), n Jacobian entries, and n*n row-major Hessian entries: (i, j) is
-// hessian[i * n + j].  Named members rather than a tuple, `arity` being what
-// tells a caller how to index `hessian`.
+// f(x), n Jacobian entries, and the n*n Hessian, row-major; hessian_view()
+// is how (i, j) is spelled.
 struct HessianOwned {
   double value = 0.0;
   std::unique_ptr<double[]> jacobian;
   std::unique_ptr<double[]> hessian;
   std::size_t arity = 0;
+
+  [[nodiscard]] constexpr md::mdspan<double, md::dextents<std::size_t, 2>>
+  hessian_view() noexcept {
+    return {hessian.get(), md::dextents<std::size_t, 2>{arity, arity}};
+  }
+  [[nodiscard]] constexpr md::mdspan<const double, md::dextents<std::size_t, 2>>
+  hessian_view() const noexcept {
+    return {hessian.get(), md::dextents<std::size_t, 2>{arity, arity}};
+  }
 };
 
 // Compile-time extent: no allocation, and constant-evaluable.
@@ -54,14 +62,24 @@ template <std::size_t N> struct HessianStatic {
   std::array<double, N> jacobian{};
   std::array<double, N * N> hessian{};
   static constexpr std::size_t arity = N;
+
+  [[nodiscard]] constexpr md::mdspan<double, md::extents<std::size_t, N, N>>
+  hessian_view() noexcept {
+    return md::mdspan<double, md::extents<std::size_t, N, N>>{hessian.data()};
+  }
+  [[nodiscard]] constexpr md::mdspan<const double,
+                                     md::extents<std::size_t, N, N>>
+  hessian_view() const noexcept {
+    return md::mdspan<const double, md::extents<std::size_t, N, N>>{
+        hessian.data()};
+  }
 };
 
 namespace detail {
-// Average each mirrored pair: independent sweeps differ in the last ULP.  An
-// mdspan rather than a pointer and a stride, so `h[i, j]` is not an index
-// expression the reader has to check.
-constexpr void symmetrize(std::span<double> h, const std::size_t n) noexcept {
-  const md::mdspan m{h.data(), md::dextents<std::size_t, 2>{n, n}};
+// Average each mirrored pair: independent sweeps differ in the last ULP.
+constexpr void
+symmetrize(const md::mdspan<double, md::dextents<std::size_t, 2>> m) noexcept {
+  const std::size_t n = m.extent(0);
   for (const std::size_t i : std::views::iota(0uz, n)) {
     for (const std::size_t j : std::views::iota(i + 1, n)) {
       const double s = std::midpoint(m[i, j], m[j, i]);
@@ -103,11 +121,11 @@ template <Numeric D> struct SweepWorkspace {
 
   // Storage valid until the next seed on this workspace.  assign(), not
   // resize() then transform: the second writes every element twice.
-  [[nodiscard]] D *seed(const std::span<const double> x) {
+  [[nodiscard]] std::span<D> seed(const std::span<const double> x) {
     const auto seeded =
         x | std::views::transform([](const double v) { return D{v}; });
     dof.assign(std::ranges::begin(seeded), std::ranges::end(seeded));
-    return dof.data();
+    return std::span<D>{dof};
   }
 };
 

@@ -162,20 +162,20 @@ TEST(RtJacobian, DerivFromValueReusesThePrimalNode) {
 // second spelling from being written for one of them.
 #define DDX_TEST_UNARY_RULE(fn, Op, label, functor, Desc)                       \
   static_assert(requires(const double &a) {                                    \
-    ddx::impl::detail::Desc<double>::adjoints(a, a);                           \
+    ddx::impl::detail::adjoints_of<ddx::impl::detail::Desc>(a, a);             \
   });                                                                          \
   static_assert(requires(const ddx::rt::RTExpression<> &a) {                   \
-    ddx::impl::detail::Desc<ddx::rt::RTExpression<>>::adjoints(a, a);          \
+    ddx::impl::detail::adjoints_of<ddx::impl::detail::Desc>(a, a);             \
   });
 DDX_RT_UNARY_TABLE(DDX_TEST_UNARY_RULE)
 #undef DDX_TEST_UNARY_RULE
 
 #define DDX_TEST_BINARY_RULE(fn, Op, label, functor, Desc)                      \
   static_assert(requires(const double &a) {                                    \
-    ddx::impl::detail::Desc<double>::adjoints(a, a, a);                        \
+    ddx::impl::detail::adjoints_of<ddx::impl::detail::Desc>(a, a, a);          \
   });                                                                          \
   static_assert(requires(const ddx::rt::RTExpression<> &a) {                   \
-    ddx::impl::detail::Desc<ddx::rt::RTExpression<>>::adjoints(a, a, a);       \
+    ddx::impl::detail::adjoints_of<ddx::impl::detail::Desc>(a, a, a);          \
   });
 DDX_RT_BINARY_TABLE(DDX_TEST_BINARY_RULE)
 #undef DDX_TEST_BINARY_RULE
@@ -316,7 +316,7 @@ TEST(RtJacobian, ABandedSystemKeepsOnlyTheCellsThatExist) {
       const bool interior = i > 0 && i + 1 < n;
       const bool banded =
           k == i || (interior && (k + 1 == i || k == i + 1));
-      EXPECT_EQ(pattern.at(i, k) != ddx::rt::no_column, banded)
+      EXPECT_EQ(pattern.at(i, k).has_value(), banded)
           << "cell (" << i << ", " << k << ")";
     }
   }
@@ -341,7 +341,7 @@ TEST(RtJacobian, DenseCompressedAndTheNodesAllAgree) {
   const auto dense = *eq.jacobian(std::span<const double>{at});
   ASSERT_EQ(dense.size(), 3u * 3u);
 
-  const auto &pattern = eq.jacobian_pattern();
+  const ddx::rt::Sparsity &pattern = eq.jacobian_pattern()->get();
   ASSERT_EQ(pattern.nonzeros(), *eq.jacobian_columns());
   ASSERT_LT(pattern.nonzeros(), 9u);
 
@@ -354,8 +354,10 @@ TEST(RtJacobian, DenseCompressedAndTheNodesAllAgree) {
 
   for (const std::size_t i : std::views::iota(0uz, 3uz)) {
     for (const std::size_t k : std::views::iota(0uz, 3uz)) {
-      const std::size_t cell = pattern.at(i, k);
-      const double want = cell == ddx::rt::no_column ? 0.0 : cells[cell];
+      const double want =
+          pattern.at(i, k)
+              .transform([&cells](std::size_t cell) { return cells[cell]; })
+              .value_or(0.0);
       EXPECT_EQ(dense[i * 3 + k], want) << "cell (" << i << ", " << k << ")";
     }
   }
@@ -378,7 +380,7 @@ TEST(RtJacobian, AFoldedPartialIsAStructuralHole) {
   (void)f; // named, never used: their columns must not exist either
   const auto eq = ddx::rt::equation(a * bb - a * bb + c, d + d, c * 0.0 + 2.0);
 
-  const auto &pattern = eq.jacobian_pattern();
+  const ddx::rt::Sparsity &pattern = eq.jacobian_pattern()->get();
   EXPECT_EQ(pattern.rows, 3u);
   EXPECT_EQ(pattern.columns, 6u);
   // Row 0 keeps c alone, row 1 keeps d alone, row 2 is a constant.
@@ -386,9 +388,9 @@ TEST(RtJacobian, AFoldedPartialIsAStructuralHole) {
   EXPECT_EQ(pattern.row(0).size(), 1u);
   EXPECT_EQ(pattern.row(1).size(), 1u);
   EXPECT_EQ(pattern.row(2).size(), 0u);
-  EXPECT_NE(pattern.at(0, 2), ddx::rt::no_column); // c
-  EXPECT_EQ(pattern.at(0, 0), ddx::rt::no_column); // a
-  EXPECT_EQ(pattern.at(0, 1), ddx::rt::no_column); // b
+  EXPECT_TRUE(pattern.at(0, 2).has_value());  // c
+  EXPECT_FALSE(pattern.at(0, 0).has_value()); // a
+  EXPECT_FALSE(pattern.at(0, 1).has_value()); // b
 
   // And the dense spelling still answers for every cell, with zeros.
   const std::vector<double> at{0.3, 0.7, 1.1, 0.5, 0.2, 0.9};
@@ -672,7 +674,7 @@ TEST(RtJacobian, BothArmsOfASelectOverASharedSubexpression) {
 
   // x and y reach f through `s`, never only through the condition, so no
   // column is missing -- and s*s couples all three, so nothing compresses.
-  const auto &pattern = eq.jacobian_pattern();
+  const ddx::rt::Sparsity &pattern = eq.jacobian_pattern()->get();
   EXPECT_EQ(pattern.nonzeros(), 3u) << "a condition-only symbol would be absent";
   EXPECT_EQ(*eq.hessian_colors(), 3u);
 }
@@ -694,12 +696,20 @@ TEST(RtJacobian, SharedArmsThroughTheLoaderStillSum) {
                              .c = 0}};
   snap.roots = {3};
   snap.model_nodes = 4;
+  // What a file carries beside the model: the loader admits nothing less.
+  snap.nodes.push_back(Node<double>{.op = ddx::rt::OpCode::Const, .value = 0.0});
+  snap.jacobian = {.value = {3},
+                   .partial = {},
+                   .pattern = {.rowptr = {0, 0}, .col = {}, .rows = 1, .columns = 2},
+                   .zero = 4};
 
-  const auto arena = ddx::rt::rebuild(snap);
-  ASSERT_EQ(arena->size(), 4u) << "restore installs the array as written";
+  auto sound = ddx::rt::verified(std::move(snap));
+  ASSERT_TRUE(sound.has_value()) << "a shared arm is a sound file";
+  const auto [arena, rest] = std::move(*sound).rebuild();
+  ASSERT_EQ(arena->size(), 5u) << "restore installs the array as written";
   ASSERT_EQ((*arena)[3].b, (*arena)[3].c) << "the shared arm survived the load";
 
-  const auto j = ddx::rt::build_jacobian_impl(*arena, snap.roots);
+  const auto j = ddx::rt::build_jacobian_impl(*arena, rest.roots);
   // Both conditions, since a rule keeping one contribution answers the arm the
   // condition names and would be right at exactly one of these points.
   for (const auto &at : {std::array<double, 2>{1.0, 2.0},

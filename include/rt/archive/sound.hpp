@@ -9,24 +9,30 @@
 #include <cstddef>
 #include <cstdint>
 #include <ranges>
+#include <memory>
+#include <utility>
 #include <vector>
 
 // The trust boundary.  A loaded snapshot has cleared a checksum, which detects
 // accidents and confers nothing: what the interpreter, the liveness walk and
 // codegen rely on and none re-tests is checked here, and until a file nothing
 // could build a graph that broke one.
+namespace ddx::rt {
+template <impl::Numeric T> class Verified;
+} // namespace ddx::rt
+
 namespace ddx::rt::detail {
 
 template <impl::Numeric T> class Sound {
 public:
-  explicit constexpr Sound(const Snapshot<T> &s) noexcept : s_(s) {}
+  explicit Sound(Snapshot<T> s) noexcept : s_(std::move(s)) {}
 
   // Every refusal is the same one: the file parsed, and does not hold.  The
   // order is load-bearing -- each check is what the next one indexes with.
-  [[nodiscard]] result<void> operator()() const {
+  [[nodiscard]] result<Verified<T>> operator()() && {
     return symbols() && nodes() && vars() && reachable() && jacobian() &&
-                   hessians() && seeded()
-               ? result<void>{}
+                   hessians() && seeded() && objects()
+               ? result<Verified<T>>{Verified<T>{std::move(s_)}}
                : fail(errc::archive_corrupt);
   }
 
@@ -60,7 +66,9 @@ private:
                  (arity == 3 ? node.c < static_cast<NodeId>(i)
                              : node.c == no_node) &&
                  (node.op != OpCode::Var || node.slot < nsym) &&
-                 (node.op != OpCode::Seed || node.slot < nseed);
+                 (node.op != OpCode::Seed || node.slot < nseed) &&
+                 // As make() sorts them: contraction_at's tie-break reads it.
+                 (!is_commutative<T>(node.op) || node.a <= node.b);
         });
   }
 
@@ -172,7 +180,53 @@ private:
            });
   }
 
-  const Snapshot<T> &s_;
+  // A lane the enum names; the byte is what a file carries.
+  [[nodiscard]] bool objects() const {
+    return std::ranges::all_of(s_.objects, [](const Object &o) {
+      return std::to_underlying(o.want) < want_count;
+    });
+  }
+
+  Snapshot<T> s_;
 };
 
 } // namespace ddx::rt::detail
+
+namespace ddx::rt {
+
+// An arena rebuilt from a verified snapshot, and what the snapshot still holds
+// once its node array has become the arena's.
+template <impl::Numeric T> struct Rebuilt {
+  std::unique_ptr<Builder<T>> arena;
+  Snapshot<T> rest;
+};
+
+// A snapshot that holds: every invariant the interpreter, the liveness walk
+// and codegen rely on without re-testing.  Only Sound mints one, so an arena
+// is never restored from anything less; releasing the snapshot drops the
+// proof with it.
+template <impl::Numeric T> class Verified {
+public:
+  [[nodiscard]] const Snapshot<T> &operator*() const noexcept { return s_; }
+  [[nodiscard]] const Snapshot<T> *operator->() const noexcept { return &s_; }
+
+  // Owning, and it consumes the node array: it *is* the arena's.
+  [[nodiscard]] Rebuilt<T> rebuild() && {
+    auto arena = std::make_unique<Builder<T>>();
+    arena->restore(std::move(s_.nodes), std::move(s_.symbols));
+    return {.arena = std::move(arena), .rest = std::move(s_)};
+  }
+  [[nodiscard]] Snapshot<T> release() && noexcept { return std::move(s_); }
+
+private:
+  friend class detail::Sound<T>;
+  explicit Verified(Snapshot<T> s) noexcept : s_(std::move(s)) {}
+  Snapshot<T> s_;
+};
+
+template <impl::Numeric T>
+[[nodiscard]] result<Verified<T>> verified(Snapshot<T> snap) {
+  return detail::Sound<T>{std::move(snap)}();
+}
+
+} // namespace ddx::rt

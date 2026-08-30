@@ -9,7 +9,7 @@ TEST(HessianRouter, RawCallableTakesTheScalarDriver) {
       x[k] = 0.15 + 0.6 * (static_cast<double>(k) + 1.0) /
                         (static_cast<double>(n) + 1.0);
     }
-    auto f = [n](const auto *dof) { return vf_sample(dof, n); };
+    auto f = [](auto dof) { return vf_sample(dof); };
     const std::span<const double> xs{x.data(), x.size()};
 
     const auto Hs = ddx::impl::detail::hessian(f, xs);
@@ -136,7 +136,7 @@ TEST(Ownership, GraphHessianRejectsAnActiveIndexThatNamesNoSymbol) {
 }
 TEST(Ownership, ResultOwnsItsBuffersAndTransfersThem) {
   // Owning std types: the buffers move with the result and die with it.
-  auto f = [](const auto *d) { return d[0] * d[0] * d[1]; };
+  auto f = [](auto d) { return d[0] * d[0] * d[1]; };
   const std::array<double, 2> x{2.0, 3.0};
 
   auto H = *ddx::impl::hessian(f, std::span<const double>{x});
@@ -474,7 +474,7 @@ TEST(SparseHessian, OfALinearExpressionIsEmpty) {
 }
 TEST(HessianRouter, IdealMixingClosedForm) {
   constexpr double R = 8.31446261815324, T = 1000.0;
-  auto f = [](const auto *y) {
+  auto f = [](auto y) {
     using std::log;
     return R * T * (y[0] * log(y[0]) + y[1] * log(y[1]));
   };
@@ -501,7 +501,8 @@ TEST(ForwardDriverReuse, WritingOverloadMatchesOwningOverload) {
   std::array<double, 9> hess{};
   const double value = ddx::impl::detail::hessian(
       reuse_energy, x, ddx::impl::detail::all_indices(3), ws,
-      std::span<double>{grad}, std::span<double>{hess});
+      std::span<double>{grad},
+      md::mdspan{hess.data(), md::dextents<std::size_t, 2>{3, 3}});
 
   EXPECT_DOUBLE_EQ(value, val_of(owned));
   for (std::size_t i = 0; i < 3; ++i) {
@@ -519,17 +520,19 @@ TEST(ForwardDriverReuse, WorkspaceSurvivesAShrinkingExtent) {
   const std::array<double, 3> big{0.4, 0.9, 1.3};
   std::array<double, 3> g3{};
   std::array<double, 9> h3{};
-  ddx::impl::detail::hessian(reuse_energy, std::span<const double>{big},
-                             ddx::impl::detail::all_indices(3), ws,
-                             std::span<double>{g3}, std::span<double>{h3});
+  ddx::impl::detail::hessian(
+      reuse_energy, std::span<const double>{big},
+      ddx::impl::detail::all_indices(3), ws, std::span<double>{g3},
+      md::mdspan{h3.data(), md::dextents<std::size_t, 2>{3, 3}});
 
-  auto planar = [](const auto *q) { return q[0] * q[0] * q[1]; };
+  auto planar = [](auto q) { return q[0] * q[0] * q[1]; };
   const std::array<double, 2> small{0.4, 0.9};
   std::array<double, 2> g2{};
   std::array<double, 4> h2{};
-  ddx::impl::detail::hessian(planar, std::span<const double>{small},
-                             ddx::impl::detail::all_indices(2), ws,
-                             std::span<double>{g2}, std::span<double>{h2});
+  ddx::impl::detail::hessian(
+      planar, std::span<const double>{small}, ddx::impl::detail::all_indices(2),
+      ws, std::span<double>{g2},
+      md::mdspan{h2.data(), md::dextents<std::size_t, 2>{2, 2}});
 
   EXPECT_DOUBLE_EQ(h2[0 * 2 + 0], 2.0 * 0.9);
   EXPECT_DOUBLE_EQ(h2[0 * 2 + 1], 2.0 * 0.4);
@@ -575,7 +578,7 @@ TEST(ForwardDriverReuse, JacobianReusingOverloadMatchesOwning) {
 TEST(ForwardDriverReuse, PointAcceptsAnyContiguousSizedRange) {
   // vector, array, C array and span agree bit-for-bit, or a conversion is
   // doing work.
-  auto f = [](const auto *q) { return q[0] * q[0] * q[1] + q[2]; };
+  auto f = [](auto q) { return q[0] * q[0] * q[1] + q[2]; };
 
   const std::vector<double> v{0.4, 0.9, 1.3};
   const std::array<double, 3> a{0.4, 0.9, 1.3};

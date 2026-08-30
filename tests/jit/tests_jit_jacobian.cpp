@@ -48,7 +48,7 @@ void expect_jacobian_matches_interpreter(auto build, std::size_t nvars,
   const auto reference_jacobian = ddx::rt::build_jacobian_impl(b, root.id(b));
   const auto kernel =
       must_compile(ddx::rt::GraphBuilder{b}.value(root).build_jacobian().finish());
-  ASSERT_EQ(kernel.outputs(), nvars + 1);
+  ASSERT_EQ(kernel.shape().outputs(), nvars + 1);
 
   std::vector<std::vector<double>> columns(nvars, std::vector<double>(n));
   for (std::size_t j = 0; j < nvars; ++j) {
@@ -152,10 +152,10 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
       ddx::rt::GraphBuilder{b}.value(f).build_jacobian().build_hessian().finish();
   const auto kernel = must_compile(graph);
 
-  ASSERT_EQ(kernel.values(), 1u);
-  ASSERT_EQ(kernel.jacobian_columns(), 2u);
-  ASSERT_EQ(kernel.hessian_columns(), graph.layout().hessian);
-  ASSERT_GT(kernel.hessian_columns(), 0u);
+  ASSERT_EQ(kernel.shape().values, 1u);
+  ASSERT_EQ(kernel.shape().jacobian, 2u);
+  ASSERT_EQ(kernel.shape().hessian, graph.layout().hessian);
+  ASSERT_GT(kernel.shape().hessian, 0u);
 
   constexpr std::size_t n = 4;
   std::array<double, n> cx{0.7, 0.8, 0.9, 1.0};
@@ -164,7 +164,7 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
 
   std::array<double, n> value{};
   std::vector<std::vector<double>> jac(2, std::vector<double>(n));
-  std::vector<std::vector<double>> hess(kernel.hessian_columns(),
+  std::vector<std::vector<double>> hess(kernel.shape().hessian,
                                         std::vector<double>(n));
   double *const values[]{value.data()};
   const auto columns_of = [](auto &blocks) {
@@ -187,12 +187,12 @@ TEST(JitHessian, ThirdBlockCarriesTheColouredHessian) {
     for (std::size_t j = 0; j < 2; ++j) {
       EXPECT_NEAR(jac[j][point], reference[outputs[1 + j]], 1e-12);
     }
-    for (std::size_t c = 0; c < kernel.hessian_columns(); ++c) {
+    for (std::size_t c = 0; c < kernel.shape().hessian; ++c) {
       EXPECT_NEAR(hess[c][point], reference[outputs[3 + c]], 1e-12)
           << "compressed Hessian column " << c;
     }
   }
-  EXPECT_EQ(coloring.count * 2, kernel.hessian_columns());
+  EXPECT_EQ(coloring.count * 2, kernel.shape().hessian);
 }
 
 } // namespace

@@ -110,7 +110,7 @@ TEST(JitVectorize, VecLibLibmvecUsesVectorLibm) {
     GTEST_SKIP() << "libmvec is glibc on x86-64";
   }
   ddx::jit::Options on;
-  on.veclib = ddx::jit::VecLib::Libmvec;
+  on.codegen.veclib = ddx::jit::VecLib::Libmvec;
   const auto ir = ir_for([](auto &v) { return exp(v[0]) * sin(v[1]); }, 2, on);
   EXPECT_TRUE(has_vector_doubles(ir)) << "loop stayed scalar";
   EXPECT_TRUE(calls_vector_libm(ir, "sin")) << "sin was not vectorised";
@@ -125,12 +125,12 @@ TEST(JitVectorize, VecLibCapsADerivedWidth) {
     GTEST_SKIP() << "libmvec is glibc on x86-64";
   }
   ddx::jit::Options on;
-  on.veclib = ddx::jit::VecLib::Libmvec;
+  on.codegen.veclib = ddx::jit::VecLib::Libmvec;
   const auto ir = ir_for([](auto &v) { return sin(v[0]) + v[1]; }, 2, on);
   EXPECT_FALSE(std::regex_search(ir, std::regex{R"(<(8|16) x double>)"}))
       << "wider than the library serves";
   // Stated widths are taken as stated, whatever the library has.
-  on.lanes = ddx::jit::Lanes{8};
+  on.codegen.lanes = *ddx::jit::Lanes::exactly(8);
   const auto wide = ir_for([](auto &v) { return sin(v[0]) + v[1]; }, 2, on);
   EXPECT_NE(wide.find("<8 x double>"), std::string::npos) << wide;
 }
@@ -170,7 +170,7 @@ TEST(JitVectorize, WideTranscendentalJacobianIsVector) {
 // The scalar kernel has no vector type anywhere in it.
 TEST(JitVectorize, OneLaneIsScalar) {
   ddx::jit::Options scalar;
-  scalar.lanes = ddx::jit::Lanes::scalar();
+  scalar.codegen.lanes = ddx::jit::Lanes::scalar();
   const auto ir =
       ir_for([](auto &v) { return exp(v[0]) * sin(v[1]) + v[0]; }, 2, scalar);
   EXPECT_FALSE(has_vector_doubles(ir)) << ir;
@@ -190,7 +190,7 @@ TEST(JitVectorize, EveryVectorSymbolResolves) {
 
   const auto graph = Graph<>::freeze(b, std::array{f.id(b)});
   ddx::jit::Options on;
-  on.veclib = ddx::jit::VecLib::Libmvec;
+  on.codegen.veclib = ddx::jit::VecLib::Libmvec;
   const auto kernel = must_compile(graph, on);
   ASSERT_TRUE(static_cast<bool>(kernel));
 

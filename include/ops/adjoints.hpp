@@ -22,11 +22,12 @@ template <Numeric T>
   return a > T{} ? T{1} : a < T{} ? T{-1} : T{a - a};
 }
 
-// The ops whose `reads_primals` is false take their operands anyway and discard
-// them, so one forwarder shape serves every op.
+// A rule that takes only the adjoint reads no primal, and the sweep derives
+// from that signature which stores it may skip -- a sum, and so a difference,
+// is the biggest source of skippable stores.
 template <Numeric T> struct SumOpFn {
   [[nodiscard]] static constexpr std::array<T, 2>
-  adjoints(const auto &adj, const auto &, const auto &) noexcept {
+  adjoints(const auto &adj) noexcept {
     return {adj, adj};
   }
 };
@@ -43,7 +44,7 @@ template <Numeric T> struct MultiplyOpFn {
 
 template <Numeric T> struct NegateOpFn {
   [[nodiscard]] static constexpr std::array<T, 1>
-  adjoints(const auto &adj, const auto &) noexcept {
+  adjoints(const auto &adj) noexcept {
     return {-adj};
   }
 };
@@ -121,7 +122,7 @@ template <Numeric T> struct AbsOpFn {
 
 template <Numeric T> struct SignOpFn {
   [[nodiscard]] static constexpr std::array<T, 1>
-  adjoints(const auto &, const auto &) noexcept {
+  adjoints(const auto &) noexcept {
     return {T{}};
   }
 };
@@ -145,5 +146,22 @@ template <Numeric T, bool IsMax> struct ExtremumOpFn {
 
 template <Numeric T> using MaxOpFn = ExtremumOpFn<T, true>;
 template <Numeric T> using MinOpFn = ExtremumOpFn<T, false>;
+
+// Whether a rule reads its operands' primals, read off its signature.
+template <template <Numeric> class Fn, Numeric T>
+inline constexpr bool reads_primals_v =
+    !requires(const T &adj) { Fn<T>::adjoints(adj); };
+
+// The one call shape for both sides: the caller hands every operand and the
+// descriptor's arity decides whether any is read.
+template <template <Numeric> class Fn, Numeric T>
+[[nodiscard]] constexpr auto adjoints_of(const T &adj,
+                                         const auto &...operands) noexcept {
+  if constexpr (reads_primals_v<Fn, T>) {
+    return Fn<T>::adjoints(adj, operands...);
+  } else {
+    return Fn<T>::adjoints(adj);
+  }
+}
 
 } // namespace ddx::impl::detail

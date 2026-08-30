@@ -1,15 +1,18 @@
 #pragma once
 
 #include "md/md.hpp"
+#include "ops/operations.hpp"
 #include "rt/builder.hpp"
 #include "rt/opcode.hpp"
 #include "util/export.hpp"
 
+#include <boost/describe/class.hpp>
 #include <boost/dynamic_bitset.hpp>
 
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
+#include <optional>
 #include <ranges>
 #include <vector>
 
@@ -18,6 +21,13 @@
 namespace ddx::rt {
 
 inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
+
+// coupling_pattern's opcode arms mirror what the ops declare of themselves;
+// pinned, so the two walks cannot answer different sparsities.
+static_assert(impl::SumOp<double>::curvature == impl::Curvature::None &&
+              impl::NegateOp<double>::curvature == impl::Curvature::None &&
+              impl::MultiplyOp<double>::curvature == impl::Curvature::Bilinear &&
+              impl::DivideOp<double>::curvature == impl::Curvature::Quotient);
 
 // boost::dynamic_bitset, not vector<bool>: the colouring's pairwise overlap
 // test is the hot loop, and `intersects` is a word-at-a-time AND.
@@ -50,22 +60,24 @@ struct Sparsity {
     return std::span{col}.subspan(rowptr[i], rowptr[i + 1] - rowptr[i]);
   }
 
-  // Where (i, j) sits in the compressed block, or `no_column` for a cell the
+  // Where (i, j) sits in the compressed block, or nullopt for a cell the
   // structure says cannot be nonzero.
-  [[nodiscard]] constexpr std::size_t at(std::size_t i,
-                                         std::size_t j) const noexcept {
+  [[nodiscard]] constexpr std::optional<std::size_t>
+  at(std::size_t i, std::size_t j) const noexcept {
     const auto present = row(i);
     const auto found =
         std::ranges::lower_bound(present, static_cast<std::uint32_t>(j));
     return found != present.end() && *found == j
-               ? rowptr[i] + static_cast<std::size_t>(found - present.begin())
-               : no_column;
+               ? std::optional{rowptr[i] +
+                               static_cast<std::size_t>(found - present.begin())}
+               : std::nullopt;
   }
 
   // Every cell present.
   [[nodiscard]] constexpr bool dense() const noexcept {
     return nonzeros() == rows * columns;
   }
+  BOOST_DESCRIBE_CLASS(Sparsity, (), (rowptr, col, rows, columns), (), ())
 };
 
 // Two columns share a colour only when no row couples them, so one sweep can
@@ -87,12 +99,14 @@ struct Coloring {
                                              std::size_t row) const {
     return by_color(cell, count, color.size())[c, row];
   }
-  // Where H(i, j) is stored, or no_column for a cell the colouring calls zero.
-  [[nodiscard]] constexpr std::size_t cell_of(std::size_t i,
-                                              std::size_t j) const {
+  // Where H(i, j) is stored, or nullopt for a cell the colouring calls zero.
+  [[nodiscard]] constexpr std::optional<std::size_t>
+  cell_of(std::size_t i, std::size_t j) const {
     const std::size_t c = color[j];
-    return target(c, i) == j ? column(c, i) : no_column;
+    return target(c, i) == j ? std::optional{column(c, i)} : std::nullopt;
   }
+  BOOST_DESCRIBE_CLASS(Coloring, (), (color, count, scatter, cell, cells), (),
+                       ())
 };
 
 namespace detail {

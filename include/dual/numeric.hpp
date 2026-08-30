@@ -1,13 +1,14 @@
 #pragma once
 
 // The drivers for a runtime callable: seed a dual into a scratch buffer, hand
-// the callable a pointer to it, read the derivative back out.  jacobian sweeps
+// the callable a view of it, read the derivative back out.  jacobian sweeps
 // once per active variable, hessian once per probe pair.
 
 #include "dual/workspace.hpp"
 #include "util/scope_guard.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <memory>
 #include <ranges>
@@ -20,11 +21,13 @@ namespace ddx::impl {
 namespace detail {
 // Over storage the caller has already seeded.
 template <CEnergyOf<dual> F, CIndexRange R>
-constexpr void jacobian_into(F &&f, dual *const dof, R &&active,
+constexpr void jacobian_into(F &&f, const std::span<dual> dof, R &&active,
                              const std::span<double> out) {
+  assert(out.size() == std::ranges::size(active));
+  const std::span<const dual> point = dof;
   for (auto &&[slot, dof_index] : std::views::zip(out, active)) {
     const auto seed = scoped_seed<1.0>(dof[dof_index].deriv());
-    slot = f(dof).deriv();
+    slot = f(point).deriv();
   }
 }
 } // namespace detail
@@ -62,11 +65,15 @@ namespace detail {
 // per probe.  Each guard holds a bare double, never the enclosing dual2nd: at
 // ai == aj they name two scalars of the same number.
 template <CEnergyOf<dual2nd> F, CIndexRange R>
-constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
-                              double *const grad_out, double *const hess_out) {
-  const std::size_t m = std::ranges::size(active);
+constexpr double
+hessian_into(F &&f, const std::span<dual2nd> dof, R &&active,
+             const std::span<double> grad,
+             const md::mdspan<double, md::dextents<std::size_t, 2>> hess) {
+  [[maybe_unused]] const std::size_t m = std::ranges::size(active);
+  assert(grad.size() == m && hess.extent(0) == m && hess.extent(1) == m);
+  const std::span<const dual2nd> point = dof;
   double value{};
-  for (const auto [index, aj] : std::views::enumerate(active)) {
+  for (const auto [index, aj] : active | std::views::enumerate) {
     const auto j = static_cast<std::size_t>(index);
     // Inner seed e_j is constant across the i-loop.
     const auto inner_seed = scoped_seed<1.0>(dof[aj].value().deriv());
@@ -77,16 +84,16 @@ constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
       // When ai == aj this lands in aj's other slot.
       const auto outer_seed = scoped_seed<1.0>(dof[ai].deriv().value());
 
-      const dual2nd r = f(dof);
+      const dual2nd r = f(point);
       const auto &[A, B] = r;   // value-component, outer-derivative component
       const auto &[a0, a1] = A; // f(x), df/dx_j
       const auto &[b0, b1] = B; // df/dx_i, d2f/dx_i dx_j
 
       value = a0;
-      grad_out[i] = b0;
-      grad_out[j] = a1;
-      hess_out[i * m + j] = b1;
-      hess_out[j * m + i] = b1;
+      grad[i] = b0;
+      grad[j] = a1;
+      hess[i, j] = b1;
+      hess[j, i] = b1;
     }
   }
   return value;
@@ -94,13 +101,13 @@ constexpr double hessian_into(F &&f, dual2nd *const dof, R &&active,
 
 // Writing form: nothing allocates once the buffers and scratch are warm.
 template <CEnergyOf<dual2nd> F>
-double hessian(F &&f, const std::span<const double> x,
-               CIndexRange auto &&active, HessianWorkspace &ws,
-               const std::span<double> grad_out,
-               const std::span<double> hess_out) {
+double
+hessian(F &&f, const std::span<const double> x, CIndexRange auto &&active,
+        HessianWorkspace &ws, const std::span<double> grad_out,
+        const md::mdspan<double, md::dextents<std::size_t, 2>> hess_out) {
   return hessian_into(static_cast<F &&>(f), ws.seed(x),
-                      static_cast<decltype(active) &&>(active), grad_out.data(),
-                      hess_out.data());
+                      static_cast<decltype(active) &&>(active), grad_out,
+                      hess_out);
 }
 
 // std::array throughout, so this is the one Hessian driver a constant
@@ -112,8 +119,9 @@ constexpr HessianStatic<N> hessian_static(F &&f,
   std::ranges::transform(x | std::views::take(N), dof.begin(),
                          [](const double v) { return dual2nd{v}; });
   HessianStatic<N> out{};
-  out.value = hessian_into(static_cast<F &&>(f), dof.data(), all_indices(N),
-                           out.jacobian.data(), out.hessian.data());
+  out.value = hessian_into(static_cast<F &&>(f), std::span<dual2nd>{dof},
+                           all_indices(N), std::span<double>{out.jacobian},
+                           out.hessian_view());
   return out;
 }
 
@@ -124,15 +132,14 @@ HessianOwned hessian(F &&f, const std::span<const double> x,
   const std::size_t m = std::ranges::size(active);
   HessianWorkspace ws;
   // Uninitialised: the sweep writes every cell.
-  auto grad = std::make_unique_for_overwrite<double[]>(m);
-  auto hess = std::make_unique_for_overwrite<double[]>(m * m);
-  const double value = hessian_into(static_cast<F &&>(f), ws.seed(x),
-                                    static_cast<decltype(active) &&>(active),
-                                    grad.get(), hess.get());
-  return {.value = value,
-          .jacobian = std::move(grad),
-          .hessian = std::move(hess),
-          .arity = m};
+  HessianOwned out{.jacobian = std::make_unique_for_overwrite<double[]>(m),
+                   .hessian = std::make_unique_for_overwrite<double[]>(m * m),
+                   .arity = m};
+  out.value = hessian_into(static_cast<F &&>(f), ws.seed(x),
+                           static_cast<decltype(active) &&>(active),
+                           std::span<double>{out.jacobian.get(), m},
+                           out.hessian_view());
+  return out;
 }
 
 // Convenience: differentiate every variable.

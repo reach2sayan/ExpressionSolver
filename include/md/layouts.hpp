@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <ranges>
 
@@ -93,19 +94,41 @@ protected:
 // vector-valued Equation's output axis; Lead == 0 is the scalar case.  The
 // symmetric part ranks the sorted multiset in colex order, via b_t = a_t + t.
 template <std::size_t Lead> struct layout_leading_simplex {
-  // Two axes can only be interchangeable if they have the same length.
   template <md::CExtents Ext>
-  class mapping
-      : public detail::mapping_base<Ext, Ext::rank() - Lead == 1, true, false> {
+  static constexpr std::size_t order_of = Ext::rank() - Lead;
+  // Unique only when there is nothing to permute.
+  template <md::CExtents Ext>
+  using base_for = detail::mapping_base<Ext, order_of<Ext> == 1, true, false>;
+
+  // Two axes can only be interchangeable if they have the same length, so the
+  // mapping refuses extents whose symmetric axes differ: at compile time when
+  // they are static, at construction otherwise.
+  template <md::CExtents Ext> class mapping : public base_for<Ext> {
     static_assert(Ext::rank() > Lead,
                   "layout_leading_simplex needs at least one symmetric axis");
-    static constexpr std::size_t kOrder = Ext::rank() - Lead;
-    using base_t = detail::mapping_base<Ext, kOrder == 1, true, false>;
+    static constexpr std::size_t kOrder = order_of<Ext>;
+    using base_t = base_for<Ext>;
+
+    [[nodiscard]] static constexpr bool symmetric_axes_agree(const Ext &e) {
+      return std::ranges::all_of(
+          std::views::iota(Lead, Ext::rank()),
+          [&e](std::size_t r) { return e.extent(r) == e.extent(Lead); });
+    }
 
   public:
-    using base_t::base_t;
     using typename base_t::index_type;
     using layout_type = layout_leading_simplex;
+
+    constexpr mapping() noexcept : mapping(Ext{}) {}
+    constexpr explicit mapping(const Ext &e) noexcept : base_t(e) {
+      if constexpr (md::CStaticExtents<Ext>) {
+        static_assert(symmetric_axes_agree(Ext{}),
+                      "layout_leading_simplex: the symmetric axes must have "
+                      "equal extents");
+      } else {
+        assert(symmetric_axes_agree(e));
+      }
+    }
 
     [[nodiscard]] constexpr index_type required_span_size() const noexcept {
       const index_type lead = std::ranges::fold_left(

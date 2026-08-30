@@ -20,7 +20,12 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <boost/describe/enum.hpp>
+#include <boost/mp11/algorithm.hpp>
+
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <exception>
 #include <memory>
 #include <ranges>
@@ -87,9 +92,9 @@ built_or_loaded(const std::optional<std::filesystem::path> &cache,
                 std::vector<rt::NodeId> roots) {
   if (cache) {
     if (auto snap = rt::load_snapshot<double>(*cache);
-        snap && snap->roots.size() == roots.size() &&
-        std::ranges::equal(snap->roots, roots) &&
-        rt::digest<double>(snap->symbols, snap->nodes, snap->model_nodes) ==
+        snap && std::ranges::equal((*snap)->roots, roots) &&
+        rt::digest<double>((*snap)->symbols, (*snap)->nodes,
+                           (*snap)->model_nodes) ==
             rt::digest<double>(arena->symbols(), arena->nodes(),
                                arena->size())) {
       return pyb::cast(PyEquation{std::move(*snap)});
@@ -351,13 +356,16 @@ PYBIND11_MODULE(_ddx, m) {
       .value("O3", jit::Level::O3)
       .finalize();
 
-  pyb::native_enum<PyEquation::Want>(m, "Want", "enum.IntEnum",
-                                     "Which blocks a bound call fills.")
-      .value("VALUE", PyEquation::Want::Values)
-      .value("JACOBIAN", PyEquation::Want::Jacobian)
-      .value("HESSIAN", PyEquation::Want::Hessian)
-      .value("GRADIENT", PyEquation::Want::Gradient)
-      .finalize();
+  pyb::native_enum<PyEquation::Want> want{m, "Want", "enum.IntEnum",
+                                          "Which blocks a bound call fills."};
+  boost::mp11::mp_for_each<
+      boost::describe::describe_enumerators<PyEquation::Want>>([&](auto D) {
+    std::string name{D.name};
+    std::ranges::transform(name, name.begin(),
+                           [](unsigned char c) { return std::toupper(c); });
+    want.value(name.c_str(), D.value);
+  });
+  want.finalize();
 
   // Bound once, called repeatedly: `x` is written into and the blocks are read
   // back.  Not constructible from Python -- Equation.buffer() is the only way
@@ -373,34 +381,45 @@ PYBIND11_MODULE(_ddx, m) {
   // Internal.  ddx.Options is the pydantic model over this, which is where the
   // ranges are checked; the defaults stay here, because they follow how the
   // library was built.
-  pyb::class_<jit::Options>(m, "_Options")
-      .def(pyb::init<>())
+  pyb::class_<jit::Options> options{m, "_Options"};
+  // Flat in Python: the identity/policy split is the C++ struct's, and the
+  // pydantic model over this names every field at one level.
+  const auto codegen = [&options](const char *name, auto jit::Codegen::*field) {
+    options.def_property(
+        name, [field](const jit::Options &o) { return o.codegen.*field; },
+        [field](jit::Options &o, decltype(o.codegen.*field) v) {
+          o.codegen.*field = v;
+        });
+  };
+  options.def(pyb::init<>())
       .def_readwrite("backend", &jit::Options::backend)
       .def_readwrite("points", &jit::Options::points)
       // None derives the width; a stated one must hold a point.
       .def_property(
           "lanes",
-          [](const jit::Options &o) { return o.lanes.stated(); },
+          [](const jit::Options &o) { return o.codegen.lanes.stated(); },
           [](jit::Options &o, std::optional<unsigned> width) {
-            if (width == 0u) {
+            const auto lanes = width ? jit::Lanes::exactly(*width)
+                                     : std::optional{jit::Lanes::derived()};
+            if (!lanes) {
               throw pyb::value_error("lanes: a stated width is at least 1");
             }
-            o.lanes = width ? jit::Lanes{*width} : jit::Lanes::derived();
+            o.codegen.lanes = *lanes;
           })
-      .def_readwrite("opt_level", &jit::Options::opt_level)
-      .def_readwrite("codegen_level", &jit::Options::codegen_level)
       .def_readwrite("warm_points", &jit::Options::warm_points)
       .def_readwrite("hot_points", &jit::Options::hot_points)
-      .def_readwrite("slp", &jit::Options::slp)
-      .def_readwrite("loop_vectorize", &jit::Options::loop_vectorize)
-      .def_readwrite("veclib", &jit::Options::veclib)
-      .def_readwrite("contract", &jit::Options::contract)
       .def_readwrite("time_passes", &jit::Options::time_passes)
       // Policy rather than identity: neither changes what a compile emits, so
       // neither belongs in a key that decides whether stored code may be run.
       .def_readwrite("retain_object", &jit::Options::retain_object)
       .def_readwrite("cache_dir", &jit::Options::cache_dir)
       .def(pyb::self == pyb::self);
+  codegen("opt_level", &jit::Codegen::opt_level);
+  codegen("codegen_level", &jit::Codegen::codegen_level);
+  codegen("slp", &jit::Codegen::slp);
+  codegen("loop_vectorize", &jit::Codegen::loop_vectorize);
+  codegen("veclib", &jit::Codegen::veclib);
+  codegen("contract", &jit::Codegen::contract);
 
   pyb::class_<PyEquation>(m, "Equation", pyb::dynamic_attr())
       .def("__repr__", &PyEquation::repr)

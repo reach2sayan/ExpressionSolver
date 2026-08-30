@@ -103,6 +103,9 @@ DDX_ALWAYS_INLINE constexpr void color_sweeps(const Expr &expr, const Point &x,
   using S = dual_scalar_t<T>;
   using Syms = sweep_symbols_t<Given, Expr>;
   constexpr std::size_t N = mp::mp_size<Syms>::value;
+  static_assert(Colors.count == 0 ||
+                    std::ranges::max(Colors.color) + 1 == Colors.count,
+                "column_coloring: count is one past the highest colour");
 
   // Only the seeded tangents move between colours.
   std::array<T, N> seeds{};
@@ -360,11 +363,8 @@ univariate_derivative_impl(const Expr &expr, S x0) noexcept {
   using symbols = detail::expr_symbols_t<std::remove_cvref_t<Expr>>;
   using TD = TaylorDual<S, Order>;
 
-  TD seed;
-  seed.c[0] = x0;
-  seed.c[1] = S{1};
-
-  const TD result = expr.template eval_seeded<symbols>(std::array<TD, 1>{seed});
+  const TD result =
+      expr.template eval_seeded<symbols>(std::array<TD, 1>{TD::variable(x0)});
 
   constexpr S factorial = static_cast<S>(compile_time_factorial(Order));
   return result.c[Order] * factorial;
@@ -393,7 +393,7 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
   // Value-initialised is load-bearing: the scatter writes only the pattern.
   HessianStatic<N> res{};
   auto &res_jacobian = res.jacobian;
-  auto &res_hessian = res.hessian;
+  const auto res_hessian = res.hessian_view();
 
   color_sweeps<kColors>(
       expr, x, [&](std::size_t c, const T &root, const auto &grads) {
@@ -408,12 +408,12 @@ hessian_expr_reverse(const Expr &expr, std::span<const double> x) {
 
         scatter(kScatter[c], grads,
                 [&](std::size_t i, std::size_t j, const auto &v) {
-                  res_hessian[i * N + j] = static_cast<double>(v);
+                  res_hessian[i, j] = static_cast<double>(v);
                 });
       });
 
   // Independent sweeps, so mirrored entries can differ in the last ULP.
-  detail::symmetrize(res_hessian, N);
+  detail::symmetrize(res_hessian);
   return res;
 }
 

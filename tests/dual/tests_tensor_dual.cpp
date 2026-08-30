@@ -27,7 +27,7 @@ TEST(BitExactness, EveryDriverIsBitStableAcrossBuilds) {
     feed(e.eval_with_tangent<"x">(a, b, c).deriv());
 
     const std::vector<double> xs{a, b, c};
-    auto fn = [](const auto *q) {
+    auto fn = [](auto q) {
       using std::exp, std::sin;
       return sin(q[0] * q[1]) * exp(q[0]) + q[2] * q[2] * q[1];
     };

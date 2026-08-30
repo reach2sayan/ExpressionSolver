@@ -78,18 +78,17 @@ consteval coupling_info<N> coupling_of() noexcept {
     }
 
     using Op = typename U::op_type;
-    // Linear ops couple nothing; a product couples across its operands, a
-    // quotient across them and within the denominator.
-    if constexpr (Op::rule_op == algebra::RuleOp::Add ||
-                  Op::rule_op == algebra::RuleOp::Neg) {
-      // No curvature of its own.
-    } else if constexpr (Op::rule_op == algebra::RuleOp::Mul && K == 2) {
+    if constexpr (Op::curvature == Curvature::None) {
+      // Linear: no curvature of its own.
+    } else if constexpr (Op::curvature == Curvature::Bilinear) {
+      static_assert(K == 2, "a bilinear op has two operands");
       couple<N>(info.rows, kids[0].symbols, kids[1].symbols);
-    } else if constexpr (Op::rule_op == algebra::RuleOp::Div && K == 2) {
+    } else if constexpr (Op::curvature == Curvature::Quotient) {
+      static_assert(K == 2, "a quotient has two operands");
       couple<N>(info.rows, kids[0].symbols, kids[1].symbols);
       couple<N>(info.rows, kids[1].symbols, kids[1].symbols);
     } else {
-      // Anything else is assumed to couple its whole support with itself.
+      static_assert(Op::curvature == Curvature::Self);
       couple<N>(info.rows, info.symbols, info.symbols);
     }
   }

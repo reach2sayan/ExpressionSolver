@@ -39,7 +39,7 @@ TEST(JitSeed, KernelArityCountsTheSeeds) {
   Builder<> b;
   const auto graph = seeded_graph(b);
   ASSERT_EQ(graph.arity(), 4u);
-  EXPECT_EQ(must_compile(graph).arity(), 4u);
+  EXPECT_EQ(must_compile(graph).shape().arity, 4u);
 }
 
 TEST(JitSeed, MatchesTheInterpreterToTheBit) {

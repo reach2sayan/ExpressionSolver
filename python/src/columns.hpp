@@ -28,18 +28,38 @@ using Array = pyb::array_t<double, pyb::array::c_style | pyb::array::forcecast>;
   return static_cast<pyb::ssize_t>(n);
 }
 
+// The symbol list as text and as the interned Python strings a dict lookup
+// keys on: one object, built once, so the two cannot come apart.  Building a
+// key per symbol per call was most of what a dict point cost.
+class Symbols {
+public:
+  explicit Symbols(std::span<const std::string> text)
+      : text_(text.begin(), text.end()),
+        keys_(text | std::views::transform([](const std::string &s) {
+                return pyb::object{pyb::str(s)};
+              }) |
+              impl::to<std::vector<pyb::object>>()) {}
+  [[nodiscard]] std::span<const std::string> text() const noexcept {
+    return text_;
+  }
+  [[nodiscard]] std::span<const pyb::object> keys() const noexcept {
+    return keys_;
+  }
+  [[nodiscard]] std::size_t size() const noexcept { return text_.size(); }
+
+private:
+  std::vector<std::string> text_;
+  std::vector<pyb::object> keys_;
+};
+
 class Point {
 public:
-  // `names` is the symbol list as interned Python strings, held by the equation:
-  // a dict lookup needs a key object, and building one per symbol per call was
-  // most of what a dict point cost.
-  Point(const pyb::handle &x, std::span<const std::string> symbols,
-        std::span<const pyb::object> names)
+  Point(const pyb::handle &x, const Symbols &symbols)
       : columns_(symbols.size(), nullptr) {
     if (pyb::isinstance<pyb::dict>(x)) {
       const auto d = pyb::reinterpret_borrow<pyb::dict>(x);
-      if (!scalars_from_dict(d, names)) {
-        from_dict(d, symbols);
+      if (!scalars_from_dict(d, symbols.keys())) {
+        from_dict(d, symbols.text());
       }
     } else {
       from_array(x, symbols.size());

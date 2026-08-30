@@ -31,5 +31,5 @@ concept CHessianResult = requires(const T &H) {
 
 [[nodiscard]] constexpr double hess_at(const auto &h, std::size_t i,
                                        std::size_t j) noexcept {
-  return hess_ptr(h)[i * hess_n(h) + j]; // row-major, as the drivers document
+  return deref(h).hessian_view()[i, j];
 }

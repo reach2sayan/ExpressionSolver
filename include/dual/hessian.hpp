@@ -11,6 +11,7 @@
 #include "util/error.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <type_traits>
@@ -59,12 +60,13 @@ reverse_hessian_applies(std::size_t n, std::span<const double> x,
          std::ranges::equal(active, std::views::iota(std::size_t{0}, n));
 }
 
-// The arity a bridged callable advertises; 0 if it advertises none.
-template <CHessianTarget F> constexpr std::size_t declared_arity() noexcept {
+// The arity a bridged callable advertises, if it advertises one.
+template <CHessianTarget F>
+constexpr std::optional<std::size_t> declared_arity() noexcept {
   if constexpr (CSeededExprEnergy<F>) {
     return std::remove_cvref_t<F>::arity;
   } else {
-    return 0;
+    return std::nullopt;
   }
 }
 
@@ -78,8 +80,8 @@ template <CHessianTarget F>
 {
   if constexpr (CExpression<F>) {
     return check_graph_point(expr_arity_v<F>, x, active...);
-  } else if constexpr (declared_arity<F>() > 0) {
-    return check_graph_point(declared_arity<F>(), x, active...);
+  } else if constexpr (declared_arity<F>().has_value()) {
+    return check_graph_point(*declared_arity<F>(), x, active...);
   } else {
     return {};
   }
@@ -120,8 +122,8 @@ constexpr auto hessian(F &&f, const std::span<const double> x) {
       }
       return detail::hessian_static<detail::expr_arity_v<F>>(
           seeded_energy(static_cast<F &&>(f)), x);
-    } else if constexpr (detail::declared_arity<F>() > 0) {
-      return detail::hessian_static<detail::declared_arity<F>()>(
+    } else if constexpr (detail::declared_arity<F>().has_value()) {
+      return detail::hessian_static<*detail::declared_arity<F>()>(
           static_cast<F &&>(f), x);
     } else {
       return detail::hessian(static_cast<F &&>(f), x);

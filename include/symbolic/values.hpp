@@ -249,6 +249,8 @@ public:
     if constexpr (!Frozen) {
       using Syms = std::decay_t<decltype(syms)>;
       constexpr auto idx = symbol_index<symbol, Syms>();
+      static_assert(idx < mp::mp_size<Syms>::value,
+                    "backward: this symbol is not in the list swept");
       // `+` and assignment, not `+=`: CFieldLike promises only a + b.  Do not
       // "simplify" this back to `+=`.
       grads[idx] = std::move(grads[idx]) + adj;
