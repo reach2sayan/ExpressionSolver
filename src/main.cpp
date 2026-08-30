@@ -9,6 +9,7 @@
 #include "symbolic/bound.hpp"    // eval(), bind(), named<>()
 #include "symbolic/coupling.hpp" // hessian_pattern(), color_columns()
 #include "symbolic/equation.hpp" // Equation: vector-valued f, Jacobians
+#include "util/config.hpp"
 #include <tuple>
 
 #include <array>
@@ -25,7 +26,7 @@ using namespace ddx::impl;
 // <format> plus a stream, so this does not gate on libstdc++ shipping <print>.
 template <std::formattable<char>... Args>
 static void println(std::format_string<Args...> fmt, Args &&...args) {
-  std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';
+  std::cout << std::format(fmt, DDX_FWD(args)...) << '\n';
 }
 
 namespace {
@@ -208,8 +209,6 @@ int main() {
               return (t[0, 2, 2]);
             },
             1000));
-    println("          same cell, chained spelling t[0][2][2] = {:.4f}",
-            T[0][2][2]);
     println("          packed: stores {} cells, not {} — symmetric", T.size(),
             3 * 3 * 3);
   }

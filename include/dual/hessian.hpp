@@ -8,6 +8,7 @@
 #include "symbolic/expressions.hpp" // CExpression
 #include "symbolic/seeded_energy.hpp"
 #include "symbolic/sweep.hpp"
+#include "util/config.hpp"
 #include "util/error.hpp"
 
 #include <cstddef>
@@ -103,9 +104,9 @@ auto hessian(CHessianTarget auto &&f, const std::span<const double> x,
           return detail::to_owned(detail::hessian_expr_reverse(f, x));
         }
       }
-      return detail::hessian(seeded_energy(std::forward<F>(f)), x, active);
+      return detail::hessian(seeded_energy(DDX_FWD(f)), x, active);
     } else {
-      return detail::hessian(std::forward<F>(f), x, active);
+      return detail::hessian(DDX_FWD(f), x, active);
     }
   });
 }
@@ -124,12 +125,12 @@ constexpr auto hessian(CHessianTarget auto &&f,
         }
       }
       return detail::hessian_static<detail::expr_arity_v<F>>(
-          seeded_energy(std::forward<F>(f)), x);
+          seeded_energy(DDX_FWD(f)), x);
     } else if constexpr (detail::declared_arity<F>().has_value()) {
-      return detail::hessian_static<*detail::declared_arity<F>()>(
-          std::forward<F>(f), x);
+      return detail::hessian_static<*detail::declared_arity<F>()>(DDX_FWD(f),
+                                                                  x);
     } else {
-      return detail::hessian(std::forward<F>(f), x);
+      return detail::hessian(DDX_FWD(f), x);
     }
   });
 }

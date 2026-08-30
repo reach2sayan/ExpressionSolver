@@ -9,7 +9,7 @@
 #endif
 
 #define DDX_SELF this auto &&self
-#define DDX_FWD_SELF std::forward<decltype(self)>(self)
+#define DDX_FWD(X) std::forward<decltype(X)>(X)
 
 // The sweep helpers and dual kernels are factored-out code, not calls; GCC
 // stops inlining them once a TU exhausts its inlining budget.
@@ -36,19 +36,19 @@
 // One slot under a name of its own: no key parameter, the name is the key.
 #define DDX_SLOT_ACCESSOR(NAME, KEY)                                           \
   [[nodiscard]] constexpr decltype(auto) NAME(DDX_SELF) noexcept {             \
-    return slot<KEY>(DDX_FWD_SELF);                                            \
+    return slot<KEY>(DDX_FWD(self));                                           \
   }
 #define DDX_KEYED_GET(TPARAMS, KEY, ...)                                       \
   template <TPARAMS>                                                           \
   [[nodiscard]] constexpr decltype(auto) get(DDX_SELF) noexcept __VA_ARGS__ {  \
-    return slot<KEY>(DDX_FWD_SELF);                                            \
+    return slot<KEY>(DDX_FWD(self));                                           \
   }
 // The same slot, reached through the empty tag operator[] deduces its key from.
 #define DDX_KEYED_SUBSCRIPT(TPARAMS, KEY, SUB_PARAM, ...)                      \
   template <TPARAMS>                                                           \
   [[nodiscard]] constexpr decltype(auto) operator[](                           \
       DDX_SELF, SUB_PARAM) noexcept __VA_ARGS__ {                              \
-    return slot<KEY>(DDX_FWD_SELF);                                            \
+    return slot<KEY>(DDX_FWD(self));                                           \
   }
 // Both spellings of one slot.  The two parameter lists differ because get<>
 // takes its key and operator[] deduces it from the tag.

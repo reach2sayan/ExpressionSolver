@@ -1,9 +1,9 @@
 #pragma once
 
-#include "md/layouts.hpp" // layout_leading_simplex — the symmetric packings
+#include "md/layouts.hpp"
 #include "md/md.hpp"
-#include "symbolic/expressions.hpp" // Numeric
-#include "util/config.hpp"          // DDX_SELF
+#include "symbolic/expressions.hpp"
+#include "util/config.hpp"
 
 #include <boost/mp11/algorithm.hpp>
 #include <boost/mp11/integral.hpp>
@@ -13,15 +13,12 @@
 #include <concepts>
 #include <cstddef>
 #include <ranges>
-#include <type_traits>
-#include <utility>
 
 namespace ddx::impl {
 
-// An owning, constant-evaluable tensor with compile-time extents.  t[i][j][k]
-// is not a slice: a rank-reducing view needs submdspan, which the packed and
-// sparse layouts do not support, so the proxy accumulates the prefix and calls
-// the mapping once at the last subscript.  None of it survives -O2.
+// An owning, constant-evaluable tensor with compile-time extents and a layout
+// policy.  t[i, j, k] is one mapping call; there is no rank-reducing view,
+// since the packed and sparse layouts have no cheap submdspan_mapping.
 
 namespace detail {
 
@@ -49,39 +46,6 @@ using stacked_extents_t = boost::mp11::mp_apply<
 
 template <Numeric S, md::CStaticExtents Ext, md::CLayoutFor<Ext> Layout>
 class md_tensor;
-
-namespace detail {
-
-// Resolves to a reference once Depth + 1 == rank.  It points at the tensor, not
-// the data, so the mapping and the const-ness travel with it.
-template <typename Tensor, std::size_t Depth> class md_index_proxy {
-  using index_type = typename Tensor::index_type;
-  static constexpr std::size_t kRank = Tensor::rank();
-  static_assert(Depth < kRank);
-
-  Tensor *tensor_;
-  std::array<index_type, Depth> prefix_;
-
-public:
-  constexpr md_index_proxy(Tensor &t,
-                           const std::array<index_type, Depth> &prefix) noexcept
-      : tensor_(&t), prefix_(prefix) {}
-
-  [[nodiscard]] constexpr decltype(auto)
-  operator[](index_type i) const noexcept {
-    const auto next = index_apply<Depth>([&]<std::size_t... K>() {
-      return std::array<index_type, Depth + 1>{prefix_[K]..., i};
-    });
-
-    if constexpr (Depth + 1 == kRank) {
-      return tensor_->at_index(next);
-    } else {
-      return md_index_proxy<Tensor, Depth + 1>(*tensor_, next);
-    }
-  }
-};
-
-} // namespace detail
 
 template <Numeric S, md::CStaticExtents Ext,
           md::CLayoutFor<Ext> Layout = md::layout_right>
@@ -130,15 +94,6 @@ public:
   [[nodiscard]] constexpr auto &operator[](DDX_SELF, I... idx) noexcept {
     return self.data_[static_cast<std::size_t>(
         kMapping(static_cast<index_type>(idx)...))];
-  }
-
-  // t[i][j][k].  Only at rank >= 2; at rank 1 the overload above already takes
-  // a single index.
-  [[nodiscard]] constexpr auto operator[](DDX_SELF, index_type i) noexcept
-    requires(Ext::rank() >= 2)
-  {
-    return detail::md_index_proxy<std::remove_reference_t<decltype(self)>, 1>(
-        self, std::array<index_type, 1>{i});
   }
 
   [[nodiscard]] constexpr decltype(auto)

@@ -112,10 +112,10 @@ public:
   }
 
   // In place, and the slot keeps its type; erase<Key>().insert(...) does not.
-  template <FixedString Key, typename U>
-  constexpr void set(U &&v) noexcept(
-      std::is_nothrow_assignable_v<value_type_of<Key> &, U &&>) {
-    slot<Key>(*this) = std::forward<U>(v);
+  template <FixedString Key>
+  constexpr void set(auto &&v) noexcept(
+      std::is_nothrow_assignable_v<value_type_of<Key> &, decltype(v)>) {
+    slot<Key>(*this) = DDX_FWD(v);
   }
 
   // The key set is part of the type, so these return new maps.

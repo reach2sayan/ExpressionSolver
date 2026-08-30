@@ -33,7 +33,7 @@ private:
     constexpr auto idx = symbol_index<S, SymList>();
     static_assert(idx < arity, "ValueMap: symbol not present in map");
     if constexpr (std::is_lvalue_reference_v<decltype(self)>) {
-      return std::forward<decltype(self)>(self).slots[idx];
+      return DDX_FWD(self).slots[idx];
     } else {
       return Scalar{self.slots[idx]};
     }
@@ -149,7 +149,7 @@ private:
   // Bound was reached by.
   template <FixedString S>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
-    return std::forward<decltype(self)>(self).map.template get<S>();
+    return DDX_FWD(self).map.template get<S>();
   }
 
 public:
@@ -158,16 +158,16 @@ public:
 
 template <CExpression Expr, CValueMap Map> Bound(Expr, Map) -> Bound<Expr, Map>;
 
-template <CExpression Expr, CValueMap Map>
-[[nodiscard]] constexpr auto bind(Expr &&e, Map &&m) noexcept {
-  return Bound<std::remove_cvref_t<Expr>, std::remove_cvref_t<Map>>{
-      std::forward<Expr>(e), std::forward<Map>(m)};
+[[nodiscard]] constexpr auto bind(CExpression auto &&e,
+                                  CValueMap auto &&m) noexcept {
+  return Bound{DDX_FWD(e), DDX_FWD(m)};
 }
 
 // bind(expr, named<"x">(1.0), named<"y">(0.5))
-template <CExpression Expr, FixedString... Syms, Numeric... Vs>
-[[nodiscard]] constexpr auto bind(Expr &&e, Entry<Syms, Vs>... nv) noexcept {
-  return bind(std::forward<Expr>(e), values(nv...));
+template <FixedString... Syms, Numeric... Vs>
+[[nodiscard]] constexpr auto bind(CExpression auto &&e,
+                                  Entry<Syms, Vs>... nv) noexcept {
+  return bind(DDX_FWD(e), values(nv...));
 }
 
 template <CExpression Expr>
@@ -264,15 +264,13 @@ make_point(const Args &...args) noexcept {
 // Array or error is settled here and nowhere else, so every numeric member
 // below reads as though it were always an array -- and returns result<T>
 // exactly when its caller spelled the point as a range.
-template <CSymbolList Syms, Numeric U, std::size_t N, typename Body,
-          CEvalArg... Args>
-[[nodiscard]] constexpr auto with_point(Body &&body,
-                                        const Args &...args) noexcept {
-  if constexpr (CDynamicPoint<Args...>) {
-    return make_point<Syms, U, N>(args...).transform(
-        std::forward<Body>(body));
+template <CSymbolList Syms, Numeric U, std::size_t N>
+[[nodiscard]] constexpr auto
+with_point(auto &&body, const CEvalArg auto &...args) noexcept {
+  if constexpr (CDynamicPoint<decltype(args)...>) {
+    return make_point<Syms, U, N>(args...).transform(DDX_FWD(body));
   } else {
-    return std::forward<Body>(body)(make_point<Syms, U, N>(args...));
+    return DDX_FWD(body)(make_point<Syms, U, N>(args...));
   }
 }
 

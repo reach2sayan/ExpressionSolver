@@ -3,6 +3,7 @@
 #include "ops/algebra.hpp"
 #include "rt/apply.hpp"
 #include "rt/opcode.hpp"
+#include "util/config.hpp"
 #include "util/ranges.hpp"
 
 #include <boost/describe/class.hpp>
@@ -524,12 +525,13 @@ contraction_at(const CNodeSource auto &nodes, NodeId v) {
 // contraction_at() inside a sweep re-derives per point what is a property of
 // the nodes, at two dependent loads a time.  `on` false contracts nothing.
 namespace detail {
-template <std::ranges::input_range Order>
-  requires std::convertible_to<std::ranges::range_value_t<Order>, NodeId>
 [[nodiscard]] constexpr std::vector<Step>
-schedule_of(const CNodeSource auto &nodes, Order &&order, bool on = true) {
-  return std::forward<Order>(order) |
-         std::views::transform([&nodes, on](NodeId v) {
+schedule_of(const CNodeSource auto &nodes,
+            std::ranges::input_range auto &&order, bool on = true)
+  requires std::convertible_to<std::ranges::range_value_t<decltype(order)>,
+                               NodeId>
+{
+  return DDX_FWD(order) | std::views::transform([&nodes, on](NodeId v) {
            return Step{.node = v,
                        .fma = on ? contraction_at(nodes, v) : Contraction{}};
          }) |

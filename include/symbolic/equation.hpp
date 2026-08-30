@@ -197,7 +197,7 @@ private:
   template <std::size_t N>
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     if constexpr (N == 0) {
-      return std::get<0>(std::forward<decltype(self)>(self).expressions);
+      return std::get<0>(DDX_FWD(self).expressions);
     } else {
       // Built on demand, so this returns a value, not a dangling reference.
       auto row = std::get<0>(self.jacobian_rows());

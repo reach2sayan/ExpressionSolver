@@ -48,9 +48,9 @@ private:
   [[nodiscard]] static constexpr decltype(auto) slot(auto &&self) noexcept {
     static_assert(Index < 2, "Dual index out of bounds");
     if constexpr (Index == 0) {
-      return (std::forward<decltype(self)>(self).val_);
+      return (DDX_FWD(self).val_);
     } else {
-      return (std::forward<decltype(self)>(self).deriv_);
+      return (DDX_FWD(self).deriv_);
     }
   }
 
@@ -275,15 +275,16 @@ constexpr auto pow(A &&a, DualCompatible<A> auto &&b) noexcept {
 // pow(a, s), s constant.  d(a^s) = s a^(s-1) a', a second pow rather than
 // a^s (s a'/a): the quotient is 0/0 at av == 0 where this is exact, and with no
 // log a negative av with an integral exponent stays finite.
-template <DualLike A, CArithmetic U> constexpr auto pow(A &&a, U s) noexcept {
+constexpr auto pow(DualLike auto &&a, CArithmetic auto s) noexcept {
   using std::pow;
-  if constexpr (std::unsigned_integral<std::remove_cvref_t<U>>) {
+  if constexpr (std::unsigned_integral<decltype(s)>) {
     // Signed, so the s - 1 below cannot wrap at s == 0.
-    return pow(std::forward<A>(a), static_cast<long long>(s));
+    return pow(DDX_FWD(a), static_cast<long long>(s));
   } else {
     const auto &[av, ad] = a;
-    using DT = std::remove_cvref_t<A>;
+    using DT = std::remove_cvref_t<decltype(a)>;
     using T = std::remove_cvref_t<decltype(av)>;
+    using U = decltype(s);
     const T p = pow(av, s);
     // s == 0: a^0 is the constant 1, and s * a^(s-1) is 0 * inf at av == 0.
     return s == U{} ? DT{p, T{}}
@@ -322,29 +323,29 @@ constexpr auto extremum(DualLike auto &&a, const auto &other) noexcept {
 }
 } // namespace detail
 
-template <DualLike A>
-constexpr auto max(A &&a, DualCompatible<A> auto &&b) noexcept {
-  return detail::extremum<true>(std::forward<A>(a), b);
+constexpr auto max(DualLike auto &&a,
+                   DualCompatible<decltype(a)> auto &&b) noexcept {
+  return detail::extremum<true>(DDX_FWD(a), b);
 }
 
-template <DualLike A>
-constexpr auto min(A &&a, DualCompatible<A> auto &&b) noexcept {
-  return detail::extremum<false>(std::forward<A>(a), b);
+constexpr auto min(DualLike auto &&a,
+                   DualCompatible<decltype(a)> auto &&b) noexcept {
+  return detail::extremum<false>(DDX_FWD(a), b);
 }
 
 // max/min otherwise select an operand whole, so the bound stays a scalar; at
 // a tie against the constant the derivative halves.
 constexpr auto max(DualLike auto &&a, CArithmetic auto s) noexcept {
-  return detail::extremum<true>(std::forward<decltype(a)>(a), s);
+  return detail::extremum<true>(DDX_FWD(a), s);
 }
 constexpr auto max(CArithmetic auto s, DualLike auto &&a) noexcept {
-  return detail::extremum<true>(std::forward<decltype(a)>(a), s);
+  return detail::extremum<true>(DDX_FWD(a), s);
 }
 constexpr auto min(DualLike auto &&a, CArithmetic auto s) noexcept {
-  return detail::extremum<false>(std::forward<decltype(a)>(a), s);
+  return detail::extremum<false>(DDX_FWD(a), s);
 }
 constexpr auto min(CArithmetic auto s, DualLike auto &&a) noexcept {
-  return detail::extremum<false>(std::forward<decltype(a)>(a), s);
+  return detail::extremum<false>(DDX_FWD(a), s);
 }
 
 // atan2(y, x), numerator first:

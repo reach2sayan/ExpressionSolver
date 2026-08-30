@@ -5,6 +5,7 @@
 // once per active variable, hessian once per probe pair.
 
 #include "dual/workspace.hpp"
+#include "util/config.hpp"
 #include "util/scope_guard.hpp"
 
 #include <algorithm>
@@ -38,8 +39,7 @@ constexpr void jacobian_into(CEnergyOf<dual> auto &&f,
 void jacobian(CEnergyOf<dual> auto &&f, const std::span<const double> x,
               CIndexRange auto &&active, JacobianWorkspace &ws,
               const std::span<double> out) {
-  detail::jacobian_into(std::forward<decltype(f)>(f), ws.seed(x),
-                        std::forward<decltype(active)>(active), out);
+  detail::jacobian_into(DDX_FWD(f), ws.seed(x), DDX_FWD(active), out);
 }
 
 // Owning form: a local workspace.
@@ -48,16 +48,14 @@ std::vector<double> jacobian(CEnergyOf<dual> auto &&f,
                              CIndexRange auto &&active) {
   JacobianWorkspace ws;
   std::vector<double> g(std::ranges::size(active));
-  jacobian(std::forward<decltype(f)>(f), x,
-           std::forward<decltype(active)>(active), ws, std::span<double>{g});
+  jacobian(DDX_FWD(f), x, DDX_FWD(active), ws, std::span<double>{g});
   return g;
 }
 
 // Convenience: differentiate every variable.
 std::vector<double> jacobian(CEnergyOf<dual> auto &&f,
                              const std::span<const double> x) {
-  return jacobian(std::forward<decltype(f)>(f), x,
-                  detail::all_indices(x.size()));
+  return jacobian(DDX_FWD(f), x, detail::all_indices(x.size()));
 }
 
 namespace detail {
@@ -79,8 +77,8 @@ hessian_into(CEnergyOf<dual2nd> auto &&f, const std::span<dual2nd> dof,
     const auto j = static_cast<std::size_t>(index);
     // Inner seed e_j is constant across the i-loop.
     const auto inner_seed = scoped_seed<1.0>(dof[aj].value().deriv());
-    for (const auto [inner, ai] : (active | std::views::take(index + 1)) |
-         std::views::enumerate) {
+    for (const auto [inner, ai] :
+         (active | std::views::take(index + 1)) | std::views::enumerate) {
       const auto i = static_cast<std::size_t>(inner);
 
       // When ai == aj this lands in aj's other slot.
@@ -107,8 +105,7 @@ hessian(CEnergyOf<dual2nd> auto &&f, const std::span<const double> x,
         CIndexRange auto &&active, HessianWorkspace &ws,
         const std::span<double> grad_out,
         const md::mdspan<double, md::dextents<std::size_t, 2>> hess_out) {
-  return hessian_into(std::forward<decltype(f)>(f), ws.seed(x),
-                      std::forward<decltype(active)>(active), grad_out,
+  return hessian_into(DDX_FWD(f), ws.seed(x), DDX_FWD(active), grad_out,
                       hess_out);
 }
 
@@ -121,8 +118,7 @@ constexpr HessianStatic<N> hessian_static(CEnergyOf<dual2nd> auto &&f,
   std::ranges::transform(x | std::views::take(N), dof.begin(),
                          [](const double v) { return dual2nd{v}; });
   HessianStatic<N> out{};
-  out.value = hessian_into(std::forward<decltype(f)>(f),
-                           std::span<dual2nd>{dof}, all_indices(N),
+  out.value = hessian_into(DDX_FWD(f), std::span<dual2nd>{dof}, all_indices(N),
                            std::span<double>{out.jacobian}, out.hessian_view());
   return out;
 }
@@ -137,8 +133,7 @@ HessianOwned hessian(CEnergyOf<dual2nd> auto &&f,
   HessianOwned out{.jacobian = std::make_unique_for_overwrite<double[]>(m),
                    .hessian = std::make_unique_for_overwrite<double[]>(m * m),
                    .arity = m};
-  out.value = hessian_into(std::forward<decltype(f)>(f), ws.seed(x),
-                           std::forward<decltype(active)>(active),
+  out.value = hessian_into(DDX_FWD(f), ws.seed(x), DDX_FWD(active),
                            std::span<double>{out.jacobian.get(), m},
                            out.hessian_view());
   return out;
@@ -147,7 +142,7 @@ HessianOwned hessian(CEnergyOf<dual2nd> auto &&f,
 // Convenience: differentiate every variable.
 HessianOwned hessian(CEnergyOf<dual2nd> auto &&f,
                      const std::span<const double> x) {
-  return hessian(std::forward<decltype(f)>(f), x, all_indices(x.size()));
+  return hessian(DDX_FWD(f), x, all_indices(x.size()));
 }
 
 } // namespace detail

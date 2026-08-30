@@ -47,24 +47,6 @@ TEST(MdLayout, SparsePatternSendsStructuralZerosToTheSink) {
   EXPECT_NE(static_cast<std::size_t>(m(0, 1)),
             static_cast<std::size_t>(m(2, 2)));
 }
-TEST(MdTensor, BothIndexSpellingsAgree) {
-  auto t = ddx::impl::nd_tensor_t<double, 3, 3>{};
-  double v = 0.0;
-  for (std::size_t i = 0; i < 3; ++i) {
-    for (std::size_t j = i; j < 3; ++j) {
-      for (std::size_t k = j; k < 3; ++k) {
-        t[i, j, k] = (v += 1.0);
-      }
-    }
-  }
-  for (std::size_t i = 0; i < 3; ++i) {
-    for (std::size_t j = 0; j < 3; ++j) {
-      for (std::size_t k = 0; k < 3; ++k) {
-        EXPECT_DOUBLE_EQ((t[i, j, k]), t[i][j][k]);
-      }
-    }
-  }
-}
 // The constexpr half of the contract: every mapping and the tensor itself must
 // survive constant evaluation, or the symbolic path silently stops being
 // constexpr and only the ConstexprContract suite would notice, much later.

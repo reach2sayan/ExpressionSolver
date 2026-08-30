@@ -2,6 +2,7 @@
 
 #include "symbolic/expressions.hpp" // CExpression, Numeric
 #include "symbolic/traits.hpp"      // extract_symbols_from_expr_t
+#include "util/config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,10 +53,8 @@ template <typename F>
 concept CSeededExprEnergy =
     requires { requires std::remove_cvref_t<F>::kSeededExprEnergy; };
 
-template <CExpression Expr>
-[[nodiscard]] constexpr auto seeded_energy(Expr &&expr) noexcept {
-  return SeededExprEnergy<std::remove_cvref_t<Expr>>(
-      std::forward<Expr>(expr));
+[[nodiscard]] constexpr auto seeded_energy(CExpression auto &&expr) noexcept {
+  return SeededExprEnergy<std::remove_cvref_t<decltype(expr)>>(DDX_FWD(expr));
 }
 
 } // namespace ddx::impl

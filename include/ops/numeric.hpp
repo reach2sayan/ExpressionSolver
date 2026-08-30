@@ -4,6 +4,8 @@
 // or a quaternion alike, which is what lets the compile-time graph, the runtime
 // graph and the JIT share one set of operation descriptors.
 
+#include "util/config.hpp"
+
 #include <algorithm>
 #include <concepts>
 #include <functional>
@@ -24,7 +26,7 @@ concept CFieldLike = std::default_initializable<T> &&
                      std::constructible_from<T, int> && requires(T a, T b) {
                        { a + b } -> std::convertible_to<T>;
                        { a - b } -> std::convertible_to<T>;
-                       { a * b } -> std::convertible_to<T>;
+                       { a *b } -> std::convertible_to<T>;
                        { a / b } -> std::convertible_to<T>;
                        { -a } -> std::convertible_to<T>;
                      };
@@ -56,31 +58,32 @@ template <typename F, typename Seq>
 inline constexpr bool index_invocable_v = false;
 template <typename F, std::size_t... Is>
 inline constexpr bool index_invocable_v<F, std::index_sequence<Is...>> =
-    (requires(F &&f) { std::forward<F>(f).template operator()<Is>(); } &&
-     ...);
+    (requires(F &&f) { DDX_FWD(f).template operator()<Is>(); } && ...);
 
 template <typename F, typename Seq>
 inline constexpr bool pack_invocable_v = false;
 template <typename F, std::size_t... Is>
 inline constexpr bool pack_invocable_v<F, std::index_sequence<Is...>> =
-    requires(F &&f) { std::forward<F>(f).template operator()<Is...>(); };
+    requires(F &&f) { DDX_FWD(f).template operator()<Is...>(); };
 } // namespace detail
 
 // static_for  : hands over one index at a time, for a fold of statements;
 // index_apply : hands over the whole pack at once,
-template <std::size_t N, typename F>
-  requires detail::index_invocable_v<F, std::make_index_sequence<N>>
-constexpr void static_for(F &&f) noexcept {
+template <std::size_t N>
+constexpr void static_for(auto &&f) noexcept
+  requires detail::index_invocable_v<decltype(f), std::make_index_sequence<N>>
+{
   [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-    (std::forward<F>(f).template operator()<Is>(), ...);
+    (DDX_FWD(f).template operator()<Is>(), ...);
   }(std::make_index_sequence<N>{});
 }
 
-template <std::size_t N, typename F>
-  requires detail::pack_invocable_v<F, std::make_index_sequence<N>>
-[[nodiscard]] constexpr decltype(auto) index_apply(F &&f) {
+template <std::size_t N>
+[[nodiscard]] constexpr decltype(auto) index_apply(auto &&f)
+  requires detail::pack_invocable_v<decltype(f), std::make_index_sequence<N>>
+{
   return [&]<std::size_t... Is>(std::index_sequence<Is...>) -> decltype(auto) {
-    return std::forward<F>(f).template operator()<Is...>();
+    return DDX_FWD(f).template operator()<Is...>();
   }(std::make_index_sequence<N>{});
 }
 

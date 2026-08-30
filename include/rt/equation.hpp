@@ -11,6 +11,7 @@
 #include "rt/interpret.hpp"
 #include "rt/rebalance.hpp"
 #include "symbolic/equation.hpp"
+#include "util/config.hpp"
 #include "util/ranges.hpp" // to<C>() and append(), ours
 
 #include <boost/container/small_vector.hpp>
@@ -30,9 +31,9 @@
 #include <array>
 #include <atomic>
 #include <concepts>
+#include <functional>
 #include <limits>
 #include <memory>
-#include <functional>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -531,7 +532,8 @@ public:
   // the column counts describe a block nobody can index.
 
   // `at(i, j)` is nullopt where d f[i] / d x[j] is structurally zero.
-  [[nodiscard]] constexpr std::optional<std::reference_wrapper<const rt::Sparsity>>
+  [[nodiscard]] constexpr std::optional<
+      std::reference_wrapper<const rt::Sparsity>>
   jacobian_pattern() const {
     return unless_poisoned([this] { return std::cref(derivative_.pattern); });
   }
@@ -1294,22 +1296,25 @@ private:
       return;
     }
 
-    // rt::block_lanes points per sweep: the switch is paid once per node per block, and
-    // each operation becomes a lane loop wide enough to vectorise.  A short
-    // final block repeats its last point, and those lanes are never read back.
+    // rt::block_lanes points per sweep: the switch is paid once per node per
+    // block, and each operation becomes a lane loop wide enough to vectorise.
+    // A short final block repeats its last point, and those lanes are never
+    // read back.
     std::vector<T> lanes(symbols * rt::block_lanes);
     std::vector<T> tape(arena_->size() * rt::block_lanes);
 
     for (std::size_t base = 0; base < n; base += rt::block_lanes) {
       const std::size_t width = std::min(rt::block_lanes, n - base);
       for (const auto [j, column] : xs | std::views::enumerate) {
-        T *const dst = lanes.data() + static_cast<std::size_t>(j) * rt::block_lanes;
+        T *const dst =
+            lanes.data() + static_cast<std::size_t>(j) * rt::block_lanes;
         T *const tail =
             std::ranges::copy(std::span{column + base, width}, dst).out;
-        std::ranges::fill(tail, dst + rt::block_lanes, column[base + width - 1]);
+        std::ranges::fill(tail, dst + rt::block_lanes,
+                          column[base + width - 1]);
       }
-      rt::evaluate_block<rt::block_lanes>(*arena_, std::span<const T>{lanes}, schedule,
-                                 std::span<T>{tape});
+      rt::evaluate_block<rt::block_lanes>(*arena_, std::span<const T>{lanes},
+                                          schedule, std::span<T>{tape});
 
       for (const auto [columns, block] : std::views::zip(
                std::array{f, g, h},
@@ -1434,7 +1439,7 @@ template <impl::Numeric T>
   auto arena = std::make_unique<Builder<T>>();
   auto built = [&] {
     const auto scope = scoped_arena(*arena);
-    return std::invoke(std::forward<decltype(assemble)>(assemble));
+    return std::invoke(DDX_FWD(assemble));
   }();
   return std::pair{std::move(arena), std::move(built)};
 }
@@ -1462,8 +1467,7 @@ template <impl::Numeric T, typename Built>
 
 template <impl::Numeric T = double>
 [[nodiscard]] auto equation(std::invocable auto &&assemble) {
-  auto [arena, built] =
-      detail::assemble<T>(std::forward<decltype(assemble)>(assemble));
+  auto [arena, built] = detail::assemble<T>(DDX_FWD(assemble));
   return detail::over<T>(
       built, [&]<typename Eq>(std::type_identity<Eq>, auto... roots) {
         return Eq::create(std::move(arena), roots...);
@@ -1501,8 +1505,7 @@ template <impl::Numeric T = double>
   requires std::floating_point<T>
 [[nodiscard]] auto equation(const std::filesystem::path &path,
                             std::invocable auto &&assemble) {
-  auto [arena, built] =
-      detail::assemble<T>(std::forward<decltype(assemble)>(assemble));
+  auto [arena, built] = detail::assemble<T>(DDX_FWD(assemble));
   return detail::over<T>(
       built, [&]<typename Eq>(std::type_identity<Eq>, auto... roots) {
         return Eq::cached(path, std::move(arena), roots...);
