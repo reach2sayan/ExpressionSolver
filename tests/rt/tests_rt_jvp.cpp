@@ -63,7 +63,8 @@ TEST(RtJvp, AgreesWithADualPointThroughTheInterpreter) {
 
   const auto eq = ddx::rt::equation(f);
   const auto got = *eq.jvp(std::span<const double>{v}, point);
-  EXPECT_NEAR(got[0], dual.deriv(), 1e-12 * std::max(1.0, std::abs(dual.deriv())));
+  EXPECT_NEAR(got[0], dual.deriv(),
+              1e-12 * std::max(1.0, std::abs(dual.deriv())));
 }
 
 TEST(RtJvp, AUnitDirectionIsOneJacobianColumn) {

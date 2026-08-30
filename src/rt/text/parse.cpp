@@ -59,8 +59,8 @@ struct Silent {
   constexpr void diagnose(bp::diagnostic_kind, std::string_view,
                           const Context &) const {}
   template <typename Context, typename Iter>
-  constexpr void diagnose(bp::diagnostic_kind, std::string_view, const Context &,
-                          Iter) const {}
+  constexpr void diagnose(bp::diagnostic_kind, std::string_view,
+                          const Context &, Iter) const {}
 };
 
 // What the actions build.  Carried through with_globals rather than captured:
@@ -78,7 +78,7 @@ struct Building {
 
 // Where `word` sits in `table`, putting it there if it does not yet.
 [[nodiscard]] constexpr std::uint32_t intern(std::vector<std::string> &table,
-                                   const std::string_view word) {
+                                             const std::string_view word) {
   const auto at = std::ranges::find(table, word);
   if (at == table.end()) {
     table.emplace_back(word);
@@ -191,10 +191,9 @@ constexpr auto apply = [](auto &ctx) {
     const auto arg = [&invocation](const std::size_t i) {
       return invocation.args.size() > i ? invocation.args[i] : no_term;
     };
-    _val(ctx) = append(building.ast, {.op = *op,
-                                      .a = invocation.args.front(),
-                                      .b = arg(1),
-                                      .c = arg(2)});
+    _val(ctx) = append(
+        building.ast,
+        {.op = *op, .a = invocation.args.front(), .b = arg(1), .c = arg(2)});
   }
 };
 
@@ -206,33 +205,41 @@ constexpr auto apply = [](auto &ctx) {
 // power's right operand reaches over unary, which is what makes `2**-1` legal;
 // unary sitting below power is what makes `-x**2` mean -(x**2).
 
-constexpr bp::rule<struct identifier_tag, std::string> identifier = "identifier";
+constexpr bp::rule<struct identifier_tag, std::string> identifier =
+    "identifier";
 constexpr bp::rule<struct literal_tag, std::string> literal = "number";
 constexpr bp::rule<struct number_tag, std::uint32_t> number = "number";
 constexpr bp::rule<struct symbol_tag, std::uint32_t> symbol = "identifier";
 constexpr bp::rule<struct call_text_tag, Call> call_text = "function call";
 constexpr bp::rule<struct call_tag, std::uint32_t> call = "function call";
-constexpr bp::rule<struct group_tag, std::uint32_t> group = "parenthesised expression";
+constexpr bp::rule<struct group_tag, std::uint32_t> group =
+    "parenthesised expression";
 constexpr bp::rule<struct operand_tag, std::uint32_t> operand = "operand";
 constexpr bp::rule<struct power_tag, std::uint32_t> power = "power";
 // The bool is the rule's local: how many signs it has read, modulo two.
-constexpr bp::rule<struct unary_tag, std::uint32_t, bool> unary = "unary expression";
+constexpr bp::rule<struct unary_tag, std::uint32_t, bool> unary =
+    "unary expression";
 constexpr bp::rule<struct product_tag, std::uint32_t> product = "term";
 constexpr bp::rule<struct sum_tag, std::uint32_t> sum = "expression";
-constexpr bp::rule<struct expression_tag, std::uint32_t> expression = "expression";
+constexpr bp::rule<struct expression_tag, std::uint32_t> expression =
+    "expression";
 
-constexpr auto letter = bp::char_('a', 'z') | bp::char_('A', 'Z') | bp::char_('_');
+constexpr auto letter =
+    bp::char_('a', 'z') | bp::char_('A', 'Z') | bp::char_('_');
 constexpr auto digits = +bp::char_('0', '9');
 // Decimal only: no hex, no suffix, no digit separator, so from_chars reads back
 // exactly what was matched.  lexeme[] or the skipper would pass "1 . 5".
 constexpr auto exponent = (bp::char_('e') | bp::char_('E')) >>
-                      -(bp::char_('+') | bp::char_('-')) >> digits;
-constexpr auto mantissa = (digits >> -(bp::char_('.') >> *bp::char_('0', '9'))) |
-                      (bp::char_('.') >> digits);
+                          -(bp::char_('+') | bp::char_('-')) >> digits;
+constexpr auto mantissa =
+    (digits >> -(bp::char_('.') >> *bp::char_('0', '9'))) |
+    (bp::char_('.') >> digits);
 
 constexpr auto identifier_def =
-    bp::raw[bp::lexeme[letter >> *(letter | bp::char_('0', '9'))]][act::capture];
-constexpr auto literal_def = bp::raw[bp::lexeme[mantissa >> -exponent]][act::capture];
+    bp::raw[bp::lexeme[letter >> *(letter | bp::char_('0', '9'))]]
+           [act::capture];
+constexpr auto literal_def =
+    bp::raw[bp::lexeme[mantissa >> -exponent]][act::capture];
 
 constexpr auto number_def = literal[act::leaf<LiteralIndex>];
 constexpr auto symbol_def = identifier[act::leaf<NameIndex>];
@@ -246,31 +253,32 @@ constexpr auto operand_def = number | call | symbol | group;
 
 // Each action rides the operand it consumes, never the sequence that reaches
 // it: a sequence pairing a literal with one attribute answers _attr with none.
-constexpr auto power_def =
-    operand[act::assign] >> -(bp::lit("**") >> unary[act::fold<OpCode::Pow>]);
+constexpr auto power_def = operand[act::assign] >>
+                           -(bp::lit("**") >> unary[act::fold<OpCode::Pow>]);
 // The signs iterate rather than recurse: a rule that names itself inside its
 // own definition reports no attribute back to the reference, and ("-"|"+")*
 // power is the same language as Python's right-recursive u_expr anyway.
 constexpr auto unary_def =
     *(bp::lit('-')[act::flip] | bp::lit('+')) >> power[act::signed_operand];
-constexpr auto product_def =
-    unary[act::assign] >> *((bp::lit('*') >> unary[act::fold<OpCode::Mul>]) |
-                            (bp::lit('/') >> unary[act::fold<OpCode::Div>]));
-constexpr auto sum_def =
-    product[act::assign] >> *((bp::lit('+') >> product[act::fold<OpCode::Add>]) |
-                              (bp::lit('-') >> product[act::subtract]));
+constexpr auto product_def = unary[act::assign] >>
+                             *((bp::lit('*') >> unary[act::fold<OpCode::Mul>]) |
+                               (bp::lit('/') >> unary[act::fold<OpCode::Div>]));
+constexpr auto sum_def = product[act::assign] >>
+                         *((bp::lit('+') >> product[act::fold<OpCode::Add>]) |
+                           (bp::lit('-') >> product[act::subtract]));
 // One comparison and no more.  Python chains `a < b < c` into a conjunction and
 // C folds it into `(a < b) < c`; refusing it says so, where either reading
 // would have been a silent choice between two languages.  The two-character
 // tokens before the one-character ones, or the shorter token wins and leaves
 // an `=` nobody can parse.
-constexpr auto expression_def =
-    sum[act::assign] >> -((bp::lit("<=") >> sum[act::fold<OpCode::Le>]) |
-                          (bp::lit(">=") >> sum[act::fold_swapped<OpCode::Le>]) |
-                          (bp::lit("==") >> sum[act::equal]) |
-                          (bp::lit("!=") >> sum[act::unequal]) |
-                          (bp::lit('<') >> sum[act::fold<OpCode::Lt>]) |
-                          (bp::lit('>') >> sum[act::fold_swapped<OpCode::Lt>]));
+constexpr auto
+    expression_def = sum[act::assign] >>
+                     -((bp::lit("<=") >> sum[act::fold<OpCode::Le>]) |
+                       (bp::lit(">=") >> sum[act::fold_swapped<OpCode::Le>]) |
+                       (bp::lit("==") >> sum[act::equal]) |
+                       (bp::lit("!=") >> sum[act::unequal]) |
+                       (bp::lit('<') >> sum[act::fold<OpCode::Lt>]) |
+                       (bp::lit('>') >> sum[act::fold_swapped<OpCode::Lt>]));
 
 BOOST_PARSER_DEFINE_RULES(identifier, literal, number, symbol, call_text, call,
                           group, operand, power, unary, product, sum,

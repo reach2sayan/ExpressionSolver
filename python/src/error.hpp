@@ -4,8 +4,8 @@
 
 #include <format>
 #include <stdexcept>
-#include <type_traits>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace ddx::py {

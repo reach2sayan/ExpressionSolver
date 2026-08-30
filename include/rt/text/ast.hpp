@@ -44,8 +44,7 @@ struct Ast {
   std::uint32_t root = no_term;
 
   template <typename Index>
-    requires std::same_as<Index, NameIndex> ||
-             std::same_as<Index, LiteralIndex>
+    requires std::same_as<Index, NameIndex> || std::same_as<Index, LiteralIndex>
   [[nodiscard]] std::vector<std::string> &table() noexcept {
     if constexpr (std::same_as<Index, NameIndex>) {
       return names;

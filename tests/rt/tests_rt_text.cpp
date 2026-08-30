@@ -49,7 +49,8 @@ TEST(RtText, ReadsPythonsPrecedenceAndAssociativity) {
 }
 
 TEST(RtText, RaisesToAPowerTheWayPythonDoes) {
-  // Right-associative, unlike every other binary operator here: left would be 64.
+  // Right-associative, unlike every other binary operator here: left would
+  // be 64.
   EXPECT_DOUBLE_EQ(value_of("x ** y ** z", 2.0, 3.0, 2.0), 512.0);
   // Tighter than unary minus on its left...
   EXPECT_DOUBLE_EQ(value_of("-x ** 2", 3.0), -9.0);
@@ -252,8 +253,8 @@ TEST(RtText, NamesSymbolsWhicheverFunctionFirstUsesThem) {
   EXPECT_EQ(sys->arity(), 2U);
   const auto symbols = sys->symbols();
   ASSERT_TRUE(symbols.has_value());
-  EXPECT_TRUE(std::ranges::equal(*symbols,
-                                 std::array<std::string_view, 2>{"x", "y"}));
+  EXPECT_TRUE(
+      std::ranges::equal(*symbols, std::array<std::string_view, 2>{"x", "y"}));
 }
 
 TEST(RtText, RefusesAModelThatNamesNoSymbol) {
@@ -267,8 +268,7 @@ TEST(RtText, RefusesAModelThatNamesNoSymbol) {
 
 TEST(RtText, SavesAndLoadsLikeAnyOtherEquation) {
   const auto path = std::filesystem::temp_directory_path() /
-                    std::format("ddx_text_{}.ddx",
-                                std::random_device{}());
+                    std::format("ddx_text_{}.ddx", std::random_device{}());
   const auto eq = ddx::rt::equation("exp(x) * sin(y)");
   ASSERT_TRUE(eq.has_value());
   ASSERT_TRUE(eq->save(path).has_value());

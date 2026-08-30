@@ -28,8 +28,8 @@ namespace detail {
 constexpr void fold(boost::hash2::fnv1a_64 &h, const auto &v) {
   using U = std::remove_cvref_t<decltype(v)>;
   if constexpr (boost::describe::has_describe_members<U>::value) {
-    boost::mp11::mp_for_each<boost::describe::describe_members<
-        U, boost::describe::mod_any_access>>(
+    boost::mp11::mp_for_each<
+        boost::describe::describe_members<U, boost::describe::mod_any_access>>(
         [&](auto D) { fold(h, v.*D.pointer); });
   } else {
     boost::hash2::hash_append(h, wire_flavor{}, to_bits(v));
@@ -71,7 +71,8 @@ template <impl::Numeric T>
   for (const auto &[v, fma] : schedule) {
     detail::fold(h, v);
     detail::fold(h, g[v]);
-    std::ranges::for_each(g.operands(v), [&h](NodeId u) { detail::fold(h, u); });
+    std::ranges::for_each(g.operands(v),
+                          [&h](NodeId u) { detail::fold(h, u); });
   }
   std::ranges::for_each(g.outputs(), [&h](NodeId o) { detail::fold(h, o); });
   return h.result();

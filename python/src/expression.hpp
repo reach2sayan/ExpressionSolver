@@ -111,7 +111,7 @@ private:
   return combine(l, r, [](const auto &a, const auto &b) { return a < b; });
 }
 [[nodiscard]] inline PyExpression operator<=(const PyExpression &l,
-                                            const PyExpression &r) {
+                                             const PyExpression &r) {
   return combine(l, r, [](const auto &a, const auto &b) { return a <= b; });
 }
 [[nodiscard]] inline PyExpression operator>(const PyExpression &l,
@@ -119,25 +119,22 @@ private:
   return combine(l, r, [](const auto &a, const auto &b) { return a > b; });
 }
 [[nodiscard]] inline PyExpression operator>=(const PyExpression &l,
-                                            const PyExpression &r) {
+                                             const PyExpression &r) {
   return combine(l, r, [](const auto &a, const auto &b) { return a >= b; });
 }
 [[nodiscard]] inline PyExpression operator==(const PyExpression &l,
-                                            const PyExpression &r) {
+                                             const PyExpression &r) {
   return combine(l, r, [](const auto &a, const auto &b) { return a == b; });
 }
 [[nodiscard]] inline PyExpression operator!=(const PyExpression &l,
-                                            const PyExpression &r) {
+                                             const PyExpression &r) {
   return combine(l, r, [](const auto &a, const auto &b) { return a != b; });
 }
 
 // The ternary: the arena is whichever operand names one, as above.
-[[nodiscard]] inline PyExpression select(const PyExpression &c,
-                                         const PyExpression &t,
-                                         const PyExpression &f) {
-  const auto arena = c.arena()   ? c.arena()
-                     : t.arena() ? t.arena()
-                                 : f.arena();
+[[nodiscard]] inline PyExpression
+select(const PyExpression &c, const PyExpression &t, const PyExpression &f) {
+  const auto arena = c.arena() ? c.arena() : t.arena() ? t.arena() : f.arena();
   return {select(c.base(), t.base(), f.base()), arena};
 }
 

@@ -30,8 +30,8 @@ TEST(RtVjp, MatchesTheDenseJacobianForASystem) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
   const auto y = var(b, "y");
-  const auto eq = ddx::rt::equation(x * x + y * y - 4.0, x * y - 1.0,
-                                    exp(x) + sin(y));
+  const auto eq =
+      ddx::rt::equation(x * x + y * y - 4.0, x * y - 1.0, exp(x) + sin(y));
   ASSERT_FALSE(eq.poisoned());
   static_assert(decltype(eq)::output_dim == 3);
 
@@ -138,7 +138,8 @@ TEST(RtVjp, CostsFewerColumnsThanTheJacobian) {
                                     exp(v[0]) + v[1] * v[2] * v[3],
                                     v[0] + v[1] + v[2] + v[3]);
 
-  EXPECT_EQ(*eq.jacobian_columns(), 12u) << "three dense rows over four symbols";
+  EXPECT_EQ(*eq.jacobian_columns(), 12u)
+      << "three dense rows over four symbols";
   EXPECT_EQ(*eq.vjp_columns(), 4u);
 }
 } // namespace

@@ -49,7 +49,8 @@ template <typename T> using result = std::expected<T, error>;
 enum class Level : std::uint8_t { O0, O1, O2, O3 };
 
 static_assert(DDX_JIT_DEFAULT_OPT >= 0 && DDX_JIT_DEFAULT_OPT <= 3);
-inline constexpr Level default_opt_level = static_cast<Level>(DDX_JIT_DEFAULT_OPT);
+inline constexpr Level default_opt_level =
+    static_cast<Level>(DDX_JIT_DEFAULT_OPT);
 inline constexpr bool default_contract = DDX_JIT_DEFAULT_CONTRACT != 0;
 
 // Points per loop iteration.  Derived is the host's register width in doubles

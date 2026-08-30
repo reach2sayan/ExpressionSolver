@@ -39,7 +39,8 @@ template <impl::Numeric T = double, std::convertible_to<std::string_view>... Ss>
     roots.reserve(sources.size());
 
     // Every source read before any of them is an equation: create() seals the
-    // arena, and a symbol first named by the second function still wants a slot.
+    // arena, and a symbol first named by the second function still wants a
+    // slot.
     result<void> ok{};
     for (const std::string_view source : sources) {
       ok = ok.and_then([&] {

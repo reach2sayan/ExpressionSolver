@@ -552,9 +552,10 @@ private:
       return;
     }
 
-    // rt::block_lanes points per sweep: the switch is paid once per node per block, and
-    // each operation becomes a lane loop wide enough to vectorise.  A short
-    // final block repeats its last point, and those lanes are never read.
+    // rt::block_lanes points per sweep: the switch is paid once per node per
+    // block, and each operation becomes a lane loop wide enough to vectorise.
+    // A short final block repeats its last point, and those lanes are never
+    // read.
     static thread_local std::vector<double> lanes;
     static thread_local std::vector<double> tape;
     lanes.resize(symbols * rt::block_lanes);
@@ -569,8 +570,9 @@ private:
             column + base, static_cast<std::ptrdiff_t>(width), dst.begin());
         std::ranges::fill(tail.out, dst.end(), column[base + width - 1]);
       }
-      rt::evaluate_block<rt::block_lanes>(*arena_, std::span<const double>{lanes},
-                                 schedule, std::span<double>{tape});
+      rt::evaluate_block<rt::block_lanes>(*arena_,
+                                          std::span<const double>{lanes},
+                                          schedule, std::span<double>{tape});
       scatter(tape, base, rt::block_lanes, width);
     }
   }

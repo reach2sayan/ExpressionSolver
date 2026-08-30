@@ -119,7 +119,8 @@ TEST(RtBuilder, CompoundAssignmentBuildsWhatTheLongFormBuilds) {
 
   const auto spelled = (((x + y) - sin(x)) * exp(y)) / (x + y);
   EXPECT_EQ(acc.id(b), spelled.id(b));
-  EXPECT_EQ(b.size(), after) << "the long form built a node the short one did not";
+  EXPECT_EQ(b.size(), after)
+      << "the long form built a node the short one did not";
 }
 
 // The right operand converts, as it does for the binary operators, and two

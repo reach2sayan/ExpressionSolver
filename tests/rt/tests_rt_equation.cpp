@@ -8,11 +8,11 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <format>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <iterator>
 #include <map>
 #include <numbers>
@@ -134,8 +134,9 @@ TEST(RtEquation, EveryNamedPointMustNameEverySymbolAndOnlyRealOnes) {
                 .error()
                 .code,
             ddx::errc::unknown_symbol);
-  EXPECT_EQ(eq.evaluate(ddx::named<"x">(1.0), ddx::named<"z">(2.0)).error().code,
-            ddx::errc::unknown_symbol);
+  EXPECT_EQ(
+      eq.evaluate(ddx::named<"x">(1.0), ddx::named<"z">(2.0)).error().code,
+      ddx::errc::unknown_symbol);
 
   // A whole point still goes through, either way round.
   EXPECT_DOUBLE_EQ(*eq.evaluate(ddx::named<"y">(3.0), ddx::named<"x">(2.0)),
@@ -596,7 +597,6 @@ TEST(RtEquation, ScalarAccessorsAgreeWithTheArenaWalkToTheBit) {
   }
 }
 
-
 #ifdef DDX_HAS_JIT
 
 // The switchover contract, both halves of it.  `rebalance` blocks a reduction
@@ -624,9 +624,8 @@ TEST(RtEquation, ShortSpinesSurviveTheSwitchoverToTheBit) {
     return at;
   };
   const auto ulps = [](double a, double b) {
-    return std::abs(
-        static_cast<std::int64_t>(std::bit_cast<std::uint64_t>(a)) -
-        static_cast<std::int64_t>(std::bit_cast<std::uint64_t>(b)));
+    return std::abs(static_cast<std::int64_t>(std::bit_cast<std::uint64_t>(a)) -
+                    static_cast<std::int64_t>(std::bit_cast<std::uint64_t>(b)));
   };
 
   // Under the threshold nothing is rewritten, so the two agree exactly.
@@ -793,7 +792,8 @@ TEST(RtEquation, ChoosingABackendStartsTheBuild) {
 
   // Asking again for what is already built relaunches nothing.
   eq.options({.backend = ddx::rt::Backend::Compile});
-  EXPECT_TRUE(eq.uses_kernel()) << "an identical options() threw the kernel away";
+  EXPECT_TRUE(eq.uses_kernel())
+      << "an identical options() threw the kernel away";
 }
 
 // Sizing a buffer must not build a kernel: the counts are ones the constructor
@@ -970,8 +970,9 @@ TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
     return std::tuple{f, dx, dy, kernel};
   };
 
-  const ddx::jit::Options wide{.backend = ddx::rt::Backend::Compile,
-                               .codegen = {.lanes = *ddx::rt::Lanes::exactly(4)}};
+  const ddx::jit::Options wide{
+      .backend = ddx::rt::Backend::Compile,
+      .codegen = {.lanes = *ddx::rt::Lanes::exactly(4)}};
   const ddx::jit::Options scalar{
       .backend = ddx::rt::Backend::Compile,
       .codegen = {.lanes = ddx::rt::Lanes::scalar()}};
@@ -979,7 +980,8 @@ TEST(RtEquation, OptionsReachTheCompilerAndDoNotChangeTheAnswer) {
   const auto [f0, dx0, dy0, k0] = run(wide);
   const auto [f1, dx1, dy1, k1] = run(scalar);
 
-  EXPECT_EQ(eq.options().codegen.lanes, ddx::rt::Lanes::scalar()) << "the setter did not take";
+  EXPECT_EQ(eq.options().codegen.lanes, ddx::rt::Lanes::scalar())
+      << "the setter did not take";
   EXPECT_TRUE(k0 && k1) << "an option refused the compile outright";
 
   // Bit-exact: a lane is its own IEEE operation, so the width changes what is
@@ -1058,9 +1060,10 @@ TEST(RtEquation, DroppingAMidFlightCompileDoesNotBlock) {
   }
 
   // Both arms pin codegen 0, so the ladder is one rung and the two measurements
-  // are the same shape.  Under the default two, wait_for_kernel() returns at the
-  // *cheap* rung and `blocking` stops being a compile's worth of time, making
-  // the margin below a coin flip.  jit.exit_stress covers both rungs at once.
+  // are the same shape.  Under the default two, wait_for_kernel() returns at
+  // the *cheap* rung and `blocking` stops being a compile's worth of time,
+  // making the margin below a coin flip.  jit.exit_stress covers both rungs at
+  // once.
   const ddx::jit::Options one_rung{
       .backend = ddx::rt::Backend::Compile,
       .codegen = {.codegen_level = ddx::rt::Level::O0}};
@@ -1158,9 +1161,9 @@ TEST(RtEquation, ConcurrentConstCallsAgreeWithOneThread) {
   }
 }
 
-// Two equations over ONE borrowed Builder, each asked for a Hessian from its own
-// thread.  rt::build_hessian_impl appends to the arena, so no per-Equation lock
-// could make this safe if the sweep were not in the constructor.
+// Two equations over ONE borrowed Builder, each asked for a Hessian from its
+// own thread.  rt::build_hessian_impl appends to the arena, so no per-Equation
+// lock could make this safe if the sweep were not in the constructor.
 TEST(RtEquation, TwoEquationsSharingAnArenaDoNotRaceIt) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -1235,9 +1238,9 @@ TEST(RtEquation, EvaluatingUsesAValuesOnlyGraph) {
   EXPECT_EQ(pattern.at(0, 0), 0u);
 
   std::vector<double> cells(*eq.jacobian_columns());
-  const auto partials =
-      cells | std::views::transform([](double &c) { return &c; }) |
-      ddx::impl::to<std::vector<double *>>();
+  const auto partials = cells |
+                        std::views::transform([](double &c) { return &c; }) |
+                        ddx::impl::to<std::vector<double *>>();
   ASSERT_TRUE(eq.jacobian(columns, values, partials, 1).has_value());
   EXPECT_EQ(v[0], f0);
   EXPECT_EQ(v[1], f1);
@@ -1385,11 +1388,13 @@ TEST(RtEquation, EveryRungOfTheLadderAgreesToTheBit) {
   swept.options({.backend = ddx::rt::Backend::Interpret});
 
   auto cheap = ladder_model();
-  cheap.options({.backend = ddx::rt::Backend::Compile, .codegen = {.codegen_level = ddx::rt::Level::O0}});
+  cheap.options({.backend = ddx::rt::Backend::Compile,
+                 .codegen = {.codegen_level = ddx::rt::Level::O0}});
   ASSERT_TRUE(cheap.wait_for_kernel());
 
   auto top = ladder_model();
-  top.options({.backend = ddx::rt::Backend::Compile, .codegen = {.codegen_level = ddx::rt::Level::O1}});
+  top.options({.backend = ddx::rt::Backend::Compile,
+               .codegen = {.codegen_level = ddx::rt::Level::O1}});
   ASSERT_TRUE(top.wait_for_kernel());
 
   // Rung against rung, still to the bit: both rungs compile the same graph, and
@@ -1416,7 +1421,8 @@ TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
   constexpr std::size_t n = 24;
 
   auto eq = ladder_model();
-  eq.options({.backend = ddx::rt::Backend::Compile, .codegen = {.codegen_level = ddx::rt::Level::O1}});
+  eq.options({.backend = ddx::rt::Backend::Compile,
+              .codegen = {.codegen_level = ddx::rt::Level::O1}});
 
   // wait_for_kernel() waits for the *first* rung, so the cheap one is in hand.
   ASSERT_TRUE(eq.wait_for_kernel());
@@ -1450,7 +1456,8 @@ TEST(RtEquation, TheLadderClimbsAndTheAnswersDoNotMove) {
 // At codegen 0 there is nothing cheaper underneath, so the ladder is one rung.
 TEST(RtEquation, CodegenZeroIsASingleRung) {
   auto eq = ladder_model();
-  eq.options({.backend = ddx::rt::Backend::Compile, .codegen = {.codegen_level = ddx::rt::Level::O0}});
+  eq.options({.backend = ddx::rt::Backend::Compile,
+              .codegen = {.codegen_level = ddx::rt::Level::O0}});
   ASSERT_TRUE(eq.wait_for_kernel());
   ASSERT_TRUE(eq.kernel_level().has_value());
   EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0);
@@ -1481,9 +1488,9 @@ TEST(RtEquation, AWarmCacheServesBothRungs) {
 
   const auto cold = climb();
   ASSERT_TRUE(std::filesystem::exists(dir)) << "the cache wrote nothing";
-  const auto entries = static_cast<std::size_t>(std::distance(
-      std::filesystem::directory_iterator{dir},
-      std::filesystem::directory_iterator{}));
+  const auto entries = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator{dir},
+                    std::filesystem::directory_iterator{}));
   EXPECT_EQ(entries, 2u) << "both rungs should key separately";
 
   EXPECT_EQ(climb(), cold) << "a cached rung moved a bit";
@@ -1554,7 +1561,8 @@ TEST(RtEquation, AdaptBuysTheCheapRungThenTheTop) {
   EXPECT_EQ(ladder_gradient(eq, n), expected);
   ASSERT_TRUE(eq.wait_for_kernel()) << "the first point bought no rung";
   ASSERT_TRUE(eq.kernel_level().has_value());
-  EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0) << "the top rung was bought too early";
+  EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0)
+      << "the top rung was bought too early";
 
   // The next buys the top one.  Bounded: a failure to climb must fail the test
   // rather than hang it.
@@ -1562,7 +1570,8 @@ TEST(RtEquation, AdaptBuysTheCheapRungThenTheTop) {
   const auto deadline = std::chrono::steady_clock::now() + 30s;
   bool climbed = false;
   while (std::chrono::steady_clock::now() < deadline) {
-    EXPECT_EQ(ladder_gradient(eq, n), expected) << "an answer moved as it climbed";
+    EXPECT_EQ(ladder_gradient(eq, n), expected)
+        << "an answer moved as it climbed";
     if (eq.kernel_level() == ddx::rt::Level::O1) {
       climbed = true;
       break;
@@ -1586,7 +1595,8 @@ TEST(RtEquation, AdaptAtCodegenZeroBuysOneRung) {
   ASSERT_TRUE(eq.wait_for_kernel());
   ASSERT_TRUE(eq.kernel_level().has_value());
   EXPECT_EQ(*eq.kernel_level(), ddx::rt::Level::O0);
-  EXPECT_FALSE(eq.warming().has_value()) << "still counting toward a second rung";
+  EXPECT_FALSE(eq.warming().has_value())
+      << "still counting toward a second rung";
 }
 
 // A threshold of nothing is the eager ladder, which is what makes the policy

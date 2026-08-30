@@ -92,17 +92,18 @@ public:
              : RTExpression{apply<T>(op, l.literal(), r.literal())};
   }
 
-  [[nodiscard]] static constexpr RTExpression
-  form(OpCode op, const RTExpression &c, const RTExpression &t,
-       const RTExpression &f) {
+  [[nodiscard]] static constexpr RTExpression form(OpCode op,
+                                                   const RTExpression &c,
+                                                   const RTExpression &t,
+                                                   const RTExpression &f) {
     if (c.why_ || t.why_ || f.why_) {
       return poison(c.why_ ? *c.why_ : (t.why_ ? *t.why_ : *f.why_));
     }
     Builder<T> *const b =
         c.builder() ? c.builder() : (t.builder() ? t.builder() : f.builder());
     return b ? RTExpression{*b, b->make(op, c.id(*b), t.id(*b), f.id(*b))}
-             : RTExpression{apply<T>(op, c.literal(), t.literal(),
-                                     f.literal())};
+             : RTExpression{
+                   apply<T>(op, c.literal(), t.literal(), f.literal())};
   }
 
   // Hidden friends: ordinary functions for a given RTExpression<T>, so `x * 2`
@@ -196,9 +197,8 @@ public:
   }
 
   // Both arms evaluate; `c` is a condition in the C sense, any nonzero value.
-  friend constexpr RTExpression select(const RTExpression &c,
-                                       const RTExpression &t,
-                                       const RTExpression &f) {
+  friend constexpr RTExpression
+  select(const RTExpression &c, const RTExpression &t, const RTExpression &f) {
     return form(OpCode::Select, c, t, f);
   }
 

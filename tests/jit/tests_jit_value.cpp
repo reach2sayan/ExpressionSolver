@@ -9,15 +9,15 @@
 
 #include <atomic>
 #include <bit>
-#include <format>
-#include <latch>
-#include <random>
-#include <filesystem>
-#include <fstream>
-#include <thread>
 #include <cstdint>
+#include <filesystem>
+#include <format>
+#include <fstream>
+#include <latch>
 #include <numeric>
+#include <random>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -264,7 +264,8 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
 #undef DDX_TEST_OP
   f = f + pow(x, y) + atan2(x, y) + hypot(x, y) + abs(x - y) + max(x, y) +
       min(x, y) + sign(x - y);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
 
   constexpr std::size_t n = 13;
   std::vector<double> cx(n), cy(n);
@@ -286,8 +287,9 @@ TEST(JitValue, EveryLaneWidthAgreesToTheBit) {
   };
 
   const auto [v1, dx1, dy1] = run(ddx::jit::Lanes::scalar());
-  for (const auto lanes : {*ddx::jit::Lanes::exactly(2), *ddx::jit::Lanes::exactly(4),
-                           *ddx::jit::Lanes::exactly(8), ddx::jit::Lanes::derived()}) {
+  for (const auto lanes :
+       {*ddx::jit::Lanes::exactly(2), *ddx::jit::Lanes::exactly(4),
+        *ddx::jit::Lanes::exactly(8), ddx::jit::Lanes::derived()}) {
     const auto [v, dx, dy] = run(lanes);
     const std::string width = spelled(lanes);
     for (std::size_t i = 0; i < n; ++i) {
@@ -315,7 +317,8 @@ TEST(JitValue, EveryCodegenLevelAgreesToTheBit) {
   const auto y = var(b, "y");
   // Multiply-add shapes throughout, so every level that forms an FMA does.
   const auto f = x * y + x * x - y + exp(x * y) * (y + 1.0) + log(x) * y;
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
 
   const std::array cx{0.25, 1.5, 2.75, 3.0};
   const std::array cy{1.25, 0.5, 2.0, 0.75};
@@ -359,7 +362,8 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
   const auto x = var(b, "x");
   const auto y = var(b, "y");
   const auto f = x * log(x) + y * exp(x * y) + sqrt(x + y) + x * y * (x + y);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(f).build_jacobian().finish();
 
   constexpr std::size_t n = 9;
   std::vector<double> cx(n), cy(n);
@@ -378,12 +382,13 @@ TEST(JitValue, TheVectorisersDoNotMoveABit) {
     return std::tuple{value, dx, dy};
   };
 
-  for (const auto lanes : {ddx::jit::Lanes::scalar(), *ddx::jit::Lanes::exactly(4)}) {
+  for (const auto lanes :
+       {ddx::jit::Lanes::scalar(), *ddx::jit::Lanes::exactly(4)}) {
     const auto [v0, dx0, dy0] = run({.codegen = {.lanes = lanes}});
     const std::string width = spelled(lanes);
     for (const auto &[what, o] :
-         {std::pair{"slp", ddx::jit::Options{
-                                .codegen = {.lanes = lanes, .slp = true}}},
+         {std::pair{"slp", ddx::jit::Options{.codegen = {.lanes = lanes,
+                                                         .slp = true}}},
           std::pair{"loop_vectorize",
                     ddx::jit::Options{.codegen = {.lanes = lanes,
                                                   .loop_vectorize = true}}}}) {
@@ -508,7 +513,8 @@ TEST(JitValue, AnObjectAdoptsBackIntoTheSameKernel) {
                          .build_jacobian()
                          .finish();
 
-  const auto compiled = must_compile(graph, ddx::jit::Options{.retain_object = true});
+  const auto compiled =
+      must_compile(graph, ddx::jit::Options{.retain_object = true});
   ASSERT_TRUE(compiled);
   ASSERT_FALSE(compiled.object().empty()) << "retain_object kept nothing";
 
@@ -548,9 +554,8 @@ TEST(JitValue, ACachedObjectSkipsTheWholeCompile) {
     const auto x = var(b, "x");
     const auto y = var(b, "y");
     const auto root = (x * log(x) + exp(x * y) + sqrt(y)).id(b);
-    return std::pair{
-        std::move(b),
-        root}; // the arena has to outlive the freeze that reads it
+    return std::pair{std::move(b),
+                     root}; // the arena has to outlive the freeze that reads it
   };
 
   ddx::jit::Options opt;
@@ -599,7 +604,8 @@ TEST(JitValue, ACorruptCacheEntryIsAMissNotACrash) {
   for (const auto &e : std::filesystem::directory_iterator{dir}) {
     std::fstream f{e.path(), std::ios::in | std::ios::out | std::ios::binary};
     ASSERT_TRUE(f.is_open());
-    f.seekp(static_cast<std::streamoff>(ddx::rt::detail::Container::header_bytes + 8));
+    f.seekp(static_cast<std::streamoff>(
+        ddx::rt::detail::Container::header_bytes + 8));
     f.put('\xff');
     ++damaged;
   }
@@ -624,8 +630,7 @@ TEST(JitValue, ACorruptCacheEntryIsAMissNotACrash) {
 // a hand-picked corrupt case proves nothing.  Every prologue byte, a stride
 // through the payload and every truncation: each must degrade to a miss.
 TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
-  const auto dir =
-      cache_dir("fuzz");
+  const auto dir = cache_dir("fuzz");
   std::filesystem::remove_all(dir);
 
   ddx::jit::Options opt;
@@ -671,9 +676,9 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
   // `8 -> 9` is adopted.  Whole-byte, low-bit, high-bit.
   //
   // Three, not 255, is a trade.  Exhaustive was run once, 0 of 14280 accepted,
-  // at 98 s against an 18 s suite -- a rejection here provokes a real recompile.
-  // Three is adequate only because every field is checked by exact `!=`; a field
-  // added with a range check needs the exhaustive sweep again.
+  // at 98 s against an 18 s suite -- a rejection here provokes a real
+  // recompile. Three is adequate only because every field is checked by exact
+  // `!=`; a field added with a range check needs the exhaustive sweep again.
   const std::size_t stride = std::max<std::size_t>(1, pristine.size() / 64);
   for (std::size_t i = 0; i < ddx::rt::detail::Container::header_bytes; ++i) {
     for (const std::byte mask :
@@ -683,11 +688,13 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
       if (damaged[i] == pristine[i]) {
         continue;
       }
-      ASSERT_TRUE(ddx::rt::detail::Container::write(entry, damaged).has_value());
+      ASSERT_TRUE(
+          ddx::rt::detail::Container::write(entry, damaged).has_value());
       rejected("a flipped prologue byte", i);
     }
   }
-  for (std::size_t i = ddx::rt::detail::Container::header_bytes; i < pristine.size(); i += stride) {
+  for (std::size_t i = ddx::rt::detail::Container::header_bytes;
+       i < pristine.size(); i += stride) {
     auto damaged = pristine;
     damaged[i] = ~damaged[i];
     ASSERT_TRUE(ddx::rt::detail::Container::write(entry, damaged).has_value());
@@ -706,16 +713,18 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
   // with a CRC that agrees -- which is what makes this not vacuous.  CRC32
   // detects accidents, it does not sign anything.
   {
-    const auto opened = ddx::rt::detail::Container::unpack(pristine, "ddxjitob");
+    const auto opened =
+        ddx::rt::detail::Container::unpack(pristine, "ddxjitob");
     ASSERT_TRUE(opened.has_value());
     const auto &[head, was] = *opened;
     std::vector<std::byte> payload(was.begin(), was.end());
     ASSERT_GT(payload.size(), 8u);
     std::ranges::fill_n(payload.begin(), 8, std::byte{0xff}); // the length
 
-    ASSERT_TRUE(ddx::rt::detail::Container::write(
-                    entry, ddx::rt::detail::Container::pack("ddxjitob", head, payload))
-                    .has_value());
+    ASSERT_TRUE(
+        ddx::rt::detail::Container::write(
+            entry, ddx::rt::detail::Container::pack("ddxjitob", head, payload))
+            .has_value());
     rejected("an impossible symbol length whose CRC agrees", 0);
   }
 
@@ -734,8 +743,7 @@ TEST(JitValue, ACacheEntrySurvivesCorruptionAndTruncation) {
 // find at any size, rename being atomic.  What it covers is the end of the
 // pipe: whatever the writers did, one whole entry loads afterwards.
 TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
-  const auto dir =
-      cache_dir("writers");
+  const auto dir = cache_dir("writers");
   std::filesystem::remove_all(dir);
 
   ddx::jit::Options opt;
@@ -815,15 +823,14 @@ TEST(JitValue, ConcurrentCompilesLeaveOneWholeCacheEntry) {
 
 // No directory named, nothing written.
 TEST(JitValue, NoCacheDirectoryWritesNothing) {
-  const auto dir =
-      cache_dir("absent");
+  const auto dir = cache_dir("absent");
   std::filesystem::remove_all(dir);
 
   Builder<> b;
   const auto x = var(b, "x");
-  ASSERT_TRUE(
-      compiler().compile(Graph<>::freeze(b, std::array{(x * x).id(b)}))
-          .has_value());
+  ASSERT_TRUE(compiler()
+                  .compile(Graph<>::freeze(b, std::array{(x * x).id(b)}))
+                  .has_value());
   EXPECT_FALSE(std::filesystem::exists(dir));
 }
 
@@ -833,8 +840,9 @@ TEST(JitValue, AnObjectIsKeptUnlessRefused) {
   const auto x = var(b, "x");
   const auto g = Graph<>::freeze(b, std::array{(x * x).id(b)});
   EXPECT_FALSE(must_compile(g).object().empty());
-  EXPECT_TRUE(
-      must_compile(g, ddx::jit::Options{.retain_object = false}).object().empty());
+  EXPECT_TRUE(must_compile(g, ddx::jit::Options{.retain_object = false})
+                  .object()
+                  .empty());
 }
 
 // The symbol is the one thing adopt() takes from the caller and cannot check
@@ -864,20 +872,21 @@ TEST(JitValue, AForgedSymbolCannotReachThroughTheLinkOrder) {
   // through the process generator -- and the object defines none of them.
   for (const std::string_view forged :
        {"sin", "exp", "log", "memcpy", "ddx_kernel_999"}) {
-    EXPECT_FALSE(
-        compiler().adopt(compiled.object(), forged, compiled.shape()).has_value())
+    EXPECT_FALSE(compiler()
+                     .adopt(compiled.object(), forged, compiled.shape())
+                     .has_value())
         << forged << " resolved through the link order";
   }
 }
 
 // A cache entry that will not link is a miss, not a crash and not an abort.
 TEST(JitValue, AdoptingRubbishIsAnErrorNotACrash) {
-  const std::array<std::byte, 8> rubbish{std::byte{0x7f}, std::byte{'E'},
-                                         std::byte{'L'},  std::byte{'F'},
-                                         std::byte{0},    std::byte{0},
-                                         std::byte{0},    std::byte{0}};
-  const auto k = compiler().adopt(rubbish, "ddx_kernel_0",
-                                  {.arity = 1, .values = 1, .jacobian = 0, .hessian = 0});
+  const std::array<std::byte, 8> rubbish{
+      std::byte{0x7f}, std::byte{'E'}, std::byte{'L'}, std::byte{'F'},
+      std::byte{0},    std::byte{0},   std::byte{0},   std::byte{0}};
+  const auto k =
+      compiler().adopt(rubbish, "ddx_kernel_0",
+                       {.arity = 1, .values = 1, .jacobian = 0, .hessian = 0});
   EXPECT_FALSE(k.has_value()) << "a truncated object linked";
 }
 

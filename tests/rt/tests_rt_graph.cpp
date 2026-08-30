@@ -35,7 +35,8 @@ TEST(RtGraph, UnaryNodeHasOneOperand) {
 }
 
 // Roots that are not outputs: the value block is empty, and the nodes only the
-// value needs are not live.  x*y is the case -- d/dx wants y, never the product.
+// value needs are not live.  x*y is the case -- d/dx wants y, never the
+// product.
 TEST(RtGraph, RootsAloneLeaveTheValueOut) {
   ddx::rt::Builder<> b;
   const auto x = var(b, "x");
@@ -76,7 +77,8 @@ TEST(RtGraph, EverythingTheOutputsReachIsLive) {
 TEST(RtGraph, CarriesSymbolsAndOutputs) {
   ddx::rt::Builder<> b;
   const auto root = ddx::rt::to_graph(b, ddx::var<"x"> * ddx::var<"y">);
-  const auto graph = ddx::rt::GraphBuilder{b}.value(root).build_jacobian().finish();
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(root).build_jacobian().finish();
 
   EXPECT_EQ(graph.symbols().size(), 2u);
   EXPECT_EQ(graph.outputs().size(), 3u); // value plus two partials
@@ -86,7 +88,8 @@ TEST(RtGraph, IdOrderIsTopological) {
   ddx::rt::Builder<> b;
   const auto root = ddx::rt::to_graph(b, sin(ddx::var<"x"> * ddx::var<"y">) +
                                              exp(ddx::var<"x">));
-  const auto graph = ddx::rt::GraphBuilder{b}.value(root).build_jacobian().finish();
+  const auto graph =
+      ddx::rt::GraphBuilder{b}.value(root).build_jacobian().finish();
 
   // Codegen emits in id order in one pass, which is only correct if every
   // child precedes its parent.

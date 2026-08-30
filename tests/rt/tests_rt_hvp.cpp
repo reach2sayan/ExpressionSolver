@@ -116,7 +116,8 @@ TEST(RtHvp, IsLinearInTheDirection) {
   const auto one = ddx::rt::evaluate_all(b, widened(x, v));
   const auto two = ddx::rt::evaluate_all(b, widened(x, scaled));
   for (const auto node : hvp.product) {
-    EXPECT_NEAR(two[node], 2.0 * one[node], 1e-11 * std::max(1.0, std::abs(one[node])));
+    EXPECT_NEAR(two[node], 2.0 * one[node],
+                1e-11 * std::max(1.0, std::abs(one[node])));
   }
 }
 

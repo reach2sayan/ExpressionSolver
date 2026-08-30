@@ -274,8 +274,8 @@ private:
           }
         });
     schedule_ = detail::schedule_of(
-        *this,
-        live_order_ | std::views::filter([&live](NodeId v) { return live[v]; }));
+        *this, live_order_ |
+                   std::views::filter([&live](NodeId v) { return live[v]; }));
   }
 
   std::vector<Property> properties_;

@@ -16,8 +16,8 @@ namespace {
 // an index expression.
 std::vector<double> dense_product(const std::vector<double> &h, std::size_t n,
                                   std::span<const double> v) {
-  const ddx::impl::md::mdspan m{
-      h.data(), ddx::impl::md::dextents<std::size_t, 2>{n, n}};
+  const ddx::impl::md::mdspan m{h.data(),
+                                ddx::impl::md::dextents<std::size_t, 2>{n, n}};
   std::vector<double> out(n, 0.0);
   for (const std::size_t i : std::views::iota(0uz, n)) {
     for (const std::size_t j : std::views::iota(0uz, n)) {
@@ -179,12 +179,10 @@ TEST(RtEquationHvp, TheKernelAgreesWithTheSweepToTheBit) {
 
   const auto run = [&](ddx::rt::Backend which) {
     std::vector<double> f(n);
-    std::array<std::vector<double>, 3> g{std::vector<double>(n),
-                                         std::vector<double>(n),
-                                         std::vector<double>(n)};
-    std::array<std::vector<double>, 3> hv{std::vector<double>(n),
-                                          std::vector<double>(n),
-                                          std::vector<double>(n)};
+    std::array<std::vector<double>, 3> g{
+        std::vector<double>(n), std::vector<double>(n), std::vector<double>(n)};
+    std::array<std::vector<double>, 3> hv{
+        std::vector<double>(n), std::vector<double>(n), std::vector<double>(n)};
     double *const fp[]{f.data()};
     double *const gp[]{g[0].data(), g[1].data(), g[2].data()};
     double *const hp[]{hv[0].data(), hv[1].data(), hv[2].data()};

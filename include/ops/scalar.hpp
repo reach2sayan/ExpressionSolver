@@ -99,7 +99,7 @@ template <typename> struct compound_from_binary {
 #define DDX_COMPOUND_FROM_BINARY(OP)                                           \
   template <typename Self, typename B>                                         \
     requires requires(Self &d, const B &o) { d = d OP o; }                     \
-  constexpr Self &operator OP##=(this Self & self, const B & o) noexcept {     \
+  constexpr Self &operator OP## = (this Self & self, const B &o) noexcept {    \
     return self = self OP o;                                                   \
   }
   DDX_COMPOUND_FROM_BINARY(+)

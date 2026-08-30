@@ -1,7 +1,7 @@
 #include "ddx.hpp"
+#include "rt/archive/snapshot.hpp"
 #include "rt/bridge.hpp"
 #include "rt/derivative.hpp"
-#include "rt/archive/snapshot.hpp"
 #include "rt/equation.hpp"
 #include "rt/interpret.hpp"
 
@@ -9,10 +9,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <limits>
 #include <ranges>
 #include <span>
-#include <concepts>
 #include <string>
 #include <utility>
 #include <vector>
@@ -160,7 +160,7 @@ TEST(RtJacobian, DerivFromValueReusesThePrimalNode) {
 // *and* at the graph.  That is the whole of ops/adjoints.hpp's contract: add an
 // op without a shared rule and this stops compiling, which is what keeps a
 // second spelling from being written for one of them.
-#define DDX_TEST_UNARY_RULE(fn, Op, label, functor, Desc)                       \
+#define DDX_TEST_UNARY_RULE(fn, Op, label, functor, Desc)                      \
   static_assert(requires(const double &a) {                                    \
     ddx::impl::detail::adjoints_of<ddx::impl::detail::Desc>(a, a);             \
   });                                                                          \
@@ -170,7 +170,7 @@ TEST(RtJacobian, DerivFromValueReusesThePrimalNode) {
 DDX_RT_UNARY_TABLE(DDX_TEST_UNARY_RULE)
 #undef DDX_TEST_UNARY_RULE
 
-#define DDX_TEST_BINARY_RULE(fn, Op, label, functor, Desc)                      \
+#define DDX_TEST_BINARY_RULE(fn, Op, label, functor, Desc)                     \
   static_assert(requires(const double &a) {                                    \
     ddx::impl::detail::adjoints_of<ddx::impl::detail::Desc>(a, a, a);          \
   });                                                                          \
@@ -208,7 +208,7 @@ TEST(RtJacobian, UnusedSymbolHasZeroPartial) {
 // written to divide by the hypotenuse first so they survive where x*x + y*y
 // overflows, and pow's left partial has to stay finite at a == 0.
 TEST(RtJacobian, SharedRulesAgreeAcrossTheScaleRange) {
-  for (const auto& [a, b] : std::vector<std::pair<double, double>>{
+  for (const auto &[a, b] : std::vector<std::pair<double, double>>{
            {1.3, 2.1}, {1e200, 1e200}, {1e-200, 1e-200}, {3.0, 1e-8}}) {
     expect_agrees_with_ddx(hypot(x, y), std::array{a, b});
     expect_agrees_with_ddx(atan2(x, y), std::array{a, b});
@@ -216,7 +216,7 @@ TEST(RtJacobian, SharedRulesAgreeAcrossTheScaleRange) {
     expect_agrees_with_ddx(x * y, std::array{a, b});
     expect_agrees_with_ddx(x + y, std::array{a, b});
   }
-  for (const auto& [a, b] :
+  for (const auto &[a, b] :
        std::vector<std::pair<double, double>>{{1.7, 2.3}, {0.5, 3.0}}) {
     expect_agrees_with_ddx(pow(x, y), std::array{a, b});
   }
@@ -314,8 +314,7 @@ TEST(RtJacobian, ABandedSystemKeepsOnlyTheCellsThatExist) {
   for (const std::size_t i : std::views::iota(0uz, n)) {
     for (const std::size_t k : std::views::iota(0uz, n)) {
       const bool interior = i > 0 && i + 1 < n;
-      const bool banded =
-          k == i || (interior && (k + 1 == i || k == i + 1));
+      const bool banded = k == i || (interior && (k + 1 == i || k == i + 1));
       EXPECT_EQ(pattern.at(i, k).has_value(), banded)
           << "cell (" << i << ", " << k << ")";
     }
@@ -559,8 +558,8 @@ TEST(RtJacobian, SelectSurvivesEveryWalkerThatRebuildsANode) {
 #ifdef DDX_HAS_JIT
 // The interpreter and the kernel have to answer alike at every value, and a
 // comparison is where they most easily do not: `<=` written as `!(b < a)` calls
-// a NaN less-or-equal to itself where `fcmp ole` says false.  A model that never
-// sees a NaN would never notice.
+// a NaN less-or-equal to itself where `fcmp ole` says false.  A model that
+// never sees a NaN would never notice.
 TEST(RtJacobian, ComparisonsAgreeWithTheKernelAtNaN) {
   const double nan = std::numeric_limits<double>::quiet_NaN();
   const double inf = std::numeric_limits<double>::infinity();
@@ -573,9 +572,13 @@ TEST(RtJacobian, ComparisonsAgreeWithTheKernelAtNaN) {
            (x == y) * 16.0 + (x != y) * 32.0 + select(x <= y, x, y) * 64.0;
   });
 
-  const std::array<std::array<double, 2>, 7> points{
-      {{1.0, 2.0}, {2.0, 1.0}, {2.0, 2.0}, {nan, 1.0}, {1.0, nan}, {nan, nan},
-       {inf, inf}}};
+  const std::array<std::array<double, 2>, 7> points{{{1.0, 2.0},
+                                                     {2.0, 1.0},
+                                                     {2.0, 2.0},
+                                                     {nan, 1.0},
+                                                     {1.0, nan},
+                                                     {nan, nan},
+                                                     {inf, inf}}};
 
   // A raw value as the condition, which is the only way a NaN reaches one: a
   // comparison's output is 1.0 or 0.0 and never NaN, so the model above cannot
@@ -630,10 +633,11 @@ TEST(RtJacobian, ComparisonsAgreeWithTheKernelAtNaN) {
 // live.
 //
 // This does *not* test a select whose two arms are the same node: `make` folds
-// that to the arm before a node exists (RtBuilder.SelectFoldsWhereABinaryWould),
-// so a test built through the factories would be checking the fold.  The rule
-// still has to handle it -- see SharedArmsThroughTheLoaderStillSum below, which
-// reaches it the one way that bypasses `make`.
+// that to the arm before a node exists
+// (RtBuilder.SelectFoldsWhereABinaryWould), so a test built through the
+// factories would be checking the fold.  The rule still has to handle it -- see
+// SharedArmsThroughTheLoaderStillSum below, which reaches it the one way that
+// bypasses `make`.
 TEST(RtJacobian, BothArmsOfASelectOverASharedSubexpression) {
   const auto eq = ddx::rt::equation([] {
     const auto x = ddx::rt::var("x");
@@ -675,7 +679,8 @@ TEST(RtJacobian, BothArmsOfASelectOverASharedSubexpression) {
   // x and y reach f through `s`, never only through the condition, so no
   // column is missing -- and s*s couples all three, so nothing compresses.
   const ddx::rt::Sparsity &pattern = eq.jacobian_pattern()->get();
-  EXPECT_EQ(pattern.nonzeros(), 3u) << "a condition-only symbol would be absent";
+  EXPECT_EQ(pattern.nonzeros(), 3u)
+      << "a condition-only symbol would be absent";
   EXPECT_EQ(*eq.hessian_colors(), 3u);
 }
 
@@ -689,19 +694,21 @@ TEST(RtJacobian, SharedArmsThroughTheLoaderStillSum) {
   ddx::rt::Snapshot<double> snap;
   snap.symbols = {"x", "y"};
   // select(x < y, x, x), which is x -- and which make() would never form.
-  snap.nodes = {Node<double>{.op = ddx::rt::OpCode::Var, .slot = 0},
-                Node<double>{.op = ddx::rt::OpCode::Var, .slot = 1},
-                Node<double>{.op = ddx::rt::OpCode::Lt, .a = 0, .b = 1},
-                Node<double>{.op = ddx::rt::OpCode::Select, .a = 2, .b = 0,
-                             .c = 0}};
+  snap.nodes = {
+      Node<double>{.op = ddx::rt::OpCode::Var, .slot = 0},
+      Node<double>{.op = ddx::rt::OpCode::Var, .slot = 1},
+      Node<double>{.op = ddx::rt::OpCode::Lt, .a = 0, .b = 1},
+      Node<double>{.op = ddx::rt::OpCode::Select, .a = 2, .b = 0, .c = 0}};
   snap.roots = {3};
   snap.model_nodes = 4;
   // What a file carries beside the model: the loader admits nothing less.
-  snap.nodes.push_back(Node<double>{.op = ddx::rt::OpCode::Const, .value = 0.0});
-  snap.jacobian = {.value = {3},
-                   .partial = {},
-                   .pattern = {.rowptr = {0, 0}, .col = {}, .rows = 1, .columns = 2},
-                   .zero = 4};
+  snap.nodes.push_back(
+      Node<double>{.op = ddx::rt::OpCode::Const, .value = 0.0});
+  snap.jacobian = {
+      .value = {3},
+      .partial = {},
+      .pattern = {.rowptr = {0, 0}, .col = {}, .rows = 1, .columns = 2},
+      .zero = 4};
 
   auto sound = ddx::rt::verified(std::move(snap));
   ASSERT_TRUE(sound.has_value()) << "a shared arm is a sound file";
@@ -712,8 +719,8 @@ TEST(RtJacobian, SharedArmsThroughTheLoaderStillSum) {
   const auto j = ddx::rt::build_jacobian_impl(*arena, rest.roots);
   // Both conditions, since a rule keeping one contribution answers the arm the
   // condition names and would be right at exactly one of these points.
-  for (const auto &at : {std::array<double, 2>{1.0, 2.0},
-                         std::array<double, 2>{2.0, 1.0}}) {
+  for (const auto &at :
+       {std::array<double, 2>{1.0, 2.0}, std::array<double, 2>{2.0, 1.0}}) {
     const auto values = ddx::rt::evaluate_all(*arena, at);
     EXPECT_DOUBLE_EQ(values[j.at(0, 0)], 1.0)
         << "d select(c, x, x)/dx at (" << at[0] << ", " << at[1] << ")";

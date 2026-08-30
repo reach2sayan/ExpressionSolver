@@ -48,8 +48,7 @@ class Format {
   // The prologue this build would write, against the one the file carries.
   template <std::floating_point T>
   [[nodiscard]] static result<void> compatible(const FileHeader &h) {
-    if (h.format != format ||
-        h.schema != Container::stamp<Snapshot<T>>() ||
+    if (h.format != format || h.schema != Container::stamp<Snapshot<T>>() ||
         h.scalar_size != sizeof(T) || h.scalar_kind != ScalarKind::Floating) {
       return fail(errc::bad_archive);
     }
@@ -68,13 +67,12 @@ class Format {
     }
     return remap;
   }
-
 };
 
 struct SaveFn {
   template <std::floating_point T>
-  [[nodiscard]] result<void> operator()(const Snapshot<T> &snap,
-                                        const std::filesystem::path &path) const {
+  [[nodiscard]] result<void>
+  operator()(const Snapshot<T> &snap, const std::filesystem::path &path) const {
     // Together, and in this order: the table is what every opcode byte *means*,
     // so outside the checksum one flipped bit reinterprets the graph, and it
     // has to be readable before a graph byte is.
@@ -82,14 +80,14 @@ struct SaveFn {
     const auto payload = Container::encode(snap);
     body.insert(body.end(), payload.begin(), payload.end());
 
-    const FileHeader h{.magic = Format::magic,
-                       .format = Format::format,
-                       .schema = Container::stamp<Snapshot<T>>(),
-                       .scalar_size = sizeof(T),
-                       .scalar_kind = ScalarKind::Floating,
-                       .model_nodes = snap.model_nodes,
-                       .model_digest = digest<T>(snap.symbols, snap.nodes,
-                                                 snap.model_nodes)};
+    const FileHeader h{
+        .magic = Format::magic,
+        .format = Format::format,
+        .schema = Container::stamp<Snapshot<T>>(),
+        .scalar_size = sizeof(T),
+        .scalar_kind = ScalarKind::Floating,
+        .model_nodes = snap.model_nodes,
+        .model_digest = digest<T>(snap.symbols, snap.nodes, snap.model_nodes)};
     return Container::write(path, Container::pack(Format::magic, h, body));
   }
 };
@@ -173,11 +171,10 @@ private:
   // would otherwise be written, never read, and one edit from being trusted.
   [[nodiscard]] static result<void> keyed(const FileHeader &head,
                                           const Snapshot<T> &snap) {
-    const bool agrees =
-        head.model_nodes == snap.model_nodes &&
-        snap.model_nodes <= snap.nodes.size() &&
-        digest<T>(snap.symbols, snap.nodes, snap.model_nodes) ==
-            head.model_digest;
+    const bool agrees = head.model_nodes == snap.model_nodes &&
+                        snap.model_nodes <= snap.nodes.size() &&
+                        digest<T>(snap.symbols, snap.nodes, snap.model_nodes) ==
+                            head.model_digest;
     return agrees ? result<void>{} : fail(errc::archive_corrupt);
   }
 };

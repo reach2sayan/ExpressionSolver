@@ -15,10 +15,10 @@
 
 #include <pybind11/native_enum.h>
 #include <pybind11/numpy.h>
-#include <pybind11/stl/filesystem.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/stl/filesystem.h>
 
 #include <boost/describe/enum.hpp>
 #include <boost/mp11/algorithm.hpp>
@@ -100,8 +100,7 @@ built_or_loaded(const std::optional<std::filesystem::path> &cache,
       return pyb::cast(PyEquation{std::move(*snap)});
     }
   }
-  pyb::object eq =
-      pyb::cast(PyEquation{std::move(arena), std::move(roots)});
+  pyb::object eq = pyb::cast(PyEquation{std::move(arena), std::move(roots)});
   if (cache) {
     // A cache that cannot be written is still a working equation.
     (void)rt::save(eq.cast<PyEquation &>().snapshot(), *cache);
@@ -127,12 +126,12 @@ text_equation(std::span<const std::string> sources,
   auto arena = std::make_shared<rt::Builder<double>>();
   pyb::list built;
   for (const std::string &source : sources) {
-    built.append(pyb::cast(PyExpression{
-        unwrap(rt::text::parse(source).and_then(
-            [&arena](const rt::text::Ast &ast) {
-              return rt::text::lower(*arena, ast);
-            })),
-        arena}));
+    built.append(pyb::cast(PyExpression{unwrap(rt::text::parse(source).and_then(
+                                            [&arena](const rt::text::Ast &ast) {
+                                              return rt::text::lower(*arena,
+                                                                     ast);
+                                            })),
+                                        arena}));
   }
   auto roots = roots_of(built, *arena);
   return built_or_loaded(cache, std::move(arena), std::move(roots));
@@ -141,8 +140,9 @@ text_equation(std::span<const std::string> sources,
 // The whole of ddx.equation: install an arena, run the model in it, take what
 // comes back -- rt::equation(assemble)'s three steps, with the output count a
 // number rather than a template parameter.
-[[nodiscard]] pyb::object make_equation(const pyb::object &model,
-                                        const std::optional<std::filesystem::path> &cache) {
+[[nodiscard]] pyb::object
+make_equation(const pyb::object &model,
+              const std::optional<std::filesystem::path> &cache) {
   auto arena = std::make_shared<rt::Builder<double>>();
   pyb::object built;
   {
@@ -298,8 +298,8 @@ PYBIND11_MODULE(_ddx, m) {
         return ddx::py::text_equation(sources, cache);
       },
       pyb::arg("source"), pyb::kw_only(), pyb::arg("cache") = pyb::none());
-  m.def("equation", &ddx::py::make_equation, pyb::arg("model"),
-        pyb::kw_only(), pyb::arg("cache") = pyb::none());
+  m.def("equation", &ddx::py::make_equation, pyb::arg("model"), pyb::kw_only(),
+        pyb::arg("cache") = pyb::none());
   m.def("load", &ddx::py::load_equation, pyb::arg("path"));
   m.def("var", &ddx::py::make_var, pyb::arg("name"));
 

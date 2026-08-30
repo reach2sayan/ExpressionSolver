@@ -255,9 +255,9 @@ struct Jacobian {
   NodeId zero = no_node; // what a cell outside the pattern reads
 
   [[nodiscard]] constexpr NodeId at(std::size_t i, std::size_t j) const {
-    return pattern.at(i, j).transform([this](std::size_t k) {
-      return partial[k];
-    }).value_or(zero);
+    return pattern.at(i, j)
+        .transform([this](std::size_t k) { return partial[k]; })
+        .value_or(zero);
   }
   BOOST_DESCRIBE_CLASS(Jacobian, (), (value, partial, pattern, zero), (), ())
 };

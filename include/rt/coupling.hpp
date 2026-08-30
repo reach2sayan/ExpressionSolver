@@ -26,7 +26,8 @@ inline constexpr std::size_t no_column = static_cast<std::size_t>(-1);
 // pinned, so the two walks cannot answer different sparsities.
 static_assert(impl::SumOp<double>::curvature == impl::Curvature::None &&
               impl::NegateOp<double>::curvature == impl::Curvature::None &&
-              impl::MultiplyOp<double>::curvature == impl::Curvature::Bilinear &&
+              impl::MultiplyOp<double>::curvature ==
+                  impl::Curvature::Bilinear &&
               impl::DivideOp<double>::curvature == impl::Curvature::Quotient);
 
 // boost::dynamic_bitset, not vector<bool>: the colouring's pairwise overlap
@@ -68,8 +69,8 @@ struct Sparsity {
     const auto found =
         std::ranges::lower_bound(present, static_cast<std::uint32_t>(j));
     return found != present.end() && *found == j
-               ? std::optional{rowptr[i] +
-                               static_cast<std::size_t>(found - present.begin())}
+               ? std::optional{rowptr[i] + static_cast<std::size_t>(
+                                               found - present.begin())}
                : std::nullopt;
   }
 

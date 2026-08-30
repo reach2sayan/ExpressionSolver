@@ -120,8 +120,8 @@ llvm::TargetLibraryInfoImpl target_library_info(const llvm::Triple &triple,
 // 20's libmvec table stops at four doubles, so an AVX-512 host's eight-wide
 // intrinsic has no library form and unrolls to scalar calls.
 [[nodiscard]] unsigned library_lanes(const llvm::Triple &triple) {
-  const auto tlii =
-      target_library_info(triple, Options{.codegen = {.veclib = VecLib::Libmvec}}, true);
+  const auto tlii = target_library_info(
+      triple, Options{.codegen = {.veclib = VecLib::Libmvec}}, true);
   llvm::ElementCount fixed;
   llvm::ElementCount scalable;
   tlii.getWidestVF("sin", fixed, scalable);
@@ -460,9 +460,8 @@ constexpr std::uint32_t kCacheEpoch = 1;
 // The identity, with the width *emitted* in place of the one asked for: a
 // derived `Lanes` means the host's, so the raw request would give one graph two
 // keys that never hit each other.
-[[nodiscard]] std::uint64_t cache_key(std::uint64_t graph,
-                                      std::string_view host,
-                                      const Codegen &emitted) {
+[[nodiscard]] std::uint64_t
+cache_key(std::uint64_t graph, std::string_view host, const Codegen &emitted) {
   boost::hash2::fnv1a_64 h;
   boost::hash2::hash_append(h, rt::detail::wire_flavor{}, host);
   rt::detail::fold(h, graph);
@@ -534,7 +533,8 @@ void write_entry(std::string_view dir, std::uint64_t key,
                                  .format = kCacheFormat,
                                  .schema = kCacheSchema,
                                  .scalar_size = sizeof(double),
-                                 .scalar_kind = rt::detail::ScalarKind::Floating,
+                                 .scalar_kind =
+                                     rt::detail::ScalarKind::Floating,
                                  .model_digest = key};
   // Staged inside the cache directory: a rename is only atomic within one
   // filesystem.
@@ -689,9 +689,10 @@ struct Compiler::Impl {
   // One per adopted object: the symbol is baked into the bytes, so two objects
   // from one graph share a name and the main dylib would refuse the second.
   // The link order keeps libm and the vector-math generators reachable.
-  [[nodiscard]] static result<Kernel>
-  link(const std::shared_ptr<Impl> &self, std::span<const std::byte> object,
-       std::string_view symbol, KernelShape shape) {
+  [[nodiscard]] static result<Kernel> link(const std::shared_ptr<Impl> &self,
+                                           std::span<const std::byte> object,
+                                           std::string_view symbol,
+                                           KernelShape shape) {
     auto &jit = *self->jit;
     auto jd =
         jit.createJITDylib("ddx_adopted_" + std::to_string(self->counter++));
@@ -722,8 +723,7 @@ struct Compiler::Impl {
                                       sym.takeError())};
     }
     return Kernel{sym->toPtr<Kernel::function_type>(), shape, self,
-                  std::make_shared<const std::string>(symbol),
-                  std::move(kept)};
+                  std::make_shared<const std::string>(symbol), std::move(kept)};
   }
 
   // On Impl, so a queued compile needs only a share of this and not a Compiler

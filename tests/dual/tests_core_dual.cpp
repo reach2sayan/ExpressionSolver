@@ -763,8 +763,8 @@ TEST(TutorialHigherOrder, FourthOrder_ExpX) {
   Variable<double, FixedString{"x"}> x;
   double ev = std::exp(x0);
   EXPECT_NEAR(
-      (Equation{exp(x)}.template derivative_tensor<2>(std::array{x0})[0, 0]), ev,
-      1e-12);
+      (Equation{exp(x)}.template derivative_tensor<2>(std::array{x0})[0, 0]),
+      ev, 1e-12);
   EXPECT_NEAR(
       (Equation{exp(x)}.template derivative_tensor<3>(std::array{x0})[0, 0, 0]),
       ev, 1e-12);
@@ -820,8 +820,8 @@ TEST(TutorialDirectional, SecondOrder_HessianContraction) {
   Variable<double, FixedString{"y"}> y;
   auto H = Equation{exp(x) * sin(y)}.template derivative_tensor<2>(
       std::array{xv, yv});
-  double d2fdu2 =
-      (H[0, 0]) * u * u + (H[0, 1]) * u * u + (H[1, 0]) * u * u + (H[1, 1]) * u * u;
+  double d2fdu2 = (H[0, 0]) * u * u + (H[0, 1]) * u * u + (H[1, 0]) * u * u +
+                  (H[1, 1]) * u * u;
   EXPECT_NEAR(d2fdu2, std::exp(xv) * std::cos(yv), 1e-12);
 }
 TEST(TutorialDirectional, VectorFunction_JacobianTimesDirection) {
@@ -859,8 +859,9 @@ TEST(TutorialTaylor, VectorFunction_SecondOrderAccuracy) {
   auto f0 = ve.evaluate(std::array{xv, yv});
   auto J = ve.derivative_tensor<1>(std::array{xv, yv});
   auto H = ve.derivative_tensor<2>(std::array{xv, yv});
-  double taylor1 = f0[1] + ((J[1, 0]) + (J[1, 1])) * h +
-                   0.5 * ((H[1, 0, 0]) + 2.0 * (H[1, 0, 1]) + (H[1, 1, 1])) * h * h;
+  double taylor1 =
+      f0[1] + ((J[1, 0]) + (J[1, 1])) * h +
+      0.5 * ((H[1, 0, 0]) + 2.0 * (H[1, 0, 1]) + (H[1, 1, 1])) * h * h;
   EXPECT_NEAR(taylor1, std::exp(2.0 * h), 2e-3);
 }
 TEST(TutorialReverseHessian, QuadraticForm) {

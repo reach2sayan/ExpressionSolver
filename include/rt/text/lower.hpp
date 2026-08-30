@@ -17,8 +17,8 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
-#include <vector>
 #include <variant>
+#include <vector>
 
 // An Ast into somebody's arena.  Every node goes through RTExpression::form,
 // which interns, folds and carries poison, so nothing here re-implements what
@@ -42,10 +42,9 @@ template <std::floating_point T>
 
 // One term, with its symbols and its operands already standing.
 template <std::floating_point T>
-[[nodiscard]] constexpr result<RTExpression<T>> form(const Ast &ast,
-                                           std::span<const RTExpression<T>> symbols,
-                                           std::span<const RTExpression<T>> built,
-                                           const Term &t) {
+[[nodiscard]] constexpr result<RTExpression<T>>
+form(const Ast &ast, std::span<const RTExpression<T>> symbols,
+     std::span<const RTExpression<T>> built, const Term &t) {
   using Expr = RTExpression<T>;
   const auto at = [](std::span<const Expr> from,
                      const std::uint32_t i) -> result<Expr> {
@@ -73,20 +72,23 @@ template <std::floating_point T>
         t.leaf);
   }
   if (arity_of(t.op) == 1) {
-    return at(built, t.a).transform(
-        [&t](const Expr &u) { return Expr::form(t.op, u); });
+    return at(built, t.a).transform([&t](const Expr &u) {
+      return Expr::form(t.op, u);
+    });
   }
   if (arity_of(t.op) == 3) {
     return at(built, t.a).and_then([&](const Expr &c) {
       return at(built, t.b).and_then([&](const Expr &x) {
-        return at(built, t.c).transform(
-            [&](const Expr &y) { return Expr::form(t.op, c, x, y); });
+        return at(built, t.c).transform([&](const Expr &y) {
+          return Expr::form(t.op, c, x, y);
+        });
       });
     });
   }
   return at(built, t.a).and_then([&](const Expr &l) {
-    return at(built, t.b).transform(
-        [&](const Expr &r) { return Expr::form(t.op, l, r); });
+    return at(built, t.b).transform([&](const Expr &r) {
+      return Expr::form(t.op, l, r);
+    });
   });
 }
 
@@ -105,10 +107,9 @@ template <std::floating_point T>
   // be the same nodes as the same model built by hand.
   std::vector<Expr> symbols;
   symbols.reserve(ast.names.size());
-  std::ranges::transform(ast.names, std::back_inserter(symbols),
-                         [&arena](const std::string &name) {
-                           return var(arena, name);
-                         });
+  std::ranges::transform(
+      ast.names, std::back_inserter(symbols),
+      [&arena](const std::string &name) { return var(arena, name); });
 
   // Children before parents, so a term's operands are always already built and
   // the pass never looks forward.

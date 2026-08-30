@@ -8,15 +8,15 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
-#include <ios>
 #include <filesystem>
+#include <ios>
 #include <latch>
 #include <random>
-#include <thread>
 #include <ranges>
 #include <span>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 // Saving and loading a built equation: the file must reproduce every answer to
@@ -210,8 +210,9 @@ TEST(RtArchive, RefusesAFlippedByte) {
   auto bytes = file.bytes();
 
   // One bit, in the middle of the payload, where it will land inside a node.
-  const std::size_t at = ddx::rt::detail::Container::header_bytes +
-                         (bytes.size() - ddx::rt::detail::Container::header_bytes) / 2;
+  const std::size_t at =
+      ddx::rt::detail::Container::header_bytes +
+      (bytes.size() - ddx::rt::detail::Container::header_bytes) / 2;
   bytes[at] ^= std::byte{0x01};
   file.write(bytes);
 
@@ -233,7 +234,8 @@ TEST(RtArchive, RefusesForeignAndFutureFiles) {
   // Bumped in place: the checksum covers the payload, not the prologue, so this
   // is what a future writer's file looks like to us.
   auto future = whole;
-  future[ddx::rt::detail::Container::magic_bytes] = std::byte{0xFF}; // the first `format` byte
+  future[ddx::rt::detail::Container::magic_bytes] =
+      std::byte{0xFF}; // the first `format` byte
   file.write(future);
   EXPECT_EQ(ddx::rt::load(file.path()).error().code, ddx::errc::bad_archive);
 
@@ -241,7 +243,8 @@ TEST(RtArchive, RefusesForeignAndFutureFiles) {
   // format change.  Named, not a literal: the described field list decides
   // where the tail starts, and a field added to it moves this.
   auto reserved = whole;
-  reserved[ddx::rt::detail::Container::header_bytes - ddx::rt::detail::Container::reserved_bytes] = std::byte{0x01};
+  reserved[ddx::rt::detail::Container::header_bytes -
+           ddx::rt::detail::Container::reserved_bytes] = std::byte{0x01};
   file.write(reserved);
   EXPECT_EQ(ddx::rt::load(file.path()).error().code, ddx::errc::bad_archive);
 }
@@ -298,7 +301,8 @@ TEST(RtArchive, ConcurrentWritersToOnePathAllSucceed) {
     writers.emplace_back([&file, &bytes, &start] {
       start.arrive_and_wait(); // nobody writes until everybody is ready
       for (int spin = 0; spin < 8; ++spin) {
-        EXPECT_TRUE(ddx::rt::detail::Container::write(file.path(), bytes).has_value());
+        EXPECT_TRUE(
+            ddx::rt::detail::Container::write(file.path(), bytes).has_value());
       }
     });
   }
@@ -306,9 +310,9 @@ TEST(RtArchive, ConcurrentWritersToOnePathAllSucceed) {
 
   // Stated but not reliably exercised -- see the note above.
   const auto landed = file.bytes();
-  EXPECT_TRUE(std::ranges::any_of(
-      payloads, [&landed](const auto &p) { return p == landed; }))
-      << "the file is not any single writer's";
+  EXPECT_TRUE(std::ranges::any_of(payloads, [&landed](const auto &p) {
+    return p == landed;
+  })) << "the file is not any single writer's";
   const auto loaded = ddx::rt::load(file.path());
   EXPECT_TRUE(loaded.has_value())
       << "a torn file would fail the checksum: " << loaded.error().code;
@@ -411,8 +415,8 @@ TEST(RtArchive, SurvivesEverySingleByteCorruption) {
   std::size_t accepted = 0;
   for (std::size_t at = 0; at < whole.size();
        at += (at < ddx::rt::detail::Container::header_bytes ? 1 : 97)) {
-    for (const std::byte mask : {std::byte{0x01}, std::byte{0x80},
-                                 std::byte{0xFF}}) {
+    for (const std::byte mask :
+         {std::byte{0x01}, std::byte{0x80}, std::byte{0xFF}}) {
       auto bytes = whole;
       bytes[at] ^= mask;
       file.write(bytes);
@@ -429,9 +433,11 @@ TEST(RtArchive, SurvivesEverySingleByteCorruption) {
   // file's meaning is protected: 390 of 4290 get past the checksum, and none
   // was the one bit that remapped an opcode -- see RefusesAFlippedOpcodeLabel.
   EXPECT_GT(refused, 0u);
-  EXPECT_EQ(refused + accepted, 3 * (ddx::rt::detail::Container::header_bytes +
-                                     (whole.size() - ddx::rt::detail::Container::header_bytes +
-                                      96) / 97));
+  EXPECT_EQ(
+      refused + accepted,
+      3 * (ddx::rt::detail::Container::header_bytes +
+           (whole.size() - ddx::rt::detail::Container::header_bytes + 96) /
+               97));
 }
 
 // Every prefix of a real file, which is what a partial write leaves behind.
@@ -508,10 +514,10 @@ TEST(RtArchive, DigestSeparatesTheSignedZeroes) {
 // inside the checksum: '+' is 0x2B and '/' is 0x2F, one bit apart and the same
 // arity, so remapping every Add to a Div passes sound() untouched.
 //
-// The model deliberately contains no '+' of its own.  Every Add in it is one the
-// reverse sweep created, which puts it above model_nodes and so beyond the model
-// digest -- the digest covers the model, the checksum covers everything.  The
-// byte-flip sweep cannot reach this: it needs a specific bit in one label.
+// The model deliberately contains no '+' of its own.  Every Add in it is one
+// the reverse sweep created, which puts it above model_nodes and so beyond the
+// model digest -- the digest covers the model, the checksum covers everything.
+// The byte-flip sweep cannot reach this: it needs a specific bit in one label.
 TEST(RtArchive, RefusesAFlippedOpcodeLabel) {
   const Scratch file{"label"};
   const auto eq = ddx::rt::equation([] {
@@ -523,7 +529,8 @@ TEST(RtArchive, RefusesAFlippedOpcodeLabel) {
 
   auto bytes = file.bytes();
   bool flipped = false;
-  for (std::size_t i = ddx::rt::detail::Container::header_bytes; i + 9 < bytes.size(); ++i) {
+  for (std::size_t i = ddx::rt::detail::Container::header_bytes;
+       i + 9 < bytes.size(); ++i) {
     std::uint64_t len = 0;
     std::memcpy(&len, bytes.data() + i, sizeof len);
     if (len != 1 || static_cast<char>(bytes[i + 8]) != '+') {
@@ -561,7 +568,8 @@ TEST(RtArchive, EveryPrologueByteIsVerified) {
   const auto whole = file.bytes();
   ASSERT_GT(whole.size(), ddx::rt::detail::Container::header_bytes);
 
-  for (std::size_t at = 0; at < ddx::rt::detail::Container::header_bytes; ++at) {
+  for (std::size_t at = 0; at < ddx::rt::detail::Container::header_bytes;
+       ++at) {
     for (int mask = 1; mask < 256; ++mask) {
       auto bytes = whole;
       bytes[at] ^= static_cast<std::byte>(mask);
@@ -591,9 +599,12 @@ TEST(RtArchive, OpcodesTravelByLabel) {
 // The stamp refuses old files rather than misreading them, so it must actually
 // depend on the fields.
 TEST(RtArchive, TheSchemaStampSeparatesShapes) {
-  constexpr auto snapshot = ddx::rt::detail::Container::stamp<ddx::rt::Snapshot<double>>();
-  constexpr auto narrower = ddx::rt::detail::Container::stamp<ddx::rt::Snapshot<float>>();
-  constexpr auto unrelated = ddx::rt::detail::Container::stamp<ddx::rt::Coloring>();
+  constexpr auto snapshot =
+      ddx::rt::detail::Container::stamp<ddx::rt::Snapshot<double>>();
+  constexpr auto narrower =
+      ddx::rt::detail::Container::stamp<ddx::rt::Snapshot<float>>();
+  constexpr auto unrelated =
+      ddx::rt::detail::Container::stamp<ddx::rt::Coloring>();
   static_assert(snapshot != narrower);
   static_assert(snapshot != unrelated);
   EXPECT_NE(snapshot, 0u);
@@ -634,8 +645,8 @@ TEST(RtArchive, CarriesTheCompiledKernel) {
     auto built = coupled();
     // Off by default: a kernel does not keep a megabyte of machine code alive
     // on the chance that someone saves it.
-    built.options({.backend = ddx::jit::Backend::Compile,
-                   .retain_object = true});
+    built.options(
+        {.backend = ddx::jit::Backend::Compile, .retain_object = true});
     ASSERT_TRUE(built.wait_for_kernel());
     ASSERT_TRUE(built.save(file).has_value());
   }
@@ -660,8 +671,8 @@ TEST(RtArchive, AdaptLinksAKernelStoredUnderCompile) {
   const Scratch file{"adapt_kernel"};
   {
     auto built = coupled();
-    built.options({.backend = ddx::jit::Backend::Compile,
-                   .retain_object = true});
+    built.options(
+        {.backend = ddx::jit::Backend::Compile, .retain_object = true});
     ASSERT_TRUE(built.wait_for_kernel());
     ASSERT_TRUE(built.save(file).has_value());
   }
@@ -683,8 +694,8 @@ TEST(RtArchive, AdaptLinksAKernelStoredUnderCompile) {
 TEST(RtArchive, SavesNoKernelWithoutRetainObject) {
   const Scratch file{"no_retain"};
   auto built = coupled();
-  built.options({.backend = ddx::jit::Backend::Compile,
-                 .retain_object = false});
+  built.options(
+      {.backend = ddx::jit::Backend::Compile, .retain_object = false});
   ASSERT_TRUE(built.wait_for_kernel());
   ASSERT_TRUE(built.save(file).has_value());
 
@@ -698,16 +709,15 @@ TEST(RtArchive, SavesNoKernelWithoutRetainObject) {
 TEST(RtArchive, RefusesAKernelFromAnotherGraph) {
   const Scratch file{"foreign_kernel"};
   auto built = coupled();
-  built.options({.backend = ddx::jit::Backend::Compile,
-                 .retain_object = true});
+  built.options({.backend = ddx::jit::Backend::Compile, .retain_object = true});
   ASSERT_TRUE(built.wait_for_kernel());
 
   ASSERT_TRUE(built.save(file).has_value());
 
   // The right code relabelled as another graph's, written back through the same
   // serialiser so the checksum still holds: a stored kernel run against a graph
-  // it was not emitted from is silently wrong arithmetic, and the digest is what
-  // gates it.
+  // it was not emitted from is silently wrong arithmetic, and the digest is
+  // what gates it.
   auto sound = ddx::rt::load_snapshot<>(file.path());
   ASSERT_TRUE(sound.has_value());
   auto snap = std::move(*sound).release();
@@ -807,7 +817,8 @@ TEST(RtArchive, RefusesAForgedJacobianPattern) {
     EXPECT_EQ(*built.jacobian(0.6, 1.4, 0.9), *loaded->jacobian(0.6, 1.4, 0.9));
     EXPECT_EQ(built.jacobian_pattern()->get().nonzeros(),
               loaded->jacobian_pattern()->get().nonzeros());
-    EXPECT_EQ(built.jacobian_pattern()->get().col, loaded->jacobian_pattern()->get().col);
+    EXPECT_EQ(built.jacobian_pattern()->get().col,
+              loaded->jacobian_pattern()->get().col);
     EXPECT_EQ(built.jacobian_pattern()->get().rowptr,
               loaded->jacobian_pattern()->get().rowptr);
   }
