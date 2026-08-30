@@ -25,8 +25,6 @@ namespace ddx::rt {
 // Live is what codegen emits; All draws what the freeze pruned, dashed.
 enum class Scope : std::uint8_t { Live, All };
 
-// What the CSR does not say.  Resolved here, which leaves the writer carrying
-// no `T`.
 struct DotNode {
   std::string label;
   std::string shape;
@@ -43,7 +41,7 @@ to_dot(const Adjacency &adj, std::span<const DotNode> nodes, Scope scope);
 template <impl::Numeric T = double> class Dot {
 public:
   explicit Dot(const Graph<T> &g, Scope scope = Scope::Live) noexcept
-      : graph_(g), scope_(scope) {}
+      : graph_{g}, scope_{scope} {}
   Dot(const Graph<T> &&, Scope = Scope::Live) = delete;
 
   [[nodiscard]] std::string str() const {

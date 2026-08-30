@@ -86,8 +86,9 @@ inline constexpr bool probes_Sign =
 // Every row instantiates for every T, so an op the scalar lacks has to compile
 // to *something*; T{} is that, and supports() below is how a sweep finds out
 // before it reads one.
-template <typename Fn, impl::Numeric T, bool Ok, impl::Numeric... Args>
-[[nodiscard]] constexpr T supported(const Args &...args) noexcept {
+template <typename Fn, impl::Numeric T, bool Ok>
+[[nodiscard]] constexpr T
+supported(const impl::Numeric auto &...args) noexcept {
   if constexpr (Ok) {
     return T{Fn{}(args...)};
   } else {
@@ -149,11 +150,13 @@ template <impl::Numeric T>
 // share one definition: at double it computes, at RTExpression it builds.  The
 // operand count is the arity asked for; a row of another arity answers T{},
 // as an unsupported one does.
-template <impl::Numeric T, std::same_as<T>... Args>
-  requires(sizeof...(Args) >= 1 && sizeof...(Args) <= 3)
-[[nodiscard]] constexpr T apply(OpCode op, const Args &...args) noexcept {
+template <impl::Numeric T>
+[[nodiscard]] constexpr T apply(OpCode op,
+                                const std::same_as<T> auto &...args) noexcept
+  requires(sizeof...(args) >= 1 && sizeof...(args) <= 3)
+{
   return detail::dispatch<T>(op, [&]<typename R>(R) -> T {
-    if constexpr (R::arity == sizeof...(Args)) {
+    if constexpr (R::arity == sizeof...(args)) {
       return detail::supported<typename R::functor, T, R::ok>(args...);
     } else {
       return T{};
