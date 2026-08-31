@@ -683,10 +683,13 @@ private:
   // the array is built, so the array is built at this shape and never reshaped.
   [[nodiscard]] Shape shape_of(std::initializer_list<pyb::ssize_t> base,
                                const Point &at) const {
+    const std::span axes{base};
+    // A count and not a flag: drop() takes a difference_type, and libstdc++
+    // 14.2 refuses the bool under clang where 14.3 accepts it.
+    const auto lead =
+        static_cast<std::ptrdiff_t>(outputs() == 1 && !axes.empty());
     Shape dims;
-    std::ranges::copy(std::span{base} |
-                          std::views::drop(outputs() == 1 && base.size() > 0),
-                      std::back_inserter(dims));
+    std::ranges::copy(axes | std::views::drop(lead), std::back_inserter(dims));
     if (at.batched()) {
       dims.push_back(ssize(at.size()));
     }
