@@ -16,18 +16,10 @@
 
 namespace ddx::rt {
 
-// Points per block sweep: two AVX2 registers of doubles.  Also where a batch
-// stops being a batch for the kernel, through jit::for_batch.
+// Points per block sweep: two AVX2 registers of doubles.
 inline constexpr std::size_t block_lanes = 8;
 
-// --- block sweep -----------------------------------------------------------
-// W points per node instead of one, so the switch is paid once per node per
-// block and each operation becomes a counted lane loop the vectoriser can take
-// whole -- including the libm call, which is most of a Jacobian.  Raw counted
-// loops over a constant bound, as in vector_dual.hpp: no peel prologue.
-//
-// The cases are generated from the same tables as apply(), so the operation set
-// cannot drift between the scalar sweep and this one.
+// W points per node instead of one
 namespace detail {
 
 // One counted loop for every arity: the operand columns are the pack, and the
@@ -42,10 +34,7 @@ constexpr void lanes(T *DDX_RESTRICT out,
   }
 }
 
-// Every op's lane loop, off apply.hpp's one dispatch: the row says how many of
-// the three columns it reads, and only those are resolved -- an operand a row
-// does not have is no_node, which names no lane.  Builder forms no op outside
-// the tables, so a leaf row is unreachable here.
+// Every op's lane loop, off apply.hpp's one dispatch:
 template <std::size_t W, impl::Numeric T, typename U>
 DDX_ALWAYS_INLINE constexpr void
 lanes_apply(const Node<T> &n, U *DDX_RESTRICT out, auto &&lane) noexcept {
@@ -63,9 +52,7 @@ lanes_apply(const Node<T> &n, U *DDX_RESTRICT out, auto &&lane) noexcept {
   });
 }
 
-// x * y + z rounded once, which is what the kernel's llvm.fma lowers to.  A
-// scalar with no fma of its own rounds twice and has no kernel to disagree
-// with.
+// x * y + z rounded once, which is what the kernel's llvm.fma lowers to.
 template <impl::Numeric T>
 [[nodiscard]] constexpr T fused_multiply_add(const T &x, const T &y,
                                              const T &z) noexcept {

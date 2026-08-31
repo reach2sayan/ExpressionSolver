@@ -62,5 +62,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "Release $new"
-          git tag "v$new"
+          git tag -a "v$new" -m "Release $new"
           git push --follow-tags origin HEAD:main

@@ -81,7 +81,7 @@ jobs:
           Out-File -FilePath "${{ steps.strings.outputs.build-dir }}/benchmark-results/benchmarks.txt" -Encoding utf8
 
       - name: Upload benchmark artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}-${{ github.run_number }}
           path: ${{ steps.strings.outputs.build-dir }}/benchmark-results
