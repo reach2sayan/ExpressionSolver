@@ -58,6 +58,7 @@ struct Tally {
     Counts *counts_;
   };
 
+  [[nodiscard]] bool active() const noexcept { return kept.active(); }
   [[nodiscard]] auto read(ddx::rt::Want want,
                           const ddx::rt::Extent &extent) const {
     ++counts->reads;

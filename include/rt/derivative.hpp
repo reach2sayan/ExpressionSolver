@@ -229,13 +229,15 @@ template <impl::Numeric T>
   JacobianRow g{.value = root, .partial = std::vector<NodeId>(nsym, no_node)};
   const std::array<NodeId, 1> roots{root};
 
+  // One vector, the unit moved through it: interning makes both constants
+  // stable ids, created in the order the per-sweep spelling did.
+  const NodeId one = b.constant(T{1});
+  const NodeId zero = b.constant(T{0});
+  std::vector<NodeId> unit(nsym, zero);
   for (const std::size_t s : std::views::iota(0uz, nsym)) {
-    const auto unit = std::views::iota(0uz, nsym) |
-                      std::views::transform([&b, s](std::size_t j) {
-                        return b.constant(j == s ? T{1} : T{0});
-                      }) |
-                      impl::to<std::vector<NodeId>>();
+    unit[s] = one;
     g.partial[s] = tangent_sweep(b, roots, unit).front();
+    unit[s] = zero;
   }
   return g;
 }

@@ -469,6 +469,8 @@ private:
   // Open-addressed by hand: interning runs inside constant evaluation and no
   // library hash container is constexpr.
   std::vector<NodeId> table_; // power-of-two capacity; no_node == free slot
+  // With vars_, a flat map by hand: interning runs inside constant evaluation
+  // and no library flat container is constexpr before C++26.
   std::vector<std::string> symbols_;
   // Slot-addressed, so a renamed slot is a write rather than a rehash: a Var
   // node's hash goes stale as its slot moves.

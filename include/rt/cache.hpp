@@ -5,7 +5,7 @@
 #include "rt/interpret.hpp"
 #include "util/config.hpp" // DDX_FWD
 
-#include <boost/container/vector.hpp> // a vector<bool> that holds bools
+#include <boost/container/small_vector.hpp> // a vector<bool> that holds bools
 #include <boost/dynamic_bitset.hpp>
 
 #include <algorithm>
@@ -99,6 +99,8 @@ concept CWriteLease = requires(L &l, const L &cl) {
 template <typename C, typename T>
 concept CValueCache = std::copy_constructible<C> && std::movable<C> &&
                       requires(const C &c, Want w, Extent e) {
+                        // Whether any call could hit: false skips the gather.
+                        { c.active() } -> std::same_as<bool>;
                         { c.read(w, e) } -> CReadLease<T>;
                         { c.write(w, e) } -> CWriteLease<T>;
                         { c.clear() }; // a re-freeze invalidates every lane
@@ -172,6 +174,8 @@ public:
     std::unique_lock<std::shared_mutex> lock_;
   };
 
+  [[nodiscard]] bool active() const noexcept { return lanes_ != nullptr; }
+
   // Engaged only where the slot is already the shape asked for: resizing is a
   // write, and a reader holds nothing but a shared lock.
   [[nodiscard]] ReadLease read(Want want, const Extent &extent) const {
@@ -233,6 +237,7 @@ template <impl::Numeric T> struct NoCache {
     [[nodiscard]] Recorded<T> entry() noexcept { return {}; }
     void commit() noexcept {}
   };
+  [[nodiscard]] static constexpr bool active() noexcept { return false; }
   [[nodiscard]] constexpr Lease read(Want, const Extent &) const noexcept {
     return {};
   }
@@ -260,8 +265,8 @@ protected:
       run();
     } else {
       // A batch is amortised already, and comparing points would cost what it
-      // saves.
-      if (n != 1) {
+      // saves; a cache built disabled would gather the point for nothing.
+      if (n != 1 || !cache().active()) {
         run();
       } else {
         serve(want, graph, how, xs, out, DDX_FWD(run));
@@ -334,7 +339,7 @@ private:
     if (!filled) {
       return swept ? Plan{Fill{}} : Plan{Relay{}};
     }
-    boost::container::vector<bool> &changed = column_scratch();
+    auto &changed = column_scratch();
     changed.assign(at.size(), false);
     std::ranges::transform(
         at, slot.point, changed.begin(),
@@ -418,10 +423,11 @@ private:
     static thread_local std::vector<T> at;
     return at;
   }
-  [[nodiscard]] static boost::container::vector<bool> &column_scratch() {
-    // boost::container::vector<bool> because std::vector<bool> is a bitset and
-    // cannot lend a span.
-    static thread_local boost::container::vector<bool> changed;
+  [[nodiscard]] static boost::container::small_vector<bool, 64> &
+  column_scratch() {
+    // A Boost vector because std::vector<bool> is a bitset and cannot lend a
+    // span; small, so a typical arity never allocates.
+    static thread_local boost::container::small_vector<bool, 64> changed;
     return changed;
   }
   [[nodiscard]] static boost::dynamic_bitset<> &reach_scratch() {

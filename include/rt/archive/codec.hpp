@@ -153,6 +153,36 @@ private:
 };
 static_assert(CWirePort<Writer>);
 
+// Prices a value before a Writer writes it: the same traversal with no bytes
+// moved, so an encode can reserve exactly once.
+class Counter : public Codec<Counter> {
+public:
+  bool scalar(const CWireScalar auto &v) {
+    total_ += sizeof(to_bits(v));
+    return true;
+  }
+
+  [[nodiscard]] static constexpr bool ok() noexcept { return true; }
+  bool count(std::size_t &) {
+    total_ += sizeof(std::uint64_t);
+    return true;
+  }
+  template <typename C>
+  static constexpr bool fit(C &, std::size_t, std::size_t) noexcept {
+    return true;
+  }
+  bool bytes(const void *, std::size_t n) {
+    total_ += n;
+    return true;
+  }
+
+  [[nodiscard]] std::size_t total() const noexcept { return total_; }
+
+private:
+  std::size_t total_ = 0;
+};
+static_assert(CWirePort<Counter>);
+
 class Reader : public Codec<Reader> {
 public:
   static constexpr std::uint8_t no_op = 0xFF;

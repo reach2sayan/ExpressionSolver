@@ -31,6 +31,9 @@ constexpr void append(auto &c, std::ranges::input_range auto &&r)
   requires std::convertible_to<std::ranges::range_reference_t<decltype(r)>,
                                std::ranges::range_value_t<decltype(c)>>
 {
+  if constexpr (std::ranges::sized_range<decltype(r)>) {
+    c.reserve(c.size() + std::ranges::size(r));
+  }
   std::ranges::copy(DDX_FWD(r), std::back_inserter(c));
 }
 

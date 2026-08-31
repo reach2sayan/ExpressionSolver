@@ -6,12 +6,15 @@
 #include "util/fmt.hpp" // detail::fmt_put
 #include "util/ranges.hpp"
 
+#include <boost/dynamic_bitset.hpp>
+
 #include <concepts>
 #include <cstdint>
 #include <format>
 #include <ostream>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The frozen graph as DOT, for looking at it:
@@ -27,7 +30,7 @@ enum class Scope : std::uint8_t { Live, All };
 
 struct DotNode {
   std::string label;
-  std::string shape;
+  std::string_view shape; // always one of three literals
   bool live = true;
   bool show_slots = false;
 };
@@ -50,9 +53,9 @@ public:
 
 private:
   [[nodiscard]] std::vector<DotNode> describe() const {
-    std::vector<char> is_output(graph_.size(), 0);
+    boost::dynamic_bitset<> is_output(graph_.size());
     std::ranges::for_each(graph_.outputs(),
-                          [&](NodeId o) { is_output[o] = 1; });
+                          [&](NodeId o) { is_output.set(o); });
 
     return std::views::iota(NodeId{0}, static_cast<NodeId>(graph_.size())) |
            std::views::transform([&](NodeId v) {
@@ -77,20 +80,19 @@ private:
   // the id.
   [[nodiscard]] std::string text(NodeId v) const {
     const auto &p = graph_[v];
-    const auto id = std::to_string(v) + ": ";
     switch (p.op) {
     case OpCode::Var:
-      return id + graph_.symbols()[p.slot];
+      return std::format("{}: {}", v, graph_.symbols()[p.slot]);
     case OpCode::Seed:
-      return id + "v[" + std::to_string(p.slot) + "]";
+      return std::format("{}: v[{}]", v, p.slot);
     case OpCode::Const:
       if constexpr (std::formattable<T, char>) {
-        return id + std::format("{}", p.value);
+        return std::format("{}: {}", v, p.value);
       } else {
-        return id + "const";
+        return std::format("{}: const", v);
       }
     default:
-      return id + std::string(label_of(p.op));
+      return std::format("{}: {}", v, label_of(p.op));
     }
   }
 

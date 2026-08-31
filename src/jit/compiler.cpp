@@ -79,6 +79,7 @@ void init_native_target_once() {
                                       const llvm::DataLayout &dl) {
   llvm::orc::MangleAndInterner mangle(es, dl);
   llvm::orc::SymbolMap syms;
+  syms.reserve(rt::op_count);
   // The unary + turns each lambda into a plain function pointer.
   const auto def = [&](const char *name, auto *fn) {
     syms[mangle(name)] = {llvm::orc::ExecutorAddr::fromPtr(fn),
@@ -425,7 +426,8 @@ private:
     auto sym = host_.jit.lookup(name_);
     if (!sym) {
       return std::unexpected{
-          as_error(errc::jit_lookup, "looking up " + name_, sym.takeError())};
+          as_error(errc::jit_lookup, llvm::Twine{"looking up "} + name_,
+                   sym.takeError())};
     }
     return Kernel{sym->toPtr<Kernel::function_type>(), KernelShape::of(g_),
                   std::move(host_.code),
@@ -719,7 +721,8 @@ struct Compiler::Impl {
     auto sym = jit.lookup(*jd, symbol);
     if (!sym) {
       return std::unexpected{as_error(errc::jit_lookup,
-                                      "looking up " + std::string{symbol},
+                                      llvm::Twine{"looking up "} +
+                                          llvm::StringRef{symbol},
                                       sym.takeError())};
     }
     return Kernel{sym->toPtr<Kernel::function_type>(), shape, self,

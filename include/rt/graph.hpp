@@ -342,6 +342,24 @@ private:
 //   GraphBuilder{b}.value(f).build_jacobian().build_hessian().finish()
 //
 // The class template argument is deduced from the builder.
+// What a freeze may ask a lane for.  Each is fetched only on the branch that
+// wants it, so a caller whose sweeps are lazy stays lazy.
+template <typename S>
+concept CSweeps = requires(S &s) {
+  { s.roots() } -> std::convertible_to<std::span<const NodeId>>;
+  { s.jacobian() } -> std::convertible_to<const Jacobian &>;
+  { s.hessian() } -> std::convertible_to<const Hessian &>;
+  { s.hessian_vector() } -> std::convertible_to<const HessianVector &>;
+  { s.vector_jacobian() } -> std::convertible_to<const VectorJacobian &>;
+  { s.tangent() } -> std::convertible_to<const Tangent &>;
+};
+
+// Defined below GraphBuilder, which befriends it: the only caller of the
+// block-taking members it keeps private.
+template <impl::Numeric T>
+[[nodiscard]] Graph<T> freeze_for(Want want, Builder<T> &arena,
+                                  CSweeps auto &sweeps, bool contract);
+
 template <impl::Numeric T = double> class GraphBuilder {
 public:
   explicit constexpr GraphBuilder(Builder<T> &b) noexcept : builder_(&b) {
@@ -403,8 +421,8 @@ public:
 private:
   // The Hessian an Equation already holds, so the arena is not swept again:
   // rt::build_hessian_impl appends to the builder, and freeze() must not.
-  template <typename... Ts> friend class impl::Equation;
-  friend class py::PyEquation;
+  template <impl::Numeric U>
+  friend Graph<U> freeze_for(Want, Builder<U> &, CSweeps auto &, bool);
 
   constexpr GraphBuilder &block(std::vector<NodeId> OutputBlocks::*which,
                                 std::span<const NodeId> ids) {
@@ -438,5 +456,37 @@ private:
 };
 
 template <impl::Numeric T> GraphBuilder(Builder<T> &) -> GraphBuilder<T>;
+
+// The graph one lane computes: the value block unless the want is Gradient,
+// which differentiates the roots without computing them, and the one derivative
+// block that want names.  Vjp and Jvp replace the Jacobian block rather than
+// adding to it -- n columns instead of the pattern's nonzeros is the whole
+// point of asking.
+template <impl::Numeric T>
+[[nodiscard]] Graph<T> freeze_for(Want want, Builder<T> &arena,
+                                  CSweeps auto &sweeps, bool contract) {
+  GraphBuilder<T> gb{arena};
+  if (want == Want::Gradient) {
+    gb.roots_from(sweeps.roots());
+  } else {
+    gb.values_from(sweeps.roots());
+  }
+  if (want == Want::Vjp) {
+    gb.vector_jacobian_from(sweeps.vector_jacobian());
+  } else if (want == Want::Jvp) {
+    gb.tangent_from(sweeps.tangent());
+  } else {
+    if (want != Want::Value) {
+      gb.jacobian_from(sweeps.jacobian());
+    }
+    if (want == Want::Hessian) {
+      gb.hessian_from(sweeps.hessian());
+    }
+    if (want == Want::Hvp) {
+      gb.hessian_vector_from(sweeps.hessian_vector());
+    }
+  }
+  return gb.finish(contract);
+}
 
 } // namespace ddx::rt

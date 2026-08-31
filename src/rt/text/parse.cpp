@@ -40,7 +40,9 @@ using bp::_pass;
 using bp::_val;
 
 // The name and arguments of a call, which the grammar reads as one sequence and
-// an aggregate attribute takes apart.
+// an aggregate attribute takes apart.  std::vector because the aggregate must
+// match the parser's default attribute; small_vector is refused at the
+// static_assert in parser.hpp.
 struct Call {
   std::string name;
   std::vector<std::uint32_t> args;

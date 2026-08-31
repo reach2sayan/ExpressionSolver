@@ -2,7 +2,10 @@
 
 #include "util/ranges.hpp"
 
+#include <boost/container/small_vector.hpp>
+
 #include <llvm/ADT/SmallString.h>
+#include <llvm/ADT/Twine.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -169,16 +172,20 @@ public:
 private:
   // An intrinsic is declared on the lane type and left to the backend to
   // unroll; a libm function has only a scalar entry point, so it is unrolled
-  // here.
+  // here.  Declared once per opcode: getOrInsertDeclaration re-mangles the name
+  // into a heap string per ask, and the emitter asks per node.
   llvm::Value *call(rt::OpCode op, llvm::ArrayRef<llvm::Value *> args) const {
-    const llvm::Intrinsic::ID id = intrinsic_for(op);
-    if (id != llvm::Intrinsic::not_intrinsic) {
-      return b_.CreateCall(
-          llvm::Intrinsic::getOrInsertDeclaration(&m_, id, {lanes_.ty}), args);
+    auto &[fn, scalarise] = callees_[std::to_underlying(op)];
+    if (fn == nullptr) {
+      const llvm::Intrinsic::ID id = intrinsic_for(op);
+      if (id != llvm::Intrinsic::not_intrinsic) {
+        fn = llvm::Intrinsic::getOrInsertDeclaration(&m_, id, {lanes_.ty});
+      } else {
+        fn = libm_decl(m_, rt::label_of(op), static_cast<unsigned>(args.size()));
+        scalarise = lanes_.vector();
+      }
     }
-    llvm::Function *const fn =
-        libm_decl(m_, rt::label_of(op), static_cast<unsigned>(args.size()));
-    return lanes_.vector() ? scalarised(fn, args) : b_.CreateCall(fn, args);
+    return scalarise ? scalarised(fn, args) : b_.CreateCall(fn, args);
   }
 
   llvm::Value *scalarised(llvm::Function *fn,
@@ -197,6 +204,11 @@ private:
   llvm::Module &m_;
   llvm::IRBuilder<> &b_;
   LaneType lanes_;
+  struct Callee {
+    llvm::Function *fn = nullptr;
+    bool scalarise = false;
+  };
+  mutable std::array<Callee, rt::op_count> callees_{};
 };
 
 llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name,
@@ -247,10 +259,11 @@ llvm::Function *declare_kernel(llvm::Module &m, llvm::StringRef name,
 }
 
 // Loaded once in the entry block, so they are loop-invariant.
+using ColumnValues = boost::container::small_vector<llvm::Value *, 8>;
 struct HoistedColumns {
-  std::vector<llvm::Value *> inputs;
+  ColumnValues inputs;
   // f[k], g[k*n + j], h[c*n + i]
-  rt::Blocks<std::vector<llvm::Value *>> out;
+  rt::Blocks<ColumnValues> out;
 };
 
 HoistedColumns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
@@ -263,9 +276,9 @@ HoistedColumns hoist_columns(llvm::IRBuilder<> &b, llvm::Function &fn,
            std::views::transform([&](std::size_t j) {
              llvm::Value *const slot =
                  b.CreateConstInBoundsGEP1_64(ptr, fn.getArg(arg), j);
-             return b.CreateLoad(ptr, slot, stem + std::to_string(j));
+             return b.CreateLoad(ptr, slot, stem + llvm::Twine(j));
            }) |
-           impl::to<std::vector<llvm::Value *>>();
+           impl::to<ColumnValues>();
   };
 
   const auto &layout = g.layout();
@@ -315,16 +328,14 @@ void emit_stores(const Emitter &emit, const rt::Graph<double> &g,
                  const HoistedColumns &cols,
                  std::span<llvm::Value *const> value, llvm::Value *index,
                  llvm::Value *mask) {
-  const auto blocks = g.output_blocks();
-  const auto store_block = [&](std::span<llvm::Value *const> columns,
-                               std::span<const rt::NodeId> block) {
-    for (const auto [column, o] : std::views::zip(columns, block)) {
+  const rt::Blocks<std::span<llvm::Value *const>> columns{
+      cols.out.values, cols.out.jacobian, cols.out.hessian};
+  for (const auto [block_columns, block] :
+       rt::zip_blocks(columns, g.output_blocks())) {
+    for (const auto [column, o] : std::views::zip(block_columns, block)) {
       emit.store(value[o], column, index, mask);
     }
-  };
-  store_block(cols.out.values, blocks.values);
-  store_block(cols.out.jacobian, blocks.jacobian);
-  store_block(cols.out.hessian, blocks.hessian);
+  }
 }
 
 } // namespace

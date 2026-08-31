@@ -11,6 +11,7 @@
 #include "rt/dot.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
+#include "rt/lanes.hpp"
 #include "util/ranges.hpp"
 
 // Unconditional: jit::Options and jit::Kernel are header types, so the Python
@@ -121,7 +122,7 @@ public:
 
   [[nodiscard]] pyb::object evaluate(const pyb::handle &x) {
     const Point at{x, symbols_};
-    Lane &l = lane(Want::Value);
+    const auto l = lane(Want::Value);
     if (scalar(at)) {
       Cell f;
       run(Want::Value, at, {.values = f.rows()});
@@ -135,7 +136,7 @@ public:
 
   [[nodiscard]] pyb::tuple jacobian(const pyb::handle &x) {
     const Point at{x, symbols_};
-    Lane &l = lane(Want::Jacobian);
+    const auto l = lane(Want::Jacobian);
     Scratch cells{count(l, &rt::OutputSpans::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
             outputs() * arity(), at.size()};
@@ -150,7 +151,7 @@ public:
   // The Jacobian alone, from a lane with no value block.
   [[nodiscard]] pyb::object gradient(const pyb::handle &x) {
     const Point at{x, symbols_};
-    Lane &l = lane(Want::Gradient);
+    const auto l = lane(Want::Gradient);
     Scratch cells{count(l, &rt::OutputSpans::jacobian), at.size()};
     Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
             outputs() * arity(), at.size()};
@@ -167,7 +168,7 @@ public:
   [[nodiscard]] pyb::tuple jvp(const pyb::handle &v, const pyb::handle &x) {
     const Point at{x, symbols_};
     const Point dir{v, symbols_};
-    Lane &l = lane(Want::Jvp);
+    const auto l = lane(Want::Jvp);
     Block out{shape_of({ssize(outputs())}, at),
               count(l, &rt::OutputSpans::jacobian), at.size()};
     Cell cell;
@@ -182,7 +183,7 @@ public:
     // By position: the covector is indexed by function, and a dict would have
     // nothing to key on.
     const Point dir{w, outputs()};
-    Lane &l = lane(Want::Vjp);
+    const auto l = lane(Want::Vjp);
     Block out{symbol_shape(at), count(l, &rt::OutputSpans::jacobian),
               at.size()};
     Cell cell;
@@ -200,7 +201,7 @@ public:
     }
     const Point at{x, symbols_};
     const Point dir{v, symbols_};
-    Lane &l = lane(Want::Hvp);
+    const auto l = lane(Want::Hvp);
     const std::size_t n = arity();
 
     Scratch partials{count(l, &rt::OutputSpans::jacobian), at.size()};
@@ -241,18 +242,17 @@ public:
   // The only thing that waits.  A call does not: until the kernel lands the
   // graph is swept, and the kernel replaces the sweep when it arrives.
   [[nodiscard]] bool wait_for_kernel(Want want) {
-    Lane &l = lane(want);
-    if (l.pending.valid()) {
+    (void)lane(want); // launches it, if nothing has yet
+    if (const auto first = lane_for(want).pending(); first.valid()) {
       // Given up around the wait alone, never around the lane bookkeeping.
       const pyb::gil_scoped_release unlocked;
-      l.pending.wait();
+      first.wait();
     }
-    adopt(l);
-    return static_cast<bool>(l.kernel);
+    return static_cast<bool>(lane(want)->kernel);
   }
 
   [[nodiscard]] bool uses_kernel() {
-    return static_cast<bool>(lane(Want::Jacobian).kernel);
+    return static_cast<bool>(lane(Want::Jacobian)->kernel);
   }
 
   // Colours, not n: the Hessian is stored compressed and scattered on read, so
@@ -264,7 +264,7 @@ public:
   // What one call for `want` evaluates: the contracted live order, which is
   // the sweep and what the kernel is lowered from.
   [[nodiscard]] std::size_t nodes(Want want) {
-    return lane(want).graph->schedule().size();
+    return lane(want)->graph->schedule().size();
   }
 
   // Only what is free to answer: uses_kernel() would freeze a lane, and a repr
@@ -305,7 +305,7 @@ public:
   }
 
   [[nodiscard]] std::string to_dot(bool all) {
-    return rt::Dot<double>{*lane(Want::Jacobian).graph,
+    return rt::Dot<double>{*lane(Want::Jacobian)->graph,
                            all ? rt::Scope::All : rt::Scope::Live}
         .str();
   }
@@ -323,141 +323,75 @@ private:
     }
     std::vector<rt::Object> out;
     for (const auto [want, l] : std::views::zip(rt::want_values, lanes_)) {
-      if (!l.graph || !l.kernel || l.kernel.object().empty()) {
-        continue;
+      if (auto kept = l.object(want, setting())) {
+        out.push_back(*std::move(kept));
       }
-      const auto code = l.kernel.object();
-      out.push_back({.want = want,
-                     .symbol = std::string{l.kernel.symbol()},
-                     .host = std::string{c->host_identity()},
-                     .digest = rt::digest(*l.graph),
-                     .codegen = effective_options().codegen,
-                     .code = {
-                       code.begin(),
-                       code.end()
-                     }});
     }
     return out;
   }
 #endif
 
-  // Filled once and never invalidated; a new backend throws the whole set away
-  // rather than editing one.
-  struct Lane {
-    std::shared_ptr<const rt::Graph<double>> graph;
-    jit::Kernel kernel{};
-    std::shared_future<jit::result<jit::Kernel>> pending;
-    // Adapt's counter.  Plain, not atomic: the GIL is held for every call that
-    // touches a lane.  `settled` is set once nothing is left to buy, so a lane
-    // that will never compile again stops counting.
-    std::size_t points = 0;
-    bool settled = false;
+  // One rung, because the Python surface has no ladder to climb: warm_points is
+  // the only threshold it has and hot_points says nothing.  No lock, because
+  // the GIL is held for every touch below and given up only inside a sweep.
+  using Lane = rt::detail::Lane<double, rt::detail::Serialised, 1>;
+  using Compiled = rt::detail::Compiled<double>;
+
+  [[nodiscard]] Lane &lane_for(Want want) {
+    return lanes_[static_cast<std::size_t>(want)];
+  }
+
+  // `n` is the batch about to run and is what Adapt counts; an observer asks
+  // without buying anything.
+  [[nodiscard]] std::shared_ptr<const Compiled> lane(Want want,
+                                                     std::size_t n = 0) {
+    return lane_for(want).snapshot(want, n, setting(),
+                                   [&] { return frozen_for(want); });
+  }
+
+  [[nodiscard]] rt::detail::Setting setting() {
+    rt::detail::Setting out;
+    out.options = effective_options();
+    out.objects = objects_;
+#ifdef DDX_HAS_JIT
+    if (options_.backend != jit::Backend::Interpret) {
+      out.compiler = compiler();
+    }
+#endif
+    return out;
+  }
+
+  // What a freeze asks for.  Every one of these sweeps on first call and
+  // appends to the arena, so they are reached through here and not gathered up
+  // front: a lane is frozen from the one block its want names.
+  struct Frozen {
+    PyEquation &eq;
+
+    [[nodiscard]] std::span<const rt::NodeId> roots() const {
+      return eq.roots_;
+    }
+    [[nodiscard]] const rt::Jacobian &jacobian() const {
+      return eq.derivative();
+    }
+    [[nodiscard]] const rt::Hessian &hessian() const {
+      return eq.sweeps().front();
+    }
+    [[nodiscard]] const rt::HessianVector &hessian_vector() const {
+      return eq.hvp_sweep();
+    }
+    [[nodiscard]] const rt::VectorJacobian &vector_jacobian() const {
+      return eq.vjp_sweep();
+    }
+    [[nodiscard]] const rt::Tangent &tangent() const { return eq.jvp_sweep(); }
   };
 
-  [[nodiscard]] Lane &lane(Want want) {
-    Lane &l = lanes_[static_cast<std::size_t>(want)];
-    if (!l.graph) {
-      prepare(l, want);
-    }
-    adopt(l);
-    return l;
-  }
-
-  // Freezing a lane and launching its compile are one step deliberately: split,
-  // a lane could be ready having compiled nothing, and the next caller would
-  // find it ready and interpret forever with every answer still right.
-  void prepare(Lane &l, Want want) {
-    rt::GraphBuilder<double> gb{*arena_};
-    // The gradient lane differentiates the roots without computing them.
-    if (want == Want::Gradient) {
-      gb.roots_from(roots_);
-    } else {
-      gb.values_from(roots_);
-    }
-    // The seeded lanes replace the Jacobian block rather than adding to it,
-    // except Hvp, whose gradient falls out of the same sweep.
-    if (want == Want::Vjp) {
-      gb.vector_jacobian_from(vjp_sweep());
-    } else if (want == Want::Jvp) {
-      gb.tangent_from(jvp_sweep());
-    } else {
-      if (want != Want::Value) {
-        gb.jacobian_from(derivative());
-      }
-      if (want == Want::Hessian) {
-        gb.hessian_from(sweeps().front());
-      }
-      if (want == Want::Hvp) {
-        gb.hessian_vector_from(hvp_sweep());
-      }
-    }
-    l.graph = std::make_shared<const rt::Graph<double>>(gb.finish(contracts()));
-    if (options_.backend == jit::Backend::Interpret) {
-      l.settled = true;
-      return;
-    }
-#ifdef DDX_HAS_JIT
-    jit::Compiler *const c = compiler();
-    if (c == nullptr) {
-      l.settled = true;
-      return;
-    }
-    // A compile already done, adopted only where graph, host and codegen
-    // options all still agree.
-    if (const rt::Object *const stored =
-            rt::find_object(objects_, want, rt::digest(*l.graph),
-                            c->host_identity(), effective_options().codegen)) {
-      // The shape from the graph just frozen, never from the file: a forged
-      // entry may supply code and a symbol but cannot claim an arity.
-      if (auto adopted = c->adopt(stored->code, stored->symbol,
-                                  jit::KernelShape::of(*l.graph))) {
-        l.kernel = std::move(*adopted);
-        l.settled = true;
-        return; // nothing left to compile
-      }
-      // A refused link is a miss, never a failure: the compile below stands.
-    }
-    // Adapt earns its compile in charge(); Compile asks for it outright.  There
-    // is one rung here rather than the facade's ladder, so warm_points is the
-    // only threshold this lane has and hot_points says nothing.
-    if (options_.backend == jit::Backend::Compile) {
-      l.pending = c->compile_async(l.graph, effective_options());
-      l.settled = true;
-    }
-#else
-    l.settled = true;
-#endif
-  }
-
-  // Charge the lane for a batch and launch the compile the points have bought.
-  void charge(Lane &l, std::size_t n) {
-    if (l.settled || n == 0 || options_.backend != jit::Backend::Adapt) {
-      return;
-    }
-    l.points += n;
-    if (l.points < options_.warm_points) {
-      return;
-    }
-#ifdef DDX_HAS_JIT
-    if (jit::Compiler *const c = compiler(); c != nullptr) {
-      l.pending = c->compile_async(l.graph, effective_options());
-    }
-#endif
-    l.settled = true;
-  }
-
-  // A refused compile leaves the kernel empty and the sweep stays: the JIT is
-  // never a correctness dependency.
-  void adopt(Lane &l) {
-    using namespace std::chrono_literals;
-    if (!l.pending.valid() ||
-        l.pending.wait_for(0s) != std::future_status::ready) {
-      return;
-    }
-    if (const auto &landed = l.pending.get()) {
-      l.kernel = *landed;
-    }
-    l.pending = {};
+  // This side never rebalances, so the kernel is lowered from the graph the
+  // sweep walks and the two blocks alias.
+  [[nodiscard]] Compiled frozen_for(Want want) {
+    Frozen from{*this};
+    auto swept = std::make_shared<const rt::Graph<double>>(
+        rt::freeze_for(want, *arena_, from, contracts()));
+    return {.graph = swept, .compile_graph = swept};
   }
 
   // How wide to emit, from the batch the caller said they have: a wide kernel
@@ -478,9 +412,9 @@ private:
   }
 
   using BlockMember = std::span<const rt::NodeId> rt::OutputSpans::*;
-  [[nodiscard]] static constexpr std::size_t count(const Lane &l,
-                                                   BlockMember which) {
-    return (l.graph->output_blocks().*which).size();
+  [[nodiscard]] static std::size_t count(const Compiled &c,
+                                         BlockMember which) {
+    return (c.graph->output_blocks().*which).size();
   }
 
   // --- running -------------------------------------------------------------
@@ -505,24 +439,21 @@ private:
 
   void run_columns(Want want, std::span<const double *const> xs, std::size_t n,
                    const rt::Columns<double> &out) {
-    Lane &l = lane(want);
-    if (xs.size() != l.graph->arity() ||
-        std::ranges::any_of(rt::zip_blocks(out, l.graph->output_blocks()),
+    const auto l = lane(want, n);
+    if (xs.size() != l->graph->arity() ||
+        std::ranges::any_of(rt::zip_blocks(out, l->graph->output_blocks()),
                             [](const auto &pair) {
                               const auto &[columns, block] = pair;
                               return columns.size() != block.size();
                             })) {
       fail_with(errc::wrong_column_count);
     }
-    // Before the GIL goes, and after the shape check: a call that will not run
-    // has bought nothing.
-    charge(l, n);
-    through(want, *l.graph,
-            l.kernel ? rt::Answered::ByKernel : rt::Answered::BySweep, xs, out,
-            n, [&] { sweep(l, xs, out, n); });
+    through(want, *l->graph,
+            l->kernel ? rt::Answered::ByKernel : rt::Answered::BySweep, xs, out,
+            n, [&] { sweep(*l, xs, out, n); });
   }
 
-  void sweep(Lane &l, std::span<const double *const> xs,
+  void sweep(const Compiled &l, std::span<const double *const> xs,
              const rt::Columns<double> &out, std::size_t n) {
     // Nothing here touches Python, so the GIL goes -- which is what lets
     // another thread call in while a long batch runs.
@@ -627,7 +558,7 @@ private:
   // One function: the lane holds it compressed by colour, and the colouring
   // says which (colour, row) column owns a given (i, j).
   [[nodiscard]] pyb::tuple hessian_from_lane(const Point &at) {
-    Lane &l = lane(Want::Hessian);
+    const auto l = lane(Want::Hessian);
     const std::size_t n = arity();
     Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
             at.size()};
@@ -643,7 +574,7 @@ private:
 
     Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at), n * n,
                 at.size()};
-    scatter_hessian(l.graph->coloring(), compressed.rows(), dense.at(0), n,
+    scatter_hessian(l->graph->coloring(), compressed.rows(), dense.at(0), n,
                     at.size());
     return pyb::make_tuple(value_of(f, cell), std::move(g).array(),
                            std::move(dense).array());
@@ -781,12 +712,12 @@ private:
 
   // A float at one point, an array across a batch: only the first can skip the
   // allocation, and every derivative call serves both.
-  [[nodiscard]] std::optional<Block> values_block(const Lane &l,
+  [[nodiscard]] std::optional<Block> values_block(const Compiled &c,
                                                   const Point &at) {
     return scalar(at) ? std::nullopt
                       : std::optional<Block>{
                             std::in_place, shape_of({ssize(outputs())}, at),
-                            count(l, &rt::OutputSpans::values), at.size()};
+                            count(c, &rt::OutputSpans::values), at.size()};
   }
 
   [[nodiscard]] static pyb::object value_of(std::optional<Block> &f,
@@ -827,21 +758,21 @@ public:
     if (want_ == PyEquation::Want::Hessian && eq_->outputs() != 1) {
       fail_with(errc::wrong_column_count);
     }
-    const PyEquation::Lane &l = eq_->lane(want_);
+    const auto l = eq_->lane(want_);
     const auto outputs = ssize(eq_->outputs());
     const auto n = eq_->arity();
     if (want_ != PyEquation::Want::Gradient) {
       f_.emplace(eq_->shape_of({outputs}, at_),
-                 PyEquation::count(l, &rt::OutputSpans::values), at_.size());
+                 PyEquation::count(*l, &rt::OutputSpans::values), at_.size());
     }
     if (want_ != PyEquation::Want::Value) {
-      partials_.emplace(PyEquation::count(l, &rt::OutputSpans::jacobian),
+      partials_.emplace(PyEquation::count(*l, &rt::OutputSpans::jacobian),
                         at_.size());
       g_.emplace(eq_->shape_of({outputs, ssize(n)}, at_), eq_->outputs() * n,
                  at_.size());
     }
     if (want_ == PyEquation::Want::Hessian) {
-      compressed_.emplace(PyEquation::count(l, &rt::OutputSpans::hessian),
+      compressed_.emplace(PyEquation::count(*l, &rt::OutputSpans::hessian),
                           at_.size());
       h_.emplace(eq_->shape_of({outputs, ssize(n), ssize(n)}, at_), n * n,
                  at_.size());
@@ -852,7 +783,7 @@ public:
   // and a call holding the old one interprets on with every answer still
   // right.
   void operator()() {
-    PyEquation::Lane &l = eq_->lane(want_);
+    const auto l = eq_->lane(want_);
     eq_->run(
         want_, at_,
         {.values = f_ ? f_->rows() : std::span<double *const>{},
@@ -863,7 +794,7 @@ public:
       eq_->scatter_jacobian(*partials_, *g_, at_.size());
     }
     if (h_) {
-      scatter(l);
+      scatter(*l);
     }
   }
 
@@ -881,7 +812,7 @@ public:
   }
 
 private:
-  void scatter(const PyEquation::Lane &l) {
+  void scatter(const PyEquation::Compiled &l) {
     scatter_hessian(l.graph->coloring(), compressed_->rows(), h_->at(0),
                     eq_->arity(), at_.size());
   }

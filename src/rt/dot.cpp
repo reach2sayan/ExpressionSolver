@@ -34,8 +34,9 @@ boost::dynamic_properties properties(const Adjacency &adj,
   dp.property("node_id", boost::get(boost::vertex_index, adj));
   dp.property("label",
               vertex_map([nodes](NodeId v) { return nodes[v].label; }));
-  dp.property("shape",
-              vertex_map([nodes](NodeId v) { return nodes[v].shape; }));
+  dp.property("shape", vertex_map([nodes](NodeId v) {
+                return std::string{nodes[v].shape};
+              }));
   dp.property("style", vertex_map([nodes](NodeId v) {
                 return std::string(nodes[v].live ? "solid" : "dashed");
               }));

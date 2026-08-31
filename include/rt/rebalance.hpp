@@ -4,6 +4,8 @@
 #include "rt/expressions.hpp"
 #include "rt/opcode.hpp"
 
+#include <boost/container/small_vector.hpp>
+
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -34,17 +36,17 @@ namespace detail {
 // A maximal single-use Add spine's terms, left to right: the blocked sum has to
 // reassociate the same sequence, not a different one.
 template <impl::Numeric T>
-[[nodiscard]] std::vector<NodeId>
-spine_terms(const Builder<T> &b, NodeId top,
-            const std::vector<std::uint32_t> &uses,
-            const std::vector<bool> &root) {
+[[nodiscard]] auto spine_terms(const Builder<T> &b, NodeId top,
+                               std::span<const std::uint32_t> uses,
+                               const std::vector<bool> &root) {
   // `root` is a flag, not an extra use: a root nothing else reads would then
   // look single-use and be swallowed as spine interior.
   const auto links = [&](NodeId u) {
     return b[u].op == OpCode::Add && uses[u] == 1 && !root[u];
   };
-  std::vector<NodeId> terms;
-  std::stack stack{std::vector{top}};
+  boost::container::small_vector<NodeId, 64> terms;
+  std::stack<NodeId, boost::container::small_vector<NodeId, 32>> stack;
+  stack.push(top);
   while (!stack.empty()) {
     const NodeId u = stack.top();
     stack.pop();
@@ -63,6 +65,8 @@ spine_terms(const Builder<T> &b, NodeId top,
 template <impl::Numeric T>
 [[nodiscard]] constexpr NodeId
 blocked_sum(Builder<T> &b, std::span<const NodeId> terms, std::size_t blocks) {
+  // Inline up to the default block count, so a round never touches the heap.
+  using Partials = boost::container::small_vector<RTExpression<T>, 16>;
   const auto as_expr = [&b](NodeId t) { return RTExpression<T>{b, t}; };
   auto partials =
       std::views::iota(0uz, blocks) | std::views::transform([&](std::size_t j) {
@@ -73,7 +77,7 @@ blocked_sum(Builder<T> &b, std::span<const NodeId> terms, std::size_t blocks) {
       }) |
       std::views::filter([](const auto &o) { return o.has_value(); }) |
       std::views::transform([](const auto &o) { return *o; }) |
-      impl::to<std::vector<RTExpression<T>>>();
+      impl::to<Partials>();
 
   // Pairwise: the combine is itself a chain.
   while (partials.size() > 1) {
@@ -81,7 +85,7 @@ blocked_sum(Builder<T> &b, std::span<const NodeId> terms, std::size_t blocks) {
         partials | std::views::chunk(2) | std::views::transform([](auto pair) {
           return std::ranges::fold_left_first(pair, std::plus<>{}).value();
         }) |
-        impl::to<std::vector<RTExpression<T>>>();
+        impl::to<Partials>();
   }
   return partials.front().id(b);
 }

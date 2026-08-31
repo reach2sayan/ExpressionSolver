@@ -174,8 +174,9 @@ std::vector<std::byte> Container::pack(std::string_view magic,
   FileHeader stamped = h;
   stamped.magic = magic;
   stamped.payload_crc = Container::checksum(payload);
-  std::vector<std::byte> file(Container::header_bytes);
+  std::vector<std::byte> file;
   file.reserve(Container::header_bytes + payload.size());
+  file.resize(Container::header_bytes);
   Container::put_header(stamped, file);
   file.insert(file.end(), payload.begin(), payload.end());
   return file;

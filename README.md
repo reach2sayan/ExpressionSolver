@@ -535,12 +535,14 @@ can be served the same point at once, and one that arrives while another is
 writing sweeps for itself rather than waiting. The object is copied in, so it
 may be a temporary.
 
-To supply your own, model `ddx::rt::CValueCache`: hand out a read lease and a
-write lease per `Want`, each lending the point, the output values and the tape
-of one remembered call. `ddx::rt::Extent` says what a slot has to hold and which
-frozen graph it holds it for; two calls belong to the same entry only where
-their whole `Extent` matches, so a re-freeze or a grown arena parts them without
-the cache having to know why.
+To supply your own, model `ddx::rt::CValueCache`: answer `active()`, and hand out
+a read lease and a write lease per `Want`, each lending the point, the output
+values and the tape of one remembered call. `active()` is asked before anything
+else and is how a cache says no call of yours can hit -- a `false` there costs
+the equation nothing at all, not even reading the point. `ddx::rt::Extent` says
+what a slot has to hold and which frozen graph it holds it for; two calls belong
+to the same entry only where their whole `Extent` matches, so a re-freeze or a
+grown arena parts them without the cache having to know why.
 
 ## Batches
 

@@ -27,6 +27,54 @@
 // found by argument-dependent lookup on a type that happens to live nearby.
 namespace ddx::rt {
 
+#ifdef DDX_HAS_JIT
+// One lane's kernel as a file carries it.
+template <impl::Numeric T>
+[[nodiscard]] Object object_of(Want want, const Graph<T> &graph,
+                               const jit::Kernel &kernel,
+                               const jit::Compiler &compiler,
+                               const jit::Codegen &codegen) {
+  const auto code = kernel.object();
+  return {.want = want,
+          .symbol = std::string{kernel.symbol()},
+          .host = std::string{compiler.host_identity()},
+          .digest = digest(graph),
+          .codegen = codegen,
+          .code = {code.begin(), code.end()}};
+}
+
+// What a file gave this lane back.  A miss and a refused link are the same
+// answer: an empty kernel, and a compile still to do.
+struct Adopted {
+  jit::Kernel kernel;
+  jit::Level level = jit::Level::O0;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return static_cast<bool>(kernel);
+  }
+};
+
+// The shape is taken from the graph just frozen, never from the file: a forged
+// entry may supply code and a symbol but cannot claim a column count.
+template <impl::Numeric T>
+[[nodiscard]] Adopted adopt_stored(std::span<const Object> objects, Want want,
+                                   const Graph<T> &graph,
+                                   jit::Compiler &compiler,
+                                   const jit::Codegen &codegen) {
+  const Object *const have = find_object(objects, want, digest(graph),
+                                         compiler.host_identity(), codegen);
+  if (have == nullptr) {
+    return {};
+  }
+  auto adopted =
+      compiler.adopt(have->code, have->symbol, jit::KernelShape::of(graph));
+  if (!adopted) {
+    return {};
+  }
+  return {std::move(*adopted), have->codegen.codegen_level};
+}
+#endif
+
 namespace detail {
 
 struct SaveFn;

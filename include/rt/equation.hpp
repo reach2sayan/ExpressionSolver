@@ -10,6 +10,7 @@
 #include "rt/expressions.hpp"
 #include "rt/graph.hpp"
 #include "rt/interpret.hpp"
+#include "rt/lanes.hpp"
 #include "rt/rebalance.hpp"
 #include "symbolic/equation.hpp"
 #include "util/config.hpp"
@@ -377,9 +378,7 @@ public:
     // Choosing a backend starts the build, so it overlaps whatever the caller
     // does before their first call.
     if (opt.backend != jit::Backend::Interpret && !poisoned()) {
-      Lane &lane = lane_for(Want::Jacobian);
-      const std::unique_lock fill{lane.mutex};
-      prepare(lane, Want::Jacobian);
+      (void)snapshot(Want::Jacobian);
     }
     return *this;
   }
@@ -421,12 +420,8 @@ public:
       return false;
     }
     (void)snapshot(Want::Jacobian); // launches it, if nothing has yet
-    {
-      const Lane &lane = lane_for(Want::Jacobian);
-      const std::shared_lock read{lane.mutex};
-      if (const auto &first = lane.rungs.front(); first.pending.valid()) {
-        first.pending.wait();
-      }
+    if (const auto first = lane_for(Want::Jacobian).pending(); first.valid()) {
+      first.wait();
     }
     return static_cast<bool>(snapshot(Want::Jacobian)->kernel);
   }
@@ -443,11 +438,12 @@ public:
       return std::nullopt;
     }
     const Lane &lane = lane_for(Want::Jacobian);
-    const unsigned asked = lane.asked.load(std::memory_order_relaxed);
-    return asked >= 2 ? std::nullopt : std::optional{Warmup {
-      lane.points.load(std::memory_order_relaxed),
-      rung_at(asked)
-    }};
+    const unsigned asked = lane.asked();
+    return asked >= Lane::ladder()
+               ? std::nullopt
+               : std::optional{Warmup{lane.points(),
+                                      Lane::rung_at(asked,
+                                                    effective_options())}};
   }
 #endif
 
@@ -702,34 +698,13 @@ private:
     }
     std::vector<rt::Object> out;
     for (const auto [want, lane] : std::views::zip(rt::want_values, *lanes_)) {
-      const std::shared_lock read{lane.mutex};
-      if (!lane.ready || !lane.ready->kernel ||
-          lane.ready->kernel.object().empty()) {
-        continue;
+      if (auto kept = lane.object(want, setting())) {
+        out.push_back(*std::move(kept));
       }
-      const auto code = lane.ready->kernel.object();
-      out.push_back({.want = want,
-                     .symbol = std::string{lane.ready->kernel.symbol()},
-                     .host = std::string{c->host_identity()},
-                     .digest = rt::digest(*lane.ready->graph),
-                     .codegen = effective_options().codegen,
-                     .code = {
-                       code.begin(),
-                       code.end()
-                     }});
     }
     return out;
   }
 
-  [[nodiscard]] const rt::Object *stored(Want want,
-                                         const rt::Graph<T> &g) const {
-    auto *const c = compiler();
-    if (c == nullptr || objects_.empty()) {
-      return nullptr;
-    }
-    return rt::find_object(objects_, want, rt::digest(g), c->host_identity(),
-                           effective_options().codegen);
-  }
 #endif
 
   // The roots as well as the digest: two equations over one arena share every
@@ -986,331 +961,81 @@ private:
     return out;
   }
 
-  // Published, never written: a kernel arrives as a *new* Compiled.
-  struct Compiled {
-    // Shared, so the graph outlives an Equation that went away mid-compile.
-    std::shared_ptr<const rt::Graph<T>> graph;
-#ifdef DDX_HAS_JIT
-    // Not what the sweep walks: spines are blocked for the kernel, where the
-    // chain is latency, and left alone for the sweep, where the same rewrite
-    // costs tape locality.  Aliases `graph` where they agree.
-    std::shared_ptr<const rt::Graph<T>> compile_graph{};
-    jit::Kernel kernel{};
-    // Rungs share one pool and need not land in the order they were asked for,
-    // so this is what refuses a late one.
-    jit::Level level = jit::Level::O0;
-
-    // The same graphs under a kernel that just landed.
-    [[nodiscard]] std::shared_ptr<const Compiled> with(jit::Kernel k,
-                                                       jit::Level l) const {
-      return std::make_shared<const Compiled>(
-          Compiled{.graph = graph,
-                   .compile_graph = compile_graph,
-                   .kernel = std::move(k),
-                   .level = l});
-    }
-#endif
-  };
-
-#ifdef DDX_HAS_JIT
-  // `level` is also the rank: a higher rung may replace a lower one, never the
-  // other way about.
-  struct Rung {
-    std::shared_future<jit::result<jit::Kernel>> pending; // set once, then read
-    jit::Level level = jit::Level::O0;
-  };
-
-  // One rung at `level`, the options otherwise the caller's.
-  [[nodiscard]] static Rung rung(jit::Compiler &c,
-                                 const std::shared_ptr<const rt::Graph<T>> &g,
-                                 jit::Options opt, jit::Level level) {
-    opt.codegen.codegen_level = level;
-    return {c.compile_async(g, opt), level};
-  }
-#endif
-
-  // One shape of graph, filled once and never invalidated
-  struct Lane {
-    mutable std::shared_mutex mutex;
-    std::shared_ptr<const Compiled> ready;
-#ifdef DDX_HAS_JIT
-    // Submission order, so rungs[0] answers soonest.
-    std::array<Rung, 2> rungs;
-    // Adapt's counter, and how many rungs it has already bought.  Outside the
-    // mutex because every batch call touches it and only a crossing needs the
-    // write lock; relaxed because the count orders nothing -- climb() re-reads
-    // both under the lock, which is what makes the launch happen once.  At 2
-    // there is nothing left to earn and count() stops touching the line.
-    mutable std::atomic<std::size_t> points{0};
-    mutable std::atomic<unsigned> asked{0};
-#endif
-  };
-
-  // One lane per Want, in its order.
+  using Compiled = rt::detail::Compiled<T>;
+  using Lane = rt::detail::Lane<T, rt::detail::Guarded, 2>;
   using Lanes = std::array<Lane, rt::want_count>;
 
   [[nodiscard]] Lane &lane_for(Want want) const {
     return (*lanes_)[std::to_underlying(want)];
   }
 
-  // Ownership, not a reference: a reader holds its share for the whole call, so
-  // publishing cannot pull the graph out from under a dispatch() in flight.
-  //
-  // `n` is the batch about to be run and is what Adapt counts; an observer asks
-  // for the lane without buying anything, hence the default.
-  [[nodiscard]] std::shared_ptr<const Compiled>
-  snapshot(Want want, std::size_t n = 0) const {
-    Lane &lane = lane_for(want);
-    const bool earned = count(lane, n);
-    {
-      const std::shared_lock read{lane.mutex};
-      if (lane.ready && !earned && !settling(lane)) {
-        return lane.ready;
-      }
-    }
-    const std::unique_lock fill{lane.mutex}; // another thread may have won
-    if (!lane.ready) {
-      prepare(lane, want);
-    }
-    // No call waits for a compile: until one lands the graph is swept, and the
-    // kernel replaces the sweep the moment it arrives.
-    if (arrived(lane)) {
-      adopt(lane);
-    }
-    climb(lane);
-    return lane.ready;
-  }
-
-  // Charge the lane for the batch and say whether that bought a rung.  False
-  // for everything but Adapt, and false once both rungs are spoken for, so a
-  // settled lane never writes to the counter at all.
-  [[nodiscard]] bool count([[maybe_unused]] const Lane &lane,
-                           [[maybe_unused]] std::size_t n) const {
+  // What a lane needs of the equation.  No compiler is a lane that will never
+  // compile: a poisoned equation and an interpreting backend both arrive here
+  // as one, and so does a host with no JIT.
+  [[nodiscard]] rt::detail::Setting setting() const {
+    rt::detail::Setting out;
 #ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
-      if (n == 0 || bad_ || options_.backend != jit::Backend::Adapt) {
-        return false;
+      out.options = effective_options();
+      out.objects = objects_;
+      if (!bad_ && options_.backend != jit::Backend::Interpret) {
+        out.compiler = compiler();
       }
-      const unsigned asked = lane.asked.load(std::memory_order_relaxed);
-      if (asked >= 2) {
-        return false;
-      }
-      return lane.points.fetch_add(n, std::memory_order_relaxed) + n >=
-             rung_at(asked);
     }
 #endif
-    return false;
+    return out;
   }
 
-#ifdef DDX_HAS_JIT
-  // Where the next rung is bought, counting from nothing: hot_points is the
-  // batch the *cheap* rung has to earn, so it is added to what came before.
-  // Saturating, because a caller spells "never" as a huge threshold.
-  [[nodiscard]] std::size_t rung_at(unsigned asked) const noexcept {
-    constexpr auto ceiling = std::numeric_limits<std::size_t>::max();
-    const std::size_t warm = options_.warm_points;
-    const std::size_t hot = options_.hot_points;
-    return asked == 0 ? warm : (warm > ceiling - hot ? ceiling : warm + hot);
+  [[nodiscard]] std::shared_ptr<const Compiled> snapshot(Want want,
+                                                         std::size_t n = 0) const {
+    return lane_for(want).snapshot(want, n, setting(),
+                                   [&] { return frozen_for(want); });
   }
-#endif
 
-  // Ask for the rung the counter has bought.  Under the write lock and
-  // idempotent: two threads may both arrive owing one, and the second re-reads
-  // an `asked` the first has already moved.
-  void climb([[maybe_unused]] Lane &lane) const {
-#ifdef DDX_HAS_JIT
-    if constexpr (std::same_as<T, double>) {
-      if (bad_ || options_.backend != jit::Backend::Adapt) {
-        return;
-      }
-      const unsigned asked = lane.asked.load(std::memory_order_relaxed);
-      if (asked >= 2 ||
-          lane.points.load(std::memory_order_relaxed) < rung_at(asked)) {
-        return;
-      }
-      auto *const c = compiler();
-      if (c == nullptr) {
-        // No ladder on this host, and the sweep answers everything: stop
-        // counting rather than take the write lock on every call from here on.
-        lane.asked.store(2, std::memory_order_relaxed);
-        return;
-      }
-      const jit::Options top = effective_options();
-      if (asked == 0 && top.codegen.codegen_level > jit::Level::O0) {
-        lane.rungs[0] = rung(*c, lane.ready->graph, top, jit::Level::O0);
-        lane.asked.store(1, std::memory_order_relaxed);
-        return;
-      }
-      // Either the top rung over a cheap one, or -- at codegen 0 -- the only
-      // rung there is.
-      lane.rungs[asked == 0 ? 0 : 1] =
-          rung(*c, lane.ready->graph, top, top.codegen.codegen_level);
-      lane.asked.store(2, std::memory_order_relaxed);
+  // What a freeze asks for.  `ids` and `partials` differ between the swept graph
+  // and the kernel's rebalanced one; the rest cannot be rebalanced.
+  struct Frozen {
+    const Equation &eq;
+    std::span<const rt::NodeId> ids;
+    const rt::Jacobian &partials;
+
+    [[nodiscard]] std::span<const rt::NodeId> roots() const { return ids; }
+    [[nodiscard]] const rt::Jacobian &jacobian() const { return partials; }
+    [[nodiscard]] const rt::Hessian &hessian() const {
+      return eq.hessians_.front();
     }
-#endif
-  }
-
-  // Whether the lane owes the reader anything: only ever a kernel to publish.
-  [[nodiscard]] bool settling(const Lane &lane) const { return arrived(lane); }
-
-  // Republish rather than write into what a reader holds; a rung that lost the
-  // race is dropped rather than allowed to demote a live kernel.
-  void adopt([[maybe_unused]] Lane &lane) const {
-#ifdef DDX_HAS_JIT
-    jit::Kernel best;
-    jit::Level level = jit::Level::O0;
-    for (Rung &rung : lane.rungs) {
-      if (!ready(rung)) {
-        continue;
-      }
-      // A refused compile leaves the kernel empty, and the sweep stays.
-      const auto &landed = rung.pending.get();
-      if (landed && (!best || rung.level > level)) {
-        best = *landed;
-        level = rung.level;
-      }
-      rung.pending = {};
+    [[nodiscard]] const rt::HessianVector &hessian_vector() const {
+      return eq.hvp_;
     }
-    if (best && (!lane.ready->kernel || level > lane.ready->level)) {
-      lane.ready = lane.ready->with(std::move(best), level);
+    [[nodiscard]] const rt::VectorJacobian &vector_jacobian() const {
+      return eq.vjp_;
     }
-#endif
-  }
+    [[nodiscard]] const rt::Tangent &tangent() const { return eq.jvp_; }
+  };
 
-#ifdef DDX_HAS_JIT
-  // Polling a shared_future from many threads is well-defined, and a rung is
-  // written once under the write lock.
-  [[nodiscard]] static bool ready(const Rung &rung) {
-    using namespace std::chrono_literals;
-    return rung.pending.valid() &&
-           rung.pending.wait_for(0s) == std::future_status::ready;
-  }
-#endif
-
-  // Whether any rung has finished but not yet been collected.
-  [[nodiscard]] static bool arrived([[maybe_unused]] const Lane &lane) {
-#ifdef DDX_HAS_JIT
-    return std::ranges::any_of(lane.rungs, ready);
-#else
-    return false;
-#endif
-  }
-
-  // Freeze the lane's graph and, under a compiling backend, put the compile in
-  // flight.  Every derivative was swept in the constructor, so this only reads
-  // the arena.  Under the lane's write lock.
-  //
-  // One step deliberately: split, a lane could be `ready` having compiled
-  // nothing, and the next caller would interpret forever with every answer
-  // still right.
-  void prepare(Lane &lane, Want want) const {
+  // The graphs a lane computes.  A poisoned equation freezes an empty one:
+  // every accessor short-circuits before it, and dispatch() refuses on `bad_`.
+  [[nodiscard]] Compiled frozen_for(Want want) const {
     if (bad_) {
-      lane.ready = std::make_shared<const Compiled>(
-          Compiled{.graph = std::make_shared<const rt::Graph<T>>()});
-      return;
+      return {.graph = std::make_shared<const rt::Graph<T>>()};
     }
-    rt::GraphBuilder<T> gb{*arena_};
-    // The gradient lane differentiates the roots without computing them: the
-    // value is not an output, so the nodes only it needs are not live.
-    if (want == Want::Gradient) {
-      gb.roots_from(roots_);
-    } else {
-      gb.values_from(roots_);
-    }
-    // Vjp replaces the Jacobian block rather than adding to it: n columns
-    // instead of the pattern's nonzeros is the whole point of asking.
-    if (want == Want::Vjp) {
-      gb.vector_jacobian_from(vjp_);
-    } else if (want == Want::Jvp) {
-      gb.tangent_from(jvp_);
-    } else {
-      if (want != Want::Value) {
-        gb.jacobian_from(derivative_);
-      }
-      if (want == Want::Hessian) {
-        gb.hessian_from(hessians_.front());
-      }
-      if (want == Want::Hvp) {
-        gb.hessian_vector_from(hvp_);
-      }
-    }
-    auto swept = std::make_shared<const rt::Graph<T>>(gb.finish(contracts()));
-#ifdef DDX_HAS_JIT
+    Frozen from{*this, roots_, derivative_};
+    auto swept = std::make_shared<const rt::Graph<T>>(
+        rt::freeze_for(want, *arena_, from, contracts()));
     auto compiled = swept;
+#ifdef DDX_HAS_JIT
     if constexpr (std::same_as<T, double>) {
       if (rebalanceable(want) && !compile_roots_.empty()) {
-        rt::GraphBuilder<T> cb{*arena_};
-        if (want == Want::Gradient) {
-          cb.roots_from(compile_roots_);
-        } else {
-          cb.values_from(compile_roots_);
-        }
-        if (want != Want::Value) {
-          cb.jacobian_from(compile_derivative_);
-        }
-        compiled = std::make_shared<const rt::Graph<T>>(cb.finish(contracts()));
-      }
-    }
-    lane.ready = std::make_shared<const Compiled>(
-        Compiled{.graph = swept, .compile_graph = compiled});
-#else
-    lane.ready = std::make_shared<const Compiled>(Compiled{.graph = swept});
-#endif
-#ifdef DDX_HAS_JIT
-    if constexpr (std::same_as<T, double>) {
-      // A compiler this host cannot give is not an error a caller handles --
-      // run() falls back to interpret().
-      auto *const c =
-          options_.backend != jit::Backend::Interpret ? compiler() : nullptr;
-      if (c == nullptr) {
-        return;
-      }
-      // A rung already climbed: published at its own level, with the ladder
-      // launched as always and adopt()'s rank dropping what cannot beat it.
-      if (const rt::Object *const have =
-              stored(want, *lane.ready->compile_graph)) {
-        // The shape comes from the graph just frozen, never the file: a
-        // forged entry supplies code and a symbol, never a column count.
-        if (auto adopted =
-                c->adopt(have->code, have->symbol,
-                         jit::KernelShape::of(*lane.ready->compile_graph))) {
-          const jit::Level level = have->codegen.codegen_level;
-          lane.ready = lane.ready->with(std::move(*adopted), level);
-          // Nothing left to climb to, so nothing is launched and, under Adapt,
-          // nothing more is counted.
-          if (level >= effective_options().codegen.codegen_level) {
-            lane.asked.store(2, std::memory_order_relaxed);
-            return;
-          }
-          // A cheap rung came off the file for nothing, so Adapt has only the
-          // top one left to earn.
-          lane.asked.store(1, std::memory_order_relaxed);
-        }
-        // A refused link is a miss, never a failure: the compile below stands.
-      }
-      // Adapt buys its rungs in climb(); Compile asks for both outright.
-      if (options_.backend == jit::Backend::Compile) {
-        launch(lane, *c);
+        Frozen rebalanced{*this, compile_roots_, compile_derivative_};
+        compiled = std::make_shared<const rt::Graph<T>>(
+            rt::freeze_for(want, *arena_, rebalanced, contracts()));
       }
     }
 #endif
+    return {.graph = std::move(swept), .compile_graph = std::move(compiled)};
   }
 
 #ifdef DDX_HAS_JIT
-  // Cheapest rung first, so it is also first in the pool's queue: codegen 0
-  // lands sooner for a slower kernel, and every level agrees to the bit.  At
-  // codegen 0 there is nothing cheaper underneath, so there is one rung.
-  void launch(Lane &lane, jit::Compiler &c) const {
-    const jit::Options top = effective_options();
-    std::size_t next = 0;
-    if (top.codegen.codegen_level > jit::Level::O0) {
-      lane.rungs[next++] =
-          rung(c, lane.ready->compile_graph, top, jit::Level::O0);
-    }
-    lane.rungs[next] =
-        rung(c, lane.ready->compile_graph, top, top.codegen.codegen_level);
-  }
-
   // How wide to emit, from the batch the caller stated: a wide kernel computes
   // `w` points to answer for one, so a short batch emits scalar -- the same
   // threshold the sweep uses.  A stated `lanes` is honoured.
