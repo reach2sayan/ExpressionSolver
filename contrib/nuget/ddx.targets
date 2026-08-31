@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Imported into every vcxproj that references the ddx package.  The package
+     carries x64 binaries in the two CRT flavours; every configuration that is
+     not Debug links Release, which is what a RelWithDebInfo-style config wants
+     and what a mismatched /MDd build would fail loudly on anyway. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <DdxCfg>Release</DdxCfg>
+    <DdxCfg Condition="'$(Configuration)' == 'Debug'">Debug</DdxCfg>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard Condition="'%(LanguageStandard)' == '' or '%(LanguageStandard)' == 'Default'">stdcpplatest</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(MSBuildThisFileDirectory)lib\x64\$(DdxCfg)\ddx.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <Target Name="DdxCheckPlatform" BeforeTargets="ClCompile">
+    <Error Condition="'$(Platform)' != 'x64'"
+           Text="the ddx package carries x64 binaries only; the active platform is '$(Platform)'" />
+  </Target>
+  <Target Name="DdxCopyDll" AfterTargets="Build" Condition="'$(OutDir)' != ''">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\x64\$(DdxCfg)\ddx.dll"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

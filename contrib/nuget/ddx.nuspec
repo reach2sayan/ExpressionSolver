@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>ddx</id>
+    <version>$version$</version>
+    <authors>Sayan</authors>
+    <license type="expression">BSL-1.0</license>
+    <projectUrl>https://github.com/reach2sayan/ddx</projectUrl>
+    <repository type="git" url="https://github.com/reach2sayan/ddx.git" />
+    <readme>README.md</readme>
+    <description>Symbolic and automatic differentiation for C++23 over a runtime
+expression graph. Native x64 package: headers plus ddx.dll/ddx.lib in Release
+and Debug, with the Boost header subset the public headers reach bundled in
+(Boost Software License, same as ddx). Consumers compile with /std:c++latest;
+the binaries require AVX2. The LLVM JIT backend is not part of the Windows
+build — expressions are interpreted, as ddx.has_jit reports in the Python
+wheels.</description>
+    <tags>native automatic-differentiation autodiff symbolic-differentiation derivatives gradient jacobian hessian math cpp cpp23</tags>
+  </metadata>
+  <files>
+    <file src="build\native\**" target="build\native" />
+    <file src="README.md" target="" />
+    <file src="LICENSE.txt" target="" />
+  </files>
+</package>

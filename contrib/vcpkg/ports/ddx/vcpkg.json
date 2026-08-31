@@ -1,0 +1,33 @@
+{
+  "name": "ddx",
+  "version": "1.2.2",
+  "description": "Symbolic and automatic differentiation for C++23 over a runtime expression graph",
+  "homepage": "https://github.com/reach2sayan/ddx",
+  "license": "BSL-1.0",
+  "dependencies": [
+    "boost-assert",
+    "boost-container",
+    "boost-crc",
+    "boost-describe",
+    "boost-dynamic-bitset",
+    "boost-endian",
+    "boost-graph",
+    "boost-hash2",
+    "boost-integer",
+    "boost-mp11",
+    "boost-parser",
+    "boost-property-map",
+    "boost-range",
+    "boost-stl-interfaces",
+    "boost-throw-exception",
+    "boost-unordered",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

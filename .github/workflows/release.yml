@@ -1,7 +1,10 @@
-# Wheels and an sdist, attached to a GitHub Release.  A tag `vX.Y.Z` builds and
-# publishes -- pushed by hand, or cut on Mondays by weekly-release.yml; a
-# manual run on a branch builds the same artifacts and publishes nothing,
-# which is how a change to the pipeline is tried before a version rides on it.
+# Wheels, an sdist and a native NuGet package, attached to a GitHub Release.
+# A tag `vX.Y.Z` builds and publishes -- pushed by hand, or cut on Mondays by
+# weekly-release.yml; a manual run on a branch builds the same artifacts and
+# publishes nothing, which is how a change to the pipeline is tried before a
+# version rides on it.  The NuGet package also goes to nuget.org when the
+# NUGET_API_KEY secret exists; without it the .nupkg rides the GitHub Release
+# alone.
 #
 # Linux wheels carry the JIT: LLVM is built as archives inside the manylinux
 # container by scripts/build_llvm.py, once, and cached under .deps -- the
@@ -94,9 +97,61 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
+  # The native package for MSVC consumers: headers plus ddx.dll/ddx.lib, x64,
+  # Release and Debug from one configure of the multi-config generator.  STL
+  # types cross the DLL boundary, so a /MDd consumer needs the Debug flavour.
+  nuget:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -B build -DDDX_BUILD_TESTS=OFF -DDDX_BUILD_BENCHMARKS=OFF
+
+      - name: Build and install both configs
+        run: |
+          cmake --build build --config Release
+          cmake --build build --config Debug
+          cmake --install build --config Release --prefix prefix-release
+          cmake --install build --config Debug --prefix prefix-debug
+
+      - name: Pack
+        run: |
+          python scripts/pack_nuget.py --release prefix-release --debug prefix-debug --stage stage
+          nuget pack contrib/nuget/ddx.nuspec -Version ${{ needs.version.outputs.version }} -BasePath stage -OutputDirectory nupkg -NonInteractive
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: nuget
+          path: nupkg/*.nupkg
+
+  # The overlay port under contrib/vcpkg pins a tag and its archive hash; each
+  # release rewrites the pin on main, pushed with the same deploy key the
+  # weekly bump uses (main requires PRs; deploy keys bypass that ruleset).
+  vcpkg-port:
+    if: github.ref_type == 'tag'
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+      - run: |
+          version="${{ needs.version.outputs.version }}"
+          sha=$(curl -sfL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/v$version.tar.gz" | sha512sum | cut -d' ' -f1)
+          sed -i -E "s/\"version\": \"[0-9.]+\"/\"version\": \"$version\"/" contrib/vcpkg/ports/ddx/vcpkg.json
+          sed -i -E "s/SHA512 [0-9a-f]+/SHA512 $sha/" contrib/vcpkg/ports/ddx/portfile.cmake
+          git diff --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "vcpkg port v$version"
+          git push origin HEAD:main
+
   release:
     if: github.ref_type == 'tag'
-    needs: [version, wheels, sdist]
+    needs: [version, wheels, sdist, nuget]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -110,3 +165,13 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
+
+      - name: Publish to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [[ -z "$NUGET_API_KEY" ]]; then
+            echo "::warning::NUGET_API_KEY is not set; the .nupkg is on the GitHub release only"
+            exit 0
+          fi
+          dotnet nuget push dist/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json

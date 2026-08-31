@@ -107,12 +107,11 @@ if (NOT PROJECT_IS_TOP_LEVEL)
     return ()
 endif ()
 
-add_executable(main src/main.cpp)
-target_link_libraries(main PRIVATE ddx)
-ddx_target_flags(main)
-
 enable_testing()
-add_subdirectory(tests)
+option(DDX_BUILD_TESTS "Build GoogleTest tests" ON)
+if (DDX_BUILD_TESTS)
+    add_subdirectory(tests)
+endif ()
 
 # After enable_testing(): python/ registers a pytest run with it.
 option(DDX_BUILD_PYTHON "Build the pybind11 extension module" OFF)

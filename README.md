@@ -92,6 +92,17 @@ add_subdirectory(ddx)
 target_link_libraries(my_app PRIVATE ddx::rt)
 ```
 
+Or from a package manager — both channels carry the interpreted library,
+without the JIT:
+
+- **vcpkg**: an overlay port lives in this repository —
+  `vcpkg install ddx --overlay-ports=<ddx checkout>/contrib/vcpkg/ports` —
+  then the `find_package` below. The port pins the latest release.
+- **NuGet**, for MSVC projects: the [`ddx`](https://www.nuget.org/packages/ddx)
+  package carries the headers and x64 Release and Debug binaries; referencing
+  it wires up the include path, the import library and the DLL copy. The
+  binaries require AVX2.
+
 Or against an installed or built copy:
 
 ```cmake
@@ -170,6 +181,7 @@ cmake --preset release_jit -DLLVM_DIR=/opt/llvm-20/lib/cmake/llvm
 |---|---|---|
 | `DDX_BUILD_JIT` | `OFF` | compile the LLVM backend into the library |
 | `DDX_BUILD_PYTHON` | `OFF` | build the pybind11 extension module |
+| `DDX_BUILD_TESTS` | `ON` | build the GoogleTest tests |
 | `DDX_BUILD_BENCHMARKS` | `ON` | build the benchmark targets |
 | `DDX_SANITIZE` | `off` | `thread`, `address` or `undefined` — instrument the build |
 | `DDX_INSTALL` | on if top-level | generate the install and `find_package` rules |
