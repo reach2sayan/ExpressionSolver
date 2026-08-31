@@ -36,7 +36,9 @@ private:
 public:
   constexpr Dual() noexcept = default;
   constexpr explicit Dual(T v, T d = T{}) noexcept : val_(v), deriv_(d) {}
-  constexpr Dual(CArithmetic auto s) noexcept : val_(T(s)), deriv_(T{}) {}
+  // deriv_ is left to its NSDMI: naming T{} here is one of the spellings
+  // MSVC's front end cannot lower once T is itself a Dual (see dual_div).
+  constexpr Dual(CArithmetic auto s) noexcept : val_(T(s)) {}
 
   constexpr Dual &operator++() noexcept {
     ++val_;
@@ -141,30 +143,36 @@ dual_mul(const Dual<T> &a, const ConstOperand<Dual<T>> auto &s) noexcept {
 }
 
 // Reciprocal form: one hardware division per nesting level instead of two.
+// V, not T, throughout the bodies below: MSVC's front end ICEs in lower-trees
+// on a local whose type is spelled as the bare template parameter once that
+// parameter is itself a Dual, and the alias is what it will lower.
 template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T> dual_div(const Dual<T> &a,
                                              const Dual<T> &b) noexcept {
+  using V = T;
   const auto &[av, ad] = a;
   const auto &[bv, bd] = b;
-  const T inv = T{1} / bv;
-  const T q = av * inv; // value = a / b
+  const V inv = V{1} / bv;
+  const V q = av * inv; // value = a / b
   return Dual<T>{q, (ad - q * bd) * inv};
 }
 
 template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T>
 dual_div(const Dual<T> &a, const ConstOperand<Dual<T>> auto &s) noexcept {
+  using V = T;
   const auto &[av, ad] = a; // s is a zero-derivative constant
-  const T inv = T{1} / T(s);
+  const V inv = V{1} / V(s);
   return Dual<T>{av * inv, ad * inv};
 }
 
 template <Numeric T>
 DDX_ALWAYS_INLINE constexpr Dual<T>
 dual_div(const ConstOperand<Dual<T>> auto &s, const Dual<T> &a) noexcept {
+  using V = T;
   const auto &[av, ad] = a; // s / a; inner kept T-on-left (wide-scalar-safe)
-  const T inv = T{1} / av;
-  const T q = T{s} * inv; // value = s / a
+  const V inv = V{1} / av;
+  const V q = V{s} * inv; // value = s / a
   return Dual<T>{q, -(q * ad) * inv};
 }
 
