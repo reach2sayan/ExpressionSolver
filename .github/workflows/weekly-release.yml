@@ -5,12 +5,11 @@
 # and a red main is never released: the three compiler workflows must have
 # passed on HEAD.  "Run workflow" is the same thing on demand.
 #
-# The bump is pushed with RELEASE_PAT, not the workflow's own token: main is
-# ruled "changes must be made through a pull request", and only the admin and
-# maintain roles bypass that, so the push has to act as a person who holds
-# one -- a fine-grained token over this repository with contents write.
-# Pushing as a person is also what lets the tag fire Release's tag trigger,
-# which a push made with the workflow's own token could not do.
+# The bump is pushed over SSH with the release-agent deploy key
+# (RELEASE_DEPLOY_KEY holds the private half): main is ruled "changes must be
+# made through a pull request", and deploy keys sit on that ruleset's bypass
+# list.  A deploy-key push also fires Release's tag trigger, which a push
+# made with the workflow's own token could not do.
 #
 # Minor and major bumps are written into project() by hand and tagged as
 # before; the next Monday finds HEAD already tagged and does nothing.
@@ -32,7 +31,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - name: Anything since the last tag?
         id: since
