@@ -19,11 +19,12 @@
 #include "jit/kernel.hpp"
 #include "rt/equation.hpp"
 
+#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/container/small_vector.hpp>
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -119,6 +120,9 @@ public:
   [[nodiscard]] const std::vector<std::string> &symbols() const {
     return arena_->symbols();
   }
+  // The Python spelling: a list over the keys Symbols already built, so an
+  // access costs increfs and never a PyUnicode.
+  [[nodiscard]] pyb::list symbols_list() const { return symbols_.listed(); }
 
   [[nodiscard]] pyb::object evaluate(const pyb::handle &x) {
     const Point at{x, symbols_};
@@ -129,7 +133,7 @@ public:
       return pyb::float_(f.value);
     }
     Block f{shape_of({ssize(outputs())}, at),
-            count(l, &rt::OutputSpans::values), at.size()};
+            count(*l, &rt::OutputSpans::values), at.size()};
     run(Want::Value, at, {.values = f.rows()});
     return std::move(f).array();
   }
@@ -137,11 +141,10 @@ public:
   [[nodiscard]] pyb::tuple jacobian(const pyb::handle &x) {
     const Point at{x, symbols_};
     const auto l = lane(Want::Jacobian);
-    Scratch cells{count(l, &rt::OutputSpans::jacobian), at.size()};
-    Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
-            outputs() * arity(), at.size()};
+    Scratch cells{count(*l, &rt::OutputSpans::jacobian), at.size()};
+    Dense g{shape_of({ssize(outputs()), ssize(arity())}, at), at.size()};
     Cell cell;
-    auto f = values_block(l, at);
+    auto f = values_block(*l, at);
     run(Want::Jacobian, at,
         {.values = f ? f->rows() : cell.rows(), .jacobian = cells.rows()});
     scatter_jacobian(cells, g, at.size());
@@ -152,9 +155,8 @@ public:
   [[nodiscard]] pyb::object gradient(const pyb::handle &x) {
     const Point at{x, symbols_};
     const auto l = lane(Want::Gradient);
-    Scratch cells{count(l, &rt::OutputSpans::jacobian), at.size()};
-    Block g{shape_of({ssize(outputs()), ssize(arity())}, at),
-            outputs() * arity(), at.size()};
+    Scratch cells{count(*l, &rt::OutputSpans::jacobian), at.size()};
+    Dense g{shape_of({ssize(outputs()), ssize(arity())}, at), at.size()};
     run(Want::Gradient, at, {.jacobian = cells.rows()});
     scatter_jacobian(cells, g, at.size());
     return std::move(g).array();
@@ -170,9 +172,9 @@ public:
     const Point dir{v, symbols_};
     const auto l = lane(Want::Jvp);
     Block out{shape_of({ssize(outputs())}, at),
-              count(l, &rt::OutputSpans::jacobian), at.size()};
+              count(*l, &rt::OutputSpans::jacobian), at.size()};
     Cell cell;
-    auto f = values_block(l, at);
+    auto f = values_block(*l, at);
     run_seeded(Want::Jvp, at, dir,
                {.values = f ? f->rows() : cell.rows(), .jacobian = out.rows()});
     return pyb::make_tuple(value_of(f, cell), std::move(out).array());
@@ -184,10 +186,10 @@ public:
     // nothing to key on.
     const Point dir{w, outputs()};
     const auto l = lane(Want::Vjp);
-    Block out{symbol_shape(at), count(l, &rt::OutputSpans::jacobian),
+    Block out{symbol_shape(at), count(*l, &rt::OutputSpans::jacobian),
               at.size()};
     Cell cell;
-    auto f = values_block(l, at);
+    auto f = values_block(*l, at);
     run_seeded(Want::Vjp, at, dir,
                {.values = f ? f->rows() : cell.rows(), .jacobian = out.rows()});
     return pyb::make_tuple(value_of(f, cell), std::move(out).array());
@@ -204,12 +206,11 @@ public:
     const auto l = lane(Want::Hvp);
     const std::size_t n = arity();
 
-    Scratch partials{count(l, &rt::OutputSpans::jacobian), at.size()};
-    Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
-            at.size()};
-    Block out{symbol_shape(at), count(l, &rt::OutputSpans::hessian), at.size()};
+    Scratch partials{count(*l, &rt::OutputSpans::jacobian), at.size()};
+    Dense g{shape_of({ssize(outputs()), ssize(n)}, at), at.size()};
+    Block out{symbol_shape(at), count(*l, &rt::OutputSpans::hessian), at.size()};
     Cell cell;
-    auto f = values_block(l, at);
+    auto f = values_block(*l, at);
     run_seeded(Want::Hvp, at, dir,
                {.values = f ? f->rows() : cell.rows(),
                 .jacobian = partials.rows(),
@@ -430,11 +431,11 @@ private:
     if (dir.size() != at.size()) {
       fail_with(errc::wrong_direction);
     }
-    std::vector<const double *> xs;
+    boost::container::small_vector<const double *, 64> xs;
     xs.reserve(at.columns().size() + dir.columns().size());
     std::ranges::copy(at.columns(), std::back_inserter(xs));
     std::ranges::copy(dir.columns(), std::back_inserter(xs));
-    run_columns(want, xs, at.size(), out);
+    run_columns(want, {xs.data(), xs.size()}, at.size(), out);
   }
 
   void run_columns(Want want, std::span<const double *const> xs, std::size_t n,
@@ -539,7 +540,7 @@ private:
 
   // This side always hands back the dense matrix, so the zeros go back in
   // here: one fill, then one copy per cell the pattern names.
-  void scatter_jacobian(Scratch &cells, Block &dense, std::size_t points) {
+  void scatter_jacobian(Scratch &cells, Dense &dense, std::size_t points) {
     const std::size_t n = arity();
     const std::size_t wide = outputs() * n;
     if (wide == 0) {
@@ -560,19 +561,18 @@ private:
   [[nodiscard]] pyb::tuple hessian_from_lane(const Point &at) {
     const auto l = lane(Want::Hessian);
     const std::size_t n = arity();
-    Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
-            at.size()};
-    Scratch partials{count(l, &rt::OutputSpans::jacobian), at.size()};
-    Scratch compressed{count(l, &rt::OutputSpans::hessian), at.size()};
+    Dense g{shape_of({ssize(outputs()), ssize(n)}, at), at.size()};
+    Scratch partials{count(*l, &rt::OutputSpans::jacobian), at.size()};
+    Scratch compressed{count(*l, &rt::OutputSpans::hessian), at.size()};
     Cell cell;
-    auto f = values_block(l, at);
+    auto f = values_block(*l, at);
     run(Want::Hessian, at,
         {.values = f ? f->rows() : cell.rows(),
          .jacobian = partials.rows(),
          .hessian = compressed.rows()});
     scatter_jacobian(partials, g, at.size());
 
-    Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at), n * n,
+    Dense dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at),
                 at.size()};
     scatter_hessian(l->graph->coloring(), compressed.rows(), dense.at(0), n,
                     at.size());
@@ -590,24 +590,34 @@ private:
     const std::size_t n = arity();
     const auto &blocks = sweeps();
 
-    std::vector<double> point(n);
+    boost::container::small_vector<double, 16> point(n);
     std::ranges::transform(at.columns(), point.begin(),
                            [](const double *c) { return *c; });
-    // Values, partials and Hessian::at's compressed cells: what the three
-    // blocks below read, and nothing of the arena beyond it.
-    auto wanted = blocks | std::views::transform(&rt::Hessian::compressed) |
-                  std::views::join | impl::to<std::vector<rt::NodeId>>();
-    impl::append(wanted, blocks | std::views::transform(&rt::Hessian::partial) |
-                             std::views::join);
-    impl::append(wanted, blocks | std::views::transform(&rt::Hessian::zero));
-    impl::append(wanted, roots_);
-    const auto values = rt::evaluate_reachable(*arena_, wanted, point);
+    // The schedule over what the three blocks below read -- values, partials
+    // and Hessian::at's compressed cells -- settled on first ask: it depends
+    // only on the sweeps, and the GIL is held here.  The tape is thread-kept;
+    // every id read below is scheduled, so it is written this call.
+    if (!hessian_schedule_) {
+      auto wanted = blocks | std::views::transform(&rt::Hessian::compressed) |
+                    std::views::join | impl::to<std::vector<rt::NodeId>>();
+      impl::append(wanted, blocks |
+                               std::views::transform(&rt::Hessian::partial) |
+                               std::views::join);
+      impl::append(wanted, blocks | std::views::transform(&rt::Hessian::zero));
+      impl::append(wanted, roots_);
+      const auto live = rt::detail::reachable(*arena_, wanted);
+      hessian_schedule_ =
+          rt::detail::schedule_of(*arena_, rt::detail::live_ids(live));
+    }
+    static thread_local std::vector<double> values;
+    values.resize(arena_->size());
+    rt::evaluate_into(*arena_, point, *hessian_schedule_,
+                      std::span<double>{values});
 
-    Block f{shape_of({ssize(outputs())}, at), outputs(), at.size()};
-    Block g{shape_of({ssize(outputs()), ssize(n)}, at), outputs() * n,
-            at.size()};
-    Block dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at),
-                outputs() * n * n, at.size()};
+    Dense f{shape_of({ssize(outputs())}, at), at.size()};
+    Dense g{shape_of({ssize(outputs()), ssize(n)}, at), at.size()};
+    Dense dense{shape_of({ssize(outputs()), ssize(n), ssize(n)}, at),
+                at.size()};
     const auto dims = std::views::iota(0uz, n);
     for (const auto [k, block] : std::views::enumerate(blocks)) {
       const auto root = static_cast<std::size_t>(k);
@@ -671,13 +681,12 @@ private:
   // a scalar model at a point answers with a float, an (n,) gradient and an
   // (n, n) Hessian rather than three arrays with 1s in them.  Computed before
   // the array is built, so the array is built at this shape and never reshaped.
-  [[nodiscard]] std::vector<pyb::ssize_t>
-  shape_of(std::initializer_list<pyb::ssize_t> base, const Point &at) const {
-    const auto *first = base.begin();
-    if (outputs() == 1 && first != base.end()) {
-      ++first;
-    }
-    std::vector<pyb::ssize_t> dims(first, base.end());
+  [[nodiscard]] Shape shape_of(std::initializer_list<pyb::ssize_t> base,
+                               const Point &at) const {
+    Shape dims;
+    std::ranges::copy(std::span{base} |
+                          std::views::drop(outputs() == 1 && base.size() > 0),
+                      std::back_inserter(dims));
     if (at.batched()) {
       dims.push_back(ssize(at.size()));
     }
@@ -686,8 +695,8 @@ private:
 
   // A block indexed by symbol rather than by function, so shape_of's leading
   // axis -- which it drops at one output -- is not one this has.
-  [[nodiscard]] std::vector<pyb::ssize_t> symbol_shape(const Point &at) const {
-    std::vector<pyb::ssize_t> dims{ssize(arity())};
+  [[nodiscard]] Shape symbol_shape(const Point &at) const {
+    Shape dims{ssize(arity())};
     if (at.batched()) {
       dims.push_back(ssize(at.size()));
     }
@@ -730,6 +739,8 @@ private:
   std::vector<rt::NodeId> roots_;
   std::optional<rt::Jacobian> derivative_;
   std::optional<std::vector<rt::Hessian>> sweeps_;
+  // A system's hessian() walk, settled on first ask beside the sweeps it reads.
+  std::optional<std::vector<rt::Step>> hessian_schedule_;
   std::optional<rt::HessianVector> hvp_;
   std::optional<rt::VectorJacobian> vjp_;
   std::optional<rt::Tangent> jvp_;
@@ -749,10 +760,10 @@ private:
 // or stride to check.
 class PyCall {
 public:
-  PyCall(pyb::object owner, PyEquation &eq, PyEquation::Want want,
-         const pyb::handle &x)
-      : owner_(std::move(owner)), eq_(&eq), want_(want),
-        x_(pyb::cast<Array>(x)), at_(x_, eq.symbols_) {
+  // The equation outlives the call through pyb::keep_alive on the factory,
+  // never through a member: the binding states the lifetime once.
+  PyCall(PyEquation &eq, PyEquation::Want want, const pyb::handle &x)
+      : eq_(&eq), want_(want), x_(pyb::cast<Array>(x)), at_(x_, eq.symbols_) {
     // A system's Hessian is read off the arena a point at a time, so there is
     // no lane to bind.
     if (want_ == PyEquation::Want::Hessian && eq_->outputs() != 1) {
@@ -768,14 +779,12 @@ public:
     if (want_ != PyEquation::Want::Value) {
       partials_.emplace(PyEquation::count(*l, &rt::OutputSpans::jacobian),
                         at_.size());
-      g_.emplace(eq_->shape_of({outputs, ssize(n)}, at_), eq_->outputs() * n,
-                 at_.size());
+      g_.emplace(eq_->shape_of({outputs, ssize(n)}, at_), at_.size());
     }
     if (want_ == PyEquation::Want::Hessian) {
       compressed_.emplace(PyEquation::count(*l, &rt::OutputSpans::hessian),
                           at_.size());
-      h_.emplace(eq_->shape_of({outputs, ssize(n), ssize(n)}, at_), n * n,
-                 at_.size());
+      h_.emplace(eq_->shape_of({outputs, ssize(n), ssize(n)}, at_), at_.size());
     }
   }
 
@@ -804,11 +813,10 @@ public:
   [[nodiscard]] pyb::object hessian() const { return read(h_); }
 
   [[nodiscard]] std::string repr() const {
-    std::string want{rt::name_of(want_)};
-    std::ranges::transform(want, want.begin(),
-                           [](unsigned char c) { return std::tolower(c); });
-    return std::format("<ddx.Call {} at {} point{}>", want, at_.size(),
-                       at_.size() == 1 ? "" : "s");
+    return std::format("<ddx.Call {} at {} point{}>",
+                       boost::algorithm::to_lower_copy(
+                           std::string{rt::name_of(want_)}),
+                       at_.size(), at_.size() == 1 ? "" : "s");
   }
 
 private:
@@ -819,7 +827,8 @@ private:
 
   // A rank-0 block is the scalar case, where the allocating calls answer with
   // a float; matching them costs a PyFloat only when the value is read.
-  [[nodiscard]] static pyb::object read(const std::optional<Block> &b) {
+  template <typename B>
+  [[nodiscard]] static pyb::object read(const std::optional<B> &b) {
     if (!b) {
       fail_with(errc::wrong_column_count);
     }
@@ -827,16 +836,15 @@ private:
     return a.ndim() == 0 ? pyb::object{pyb::float_(*a.data())} : pyb::object{a};
   }
 
-  pyb::object owner_; // the equation, kept alive under the raw pointer below
-  PyEquation *eq_;
+  PyEquation *eq_; // outlived by the equation: keep_alive on the factory
   PyEquation::Want want_;
   Array x_; // declared before at_, which points into it
   Point at_;
   std::optional<Block> f_;
   std::optional<Scratch> partials_; // the pattern's cells, on their way to g_
-  std::optional<Block> g_;
+  std::optional<Dense> g_;
   std::optional<Scratch> compressed_; // the colouring's, on their way to h_
-  std::optional<Block> h_;
+  std::optional<Dense> h_;
 };
 
 } // namespace ddx::py

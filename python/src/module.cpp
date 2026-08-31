@@ -20,12 +20,12 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl/filesystem.h>
 
+#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/describe/enum.hpp>
 #include <boost/mp11/algorithm.hpp>
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <exception>
 #include <memory>
 #include <ranges>
@@ -166,11 +166,15 @@ make_equation(const pyb::object &model,
   // equation answers help() and repr() with the model's own name and docstring.
   static constexpr std::array kWrapped{"__name__", "__qualname__", "__doc__",
                                        "__module__"};
-  for (const char *attr :
-       kWrapped | std::views::filter([&model](const char *a) {
-         return pyb::hasattr(model, a);
-       })) {
-    eq.attr(attr) = model.attr(attr);
+  for (const char *attr : kWrapped) {
+    // One getattr, not a hasattr probe and then the fetch; an attribute that
+    // exists and holds None is still copied, as hasattr read it.
+    if (const auto value = pyb::reinterpret_steal<pyb::object>(
+            PyObject_GetAttrString(model.ptr(), attr))) {
+      eq.attr(attr) = value;
+    } else {
+      PyErr_Clear();
+    }
   }
   return eq;
 }
@@ -369,9 +373,7 @@ PYBIND11_MODULE(_ddx, m) {
                                           "Which blocks a bound call fills."};
   boost::mp11::mp_for_each<
       boost::describe::describe_enumerators<PyEquation::Want>>([&](auto D) {
-    std::string name{D.name};
-    std::ranges::transform(name, name.begin(),
-                           [](unsigned char c) { return std::toupper(c); });
+    const std::string name = boost::algorithm::to_upper_copy(std::string{D.name});
     want.value(name.c_str(), D.value);
   });
   want.finalize();
@@ -444,12 +446,12 @@ PYBIND11_MODULE(_ddx, m) {
       .def("hvp", &PyEquation::hvp, pyb::arg("v"), pyb::arg("x"))
       .def(
           "buffer",
-          [](const pyb::object &self, const pyb::handle &x,
-             PyEquation::Want want) {
-            return PyCall{self, pyb::cast<PyEquation &>(self), want, x};
+          [](PyEquation &self, const pyb::handle &x, PyEquation::Want want) {
+            // By pointer: a Point pins its buffers, so a PyCall never moves.
+            return std::make_unique<PyCall>(self, want, x);
           },
           pyb::arg("x"), pyb::kw_only(),
-          pyb::arg("want") = PyEquation::Want::Jacobian)
+          pyb::arg("want") = PyEquation::Want::Jacobian, pyb::keep_alive<0, 1>())
       .def("to_dot", &PyEquation::to_dot, pyb::kw_only(),
            pyb::arg("all") = false)
       .def("nodes", &PyEquation::nodes, pyb::kw_only(),
@@ -457,7 +459,7 @@ PYBIND11_MODULE(_ddx, m) {
       .def("save", &PyEquation::save, pyb::arg("path"))
       .def("verify", &PyEquation::verify, pyb::arg("path"))
       .def_property_readonly("loaded", &PyEquation::loaded)
-      .def_property_readonly("symbols", &PyEquation::symbols)
+      .def_property_readonly("symbols", &PyEquation::symbols_list)
       .def_property_readonly("arity", &PyEquation::arity)
       .def_property_readonly("outputs", &PyEquation::outputs)
       .def_property_readonly("uses_kernel", &PyEquation::uses_kernel)

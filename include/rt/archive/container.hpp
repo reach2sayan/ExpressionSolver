@@ -69,12 +69,14 @@ struct Container {
   [[nodiscard]] static DDX_API result<void>
   write(const std::filesystem::path &path, std::span<const std::byte> bytes);
 
-  // A payload with a described shape, encoded exactly as every other one is.
-  template <typename V>
-  [[nodiscard]] static std::vector<std::byte> encode(const V &v) {
+  // Payloads with a described shape, encoded end to end into one buffer,
+  // reserved exactly from the Counter's pass.
+  template <typename... Vs>
+  [[nodiscard]] static std::vector<std::byte> encode(const Vs &...vs) {
     std::vector<std::byte> out;
+    out.reserve(wire_size(vs...));
     Writer w{out};
-    wire(w, std::as_const(v));
+    (wire(w, std::as_const(vs)), ...);
     return out;
   }
 

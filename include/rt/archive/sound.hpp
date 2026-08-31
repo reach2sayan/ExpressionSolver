@@ -5,7 +5,10 @@
 #include "rt/opcode.hpp"
 #include "util/error.hpp"
 
+#include <boost/container/small_vector.hpp>
+
 #include <algorithm>
+#include <span>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -76,7 +79,8 @@ private:
   // named by none would leave a no_node for var() to hand back.  Interning is
   // what makes it exactly one rather than at least one.
   [[nodiscard]] bool vars() const {
-    std::vector<std::uint32_t> named(s_.symbols.size(), 0);
+    boost::container::small_vector<std::uint32_t, 32> named(s_.symbols.size(),
+                                                            0);
     for (const auto &node : s_.nodes) {
       if (node.op == OpCode::Var) {
         ++named[node.slot]; // nodes() pinned the slot
@@ -158,7 +162,7 @@ private:
     // thing left to check is that the division is exact and that both tables
     // are the same grid.  A forged count that wraps into agreeing with its own
     // product is no longer expressible.
-    const auto gridded = [nsym](const std::vector<std::size_t> &v) {
+    const auto gridded = [nsym](std::span<const std::size_t> v) {
       return nsym == 0 ? v.empty() : v.size() % nsym == 0;
     };
     // Every cell must name a slot inside the compressed block: two sharing one

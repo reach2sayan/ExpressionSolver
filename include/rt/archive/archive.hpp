@@ -124,9 +124,7 @@ struct SaveFn {
     // Together, and in this order: the table is what every opcode byte *means*,
     // so outside the checksum one flipped bit reinterprets the graph, and it
     // has to be readable before a graph byte is.
-    std::vector<std::byte> body = Container::encode(opcode_labels());
-    const auto payload = Container::encode(snap);
-    body.insert(body.end(), payload.begin(), payload.end());
+    const auto body = Container::encode(opcode_labels(), snap);
 
     const FileHeader h{
         .magic = Format::magic,

@@ -300,6 +300,15 @@ template <typename Sink, typename V> void wire(Sink &s, V &v) {
   }
 }
 
+// The bytes wire() will write for these values, asked of the Counter: what an
+// encode reserves before its Writer runs the same traversal.
+template <typename... Vs>
+[[nodiscard]] std::size_t wire_size(const Vs &...vs) {
+  Counter c;
+  (wire(c, std::as_const(vs)), ...);
+  return c.total();
+}
+
 // Field names and leaf widths folded in traversal order and carried in the
 // prologue, so a moved or retyped field refuses old files.
 template <typename V> constexpr void fold_schema(boost::hash2::fnv1a_32 &h) {

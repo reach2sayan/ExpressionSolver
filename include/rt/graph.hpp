@@ -174,6 +174,8 @@ public:
                  .jacobian = blocks.jacobian.size(),
                  .hessian = blocks.hessian.size()};
     g.outputs_ = std::move(blocks.values);
+    g.outputs_.reserve(g.layout_.values + g.layout_.jacobian +
+                       g.layout_.hessian);
     impl::append(g.outputs_, blocks.jacobian);
     impl::append(g.outputs_, blocks.hessian);
     g.coloring_ = std::move(coloring);
@@ -293,7 +295,9 @@ private:
             mark(static_cast<NodeId>(boost::target(edge, children_)));
           }
         });
-    live_order_ = detail::live_ids(live_) | impl::to<std::vector<NodeId>>();
+    live_order_.reserve(
+        static_cast<std::size_t>(std::ranges::count(live_, true)));
+    impl::append(live_order_, detail::live_ids(live_));
   }
 
   // Liveness under contraction, which is all this freeze settles -- an add

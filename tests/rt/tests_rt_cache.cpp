@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <boost/container/vector.hpp>
+
 #include <barrier>
 #include <cmath>
 #include <cstddef>
@@ -206,7 +208,10 @@ TEST(RtCache, ConcurrentCallsAgreeWithTheColdAnswer) {
   constexpr std::size_t threads = 8;
   std::barrier start{static_cast<std::ptrdiff_t>(threads)};
   std::vector<std::thread> racers;
-  std::vector<bool> agreed(threads, false);
+  // Not std::vector<bool>: it packs, so two threads writing their own index
+  // would be writing one word, which is a race in the test rather than in
+  // anything it is testing.
+  boost::container::vector<bool> agreed(threads, false);
   for (std::size_t t = 0; t < threads; ++t) {
     racers.emplace_back([&, t] {
       // Half at one point, so readers overlap; half at their own, so writers

@@ -4,7 +4,7 @@
 
 #include "rt/coupling.hpp"
 
-#include <boost/graph/adjacency_list.hpp>
+#include <boost/graph/compressed_sparse_row_graph.hpp>
 // First, and not sortable into the block below: smallest_last_ordering.hpp
 // uses make_shared_array_property_map without including it, as of Boost 1.92.
 #include <boost/property_map/shared_array_property_map.hpp>
@@ -20,16 +20,19 @@
 namespace ddx::rt {
 namespace {
 
-// Undirected: the conflict relation is symmetric.
-using ConflictGraph =
-    boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
+// The conflict relation is symmetric and CSR has no undirected flavour, so
+// both directions are inserted; the ordering and the colouring read only
+// out_degree and adjacent_vertices, which then answer as the undirected list
+// did -- ascending, which keeps the colours identical.  One-shot from an edge
+// range, as graph.hpp and cone.hpp already build theirs.
+using ConflictGraph = boost::compressed_sparse_row_graph<boost::directedS>;
 
 // Four stages, each feeding the next off shared state; a step per member keeps
 // that state out of the parameter lists and the order in one place.
 class ColumnColoring {
 public:
   explicit ColumnColoring(const CouplingRows &rows)
-      : rows_{rows}, n_{rows.size()}, conflicts_{n_},
+      : rows_{rows}, n_{rows.size()},
         out_{.color = std::vector<std::size_t>(n_, 0),
              .scatter = {},
              .cell = {}} {}
@@ -52,11 +55,15 @@ private:
              std::views::transform(
                  [j](const std::size_t k) { return std::pair{j, k}; });
     };
+    std::vector<std::pair<std::size_t, std::size_t>> edges;
     for (const auto [j, k] : std::views::iota(0uz, n_) |
                                  std::views::transform(conflicting) |
                                  std::views::join) {
-      boost::add_edge(j, k, conflicts_);
+      edges.emplace_back(j, k);
+      edges.emplace_back(k, j);
     }
+    conflicts_ = ConflictGraph{boost::edges_are_unsorted_multi_pass,
+                               edges.begin(), edges.end(), n_};
   }
 
   void pick_colors() {

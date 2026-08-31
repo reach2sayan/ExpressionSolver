@@ -304,7 +304,7 @@ public:
     if (!slot) {
       return fail(errc::unknown_symbol);
     }
-    std::vector<T> unit(symbol_count(), T{0});
+    boost::container::small_vector<T, 64> unit(symbol_count(), T{0});
     unit[*slot] = T{1};
     return hvp(std::span<const T>{unit}, args...);
   }
@@ -345,13 +345,12 @@ public:
           dense[0uz, cell.row, cell.column] = h[cell.slot];
         }
       } else {
-        // Hessian::at reads only the compressed cells and `zero`.
-        auto wanted = hessians_ |
-                      std::views::transform(&rt::Hessian::compressed) |
-                      std::views::join | impl::to<std::vector<rt::NodeId>>();
-        impl::append(wanted,
-                     hessians_ | std::views::transform(&rt::Hessian::zero));
-        const auto values = rt::evaluate_reachable(*arena_, wanted, at);
+        // The constructor's schedule over a thread-kept tape: every cell read
+        // below is scheduled, so entries a previous call left are never seen.
+        static thread_local std::vector<T> values;
+        values.resize(arena_->size());
+        rt::evaluate_into(*arena_, at, hessian_schedule_,
+                          std::span<T>{values});
         for (const auto [k, block] : hessians_ | std::views::enumerate) {
           for (const rt::Cell &cell : block.coloring.entries()) {
             dense[static_cast<std::size_t>(k), cell.row, cell.column] =
@@ -697,6 +696,7 @@ private:
       return {};
     }
     std::vector<rt::Object> out;
+    out.reserve(rt::want_count);
     for (const auto [want, lane] : std::views::zip(rt::want_values, *lanes_)) {
       if (auto kept = lane.object(want, setting())) {
         out.push_back(*std::move(kept));
@@ -734,12 +734,13 @@ private:
     return poisoned() ? std::optional<V>{} : std::optional<V>{value()};
   }
 
-  // The slot a symbol name occupies, or nullopt.
+  // The slot a symbol name occupies, or nullopt.  The table is sorted -- the
+  // Builder inserts at lower_bound and the loader verifies is_sorted.
   [[nodiscard]] constexpr std::optional<std::size_t>
   slot_of(std::string_view name) const {
     const auto &names = arena_->symbols();
-    const auto it = std::ranges::find(names, name);
-    return it == names.end()
+    const auto it = std::ranges::lower_bound(names, name);
+    return it == names.end() || *it != name
                ? std::nullopt
                : std::optional{static_cast<std::size_t>(it - names.begin())};
   }
@@ -757,10 +758,13 @@ private:
       return fail(errc::wrong_direction);
     }
     return point(args...).transform([this, along](const auto &at) {
-      std::vector<T> widened = at;
+      boost::container::small_vector<T, 64> widened;
+      widened.reserve(at.size() + along.size());
+      impl::append(widened, at);
       impl::append(widened, along);
       std::array<T, output_dim> f{};
-      std::vector<T> g(W == Want::Hvp ? derivative_.partial.size() : 0);
+      boost::container::small_vector<T, 64> g(
+          W == Want::Hvp ? derivative_.partial.size() : 0);
       std::vector<T> out(W == Want::Jvp ? output_dim : symbol_count());
       if constexpr (W == Want::Hvp) {
         gather(W, widened, std::span<T>{f}, g, out);
@@ -806,7 +810,23 @@ private:
       }
       vjp_ = rt::build_vjp_impl(*arena_, roots_);
       jvp_ = rt::build_jvp_impl(*arena_, roots_);
+      settle_hessian_schedule();
       lanes_ = std::make_unique<Lanes>();
+    }
+  }
+
+  // What a system's hessian() walks: fixed once the sweeps land -- built or
+  // loaded -- so a call sweeps without rebuilding the node list or the
+  // schedule.
+  void settle_hessian_schedule() {
+    if constexpr (output_dim > 1) {
+      auto wanted = hessians_ | std::views::transform(&rt::Hessian::compressed) |
+                    std::views::join | to<std::vector<rt::NodeId>>();
+      impl::append(wanted,
+                   hessians_ | std::views::transform(&rt::Hessian::zero));
+      const auto live = rt::detail::reachable(*arena_, wanted);
+      hessian_schedule_ =
+          rt::detail::schedule_of(*arena_, rt::detail::live_ids(live));
     }
   }
 
@@ -833,6 +853,7 @@ private:
     options_ = r.rest.options;
     objects_ = std::move(r.rest.objects);
 #endif
+    settle_hessian_schedule();
     lanes_ = std::make_unique<Lanes>();
   }
 
@@ -908,9 +929,10 @@ private:
   // At one point every column is one value, so a column pointer is its address.
   template <typename U>
   [[nodiscard]] static auto single_columns(std::span<U> values) {
-    boost::container::small_vector<U *, 32> out(values.size());
-    std::ranges::transform(values, out.begin(), [](U &v) { return &v; });
-    return out;
+    auto addresses =
+        values | std::views::transform([](U &v) { return std::addressof(v); });
+    return boost::container::small_vector<U *, 32>(addresses.begin(),
+                                                   addresses.end());
   }
 
   // The point columns and the direction's, in one array: symbols first, then
@@ -926,10 +948,10 @@ private:
   // One point through the batch path at n = 1, not the arena walk -- which
   // would compute the Hessian the constructor swept in for a caller wanting a
   // gradient.  Constant evaluation keeps it, having no Cache.
-  constexpr void gather(Want want, const std::vector<T> &at, std::span<T> f,
+  constexpr void gather(Want want, std::span<const T> at, std::span<T> f,
                         std::span<T> g = {}, std::span<T> h = {}) const {
     if !consteval {
-      const auto xs = single_columns(std::span<const T>{at});
+      const auto xs = single_columns(at);
       const auto fs = single_columns(f);
       const auto gs = single_columns(g);
       const auto hs = single_columns(h);
@@ -1091,9 +1113,12 @@ private:
     // rt::block_lanes points per sweep: the switch is paid once per node per
     // block, and each operation becomes a lane loop wide enough to vectorise.
     // A short final block repeats its last point, and those lanes are never
-    // read back.
-    std::vector<T> lanes(symbols * rt::block_lanes);
-    std::vector<T> tape(arena_->size() * rt::block_lanes);
+    // read back.  Kept like the scalar pair above: every lane read back was
+    // written this call.
+    static thread_local std::vector<T> lanes;
+    static thread_local std::vector<T> tape;
+    lanes.resize(symbols * rt::block_lanes);
+    tape.resize(arena_->size() * rt::block_lanes);
 
     for (const std::size_t base :
          std::views::iota(0uz, n) | std::views::stride(rt::block_lanes)) {
@@ -1195,6 +1220,8 @@ private:
   rt::HessianVector hvp_;
   rt::VectorJacobian vjp_;
   rt::Tangent jvp_;
+  // A system's hessian() walk, settled with the sweeps; empty at output_dim 1.
+  std::vector<rt::Step> hessian_schedule_;
 #ifdef DDX_HAS_JIT
   std::vector<rt::NodeId> compile_roots_;
   rt::Jacobian compile_derivative_;
