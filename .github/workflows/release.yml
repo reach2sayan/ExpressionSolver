@@ -2,9 +2,9 @@
 # A tag `vX.Y.Z` builds and publishes -- pushed by hand, or cut on Mondays by
 # weekly-release.yml; a manual run on a branch builds the same artifacts and
 # publishes nothing, which is how a change to the pipeline is tried before a
-# version rides on it.  The NuGet package also goes to nuget.org when the
-# NUGET_API_KEY secret exists; without it the .nupkg rides the GitHub Release
-# alone.
+# version rides on it.  The NuGet package also goes to nuget.org by trusted
+# publishing when the NUGET_USER repository variable names the nuget.org
+# profile; without it the .nupkg rides the GitHub Release alone.
 #
 # Linux wheels carry the JIT: LLVM is built as archives inside the manylinux
 # container by scripts/build_llvm.py, once, and cached under .deps -- the
@@ -155,6 +155,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
@@ -166,12 +167,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
 
+      # Trusted publishing: the job's OIDC token buys a one-hour single-use
+      # API key against the policy registered on nuget.org (owner reach2sayan,
+      # repo ddx, workflow release.yml).  A variable rather than a secret so
+      # the steps can be skipped where it is unset -- a fork, or an account
+      # not yet configured -- and the .nupkg rides the GitHub release alone.
+      - name: NuGet login
+        if: vars.NUGET_USER != ''
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
       - name: Publish to nuget.org
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-        run: |
-          if [[ -z "$NUGET_API_KEY" ]]; then
-            echo "::warning::NUGET_API_KEY is not set; the .nupkg is on the GitHub release only"
-            exit 0
-          fi
-          dotnet nuget push dist/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+        if: vars.NUGET_USER != ''
+        run: dotnet nuget push dist/*.nupkg --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json
